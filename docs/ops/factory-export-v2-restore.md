@@ -76,6 +76,13 @@ entry and reports constraint relationships and counts without row keys. In
 those same snapshots it compares column descriptions with the full catalog
 inventory and checks that every internal FK from a selected row has a selected
 parent. A missing column description or parent blocks the export.
+Composite MATCH FULL keys must be entirely NULL or resolve to a selected
+parent. MATCH SIMPLE keys with a NULL component remain exempt.
+
+While CRETAS writes its ZIP entries, a read-only heartbeat keeps the waiting
+SmartBI transaction on its original snapshot. The exporter releases CRETAS
+before writing SmartBI and joins the heartbeat before returning the SmartBI
+connection to the export thread.
 
 Existing v2 packages with legacy constraint descriptors and internal FKs use
 the original constraint dictionary for exact target comparison. The CLI

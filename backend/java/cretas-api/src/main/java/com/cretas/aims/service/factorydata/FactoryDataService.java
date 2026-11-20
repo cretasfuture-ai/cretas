@@ -40,6 +40,10 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 /**
@@ -366,19 +370,20 @@ public class FactoryDataService {
             manifest.put("requestedFileFormats", requestedFormats.stream().map(Enum::name).toList());
             manifest.put("fileFormats", fmt.stream().map(Enum::name).toList());
             FactoryDataPackageWriter writer = new FactoryDataPackageWriter(out);
-            // Resolve both databases before the first ZIP entry. Keep those snapshots open
-            // until their rows have been written so the guard and writer see the same data.
-            List<Map<String, Object>> dbManifests = withSnapshot(Database.CRETAS, cretas ->
-                    withSnapshot(Database.SMARTBI, smartbi -> {
-                        FactoryDataScope cretasScope = FactoryDataScopeResolver.resolveVisible(cretas, Database.CRETAS, schema, factoryId);
-                        FactoryDataScope smartbiScope = FactoryDataScopeResolver.resolveVisible(smartbi, Database.SMARTBI, schema, factoryId);
-                        rejectForeignHits(cretas, cretasScope);
-                        rejectForeignHits(smartbi, smartbiScope);
-                        var cretasMetadata = captureExportMetadata(cretas, cretasScope, factoryId);
-                        var smartbiMetadata = captureExportMetadata(smartbi, smartbiScope, factoryId);
-                        return List.of(exportDatabase(cretas, cretasScope, factoryId, fmt, writer, cretasMetadata),
-                                exportDatabase(smartbi, smartbiScope, factoryId, fmt, writer, smartbiMetadata));
-                    }));
+            List<Map<String, Object>> dbManifests = withSnapshot(Database.SMARTBI, smartbi -> {
+                var smartbiScope = FactoryDataScopeResolver.resolveVisible(smartbi, Database.SMARTBI, schema, factoryId);
+                rejectForeignHits(smartbi, smartbiScope);
+                var smartbiMetadata = captureExportMetadata(smartbi, smartbiScope, factoryId);
+                // Both preflights finish before the first ZIP entry. SMARTBI only
+                // receives heartbeat queries while CRETAS owns the writer.
+                var cretasManifest = withSnapshotHeartbeat(smartbi, () -> withSnapshot(Database.CRETAS, cretas -> {
+                    var cretasScope = FactoryDataScopeResolver.resolveVisible(cretas, Database.CRETAS, schema, factoryId);
+                    rejectForeignHits(cretas, cretasScope);
+                    var cretasMetadata = captureExportMetadata(cretas, cretasScope, factoryId);
+                    return exportDatabase(cretas, cretasScope, factoryId, fmt, writer, cretasMetadata);
+                }));
+                return List.of(cretasManifest, exportDatabase(smartbi, smartbiScope, factoryId, fmt, writer, smartbiMetadata));
+            });
             manifest.put("databases", dbManifests);
             manifest.put("attachments", exportAttachments(factoryId, mode, writer));
             writer.writeText("README.txt", readme(factoryId, factory.name(), mode, fmt));
@@ -430,6 +435,37 @@ public class FactoryDataService {
                                                                      String factoryId) throws SQLException {
         return FactoryDataSchemaMetadata.capture(conn, scope.database(), schema,
                 new ArrayList<>(scope.tables().values()), factoryId);
+    }
+
+    private static <T> T withSnapshotHeartbeat(Connection waiting, Supplier<T> work) throws SQLException {
+        long idleMillis;
+        try (PreparedStatement ps = waiting.prepareStatement(
+                "SELECT setting::bigint FROM pg_catalog.pg_settings WHERE name = 'idle_in_transaction_session_timeout'");
+             ResultSet rs = ps.executeQuery()) {
+            if (!rs.next()) throw new SQLException("无法读取快照事务空闲阈值");
+            idleMillis = rs.getLong(1);
+        }
+        if (idleMillis == 0) return work.get();
+        long interval = Math.max(1, idleMillis / 3);
+        var failure = new AtomicReference<SQLException>();
+        T result;
+        // The executor closes and joins the last heartbeat before the caller
+        // uses the JDBC connection again or rolls back the read-only snapshot.
+        try (var executor = Executors.newSingleThreadScheduledExecutor(
+                Thread.ofVirtual().name("factory-export-snapshot-heartbeat").factory())) {
+            executor.scheduleWithFixedDelay(() -> {
+                try (PreparedStatement ps = waiting.prepareStatement("SELECT 1")) {
+                    ps.setQueryTimeout(10);
+                    ps.executeQuery().close();
+                } catch (SQLException e) {
+                    failure.set(e);
+                    throw new IllegalStateException(e);
+                }
+            }, interval, interval, TimeUnit.MILLISECONDS);
+            result = work.get();
+        }
+        if (failure.get() != null) throw new SQLException("等待写出期间快照心跳失败", failure.get());
+        return result;
     }
 
     private Map<String, Object> exportDatabase(Connection conn, FactoryDataScope scope, String factoryId, Set<Format> formats,

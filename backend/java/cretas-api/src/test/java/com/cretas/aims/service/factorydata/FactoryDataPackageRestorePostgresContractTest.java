@@ -9,10 +9,15 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.postgresql.ds.PGSimpleDataSource;
+import org.springframework.jdbc.datasource.DelegatingDataSource;
 
 import javax.sql.DataSource;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.FilterOutputStream;
+import java.io.IOException;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -20,17 +25,20 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.sql.Connection;
 import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
@@ -322,6 +330,126 @@ class FactoryDataPackageRestorePostgresContractTest {
                 .hasMessageContaining("child=sales_orders, parent=users, name=sales_orders_created_by_fkey]=1")
                 .satisfies(error -> assertThat(error.getMessage()).doesNotContain("FB_RESTORE", "42424242", "other-creator"));
         assertThat(output.size()).isZero();
+    }
+
+    @Test
+    void slowCretasZipWriteKeepsTheOriginalSmartbiSnapshotAlive() throws Exception {
+        setUpSources();
+        AtomicBoolean shortenedTimeout = new AtomicBoolean();
+        DataSource waiting = shortIdleTimeout(smartbiSource, shortenedTimeout);
+        FactoryDataService service = FactoryDataServiceFixture.create(source, waiting, Set.of(1L), sourceSchema);
+        long request = service.startExport(OPERATOR, FACTORY);
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        AtomicBoolean delayed = new AtomicBoolean();
+        OutputStream slow = new FilterOutputStream(bytes) {
+            private void delayFirstZipWrite() throws IOException {
+                if (!delayed.compareAndSet(false, true)) return;
+                try {
+                    exec(smartbiSource, "UPDATE " + q(sourceSchema) + ".smart_bi_uploads "
+                            + "SET file_name='after-preflight.csv' WHERE id=1");
+                    // The real PostgreSQL session timeout is two seconds.
+                    Thread.sleep(4_500);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException("slow ZIP fixture interrupted", e);
+                } catch (Exception e) {
+                    throw new IOException("slow ZIP fixture failed", e);
+                }
+            }
+            @Override public void write(int value) throws IOException {
+                delayFirstZipWrite();
+                out.write(value);
+            }
+            @Override public void write(byte[] data, int offset, int length) throws IOException {
+                delayFirstZipWrite();
+                out.write(data, offset, length);
+            }
+        };
+        assertThatCode(() -> service.writeExport(request, OPERATOR, FACTORY, FactoryDataService.AttachmentMode.SKIP,
+                Set.of(FactoryDataService.Format.JSON), slow)).doesNotThrowAnyException();
+        assertThat(shortenedTimeout).isTrue();
+        assertThat(delayed).isTrue();
+        Map<String, byte[]> files = unzip(bytes.toByteArray());
+        JsonNode manifest = json.readTree(files.get("manifest.json"));
+        assertThat(manifest.get("factoryId").asText()).isEqualTo(FACTORY);
+        assertThat(manifest.get("databases")).extracting(db -> db.get("database").asText())
+                .containsExactly("CRETAS", "SMARTBI");
+        String uploads = "smartbi/json/smart_bi_uploads.json";
+        byte[] body = files.get(uploads);
+        assertThat(json.readTree(body).get(0).get("file_name").asText()).isEqualTo("restore.csv");
+        assertThat(manifest.get("files")).anySatisfy(file -> {
+            assertThat(file.get("path").asText()).isEqualTo(uploads);
+            assertThat(file.get("rows").asInt()).isEqualTo(1);
+            assertThat(file.get("sha256").asText())
+                    .isEqualTo(java.util.HexFormat.of().formatHex(FactoryDataPackageWriter.sha256().digest(body)));
+        });
+        try (Connection live = smartbiSource.getConnection(); Statement statement = live.createStatement();
+             ResultSet rows = statement.executeQuery("SELECT file_name FROM " + q(sourceSchema) + ".smart_bi_uploads WHERE id=1")) {
+            assertThat(rows.next()).isTrue();
+            assertThat(rows.getString(1)).isEqualTo("after-preflight.csv");
+        }
+    }
+
+    private static DataSource shortIdleTimeout(DataSource original, AtomicBoolean shortenedTimeout) {
+        return new DelegatingDataSource(original) {
+            @Override
+            public Connection getConnection() throws SQLException {
+                Connection real = super.getConnection();
+                // Forward every call to a real JDBC session, shortening only
+                // the production SET LOCAL so PostgreSQL enforces the deadline.
+                return (Connection) Proxy.newProxyInstance(Connection.class.getClassLoader(),
+                        new Class<?>[]{Connection.class}, (proxy, method, args) -> {
+                            if ("prepareStatement".equals(method.getName())
+                                    && "SET LOCAL idle_in_transaction_session_timeout = '15min'".equals(args[0])) {
+                                args[0] = "SET LOCAL idle_in_transaction_session_timeout = '2s'";
+                                shortenedTimeout.set(true);
+                            }
+                            try {
+                                return method.invoke(real, args);
+                            } catch (InvocationTargetException e) {
+                                throw e.getCause();
+                            }
+                        });
+            }
+        };
+    }
+
+    @Test
+    void matchFullAllowsAnEntirelyNullCompositeKey() throws Exception {
+        assertCompositeNullExport(true, false);
+    }
+
+    @Test
+    void matchSimpleAllowsAPartiallyNullCompositeKey() throws Exception {
+        assertCompositeNullExport(false, true);
+    }
+
+    @Test
+    void matchFullRefusesPartiallyNullHistoricalCompositeKey() throws Exception {
+        setUpSources();
+        seedCompositeMatchForeignKey(true, true);
+        assertExportRefusedBeforeManifest("name=composite_match_fk]=1");
+    }
+
+    private void assertCompositeNullExport(boolean matchFull, boolean partial) throws Exception {
+        setUpSources();
+        seedCompositeMatchForeignKey(matchFull, partial);
+        Map<String, byte[]> files = unzip(exportPackage(source, smartbiSource, sourceSchema));
+        assertThat(files).containsKey("manifest.json");
+        JsonNode row = json.readTree(files.get("cretas/json/match_child.json")).get(0);
+        assertThat(row.get("part_b").isNull()).isTrue();
+        assertThat(row.get("part_a").isNull()).isEqualTo(!partial);
+    }
+
+    private void seedCompositeMatchForeignKey(boolean matchFull, boolean partial) throws Exception {
+        exec(source, "SET search_path = " + q(sourceSchema) + ";"
+                + "CREATE TABLE match_parent(id bigint PRIMARY KEY, factory_id varchar(64), part_a int, part_b int,"
+                + " UNIQUE(part_a, part_b));"
+                + "CREATE TABLE match_child(id bigint PRIMARY KEY, factory_id varchar(64), part_a int, part_b int);"
+                + "INSERT INTO match_parent VALUES (1, '" + FACTORY + "', 10, 20);"
+                + "INSERT INTO match_child VALUES (2, '" + FACTORY + "', " + (partial ? "10" : "NULL") + ", NULL);"
+                + "ALTER TABLE match_child ADD CONSTRAINT composite_match_fk FOREIGN KEY(part_a, part_b) "
+                + "REFERENCES match_parent(part_a, part_b) MATCH " + (matchFull ? "FULL" : "SIMPLE") + " NOT VALID");
     }
 
     @Test

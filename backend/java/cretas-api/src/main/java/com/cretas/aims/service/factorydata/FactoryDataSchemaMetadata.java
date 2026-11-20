@@ -31,6 +31,7 @@ public final class FactoryDataSchemaMetadata {
 
     public record Snapshot(Map<String, Object> schema, Map<String, Object> migrations) {}
     private record InternalForeignKey(String child, String parent, String name) {}
+    private record ConstraintMetadata(List<Map<String, Object>> descriptors, Set<InternalForeignKey> matchFull) {}
 
     /**
      * Reads metadata from the same repeatable-read source connection as the rows.
@@ -69,11 +70,12 @@ public final class FactoryDataSchemaMetadata {
         requireCompleteColumnMetadata(conn, schema, structureNames, columnMetadata);
         // Schema-only dependencies retain PK/UNIQUE definitions even when
         // this tenant needs no row from the referenced table.
-        constraintMetadata = constraints(conn, schema, structureNames);
+        ConstraintMetadata allConstraints = readConstraints(conn, schema, structureNames);
+        constraintMetadata = allConstraints.descriptors();
         rejectCrossSchemaReferences(constraintMetadata, schema);
         validateColumnTypes(columnMetadata);
         validateRedactionConstraints(conn, schema, columnMetadata, constraintMetadata);
-        rejectMissingInternalParents(conn, database, schema, constraintMetadata, exportedTables, factoryId);
+        rejectMissingInternalParents(conn, database, schema, allConstraints, exportedTables, factoryId);
         structure.put("columns", columnMetadata);
         structure.put("constraints", constraintMetadata);
         List<Map<String, Object>> externalReferences = externalReferences(conn, schema,
@@ -155,9 +157,9 @@ public final class FactoryDataSchemaMetadata {
     }
 
     private static void rejectMissingInternalParents(Connection conn, Database database, String schema,
-            List<Map<String, Object>> constraints, Map<String, TableScope> exported, String factoryId) throws SQLException {
+            ConstraintMetadata constraints, Map<String, TableScope> exported, String factoryId) throws SQLException {
         Map<InternalForeignKey, List<Map<String, Object>>> foreignKeys = new LinkedHashMap<>();
-        for (Map<String, Object> constraint : constraints) {
+        for (Map<String, Object> constraint : constraints.descriptors()) {
             if (!"FOREIGN KEY".equals(constraint.get("type"))) continue;
             TableScope child = exported.get(constraint.get("table"));
             TableScope parent = exported.get(constraint.get("referencedTable"));
@@ -171,7 +173,9 @@ public final class FactoryDataSchemaMetadata {
             var child = FactoryDataScopeResolver.ownedRows(conn, exported.get(key.child()), factoryId, "c.");
             var parent = FactoryDataScopeResolver.ownedRows(conn, exported.get(key.parent()), factoryId, "p.");
             StringJoiner referenced = new StringJoiner(" AND ");
-            StringJoiner nonNull = new StringJoiner(" AND ");
+            // MATCH FULL exempts only an entirely NULL key. A partial NULL
+            // reaches the anti-join and cannot match all parent components.
+            StringJoiner nonNull = new StringJoiner(constraints.matchFull().contains(key) ? " OR " : " AND ", "(", ")");
             for (Map<String, Object> pair : fk.getValue()) {
                 String childColumn = "c." + FactoryDataScopeResolver.q((String) pair.get("column"));
                 String parentColumn = "p." + FactoryDataScopeResolver.q((String) pair.get("referencedColumn"));
@@ -254,7 +258,12 @@ public final class FactoryDataSchemaMetadata {
 
     static List<Map<String, Object>> constraints(Connection conn, String schema, Set<String> tables)
             throws SQLException {
-        if (tables.isEmpty()) return List.of();
+        return readConstraints(conn, schema, tables).descriptors();
+    }
+
+    private static ConstraintMetadata readConstraints(Connection conn, String schema, Set<String> tables)
+            throws SQLException {
+        if (tables.isEmpty()) return new ConstraintMetadata(List.of(), Set.of());
         // information_schema.table_constraints hides constraints from SELECT-only roles.
         // NOT NULL is represented by the column metadata for this descriptor shape.
         String sql = """
@@ -268,7 +277,7 @@ public final class FactoryDataSchemaMetadata {
                        CASE pc.confdeltype WHEN 'a' THEN 'NO ACTION' WHEN 'r' THEN 'RESTRICT' WHEN 'c' THEN 'CASCADE'
                          WHEN 'n' THEN 'SET NULL' WHEN 'd' THEN 'SET DEFAULT' END AS delete_rule,
                        parent_namespace.nspname AS referenced_schema,
-                       md5(pg_get_constraintdef(pc.oid)) AS definition_fingerprint
+                       md5(pg_get_constraintdef(pc.oid)) AS definition_fingerprint, pc.confmatchtype AS match_type
                 FROM pg_catalog.pg_constraint pc
                 JOIN pg_catalog.pg_class child ON child.oid = pc.conrelid
                 JOIN pg_catalog.pg_namespace child_namespace ON child_namespace.oid = child.relnamespace
@@ -288,6 +297,7 @@ public final class FactoryDataSchemaMetadata {
             for (String table : tables) ps.setString(i++, table);
             try (ResultSet rs = ps.executeQuery()) {
                 List<Map<String, Object>> out = new ArrayList<>();
+                Set<InternalForeignKey> matchFull = new java.util.HashSet<>();
                 while (rs.next()) {
                     Map<String, Object> row = new LinkedHashMap<>();
                     row.put("table", rs.getString("table_name"));
@@ -301,10 +311,19 @@ public final class FactoryDataSchemaMetadata {
                     row.put("updateRule", rs.getString("update_rule"));
                     row.put("deleteRule", rs.getString("delete_rule"));
                     row.put("definitionFingerprint", rs.getString("definition_fingerprint"));
-                    if ("FOREIGN KEY".equals(row.get("type"))
-                            && row.values().stream().anyMatch(java.util.Objects::isNull)) {
-                        throw new IllegalStateException("外键目录描述不完整，拒绝导出: "
-                                + row.get("table") + "." + row.get("name"));
+                    if ("FOREIGN KEY".equals(row.get("type"))) {
+                        if (row.values().stream().anyMatch(java.util.Objects::isNull)) {
+                            throw new IllegalStateException("外键目录描述不完整，拒绝导出: "
+                                    + row.get("table") + "." + row.get("name"));
+                        }
+                        String matchType = rs.getString("match_type");
+                        if ("f".equals(matchType)) {
+                            matchFull.add(new InternalForeignKey((String) row.get("table"),
+                                    (String) row.get("referencedTable"), (String) row.get("name")));
+                        } else if (!"s".equals(matchType)) {
+                            throw new IllegalStateException("外键匹配类型不受支持，拒绝导出: "
+                                    + row.get("table") + "." + row.get("name"));
+                        }
                     }
                     out.add(row);
                 }
@@ -313,7 +332,7 @@ public final class FactoryDataSchemaMetadata {
                         .thenComparing(row -> String.valueOf(row.get("column")))
                         .thenComparing(row -> String.valueOf(row.get("ordinal")))
                         .thenComparing(row -> String.valueOf(row.get("referencedColumn"))));
-                return out;
+                return new ConstraintMetadata(out, matchFull);
             }
         }
     }
