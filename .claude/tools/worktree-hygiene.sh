@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# worktree 体检 + 清理。上限 30 个（含主仓库；2026-11-11 由 9 调整）。规则见 .claude/rules/worktree-and-main-only-deploy.md「铁律 4」。
+# worktree 体检 + 清理。上限 50 个（含主仓库；2026-11-11 由 9 调到 30，2026-11-20 Steve 定调到 50）。规则见 .claude/rules/worktree-and-main-only-deploy.md「铁律 4」。
 #
 #   .claude/tools/worktree-hygiene.sh --check                 只报数与分类, 不动任何东西 (退出码: 0=未超限, 3=超限)
 #   .claude/tools/worktree-hygiene.sh --apply [--keep <路径>]...   收缩到上限以内
@@ -29,7 +29,7 @@
 #   (日志里 branch=DETACHED ahead=?), 已完成的也一直判成「未完成」。下面只对本脚本里的 git 放行。
 set -u
 _n=${GIT_CONFIG_COUNT:-0}; export "GIT_CONFIG_KEY_$_n=safe.directory" "GIT_CONFIG_VALUE_$_n=*" "GIT_CONFIG_COUNT=$((_n+1))"; unset _n
-MAX=30
+MAX=50
 mode="${1:-}"; shift || true
 keeps=()
 while [ $# -gt 0 ]; do
