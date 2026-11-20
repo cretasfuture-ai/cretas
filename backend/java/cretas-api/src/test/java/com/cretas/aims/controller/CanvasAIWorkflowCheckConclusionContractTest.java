@@ -18,6 +18,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class CanvasAIWorkflowCheckConclusionContractTest {
@@ -42,17 +43,23 @@ class CanvasAIWorkflowCheckConclusionContractTest {
                 Map.of("id", "m:L3:out", "data", Map.of("name", "拼装成品")));
         request.setParams(Map.of("intent", "check", "context", Map.of("definition", Map.of("nodes", nodes))));
         when(client.chatLowTemp(anyString(), eq(question))).thenReturn("""
-                结论：发现 2 个问题。
-                1. `p:L3:pa` 的 `conversionRule` 为 `ACTUAL_WEIGHT`，请核对 `m:L3:out` 的每盒净重。
-                2. p:L3:pc1：processCategory:null。
+                **结论:发现 2 个问题.**
+                1. 「`p:L3:pa`」的`conversionRule` 为 `ACTUAL_WEIGHT`，请核对「`m:L3:out`」的每盒净重。
+                2. 「p:L3:pc1」的字段「工艺类别」未填写。请在右侧选「加工」。
                 """);
 
         CanvasAIController.AIResponse response = controller.chat("F006", null, request).getData();
 
         assertEquals("""
                 结论：发现 2 个问题。
-                1. 拼装分装 的 换算规则 为 按实际重量，请核对 拼装成品 的每盒净重。
-                2. 清洗去毛：工艺类别:未填写。""", response.getReply());
+                1、「拼装分装」按实际称重，请核对「拼装成品」的每盒净重。
+                2、「清洗去毛」还没选工序类型。请在右侧选「加工」。""",
+                response.getReply());
+        var prompt = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(client).chatLowTemp(prompt.capture(), eq(question));
+        assertTrue(prompt.getValue().contains("每项最多两行、两句短话"));
+        assertTrue(prompt.getValue().contains("再说明在哪儿改、改什么"));
+        assertFalse(prompt.getValue().contains("the field"));
         assertTrue(response.getDiffs().isEmpty());
         assertFalse(response.isApplied());
     }

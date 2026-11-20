@@ -20,6 +20,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.lang.reflect.Field;
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.HashMap;
@@ -206,6 +207,39 @@ class ProductionDemandQueryToolTest {
         assertEquals(2, p.get("orderCount"));
         List<Map<String, Object>> orderRefs = (List<Map<String, Object>>) p.get("orderRefs");
         assertEquals(2, orderRefs.size());
+    }
+
+    @Test
+    void summaryUsesEarliestOrdersAndExplainsFractionalBoxes() throws Exception {
+        SalesOrder undated = buildSO("UNDATED", SalesOrderStatus.CONFIRMED);
+        SalesOrder later = buildSO("LATE", SalesOrderStatus.CONFIRMED);
+        later.setRequiredDeliveryDate(LocalDate.of(2026, 11, 23));
+        SalesOrder earliest = buildSO("EARLY", SalesOrderStatus.CONFIRMED);
+        earliest.setRequiredDeliveryDate(LocalDate.of(2026, 11, 20));
+        earliest.setCustomerName("上海连锁餐饮");
+        when(salesOrderRepository.findByFactoryIdAndStatusInOrderByCreatedAtDesc(
+                eq(FACTORY_ID), any(Collection.class), any())).thenReturn(List.of(undated, later, earliest));
+        for (SalesOrder order : List.of(undated, later, earliest)) {
+            SalesOrderItem item = buildItem("PT-A", "酱卤牛肉250g",
+                    order == earliest ? new BigDecimal("1.05") : BigDecimal.ONE,
+                    order == earliest ? BigDecimal.ONE : BigDecimal.ZERO);
+            item.setUnit("盒");
+            when(salesOrderItemRepository.findBySalesOrderId(order.getId())).thenReturn(List.of(item));
+        }
+        when(productionBatchRepository.findByFactoryIdAndCreatedAtAfter(eq(FACTORY_ID), any())).thenReturn(List.of());
+
+        String reply = invokeDoExecute(FACTORY_ID, new HashMap<>()).get("message").toString();
+        assertTrue(reply.startsWith("""
+                建议安排 1 个产品生产。
+
+                | 产品 | 排多少 | 几人几班 | 最早交期 |
+                | --- | --- | --- | --- |
+                | 酱卤牛肉250g | 2.05 盒 | 班次待估、人数待定 | 2026-11-20 |
+                """), reply);
+        assertTrue(reply.contains("上海连锁餐饮 SO-N-EARLY 待交 0.05 盒（2026-11-20）；"
+                + "SO-N-LATE 待交 1 盒（2026-11-23）；另 1 单"), reply);
+        assertTrue(reply.contains("小数来自订单待交量和在产量的原始记录"), reply);
+        assertFalse(reply.contains("SO-N-UNDATED"), reply);
     }
 
     // ===== helpers =====

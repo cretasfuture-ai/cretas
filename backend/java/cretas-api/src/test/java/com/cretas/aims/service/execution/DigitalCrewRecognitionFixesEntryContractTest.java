@@ -315,6 +315,10 @@ class DigitalCrewRecognitionFixesEntryContractTest {
         demand.setIntentCategory("WORKDESK");
         h.recognizerAnswers(answer(input, h.readIntent));
         var mapper = new ObjectMapper();
+        var summaryClient = mock(DashScopeClient.class);
+        h.workdeskSummarizer = org.mockito.Mockito.spy(new WorkdeskOutputSummarizer(summaryClient, mapper));
+        ReflectionTestUtils.setField(h.workdeskSummarizer, "enabled", true);
+        ReflectionTestUtils.setField(h.workdeskSummarizer, "maxChars", 800);
         var skills = new SkillRegistryImpl(mock(SmartBiSkillRepository.class), mapper);
         ReflectionTestUtils.setField(skills, "loadDefaults", true);
         ReflectionTestUtils.setField(skills, "skillsDirectory", "classpath:skills/");
@@ -356,7 +360,29 @@ class DigitalCrewRecognitionFixesEntryContractTest {
             var response = h.sendThroughFacade(com.cretas.aims.dto.ai.IntentExecuteRequest.builder()
                     .userInput(input).mode("READ").build());
 
-            assertThat(response.getFormattedText()).contains("酱卤牛肉", "待产 100 kg", "熟食线", "每班 3 人", "约 2 个班");
+            assertThat(response.getFormattedText())
+                    .isEqualTo("""
+                            建议安排 3 个产品生产。
+
+                            | 产品 | 排多少 | 几人几班 | 最早交期 |
+                            | --- | --- | --- | --- |
+                            | 酱卤牛肉 | 100 kg | 2 个班、每班 3 人 | 未填交期 |
+                            | 藤椒掌中宝 | 60 kg | 1 个班、每班 3 人 | 未填交期 |
+                            | 卤鸭 | 30 kg | 1 个班、每班 3 人 | 未填交期 |
+
+                            客户与订单
+
+                            酱卤牛肉：SO-STAFFING 待交 100 kg（未填交期）。产线：熟食线。
+
+                            藤椒掌中宝：SO-STAFFING 待交 60 kg（未填交期）。产线：熟食线。
+
+                            卤鸭：SO-STAFFING 待交 30 kg（未填交期）。产线：熟食线。
+
+                            （排产量已扣除发货量和在产量。人数按产线配置，班次按每班 8 小时估算。）""")
+                    .doesNotContain("*", "...", "个人次班次");
+            assertThat(response.getMessage()).isEqualTo(response.getFormattedText());
+            verify(h.workdeskSummarizer).apply(any(), org.mockito.ArgumentMatchers.eq(FACTORY));
+            org.mockito.Mockito.verifyNoInteractions(summaryClient);
             assertThat(response.getIntentCode()).isEqualTo(code);
             assertThat(h.recognitionCalls()).isZero();
             verify(orders).findByFactoryIdAndStatusInOrderByCreatedAtDesc(
@@ -385,13 +411,13 @@ class DigitalCrewRecognitionFixesEntryContractTest {
         var lines = mock(ProductionLineRepository.class);
         var order = new SalesOrder();
         order.setId("SO-STAFFING");
+        order.setOrderNumber("SO-STAFFING");
         var item = new SalesOrderItem();
         item.setProductTypeId("PT-BEEF");
         item.setProductName("酱卤牛肉");
         item.setQuantity(new BigDecimal("100"));
         item.setUnit("kg");
         var capacity = new ProductionLineCapacityConfig();
-        capacity.setProductTypeId("PT-BEEF");
         capacity.setProductionLineId("LINE-1");
         capacity.setCapacityPerHour(BigDecimal.TEN);
         capacity.setCapacityUnit(ProductionLineCapacityConfig.CapacityUnit.KG);
@@ -400,9 +426,19 @@ class DigitalCrewRecognitionFixesEntryContractTest {
         line.setStandardWorkers(3);
         when(orders.findByFactoryIdAndStatusInOrderByCreatedAtDesc(
                 org.mockito.ArgumentMatchers.eq(FACTORY), any(), any())).thenReturn(List.of(order));
-        when(items.findBySalesOrderId(order.getId())).thenReturn(List.of(item));
+        var chicken = new SalesOrderItem();
+        chicken.setProductTypeId("PT-CHICKEN");
+        chicken.setProductName("藤椒掌中宝");
+        chicken.setQuantity(new BigDecimal("60"));
+        chicken.setUnit("kg");
+        var duck = new SalesOrderItem();
+        duck.setProductTypeId("PT-DUCK");
+        duck.setProductName("卤鸭");
+        duck.setQuantity(new BigDecimal("30"));
+        duck.setUnit("kg");
+        when(items.findBySalesOrderId(order.getId())).thenReturn(List.of(item, chicken, duck));
         when(caps.findEffectiveForProduct(org.mockito.ArgumentMatchers.eq(FACTORY),
-                org.mockito.ArgumentMatchers.eq("PT-BEEF"), any())).thenReturn(List.of(capacity));
+                anyString(), any())).thenReturn(List.of(capacity));
         when(lines.findByIdAndFactoryIdAndDeletedAtIsNull("LINE-1", FACTORY)).thenReturn(Optional.of(line));
         var tool = new ProductionDemandQueryTool();
         ReflectionTestUtils.setField(tool, "salesOrderRepository", orders);

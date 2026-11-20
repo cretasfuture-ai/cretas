@@ -109,14 +109,25 @@ class ReportCostQueryToolContractTest {
         ProductTypeRepository catalog = mock(ProductTypeRepository.class);
         when(catalog.findByFactoryIdAndIsActiveTrue("F1")).thenReturn(List.of(beef, duck));
         ReflectionTestUtils.setField(tool, "productTypeRepository", catalog);
-        thisMonth.add(batch(fullName, "600", "100", "50", "40", "80", "kg", ProductionBatchStatus.COMPLETED, false));
+        thisMonth.add(batch(fullName, "600", "100", "50", "40", "80", "盒", ProductionBatchStatus.COMPLETED, false));
         thisMonth.add(batch("酱鸭", "999", "0", "0", "0", "50", "盒", ProductionBatchStatus.COMPLETED, false));
+        lastPeriod.add(batch(fullName, "580", "100", "50", "30", "80", "盒", ProductionBatchStatus.COMPLETED, false));
 
         JsonNode result = run("""
                 {"originalUserInput":"酱卤牛肉成本怎么构成"}
                 """).get("data");
 
-        assertTrue(result.get("message").asText().contains(fullName));
+        String message = result.get("message").asText();
+        assertEquals("""
+                演示·酱卤牛肉250g 每盒成本 ¥9.88：原料 75.9%、人工 12.7%、设备 6.3%、其他 5.1%。
+
+                和上期相比，每盒成本从 ¥9.50 到 ¥9.88（+3.9%）。
+
+                （按完工日期统计：2026-11-01 至 2026-11-14 计入 1 批，上期 2026-10-18 至 2026-10-31 计入 1 批。）""",
+                message);
+        for (String term : List.of("名称以", "成本齐全的", "等长周期", "按每盒成本比", "*", "...")) {
+            assertFalse(message.contains(term), message);
+        }
         JsonNode totals = result.get("data").get("totals");
         assertEquals(600, totals.get("materialCost").asInt());
         assertEquals(100, totals.get("laborCost").asInt());

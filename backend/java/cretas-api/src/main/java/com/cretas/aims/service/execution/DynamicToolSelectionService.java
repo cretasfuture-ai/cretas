@@ -561,9 +561,9 @@ public class DynamicToolSelectionService {
                 response.setIntentName(intent.getIntentName());
                 response.setIntentCategory(intent.getIntentCategory());
                 response.setStatus("SUCCESS");
-                String skillFormattedText = productionDemandReply(skillResult, userQuery)
-                        .orElseGet(() -> formatSkillResult(skillResult));
-                String skillMessage = skillResult.getMessage();
+                Optional<String> schedule = productionDemandReply(skillResult, userQuery);
+                String skillFormattedText = schedule.orElseGet(() -> formatSkillResult(skillResult));
+                String skillMessage = schedule.orElse(skillResult.getMessage());
                 if (skillMessage == null || skillMessage.isEmpty()
                         || skillMessage.startsWith("DAG execution")) {
                     skillMessage = skillFormattedText;
