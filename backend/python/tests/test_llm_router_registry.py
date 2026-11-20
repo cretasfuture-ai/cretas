@@ -223,13 +223,13 @@ def test_every_text_chain_ends_on_the_text_tail():
          ① 文本槽有地板且地板在链尾(本条, 断言 SLOT_MODELS —— call_chain 真正遍历的那个);
          ② 「必须排最后」由 `_ABSOLUTE_LAST` 结构键保证(下一条, 用合成成员钉机制)。
     """
-    # VL / WAREHOUSE_VL / DECISION 无文本地板，CHART 只用本地条目。
+    # VL / WAREHOUSE_VL / DECISION 不追加文本地板(见 _NO_TEXT_TAIL_SLOTS 的理由)。
     assert llm_router.SLOT.VL in llm_router._NO_TEXT_TAIL_SLOTS
     tail = set(llm_router._TEXT_TAIL)
     assert tail, "文本地板空了 —— 每个文本槽都会是空链"
     checked = 0
     for slot, chain in llm_router.SLOT_MODELS.items():
-        if slot in {llm_router.SLOT.VL, llm_router.SLOT.WAREHOUSE_VL, llm_router.SLOT.DECISION}:
+        if slot in llm_router._NO_TEXT_TAIL_SLOTS:
             continue
         assert chain, f"{slot.value} 是空链"
         assert chain[-1] in tail, f"{slot.value}: 链尾 {chain[-1]} 不是文本地板成员"
@@ -450,7 +450,7 @@ def test_aliyun_c_is_gone_from_registry_chains_and_provider_config(monkeypatch):
 
 # ── 2026-11-12 (LLM-PROVIDER-SWITCH, Steve 同日定稿) ───────────────────────────────────────────
 #: 人写的「本地优先」槽 —— 与 llm_router 的 `_LOCAL_FIRST_SLOT_NAMES` 来源不同(这里抄的是当天实测表的结论)。
-_MEASURED_LOCAL_COMPETENT = {"chat", "simple_text", "mapper"}
+_MEASURED_LOCAL_COMPETENT = {"chat", "simple_text", "chart", "mapper"}
 _WAREHOUSE_GATES = (None, "warehouse_candidates_not_enabled", "warehouse_v41_not_enabled")
 
 
@@ -469,9 +469,6 @@ def test_aliyun_and_local_only_by_default_and_local_first_where_measured_compete
         chain = llm_router._build_chain(slot)
         assert chain, f"{slot.value} 是空链"
         assert not [p for p in chain if p[0] in llm_router._PAID_ACCOUNTS], f"{slot.value}: {chain}"
-        if slot is llm_router.SLOT.CHART:
-            assert chain == [local]
-            continue
         assert any(p[0].startswith("aliyun") for p in chain), f"{slot.value} 没有阿里云: {chain}"
         assert all(llm_router._refuse_reason(*p) in _WAREHOUSE_GATES for p in chain), chain
         if slot.value in _MEASURED_LOCAL_COMPETENT:

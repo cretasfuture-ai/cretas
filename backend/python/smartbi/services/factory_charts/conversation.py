@@ -324,21 +324,21 @@ async def plan(question: str, catalog: Sequence[Mapping[str, Any]],
         "enable_thinking": False,
     }
     from common.llm_router import (
-        CHART_ATTEMPT_TIMEOUT_SECONDS,
-        CHART_BACKGROUND_ATTEMPT_TIMEOUT_SECONDS,
-        CHART_BACKGROUND_CHAIN_TIMEOUT_SECONDS,
-        CHART_CHAIN_TIMEOUT_SECONDS,
+        CHART_PLAN_ATTEMPT_TIMEOUT_SECONDS,
+        CHART_PLAN_BACKGROUND_ATTEMPT_TIMEOUT_SECONDS,
+        CHART_PLAN_BACKGROUND_CHAIN_TIMEOUT_SECONDS,
+        CHART_PLAN_CHAIN_TIMEOUT_SECONDS,
         LLMChainExhausted,
         SLOT,
         call_chain,
     )
     if background:
-        attempt_timeout = CHART_BACKGROUND_ATTEMPT_TIMEOUT_SECONDS
-        chain_timeout = CHART_BACKGROUND_CHAIN_TIMEOUT_SECONDS
+        attempt_timeout = CHART_PLAN_BACKGROUND_ATTEMPT_TIMEOUT_SECONDS
+        chain_timeout = CHART_PLAN_BACKGROUND_CHAIN_TIMEOUT_SECONDS
         deadline_seconds = BACKGROUND_PLANNER_DEADLINE_SECONDS
     else:
-        attempt_timeout = CHART_ATTEMPT_TIMEOUT_SECONDS
-        chain_timeout = CHART_CHAIN_TIMEOUT_SECONDS
+        attempt_timeout = CHART_PLAN_ATTEMPT_TIMEOUT_SECONDS
+        chain_timeout = CHART_PLAN_CHAIN_TIMEOUT_SECONDS
         deadline_seconds = PLANNER_DEADLINE_SECONDS
     deadline = started + deadline_seconds
     unavailable_reason = "当前授权目录没有与问题匹配的图表"
@@ -482,7 +482,8 @@ async def plan(question: str, catalog: Sequence[Mapping[str, Any]],
             timed_out = isinstance(exc, asyncio.TimeoutError) or (
                 isinstance(exc, LLMChainExhausted) and exc.timed_out
             )
-            return [], {"mode": "rule" if timed_out else "unavailable", "reason": unavailable_reason}
+            reason = "AI 规划超时，关键词规则未命中" if timed_out else unavailable_reason
+            return [], {"mode": "unavailable", "reason": reason}
         mode = {"mode": "rule", "reason": "按问题关键词从授权图表目录选择"}
     if cache_key is not None:
         _PLAN_CACHE[cache_key] = (_cache_monotonic() + PLANNER_CACHE_TTL_SECONDS, tuple(selected), mode)

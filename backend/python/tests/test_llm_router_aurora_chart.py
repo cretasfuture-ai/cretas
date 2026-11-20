@@ -4,6 +4,7 @@ import asyncio
 import datetime
 import json as jsonlib
 import logging
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -43,8 +44,10 @@ def configured_router(monkeypatch):
     monkeypatch.setattr(llm_router, "_f006_lease_is_idle", lambda: True)
 
 
-def test_chart_default_chain_is_rex_and_f006_stays_dedicated():
-    assert llm_router.SLOT_MODELS[llm_router.SLOT.CHART] == [REX]
+def test_shared_chart_chain_and_f006_stay_on_their_original_routes():
+    assert llm_router.SLOT_MODELS[llm_router.SLOT.CHART] == [
+        REX, ALIYUN_A, ("aliyun_b_vl", "qwen3.8-flash"),
+    ]
     assert all(AURORA not in chain for chain in llm_router.SLOT_MODELS.values())
     assert llm_router.SLOT_MODELS[llm_router.SLOT.CHAT][:3] == [
         ("local_canada", "qwen3:8b"), ALIYUN_A, ("aliyun_b_vl", "qwen3.8-flash"),
@@ -169,11 +172,11 @@ async def test_chart_reports_aurora_timeout_or_busy_without_switching_provider(c
 
 
 @pytest.mark.asyncio
-async def test_chart_refuses_legacy_cloud_flag_even_if_cloud_candidates_are_present(configured_router, monkeypatch):
+async def test_foreground_plan_ignores_shared_chart_cloud_candidates(configured_router, monkeypatch):
     client = _ChartClient()
     monkeypatch.setitem(llm_router.SLOT_MODELS, llm_router.SLOT.CHART, [ALIYUN_A, REX])
     monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
-    assert (await llm_router.call_chain(llm_router.SLOT.CHART, PAYLOAD))["choices"]
+    assert (await llm_router.call_chain(llm_router.SLOT.CHART, PAYLOAD, chart_background=False))["choices"]
     assert client.calls == [(REX_URL + "/chat/completions", "Bearer canada-test", REX[1], 15.0)]
 
 
@@ -303,7 +306,7 @@ async def test_background_planner_accepts_aurora_after_12_seconds(timed_planner,
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("background", [False, True])
-async def test_http_timeout_with_no_matching_chart_reports_rule(configured_router, monkeypatch, background):
+async def test_http_timeout_with_no_matching_chart_reports_unavailable(configured_router, monkeypatch, background):
     from smartbi.services.factory_charts import conversation
 
     class TimedOutClient:
@@ -317,8 +320,71 @@ async def test_http_timeout_with_no_matching_chart_reports_rule(configured_route
     chosen, result = await conversation.plan("企鹅生活在哪里？", CATALOG, background=background)
 
     assert chosen == []
-    assert result["mode"] == "rule"
-    assert result["reason"] == "当前授权目录没有与问题匹配的图表"
+    assert result == {"mode": "unavailable", "reason": "AI 规划超时，关键词规则未命中"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("consumer", ["recommender", "insight", "ranking"])
+async def test_shared_chart_callers_keep_cloud_fallback_and_timeouts(configured_router, monkeypatch, consumer):
+    from smartbi.services.chart_recommender import ChartRecommender
+    from smartbi.services.factory_charts import ranking
+    from smartbi.services.insights.chart_insight_service import ChartInsightContext, ChartInsightService
+
+    monkeypatch.setenv("SMARTBI_CHART_PLANNER_BACKGROUND", "1")
+    monkeypatch.delenv("CHART_INSIGHT_LLM_SLOT", raising=False)
+    monkeypatch.setattr(llm_router, "_LOCAL_ATTEMPT_TIMEOUT_S", 8.0)
+    outer_timeouts = []
+
+    async def observe_outer_timeout(awaitable, timeout):
+        outer_timeouts.append(timeout)
+        return await asyncio.wait_for(awaitable, timeout=timeout)
+
+    monkeypatch.setattr(ranking, "asyncio", SimpleNamespace(wait_for=observe_outer_timeout))
+    replies = {
+        "recommender": {"recommendations": [{"chart_type": "line", "title": "产量趋势"}]},
+        "insight": {"claims": [], "finding": None},
+        "ranking": {"rankings": [{"id": "production", "reason_code": "observe"}]},
+    }
+    calls = []
+
+    class Client:
+        async def post(self, url, *, headers, json, timeout):
+            auth = headers["Authorization"]
+            calls.append((auth, json["model"], timeout.read))
+            if auth != "Bearer b-test":
+                return httpx.Response(503, json={"error": "test provider unavailable"})
+            return httpx.Response(200, json={"choices": [{"message": {
+                "content": jsonlib.dumps(replies[consumer]),
+            }}]})
+
+    monkeypatch.setattr(llm_router, "get_llm_http_client", Client)
+    if consumer == "recommender":
+        recommender = ChartRecommender()
+        monkeypatch.setattr(recommender, "settings", SimpleNamespace(llm_api_key="enabled-for-test"))
+        recs = await recommender.recommend({"row_count": 100}, use_cache=False)
+        result = [rec.title for rec in recs]
+    elif consumer == "insight":
+        context = ChartInsightContext(
+            chart_type="LINE", x_dim="time", y_metric="quantity", aggregation="sum",
+            domain="factory", data_pattern="trend:up", permission_tier="finance_visible",
+            factory_id="TEST", series_values=[10, 20], series_labels=["一月", "二月"],
+        )
+        result = await ChartInsightService(pool=None, budget_tracker=None)._call_llm(context)
+    else:
+        ranked, meta = await ranking.rank([{**CATALOG[0], "priority": "required"}], use_ai=True)
+        result = (meta["mode"], ranked[0].get("aiReason"))
+
+    assert calls == [
+        ("Bearer canada-test", "qwen3:8b", 8.0),
+        ("Bearer a-test", "qwen3.8-flash", 30.0),
+        ("Bearer b-test", "qwen3.8-flash", 30.0),
+    ]
+    assert outer_timeouts == ([12] if consumer == "ranking" else [])
+    assert result == {
+        "recommender": ["产量趋势"],
+        "insight": replies["insight"],
+        "ranking": ("ai", ranking.REASONS["observe"]),
+    }[consumer]
 
 
 @pytest.mark.asyncio
@@ -370,7 +436,7 @@ async def test_aurora_yields_in_flight_when_f006_acquires_lease(configured_route
     assert "/".join(AURORA) not in llm_router._CB_FAILURES
 
 
-def test_aurora_probe_observes_an_actual_f006_lease(tmp_path, monkeypatch):
+def test_aurora_probe_observes_an_actual_f006_lease(tmp_path, monkeypatch, capsys):
     from llm.f006_mini_lease import acquire_host_lease
 
     if not llm_router.Path("/proc/locks").is_file():
@@ -383,3 +449,5 @@ def test_aurora_probe_observes_an_actual_f006_lease(tmp_path, monkeypatch):
     finally:
         lease.close()
     assert llm_router._f006_lease_is_idle()
+    with capsys.disabled():
+        print("test_aurora_probe_observes_an_actual_f006_lease: /proc/locks verified idle -> held -> idle")

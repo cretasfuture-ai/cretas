@@ -1,6 +1,8 @@
 # Aurora 图表规划网关
 
-工厂问数默认使用 Rex 的 `local_canada / qwen3:8b`。后台调用可通过 `conversation.plan(..., background=True)` 选择专用 Aurora 网关的 `aurora_chart / qwen3:14b`。专用后台进程也可以设置 `SMARTBI_CHART_PLANNER_BACKGROUND=1`，让其未显式指定通道的规划调用选用 Aurora。两档分别缓存规划结果，模型超时或无法返回合格目录 ID 时使用 #2001 的确定性规则选图。图表规划只向本地通道发请求。
+工厂问数默认使用 Rex 的 `local_canada / qwen3:8b`。后台调用可通过 `conversation.plan(..., background=True)` 选择专用 Aurora 网关的 `aurora_chart / qwen3:14b`。**`SMARTBI_CHART_PLANNER_BACKGROUND=1` 只能设在专用后台进程，禁止设在主服务。** 该变量会让进程内未显式指定通道的规划调用选用 Aurora。两档分别缓存规划结果，模型超时或无法返回合格目录 ID 时使用 #2001 的确定性规则选图。AI 超时且规则未命中时，问数返回不可用并说明原因。
+
+两档本地通道及预算仅用于工厂问数规划。普通图表推荐、洞察及排序沿用共享 `CHART` 槽的 Rex → 阿里云 A → 阿里云 B 链路与既有超时。
 
 ## 预算与启用
 
@@ -55,6 +57,6 @@ Rex 预算采用第三轮任务卡指定的 12.2 秒 p95 参考口径。上表�
 2. 在 Aurora 为 `aurora` 用户准备 `~/.config/cretas/aurora-chart/`，目录权限 0700。用已核验的 47 SSH 主机公钥生成此目录的 `known_hosts`，将专用私钥保存在 `tunnel_ed25519`，权限 0600。另生成 32 字节随机 token 的 64 位十六进制表示，保存在权限 0600 的 `token` 文件，通过现有凭证渠道同步同一 token 给 47 Python。
 3. 先用专用进程运行 `/opt/homebrew/bin/python3 /path/to/aurora_chart_gateway.py --token-file /Users/aurora/.config/cretas/aurora-chart/token`，然后用 `/bin/bash /path/to/aurora_chart_tunnel.sh` 建立反向转发。验证通过后可由两个独立 LaunchAgent 以原参数保持运行。
 4. 在 47 运行 `python3 scripts/ops/aurora_chart_check.py --token-file /path/to/private-token`，核对独立回环监听、健康、访问凭证及允许的模型。分别核对 SSH 专用账号的 shell、其它监听端口及本地转发均被拒绝。推理验收必须走带 F006 租约检查的产品路由。使用合成请求核对完整 JSON 和 usage，并覆盖 F006 租约已占用、图表推理中到来的 F006 请求、图表超时后规则选图。
-5. 通过验证与预算验收后，在 47 的受管 Python 环境设置 `LLM_AURORA_CHART_BASE_URL=http://127.0.0.1:11440/v1` 和 `LLM_AURORA_CHART_TOKEN`。路由经共享脱敏出口发送请求。若 Python 进程配置了通用 HTTP 代理，启动时的 `NO_PROXY` 必须包含 `127.0.0.1`，否则路由跳过 Aurora。通用模型登记探针不向此图表网关发推理。使用现有 Python 发布入口启用。
+5. 通过验证与预算验收后，在 47 的受管 Python 环境设置 `LLM_AURORA_CHART_BASE_URL=http://127.0.0.1:11440/v1` 和 `LLM_AURORA_CHART_TOKEN`。仅在专用后台进程设置 `SMARTBI_CHART_PLANNER_BACKGROUND=1`，主服务须保持该变量未设置。路由经共享脱敏出口发送请求。若 Python 进程配置了通用 HTTP 代理，启动时的 `NO_PROXY` 必须包含 `127.0.0.1`，否则路由跳过 Aurora。通用模型登记探针不向此图表网关发推理。使用现有 Python 发布入口启用。
 
 停用时先撤掉 Python 的 Aurora 配置并验证规则选图，然后停止专用图表隧道与网关，撤销此账户的公钥和 sshd 约束。回读 47 上 11440 消失、原有 11435/11437/11438/11439 回环监听和 F006 健康。

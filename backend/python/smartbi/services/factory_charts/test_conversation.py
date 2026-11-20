@@ -865,6 +865,45 @@ async def test_initial_generic_catalog_is_guided_current_year_and_explicit_join_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(('question', 'status', 'mode'), [
+    ('看产量', 'answered', 'rule'),
+    ('企鹅生活在哪里？', 'unavailable', 'unavailable'),
+])
+async def test_factory_analysis_timeout_reports_the_actual_rule_result(monkeypatch, question, status, mode):
+    candidate = _candidate('production.output:line', 'production.output')
+
+    async def recommendations(_request, _http_request):
+        return {'success': True, 'data': {
+            'factoryId': 'F006', 'source': 'business', 'sourceLabel': '本厂业务系统',
+            'period': {'label': '全部历史'}, 'recommendations': [candidate],
+        }}
+
+    async def timed_out(_slot, _payload, **_kwargs):
+        raise LLMChainExhausted('chart', ['local_canada/qwen3:8b: timeout'])
+
+    monkeypatch.setattr(api, 'factory_recommendations', recommendations)
+    monkeypatch.setattr('common.llm_router.call_chain', timed_out)
+    app = FastAPI()
+
+    @app.middleware('http')
+    async def trusted_identity(request, call_next):
+        request.state.factory_id, request.state.user_id, request.state.role = 'F006', 1309, 'factory_super_admin'
+        return await call_next(request)
+
+    app.include_router(api.router)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as client:
+        response = await client.post('/factory-analysis', json={'question': question})
+    assert response.status_code == 200
+    data = response.json()['data']
+    assert (data['status'], data['plannerMode']['mode']) == (status, mode)
+    if status == 'unavailable':
+        assert data['selectedIds'] == []
+        assert data['plannerMode']['reason'] == 'AI 规划超时，关键词规则未命中'
+    else:
+        assert data['selectedIds'] == [candidate['id']]
+
+
+@pytest.mark.asyncio
 async def test_factory_analysis_reuses_trusted_candidates_and_context(monkeypatch):
     candidate = _candidate('production.output:line', 'production.output')
     async def recommendations(_request, _http_request):
