@@ -9,12 +9,28 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 /**
  * OperationLog 查询. 注意 PG IS NULL 参数类型 hint (database-entity-sync.md §JPQL).
  */
 @Repository
 public interface OperationLogRepository extends JpaRepository<OperationLog, Long> {
+
+    @Query(value = """
+            SELECT o.* FROM operation_logs o
+            WHERE o.factory_id = :factoryId
+              AND o.module = 'MATERIAL_BATCH'
+              AND o.action = 'UNLINK_SOURCE_INDIVIDUAL'
+              AND o.entity_type = 'MaterialBatch'
+              AND o.entity_id IS NOT NULL
+              AND o.success = true
+              AND o.deleted_at IS NULL
+              AND o.old_value ->> 'sourceIndividualId' = :individualId
+            ORDER BY o.created_at DESC, o.id DESC
+            """, nativeQuery = true)
+    List<OperationLog> findMaterialBatchUnlinksByIndividual(
+            @Param("factoryId") String factoryId, @Param("individualId") String individualId);
 
     /**
      * 通用筛选查询. 所有 :param 可传 null 即不过滤. PG 严格类型推断要求 {@code CAST(:p AS string) IS NULL}.

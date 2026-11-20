@@ -378,7 +378,7 @@ class SourceIndividualQueryToolTest {
         Map<String, Object> data = (Map<String, Object>) invoke(Map.of("individual_code", "SL-CATTLE-005", "ask", "downstream")).get("data");
         String summary = (String) data.get("summary");
 
-        assertEquals("SL-CATTLE-005 的去向: 原料批次 MB-NEW(80kg)、MB-OLD(120kg) → 生产批次 PB-8001(酱牛肉) → 成品 FG-0001(酱牛肉) → 出货 DN-2026-001(盒马)", summary);
+        assertEquals("SL-CATTLE-005 的去向: 现挂载原料批次 MB-NEW(80kg)、MB-OLD(120kg) → 生产批次 PB-8001(酱牛肉) → 成品 FG-0001(酱牛肉) → 出货 DN-2026-001(盒马)", summary);
         assertEquals(2, ((List<?>) data.get("batches")).size());
         assertNotNull(data.get("downstream"));
     }

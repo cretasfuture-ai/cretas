@@ -4,6 +4,7 @@ import com.cretas.aims.dto.source.CreateSourceIndividualRequest;
 import com.cretas.aims.dto.user.UserDTO;
 import com.cretas.aims.exception.GlobalExceptionHandler;
 import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.repository.datacenter.OperationLogRepository;
 import com.cretas.aims.repository.source.SourceIndividualRepository;
 import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.source.SourceIndividualDetailService;
@@ -60,7 +61,7 @@ class SourceIndividualRevokeEndpointContractTest {
 
     @BeforeEach
     void setUp() {
-        service = new SourceIndividualService(repository);
+        service = new SourceIndividualService(repository, mock(OperationLogRepository.class));
         ReflectionTestUtils.setField(service, "materialBatchRepository", materialBatchRepository);
         MobileService mobileService = mock(MobileService.class);
         when(mobileService.getUserFromToken(anyString())).thenReturn(UserDTO.builder().id(42L).build());

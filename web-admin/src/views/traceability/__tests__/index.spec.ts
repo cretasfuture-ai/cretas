@@ -71,6 +71,7 @@ vi.mock('@/api/documentTrace', () => ({
 }));
 
 import TracePage from '../index.vue';
+import IndividualDrawer from '../IndividualDrawer.vue';
 
 function ok<T>(data: T) {
   return Promise.resolve({ success: true, data, message: '' });
@@ -534,6 +535,35 @@ describe('溯源查询页 — 来源链三态', () => {
 });
 
 describe('溯源查询页 — 个体抽屉', () => {
+  it('换工厂后迟到的个体档案响应不会覆盖新工厂', async () => {
+    const oldDetail = individualDetail();
+    const newDetail = {
+      ...oldDetail,
+      individual: { ...oldDetail.individual, id: 'si-new', individualCode: 'NEW-FACTORY-001' },
+    };
+    const oldResponse = await ok(oldDetail);
+    let resolveOld!: (res: typeof oldResponse) => void;
+    getDetailMock
+      .mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve; }))
+      .mockImplementationOnce(() => ok(newDetail));
+    const drawer = mount(IndividualDrawer, {
+      global: { plugins: [ElementPlus] },
+      props: { modelValue: false, factoryId: 'F006', individualId: oldDetail.individual.id },
+    });
+    mounted.push(drawer);
+    await drawer.setProps({ modelValue: true });
+    await flushPromises();
+
+    await drawer.setProps({ factoryId: 'F007', individualId: 'si-new' });
+    await flushPromises();
+    expect(getDetailMock).toHaveBeenLastCalledWith('F007', 'si-new');
+    expect(drawer.get('[data-testid="drawer-title"]').text()).toBe('NEW-FACTORY-001');
+
+    resolveOld(oldResponse);
+    await flushPromises();
+    expect(drawer.get('[data-testid="drawer-title"]').text()).toBe('NEW-FACTORY-001');
+  });
+
   it('挂了个体且有 id 的行可点 ⇒ 抽屉调 detail 接口并显示档案', async () => {
     getFullTraceMock.mockImplementation(() => ok(sixCattleTrace()));
     getDetailMock.mockImplementation(() => ok(individualDetail()));

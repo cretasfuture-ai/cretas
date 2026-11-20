@@ -6,6 +6,7 @@ import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.repository.datacenter.OperationLogRepository;
 import com.cretas.aims.repository.source.SourceIndividualRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -43,7 +44,7 @@ class SourceIndividualRevokeContractTest {
 
     @BeforeEach
     void setUp() {
-        service = new SourceIndividualService(repository);
+        service = new SourceIndividualService(repository, org.mockito.Mockito.mock(OperationLogRepository.class));
         ReflectionTestUtils.setField(service, "materialBatchRepository", materialBatchRepository);
     }
 

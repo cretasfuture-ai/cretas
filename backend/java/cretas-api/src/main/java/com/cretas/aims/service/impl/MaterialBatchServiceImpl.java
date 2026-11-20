@@ -2355,13 +2355,13 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
                     .withCode("SOURCE_INDIVIDUAL_NOT_LINKED")
                     .withHint("刷新批次列表查看最新状态");
         }
-        // #1968 M-2 (口径 a): 已有消耗的批次解除后, 它和下游会从按个体的谱系/召回里消失 ⇒ 另需权限,
+        // #1968 M-2: 解除已消耗批次会把它和下游移出当前挂载范围，因此另需权限，
         // 按可配置权限码判 (默认仓储主管 + 厂长), ⛔ 不写死岗位, 提示里也不写岗位名; 权限服务缺失一律拒绝。
         String consumption = consumptionEvidence(factoryId, batch);
         if (consumption != null && (permissionService == null || !permissionService.roleHasConfiguredPermission(
                 factoryId, callerRole, PermissionService.SOURCE_INDIVIDUAL_UNLINK_CONSUMED_PERMISSION))) {
             throw new BusinessException(409, "该批次" + consumption
-                    + ", 解除来源个体会让它和下游从按个体的召回/谱系里消失, 需要「解除已消耗批次挂载」权限")
+                    + "，解除会将批次及其下游移出当前挂载范围，需要「解除已消耗批次挂载」权限")
                     .withCode("SOURCE_INDIVIDUAL_LINK_CONSUMED")
                     .withHint("请联系管理员在权限配置中开通「解除已消耗批次挂载」权限");
         }
@@ -2373,8 +2373,10 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
 
         java.util.Map<String, Object> oldValue = new java.util.HashMap<>();
         oldValue.put("sourceIndividualId", oldIndividualId);
+        oldValue.put("batchNumber", batch.getBatchNumber());
         java.util.Map<String, Object> newValue = new java.util.HashMap<>();
         newValue.put("sourceIndividualId", null);
+        newValue.put("unlinkReason", trimmedReason);
         java.util.Map<String, Object> diffRow = new java.util.HashMap<>();
         diffRow.put("field", "sourceIndividualId");
         diffRow.put("from", oldIndividualId);

@@ -82,6 +82,14 @@ export interface SourceIndividualBatchSummary {
   receiptDate?: string | null;
 }
 
+export interface SourceIndividualPreviouslyLinkedBatch {
+  batchId: string;
+  batchNumber: string | null;
+  unlinkedAt: string;
+  reason: string | null;
+  operatorId: number | null;
+}
+
 /**
  * 下游三组, 元素与溯源血缘节点同一个形状 (`LineageNode`)。
  * 三个数组**永远是数组**, 没有就是空的。
@@ -108,6 +116,8 @@ export interface SourceIndividualDetail {
   siblingsBySire: SourceIndividualSummary[];
   batches: SourceIndividualBatchSummary[];
   downstream: SourceIndividualDownstream;
+  previouslyLinkedBatches?: SourceIndividualPreviouslyLinkedBatch[];
+  previouslyLinkedDownstream?: SourceIndividualDownstream;
 }
 
 export interface SourceIndividualPayload {
