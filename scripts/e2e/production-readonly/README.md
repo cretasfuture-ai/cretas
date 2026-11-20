@@ -132,6 +132,31 @@ URL automatically enables production-read-only mode. CLI credentials are read
 from `E2E_USERNAME` and `E2E_PASSWORD`; expected identity comes from
 `E2E_EXPECTED_USERNAME` and `E2E_FACTORY_ID`. Never echo those variables.
 
+### LIUSHANMEN 黑湖只读验收
+
+生产验收通过上方的 MCP filename 入口运行。通过安全注入把本地
+`.env.test` 中的 `TEST_LIUSHANMEN_ADMIN_USER` / `TEST_LIUSHANMEN_ADMIN_PASS`
+映射到 `username` / `password`，将 `expectedUsername` 设为同一管理员，
+`expectedFactoryId` 设为 `LIUSHANMEN`。三个场景可分别选择，也可在同一登录会话顺序运行。
+
+```text
+scenarios: ["lsm-production-data-analysis-readonly", "lsm-production-cost-readonly", "smartbi-factory-analysis-readonly"]
+```
+
+本地可先验证 CLI 的场景选择，无需加载凭证。第二条命令用于已启动的本地环境，
+从 gitignored `.env.test` 读取管理员凭证。
+
+```powershell
+node scripts/e2e/production-readonly/cli-runner.mjs --dry-run --production-readonly --scenario lsm-production-data-analysis-readonly,lsm-production-cost-readonly,smartbi-factory-analysis-readonly
+
+$env:E2E_FACTORY_ID = 'LIUSHANMEN'
+node --env-file=.env.test scripts/e2e/production-readonly/cli-runner.mjs --headed --base-url http://localhost:5173 --scenario lsm-production-data-analysis-readonly,lsm-production-cost-readonly
+```
+
+数据分析和成本场景分别保留截图、页面状态、控制台错误与 HTTP 4xx/5xx 计数。
+通过须有实时登录响应证明租户，并满足 `actualBusinessWrites == 0` 且无被阻断的写入尝试。
+工厂问数只允许 `F006` 和 `LIUSHANMEN`。
+
 ## Validation
 
 ```powershell

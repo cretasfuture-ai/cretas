@@ -4,7 +4,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { describeHarness, runSuiteWithPage } = require('./core/run-suite.js');
+const { describeHarness, resolveScenarios, runSuiteWithPage } = require('./core/run-suite.js');
 
 function parseArgs(argv) {
   const options = { scenarios: [] };
@@ -40,18 +40,26 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   const baseUrl = args.baseUrl || process.env.E2E_ADMIN_URL || 'http://localhost:5173';
   const productionReadonly = args.productionReadonly || isProductionLike(baseUrl);
+  const scenarios = resolveScenarios(args.scenarios);
   if (args.dryRun) {
     console.log(JSON.stringify({ ...describeHarness(), baseUrl, productionReadonly, selectedScenarios: args.scenarios }, null, 2));
     return;
   }
 
-  const username = process.env.E2E_USERNAME;
-  const password = process.env.E2E_PASSWORD;
-  if (!username || !password) throw new Error('E2E_USERNAME and E2E_PASSWORD are required; credentials must come from a gitignored environment source');
+  const expectedFactoryId = process.env.E2E_FACTORY_ID || 'F006';
+  for (const scenario of scenarios) scenario.validateFactory?.(expectedFactoryId);
+  const isLiushanmen = expectedFactoryId === 'LIUSHANMEN';
+  const username = isLiushanmen ? process.env.TEST_LIUSHANMEN_ADMIN_USER : process.env.E2E_USERNAME;
+  const password = isLiushanmen ? process.env.TEST_LIUSHANMEN_ADMIN_PASS : process.env.E2E_PASSWORD;
+  if (!username || !password) {
+    throw new Error(isLiushanmen
+      ? 'TEST_LIUSHANMEN_ADMIN_USER and TEST_LIUSHANMEN_ADMIN_PASS are required from a gitignored environment source'
+      : 'E2E_USERNAME and E2E_PASSWORD are required from a gitignored environment source');
+  }
   const runId = new Date().toISOString().replace(/[:.]/g, '-');
   const evidenceDir = path.resolve(args.evidenceDir || path.join('.playwright-mcp', 'production-readonly', runId));
   const chromium = await loadChromium();
-  const browser = await chromium.launch({ headless: !args.headed });
+  const browser = await chromium.launch({ headless: !(args.headed || productionReadonly) });
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await context.newPage();
   try {
@@ -61,8 +69,8 @@ async function main() {
       scenarios: args.scenarios,
       username,
       password,
-      expectedUsername: process.env.E2E_EXPECTED_USERNAME || 'f006_admin',
-      expectedFactoryId: process.env.E2E_FACTORY_ID || 'F006',
+      expectedUsername: isLiushanmen ? username : process.env.E2E_EXPECTED_USERNAME || 'f006_admin',
+      expectedFactoryId,
       expectedRole: process.env.E2E_EXPECTED_ROLE || null,
       factoryAccessFactoryId: process.env.E2E_FACTORY_ACCESS_TARGET || null,
       factoryAccessCases: process.env.E2E_FACTORY_ACCESS_CASES ? JSON.parse(process.env.E2E_FACTORY_ACCESS_CASES) : null,

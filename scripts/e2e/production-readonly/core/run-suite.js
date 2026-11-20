@@ -15,6 +15,8 @@ const { runParallelSuites } = require('./parallel-run');
 const SCENARIOS = [
   require('../scenarios/platform-factory-access-readonly'),
   require('../scenarios/smartbi-factory-analysis-readonly'),
+  require('../scenarios/lsm-production-analytics-readonly').dataAnalysis,
+  require('../scenarios/lsm-production-analytics-readonly').cost,
   require('../scenarios/smartbi-catalog-matrix-readonly'),
   require('../scenarios/smartbi-factory-readonly'),
   require('../scenarios/smartbi-guided-readonly'),
@@ -115,6 +117,7 @@ async function runSuiteWithPage(page, options = {}) {
   const runId = options.runId || new Date().toISOString().replace(/[:.]/g, '-');
   const evidenceDir = options.evidenceDir || `.playwright-mcp/production-readonly/${runId}`;
   const scenarioRef = { value: 'bootstrap' };
+  const selectedScenarios = resolveScenarios(options.scenarios);
 
   // The guard is installed before any target-origin navigation or login.
   const mutationGuard = await installMutationGuard(context, { scenarioRef });
@@ -123,10 +126,13 @@ async function runSuiteWithPage(page, options = {}) {
   await context.addInitScript(() => {
     window.__CRETAS_READONLY_HARNESS__ = true;
   });
-  const network = installNetworkRecorder(context, options.network || {});
+  const network = installNetworkRecorder(context, {
+    ...options.network,
+    includeNonApiHttpErrors: options.network?.includeNonApiHttpErrors
+      || selectedScenarios.some(scenario => scenario.includeNonApiHttpErrors),
+  });
   const consoleRecorder = installConsoleRecorder(context, options.console || {});
   const screenshot = createScreenshotWriter(page, evidenceDir, { sensitiveTexts: [expectedUsername] });
-  const selectedScenarios = resolveScenarios(options.scenarios);
   const startedAt = Date.now();
   const startedAtIso = new Date(startedAt).toISOString();
   let loginEvidence;
@@ -134,6 +140,7 @@ async function runSuiteWithPage(page, options = {}) {
 
   try {
     try {
+      for (const scenario of selectedScenarios) scenario.validateFactory?.(expectedFactoryId);
       scenarioRef.value = 'clean-session';
       await establishCleanSession(page, baseUrl);
       scenarioRef.value = 'ui-login';
@@ -142,6 +149,7 @@ async function runSuiteWithPage(page, options = {}) {
         password: options.password,
         expectedUsername,
         expectedFactoryId,
+        requireFactoryResponseProof: selectedScenarios.some(scenario => scenario.validateFactory),
         expectedRole: options.expectedRole,
         allowMobileOnlyLanding: options.allowMobileOnlyLanding,
         appMountTimeoutMs: options.appMountTimeoutMs,
