@@ -93,7 +93,7 @@ def entry(monkeypatch):
             _COST_TREND, "2026-11-19最高。",
             "有记录的日期里，2026-11-10的成本最高，2026-10-26最低。"
             "从首条记录（2026-10-24）到末条记录（2026-11-19），成本增加60.0%。",
-            "2026-11-10的成本是2026-10-26的30.0倍。可对照这两处的工单明细，"
+            "2026-10-26的成本很低，可能当天工单较少或存在缺价。可对照2026-11-10和2026-10-26的工单明细，"
             "核对工单数，以及材料费和人工费哪一项相差更多。",
         ),
         (
@@ -144,14 +144,14 @@ def test_same_name_products_keep_codes_in_the_finding_and_suggestion(entry):
     model.return_value = None
     payload = _request(
         "BAR", "product", "cost", [100, 20, 30],
-        ["样品 · BCP2026100001", "样品 · BCP2026100002", "套装 · 加量"], "ranking:top-share:50-80:n2-3",
+        ["样品 · C P2026100001", "样品 · BCP2026100002", "套装 · PLUS"], "ranking:top-share:50-80:n2-3",
     )
     response = client.post(_PATH, json=payload, headers=_headers())
 
     assert response.status_code == 200
     result = response.json()["data"]
-    assert "样品 · BCP2026100001的成本最高，样品 · BCP2026100002最低" in result["finding"]
-    assert "样品 · BCP2026100001的成本是样品 · BCP2026100002的5.0倍" in result["suggestion"]
+    assert "样品 · C P2026100001的成本最高，样品 · BCP2026100002最低" in result["finding"]
+    assert "样品 · C P2026100001的成本是样品 · BCP2026100002的5.0倍" in result["suggestion"]
 
 
 def test_zero_cost_baseline_has_no_ratio(entry):
@@ -163,8 +163,37 @@ def test_zero_cost_baseline_has_no_ratio(entry):
     assert response.status_code == 200
     result = response.json()["data"]
     assert "%" not in result["finding"]
-    assert "2026-10-24的成本记录为0，2026-10-27的成本最高" in result["suggestion"]
+    assert "2026-10-24的成本记录为0，可能当天工单较少或存在缺价。" in result["suggestion"]
+    assert "可对照2026-10-27和2026-10-24的工单明细" in result["suggestion"]
     assert "倍" not in result["suggestion"]
+
+
+@pytest.mark.parametrize(
+    ("high", "low", "expected"),
+    [
+        (200, 10, "套装 · PLUS的成本是进口原切牛腩块500g的20.0倍"),
+        (201, 10, "进口原切牛腩块500g的成本很低，可能该产品工单较少或存在缺价"),
+        (201, 0, "进口原切牛腩块500g的成本记录为0，可能该产品工单较少或存在缺价"),
+    ],
+)
+def test_product_cost_uses_name_and_explains_low_baseline(entry, high, low, expected):
+    client, _, model, _ = entry
+    model.return_value = None
+    payload = _request(
+        "BAR", "product", "cost", [high, low],
+        ["套装 · PLUS", "进口原切牛腩块500g · C P2026100020"], "ranking:top-share:80+:n2-3",
+    )
+    response = client.post(_PATH, json=payload, headers=_headers())
+
+    assert response.status_code == 200
+    result = response.json()["data"]
+    assert result["source"] == "rules"
+    assert "套装 · PLUS的成本最高，进口原切牛腩块500g最低" in result["finding"]
+    assert expected in result["suggestion"]
+    assert "C P2026100020" not in result["finding"] + result["suggestion"]
+    if high > 20 * low:
+        assert "倍" not in result["suggestion"]
+        assert "可对照套装 · PLUS和进口原切牛腩块500g的工单明细" in result["suggestion"]
 
 
 def test_single_product_has_clear_reason_and_never_calls_model(entry):

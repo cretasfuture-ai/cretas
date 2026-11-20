@@ -188,6 +188,37 @@ describe('黑湖生产分析页面', () => {
     production.unmount();
   });
 
+  it('产品成本图的坐标轴仅为同名产品保留编码，图表类别和分析请求保留完整标签', async () => {
+    const fetchInsight = vi.fn(async (_url: string, _init: RequestInit) => ({
+      ok: true,
+      json: async () => ({ success: true, code: 'RESULT_UNAVAILABLE', data: null }),
+    }));
+    vi.stubGlobal('fetch', fetchInsight);
+    const products = [
+      { ...costMetrics, productCode: 'C P2026100020', productName: '进口原切牛腩块500g', totalCost: 30 },
+      { ...costMetrics, productCode: 'C P2026100021', productName: '样品', totalCost: 20 },
+      { ...costMetrics, productCode: 'P22', productName: '样品', totalCost: 10 },
+      { ...costMetrics, productCode: 'P23', productName: '', totalCost: 0 },
+    ];
+    const page = mount(BlacklakeCostAnalysis, {
+      ...mountOptions(true),
+      props: { data: { ...costSnapshot, products }, factoryId: 'LIUSHANMEN', canViewPrice: true },
+    });
+    await flushPromises();
+    await vi.advanceTimersByTimeAsync(300);
+    await flushPromises();
+    const chart = latestChart('产品工单总成本');
+    const labels: string[] = chart.yAxis.data;
+    expect(chart.tooltip.trigger).toBe('axis');
+    expect(labels).toEqual(['进口原切牛腩块500g · C P2026100020', '样品 · C P2026100021', '样品 · P22', 'P23']);
+    expect(labels.map(label => chart.yAxis.axisLabel.formatter(label)))
+      .toEqual(['进口原切牛腩块500g', '样品 · C P2026100021', '样品 · P22', 'P23']);
+    const request = fetchInsight.mock.calls.map(([, init]) => JSON.parse(String(init.body)))
+      .find(body => body.y_metric === 'cost' && body.x_dim === 'product');
+    expect(request?.series_labels).toEqual(labels);
+    page.unmount();
+  });
+
   it('两张柱图支持升序、降序和名称排序', async () => {
     const cost = mount(BlacklakeCostAnalysis, {
       ...mountOptions(),

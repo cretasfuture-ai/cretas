@@ -5,7 +5,7 @@ import { blacklakeInsightChart } from './blacklakeChartData';
 import BlacklakeChartAnalysis from './BlacklakeChartAnalysis.vue';
 
 const props = defineProps<{
-  points: Array<{ label: string; value: number }>;
+  points: Array<{ label: string; value: number; axisLabel?: string }>;
   analysisPoints?: Array<{ label: string; value: number }>;
   title: string;
   unit: string;
@@ -42,11 +42,12 @@ watchEffect(() => {
     }
   }
   const points = sorted.value;
+  const axisLabels = new Map(points.map(point => [point.label, point.axisLabel ?? point.label]));
   chart.setOption({
     tooltip: { trigger: 'axis', confine: true, renderMode: 'richText' },
     grid: { top: 10, right: 24, bottom: 28, left: 12, containLabel: true },
     yAxis: { type: 'category', inverse: true, data: points.map(point => point.label),
-      axisLabel: { width: 180, overflow: 'truncate' } },
+      axisLabel: { width: 180, overflow: 'truncate', formatter: (label: string) => axisLabels.get(label) ?? label } },
     xAxis: { type: 'value', name: props.unit },
     dataZoom: points.length > 10 ? [{ type: 'slider', yAxisIndex: 0, startValue: 0, endValue: 9, right: 0 }] : [],
     series: [{ type: 'bar', name: props.title, data: points.map(point => point.value), barMaxWidth: 26 }],

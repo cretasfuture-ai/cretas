@@ -160,7 +160,7 @@ def _comparison_product_names(labels: List[str]) -> List[str]:
     names = []
     for label in labels:
         name, separator, code = label.rpartition(" · ")
-        has_code = separator and name.strip() and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", code)
+        has_code = separator and name.strip() and re.fullmatch(r"[A-Za-z _.-]*[0-9][A-Za-z0-9 _.-]*", code)
         names.append(name.rstrip() if has_code else label)
     counts = Counter(names)
     return [name if counts[name] == 1 else label for name, label in zip(names, labels)]
@@ -171,14 +171,19 @@ def _comparison_suggestion(
 ) -> str:
     if ctx.y_metric == "cost":
         ratio = high / low if low > 0 else None
+        if low == 0 or (ratio is not None and ratio > 20):
+            baseline = "记录为0" if low == 0 else "很低"
+            scope = "当天" if ctx.x_dim == "time" else "该产品"
+            return (
+                f"{low_label}的成本{baseline}，可能{scope}工单较少或存在缺价。"
+                f"可对照{high_label}和{low_label}的工单明细，核对工单数，以及材料费和人工费哪一项相差更多。"
+            )
         comparison = f"{high_label}的成本高于{low_label}"
         if ratio is not None and math.isfinite(ratio):
             if round(ratio, 1) > 1:
                 comparison = f"{high_label}的成本是{low_label}的{ratio:.1f}倍"
             elif round((ratio - 1) * 100, 1) > 0:
                 comparison += _fmt_pct((ratio - 1) * 100)
-        elif low == 0:
-            comparison = f"{low_label}的成本记录为0，{high_label}的成本最高"
         return f"{comparison}。可对照这两处的工单明细，核对工单数，以及材料费和人工费哪一项相差更多。"
 
     comparison = f"{low_label}的数量低于{high_label}"
