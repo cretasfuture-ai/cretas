@@ -99,6 +99,7 @@ public class FactoryDataService {
     record FactoryRow(String id, String name, String type, Boolean isActive, LocalDateTime createdAt) {}
 
     static final int MAX_LISTED_FOREIGN_HITS = 200;
+    static final int DEFAULT_SMARTBI_NETWORK_TIMEOUT_MS = 60_000;
 
     private final DataSource cretasDataSource;
     private final ObjectProvider<DataSource> smartbiDataSource;
@@ -106,6 +107,7 @@ public class FactoryDataService {
     private final FactoryDataRequestLedger ledger;
     private final Set<Long> operatorAdminIds;
     private final Clock clock;
+    private final int smartbiNetworkTimeoutMs;
     /** 两个库都是 public; 测试用独立 schema。 */
     private final String schema;
     private final ObjectMapper json = new ObjectMapper().registerModule(new JavaTimeModule())
@@ -116,14 +118,24 @@ public class FactoryDataService {
                               @Qualifier("smartbiPostgresDataSource") ObjectProvider<DataSource> smartbiDataSource,
                               FactoryObjectStore objectStore,
                               FactoryDataRequestLedger ledger,
-                              @Value("${cretas.factory-data.operator-admin-ids:}") String operatorAdminIds) {
+                              @Value("${cretas.factory-data.operator-admin-ids:}") String operatorAdminIds,
+                              @Value("${cretas.factory-data.smartbi-network-timeout-ms:"
+                                      + DEFAULT_SMARTBI_NETWORK_TIMEOUT_MS + "}") int smartbiNetworkTimeoutMs) {
         this(cretasDataSource, smartbiDataSource, objectStore, ledger, parseIds(operatorAdminIds),
-                Clock.systemDefaultZone(), "public");
+                Clock.systemDefaultZone(), "public", smartbiNetworkTimeoutMs);
     }
 
     FactoryDataService(DataSource cretasDataSource, ObjectProvider<DataSource> smartbiDataSource,
                        FactoryObjectStore objectStore, FactoryDataRequestLedger ledger, Set<Long> operatorAdminIds,
                        Clock clock, String schema) {
+        this(cretasDataSource, smartbiDataSource, objectStore, ledger, operatorAdminIds, clock, schema,
+                DEFAULT_SMARTBI_NETWORK_TIMEOUT_MS);
+    }
+
+    FactoryDataService(DataSource cretasDataSource, ObjectProvider<DataSource> smartbiDataSource,
+                       FactoryObjectStore objectStore, FactoryDataRequestLedger ledger, Set<Long> operatorAdminIds,
+                       Clock clock, String schema, int smartbiNetworkTimeoutMs) {
+        if (smartbiNetworkTimeoutMs <= 0) throw new IllegalArgumentException("SmartBI 导出连接的网络超时必须大于 0");
         this.cretasDataSource = cretasDataSource;
         this.smartbiDataSource = smartbiDataSource;
         this.objectStore = objectStore;
@@ -131,6 +143,7 @@ public class FactoryDataService {
         this.operatorAdminIds = Set.copyOf(operatorAdminIds);
         this.clock = clock;
         this.schema = schema;
+        this.smartbiNetworkTimeoutMs = smartbiNetworkTimeoutMs;
     }
 
     // ------------------------------------------------------------------ preview
@@ -370,7 +383,7 @@ public class FactoryDataService {
             manifest.put("requestedFileFormats", requestedFormats.stream().map(Enum::name).toList());
             manifest.put("fileFormats", fmt.stream().map(Enum::name).toList());
             FactoryDataPackageWriter writer = new FactoryDataPackageWriter(out);
-            List<Map<String, Object>> dbManifests = withSnapshot(Database.SMARTBI, smartbi -> {
+            List<Map<String, Object>> dbManifests = withSnapshot(Database.SMARTBI, smartbiNetworkTimeoutMs, smartbi -> {
                 var smartbiScope = FactoryDataScopeResolver.resolveVisible(smartbi, Database.SMARTBI, schema, factoryId);
                 rejectForeignHits(smartbi, smartbiScope);
                 var smartbiMetadata = captureExportMetadata(smartbi, smartbiScope, factoryId);
@@ -409,8 +422,12 @@ public class FactoryDataService {
             ledger.finish(requestId, FactoryDataRequestLedger.Status.SUCCEEDED, toJson(summary),
                     HexFormat.of().formatHex(whole.digest()), counted.count, null);
         } catch (IOException | RuntimeException e) {
+            try {
+                ledger.finish(requestId, FactoryDataRequestLedger.Status.FAILED, null, null, counted.count, e.toString());
+            } catch (RuntimeException ledgerFailure) {
+                if (ledgerFailure != e) e.addSuppressed(ledgerFailure);
+            }
             log.error("factory-data export failed requestId={} factoryId={}", requestId, factoryId, e);
-            ledger.finish(requestId, FactoryDataRequestLedger.Status.FAILED, null, null, counted.count, e.toString());
             throw e;
         }
     }
@@ -447,8 +464,8 @@ public class FactoryDataService {
         }
         if (idleMillis == 0) return work.get();
         long interval = Math.max(1, idleMillis / 3);
-        var failure = new AtomicReference<SQLException>();
-        T result;
+        var failure = new AtomicReference<Throwable>();
+        T result = null;
         // The executor closes and joins the last heartbeat before the caller
         // uses the JDBC connection again or rolls back the read-only snapshot.
         try (var executor = Executors.newSingleThreadScheduledExecutor(
@@ -457,15 +474,27 @@ public class FactoryDataService {
                 try (PreparedStatement ps = waiting.prepareStatement("SELECT 1")) {
                     ps.setQueryTimeout(10);
                     ps.executeQuery().close();
-                } catch (SQLException e) {
-                    failure.set(e);
-                    throw new IllegalStateException(e);
+                } catch (SQLException | RuntimeException e) {
+                    var heartbeatFailure = new SQLException("等待写出期间快照心跳失败", e);
+                    recordSnapshotFailure(failure, heartbeatFailure);
+                    throw new IllegalStateException(heartbeatFailure);
                 }
             }, interval, interval, TimeUnit.MILLISECONDS);
-            result = work.get();
+            try {
+                result = work.get();
+            } catch (RuntimeException | Error e) {
+                recordSnapshotFailure(failure, e);
+            }
         }
-        if (failure.get() != null) throw new SQLException("等待写出期间快照心跳失败", failure.get());
+        if (failure.get() instanceof SQLException e) throw e;
+        if (failure.get() instanceof RuntimeException e) throw e;
+        if (failure.get() instanceof Error e) throw e;
         return result;
+    }
+
+    private static void recordSnapshotFailure(AtomicReference<Throwable> failure, Throwable next) {
+        Throwable first = failure.compareAndExchange(null, next);
+        if (first != null && first != next) first.addSuppressed(next);
     }
 
     private Map<String, Object> exportDatabase(Connection conn, FactoryDataScope scope, String factoryId, Set<Format> formats,
@@ -794,11 +823,29 @@ public class FactoryDataService {
 
     /** 在一个 REPEATABLE READ 只读事务里做完, 最后回滚 (什么都不写)。 */
     private <T> T withSnapshot(Database db, SnapshotWork<T> work) {
+        return withSnapshot(db, 0, work);
+    }
+
+    @FunctionalInterface
+    private interface SnapshotRollback extends AutoCloseable {
+        @Override void close() throws SQLException;
+    }
+
+    private <T> T withSnapshot(Database db, int networkTimeoutMs, SnapshotWork<T> work) {
         try (Connection conn = dataSource(db).getConnection()) {
+            if (networkTimeoutMs > 0) {
+                int existingTimeout = conn.getNetworkTimeout();
+                if (existingTimeout == 0 || existingTimeout > networkTimeoutMs) {
+                    // Bound pgJDBC socket reads, including heartbeats and rollback.
+                    // The pool resets the connection timeout when the loan ends.
+                    conn.setNetworkTimeout(Runnable::run, networkTimeoutMs);
+                }
+            }
             conn.setAutoCommit(false);
             conn.setTransactionIsolation(Connection.TRANSACTION_REPEATABLE_READ);
             conn.setReadOnly(true);
-            try {
+            // Resource cleanup suppresses a rollback failure on the original error.
+            try (SnapshotRollback rollback = conn::rollback) {
                 // 主库连接池设了 idle_in_transaction_session_timeout=30s: 导出边读边往 HTTP 客户端写,
                 // 客户端慢时这个只读事务会「空闲」超过 30 秒被服务器杀掉。本事务内放宽到 15 分钟。
                 try (PreparedStatement ps = conn.prepareStatement("SET LOCAL idle_in_transaction_session_timeout = '15min'")) {
@@ -813,8 +860,6 @@ public class FactoryDataService {
                 }
                 // SmartBI 行级安全的租户变量由 FactoryDataScopeResolver.resolveVisible 在本事务内设置
                 return work.run(conn);
-            } finally {
-                conn.rollback();
             }
         } catch (SQLException e) {
             throw new IllegalStateException(db + " 库读取失败: " + e.getMessage(), e);

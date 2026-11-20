@@ -15,12 +15,22 @@ public final class FactoryDataServiceFixture {
     private FactoryDataServiceFixture() {}
 
     public static FactoryDataService create(DataSource main, DataSource smartbi, Set<Long> operators, String schema) {
+        // The protected restore contract also uses this fixture with the legacy exporter class.
+        return new FactoryDataService(main, smartbiProvider(smartbi), new NoAttachments(),
+                new FactoryDataRequestLedger(main, Clock.systemDefaultZone()), operators, Clock.systemDefaultZone(), schema);
+    }
+
+    static FactoryDataService create(DataSource main, DataSource smartbi, Set<Long> operators, String schema,
+                                     int smartbiNetworkTimeoutMs) {
+        return new FactoryDataService(main, smartbiProvider(smartbi), new NoAttachments(),
+                new FactoryDataRequestLedger(main, Clock.systemDefaultZone()), operators, Clock.systemDefaultZone(),
+                schema, smartbiNetworkTimeoutMs);
+    }
+
+    private static ObjectProvider<DataSource> smartbiProvider(DataSource smartbi) {
         DefaultListableBeanFactory beans = new DefaultListableBeanFactory();
         beans.registerSingleton("smartbiPostgresDataSource", smartbi);
-        ObjectProvider<DataSource> provider = beans.getBeanProvider(DataSource.class);
-        return new FactoryDataService(main, provider, new NoAttachments(),
-                new FactoryDataRequestLedger(main, Clock.systemDefaultZone()), operators, Clock.systemDefaultZone(),
-                schema);
+        return beans.getBeanProvider(DataSource.class);
     }
 
     public static String mainSchema(String schema) {
