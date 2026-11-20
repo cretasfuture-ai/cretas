@@ -227,7 +227,7 @@ for wf in MINI_WORKFLOWS:
     if not trigger or 'labeled' not in trigger.group(1).split(', '):
         print(f'FAIL: {wf} misses pull_request labeled recovery trigger')
         ok = False
-    labels = ('ci-hosted', 'java-full-ready') if wf == 'java-gate-pr.yml' else ('ci-hosted',)
+    labels = ('ci-hosted', 'java-full-ready')
     ignored = "github.event.action == 'labeled'" + ''.join(f" && github.event.label.name != '{label}'" for label in labels)
     accepted = "github.event.action != 'labeled'" + ''.join(f" || github.event.label.name == '{label}'" for label in labels)
     group_guard = f"({ignored} && format('ignored-label-{{0}}', github.run_id)) || "

@@ -120,7 +120,7 @@ on:
 
 concurrency:
   # An unrelated label must never cancel a queued or running gate for this PR.
-  group: web-admin-gate-${{ (github.event.action == 'labeled' && github.event.label.name != 'ci-hosted' && format('ignored-label-{0}', github.run_id)) || github.ref }}
+  group: web-admin-gate-${{ (github.event.action == 'labeled' && github.event.label.name != 'ci-hosted' && github.event.label.name != 'java-full-ready' && format('ignored-label-{0}', github.run_id)) || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -128,12 +128,11 @@ jobs:
   #   清单: scripts/ci/trigger-paths/web-admin-gate.txt (原 on.pull_request.paths 原样搬过去)。
   #   pull_request / merge_group 按 diff 判, 其余事件 (push / schedule / workflow_dispatch) 一律 run=true;
   #   取不到 diff 也 run=true —— 宁可多跑, ⛔ 不因为没量到而跳过。
-  # 下游作业的 if 写成 `!cancelled() && needs.changes.outputs.run != 'false'`: 本作业自己失败
-  # (输出为空) 时下游照跑, ⛔ 不让判定仪器坏掉变成「被跳过 = 必需检查通过」。
+  # 必需检查在步骤中判断 run，并在本作业失败时显式报错。
   # 2026-11-19 (Steve「其他检查也上 mini」): 本作业兼做 mini 路由, ⛔ 必须留在托管机上 (放 mini 上 mini 一满它自己也排队)。
   # 可信 base 路由验证合并组来源、心跳、空闲槽与队列，再输出 runner。
   changes:
-    if: ${{ github.event.action != 'labeled' || github.event.label.name == 'ci-hosted' }}
+    if: ${{ github.event.action != 'labeled' || github.event.label.name == 'ci-hosted' || github.event.label.name == 'java-full-ready' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -184,9 +183,10 @@ jobs:
         run: python3 scripts/ci/changed-paths.py --patterns scripts/ci/trigger-paths/web-admin-gate.txt
 
   vitest:
-    name: ${{ (github.event.action == 'labeled' && github.event.label.name != 'ci-hosted') && 'vitest (ignored label)' || 'vitest' }}
+    # GitHub 不展开 skipped job 的 name 表达式。run=false 时仅跳过实际工作步骤。
+    name: ${{ (github.event.action == 'labeled' && github.event.label.name != 'ci-hosted' && github.event.label.name != 'java-full-ready') && 'vitest (ignored label)' || 'vitest' }}
     needs: changes
-    if: ${{ !cancelled() && needs.changes.result != 'skipped' && needs.changes.outputs.run != 'false' }}
+    if: ${{ !cancelled() && needs.changes.result != 'skipped' }}
     # 2026-08-26: 组织 Actions 免费额度(2000 分钟/月)用尽后, 托管 runner 起不来
     #   —— job 2~4 秒、0 个 step、无日志地失败。改用自建 runner(139, 4 核/7G)。
     # ⚠️ 用具体标签 `cretas` 而不是裸 `self-hosted`: 将来多一台 runner 时
@@ -213,18 +213,28 @@ jobs:
       run:
         working-directory: web-admin
     steps:
+      - name: Require change detection to succeed
+        if: ${{ needs.changes.result != 'success' }}
+        working-directory: .
+        run: |
+          echo '::error::Web Admin Gate change detection did not succeed'
+          exit 1
       - uses: actions/checkout@v7
+        if: ${{ needs.changes.outputs.run != 'false' }}
       - uses: actions/setup-node@v7
+        if: ${{ needs.changes.outputs.run != 'false' }}
         with:
           node-version: '20'
           # ⛔ mini 上不用 actions/cache 恢复 npm 缓存: 各槽共用 ~ghgate/.npm, 原地解压会撞别的槽 (同 Java Gate 的 .m2);
           #    npm 自己的缓存常驻在那里, 本来就是热的。
           cache: ${{ runner.environment == 'github-hosted' && 'npm' || '' }}
           cache-dependency-path: web-admin/package-lock.json
-      - run: npm ci --legacy-peer-deps
+      - if: ${{ needs.changes.outputs.run != 'false' }}
+        run: npm ci --legacy-peer-deps
       # 只跑单测。build / vue-tsc 仍留在 ci.yml 的 full_audit 里 ——
       # 本 workflow 的目的是让「套件绿」重新成为可信信号, 不是把整轮审计搬到每次 push。
       - name: Vitest unit tests
+        if: ${{ needs.changes.outputs.run != 'false' }}
         # WSL reports 16 CPUs while the isolated runner has a six-CPU cgroup quota.
         # Bound worker contention without raising timeouts or excluding tests.
         run: npm test -- --maxWorkers=2
@@ -241,6 +251,7 @@ jobs:
       # 打包耗时更长, 而 web-dist.yml 已经在每次 web-admin push 上真的构建一次,
       # 构建坏了那边会红 —— 再加一遍是重复承载。
       - name: Type check (vue-tsc)
+        if: ${{ needs.changes.outputs.run != 'false' }}
         env:
           # The full project requires more than Node's ~2 GiB default heap on
           # GitHub-hosted runners. Keep the complete check; raise only V8's
