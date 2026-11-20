@@ -34,6 +34,7 @@ import math
 from common.process_secret_harness import with_process_secret_harness
 import os
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
@@ -154,6 +155,40 @@ def _is_comparison_chart(ctx: ChartInsightContext) -> bool:
     )
 
 
+def _comparison_product_names(labels: List[str]) -> List[str]:
+    # Product chart inputs use «name · code» so the full labels identify distinct points.
+    names = []
+    for label in labels:
+        name, separator, code = label.rpartition(" · ")
+        has_code = separator and name.strip() and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", code)
+        names.append(name.rstrip() if has_code else label)
+    counts = Counter(names)
+    return [name if counts[name] == 1 else label for name, label in zip(names, labels)]
+
+
+def _comparison_suggestion(
+    ctx: ChartInsightContext, high_label: str, low_label: str, high: float, low: float,
+) -> str:
+    if ctx.y_metric == "cost":
+        ratio = high / low if low > 0 else None
+        comparison = f"{high_label}的成本高于{low_label}"
+        if ratio is not None and math.isfinite(ratio):
+            if round(ratio, 1) > 1:
+                comparison = f"{high_label}的成本是{low_label}的{ratio:.1f}倍"
+            elif round((ratio - 1) * 100, 1) > 0:
+                comparison += _fmt_pct((ratio - 1) * 100)
+        elif low == 0:
+            comparison = f"{low_label}的成本记录为0，{high_label}的成本最高"
+        return f"{comparison}。可对照这两处的工单明细，核对工单数，以及材料费和人工费哪一项相差更多。"
+
+    comparison = f"{low_label}的数量低于{high_label}"
+    if 0 <= low < high:
+        decrease = (high - low) / high * 100
+        if round(decrease, 1) > 0:
+            comparison = f"{low_label}的数量比{high_label}少{_fmt_pct(decrease)}"
+    return f"{comparison}。可打开{low_label}的报工明细，核对是否有工序漏报，以及两处的计量单位是否一致。"
+
+
 def _comparison_insight(ctx: ChartInsightContext) -> Optional[InsightResult]:
     """Describe the submitted points after an unusable model response."""
     if not _is_comparison_chart(ctx):
@@ -167,12 +202,20 @@ def _comparison_insight(ctx: ChartInsightContext) -> Optional[InsightResult]:
     if not all(math.isfinite(value) for value in values) or not all(label.strip() for label in labels):
         return None
 
+    if ctx.x_dim == "product":
+        labels = _comparison_product_names(labels)
+
     high_idx = max(range(len(values)), key=values.__getitem__)
     low_idx = min(range(len(values)), key=values.__getitem__)
     high, low = values[high_idx], values[low_idx]
     metric = "成本" if ctx.y_metric == "cost" else "数量"
     if high == low:
-        finding = f"这张图里，有记录的各项{metric}相同。"
+        finding = f"这张图里，{len(values)}条记录的{metric}相同。"
+        suggestion = (
+            f"可扩大日期范围，查看其他日期的{metric}是否有变化。"
+            if ctx.x_dim == "time"
+            else "可对照各产品的明细，核对统计范围是否一致。"
+        )
     else:
         high_label, low_label = labels[high_idx], labels[low_idx]
         if ctx.x_dim == "time":
@@ -181,21 +224,15 @@ def _comparison_insight(ctx: ChartInsightContext) -> Optional[InsightResult]:
             if first > 0 and last >= 0:
                 change = (last - first) / first * 100
                 if math.isfinite(change) and round(abs(change), 1) > 0:
-                    direction = "多" if change > 0 else "少"
-                    finding += f"{labels[-1]}比{labels[0]}{direction}{_fmt_pct(abs(change))}。"
+                    direction = "增加" if change > 0 else "减少"
+                    finding += f"从首条记录（{labels[0]}）到末条记录（{labels[-1]}），{metric}{direction}{_fmt_pct(abs(change))}。"
         else:
             finding = f"参与比较的产品中，{high_label}的{metric}最高，{low_label}最低。"
             total = sum(values)
             if low >= 0 and math.isfinite(total):
                 finding += f"{high_label}占这些产品合计{_fmt_pct(high / total * 100)}。"
 
-    suggestion = (
-        "可查看最高和最低对应的工单，分别核对材料费和人工费。"
-        if ctx.y_metric == "cost"
-        else "可打开对应的报工明细，核对工序、单位和数量。"
-    )
-    if high == low:
-        suggestion = "可扩大日期范围，查看其他记录是否有变化。"
+        suggestion = _comparison_suggestion(ctx, high_label, low_label, high, low)
 
     if ctx.permission_tier == "finance_hidden" and _ABSOLUTE_AMOUNT_RE.search(finding):
         return None

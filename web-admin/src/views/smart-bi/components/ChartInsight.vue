@@ -24,7 +24,6 @@
     <div class="chart-insight-body">
       <!-- Finding: always shown -->
       <div class="chart-insight-finding">{{ insight.finding }}</div>
-      <div v-if="insight.source === 'rules' && insight.tier === 2" class="chart-insight-rule-source">规则生成</div>
 
       <!-- Detailed mode: implication + suggestion (when present) -->
       <template v-if="depth === 'detailed'">
@@ -183,11 +182,6 @@ async function handleVote(vote: 'up' | 'down'): Promise<void> {
   flex: 1;
   min-width: 0;
   overflow-wrap: anywhere;
-}
-
-.chart-insight-rule-source {
-  color: var(--el-text-color-secondary, #4a5568);
-  font-size: 12px;
 }
 
 .chart-insight-finding {

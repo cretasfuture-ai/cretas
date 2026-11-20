@@ -51,11 +51,12 @@ _COST_DAYS = [
     )
 ]
 _COST_TREND = _request(
-    "LINE", "time", "cost", [100, 10] * 11 + [160], _COST_DAYS, "trend:mixed:high",
+    "LINE", "time", "cost", [100, 20, 10] + [100] * 11 + [300] + [100] * 7 + [160],
+    _COST_DAYS, "trend:mixed:high",
 )
 _COST_RANK = _request(
     "BAR", "product", "cost", list(range(100, 0, -10)),
-    [f"样品 BCP202610{i:04d}" for i in range(1, 11)], "ranking:top-share:0-50:n9+",
+    [f"样品{i} · BCP202610{i:04d}" for i in range(1, 11)], "ranking:top-share:0-50:n9+",
 )
 _PRODUCTION_TREND = _request(
     "LINE", "time", "quantity", [6300.0, 3087.0],
@@ -86,15 +87,32 @@ def entry(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("payload", "rejected_finding", "expected"),
+    ("payload", "rejected_finding", "expected_finding", "expected_suggestion"),
     [
-        (_COST_TREND, "2026-11-19最高。", "2026-11-19比2026-10-24多60.0%"),
-        (_COST_RANK, "样品 BCP2026100001成本最高。", "样品 BCP2026100001占这些产品合计18.2%"),
-        (_PRODUCTION_TREND, "11日良品下降。", "2026-11-17比2026-11-16少51.0%"),
+        (
+            _COST_TREND, "2026-11-19最高。",
+            "有记录的日期里，2026-11-10的成本最高，2026-10-26最低。"
+            "从首条记录（2026-10-24）到末条记录（2026-11-19），成本增加60.0%。",
+            "2026-11-10的成本是2026-10-26的30.0倍。可对照这两处的工单明细，"
+            "核对工单数，以及材料费和人工费哪一项相差更多。",
+        ),
+        (
+            _COST_RANK, "样品1 · BCP2026100001成本最高。",
+            "参与比较的产品中，样品1的成本最高，样品10最低。样品1占这些产品合计18.2%。",
+            "样品1的成本是样品10的10.0倍。可对照这两处的工单明细，"
+            "核对工单数，以及材料费和人工费哪一项相差更多。",
+        ),
+        (
+            _PRODUCTION_TREND, "11日良品下降。",
+            "有记录的日期里，2026-11-16的数量最高，2026-11-17最低。"
+            "从首条记录（2026-11-16）到末条记录（2026-11-17），数量减少51.0%。",
+            "2026-11-17的数量比2026-11-16少51.0%。可打开2026-11-17的报工明细，"
+            "核对是否有工序漏报，以及两处的计量单位是否一致。",
+        ),
     ],
     ids=["cost-daily-23", "cost-products-9plus", "production-daily-2"],
 )
-def test_rejected_model_output_uses_chart_numbers(entry, payload, rejected_finding, expected):
+def test_rejected_model_output_uses_chart_numbers(entry, payload, rejected_finding, expected_finding, expected_suggestion):
     client, budget, model, persist = entry
     model.return_value = {"finding": rejected_finding, "claims": []}
     response = client.post(_PATH, json=payload, headers=_headers())
@@ -103,7 +121,8 @@ def test_rejected_model_output_uses_chart_numbers(entry, payload, rejected_findi
     result = response.json()["data"]
     assert result is not None
     assert result["source"] == "rules"
-    assert expected in result["finding"]
+    assert result["finding"] == expected_finding
+    assert result["suggestion"] == expected_suggestion
     assert result["input_hash"] is None
     assert model.await_args.args[0].permission_tier == "finance_visible"
     budget.consume.assert_awaited_once_with("LIUSHANMEN", 800)
@@ -116,8 +135,36 @@ def test_model_unavailable_uses_chart_numbers(entry):
     response = client.post(_PATH, json=_PRODUCTION_TREND, headers=_headers())
     assert response.status_code == 200
     assert response.json()["data"]["source"] == "rules"
-    assert "少51.0%" in response.json()["data"]["finding"]
+    assert "数量减少51.0%" in response.json()["data"]["finding"]
     budget.consume.assert_awaited_once_with("LIUSHANMEN", 800)
+
+
+def test_same_name_products_keep_codes_in_the_finding_and_suggestion(entry):
+    client, _, model, _ = entry
+    model.return_value = None
+    payload = _request(
+        "BAR", "product", "cost", [100, 20, 30],
+        ["样品 · BCP2026100001", "样品 · BCP2026100002", "套装 · 加量"], "ranking:top-share:50-80:n2-3",
+    )
+    response = client.post(_PATH, json=payload, headers=_headers())
+
+    assert response.status_code == 200
+    result = response.json()["data"]
+    assert "样品 · BCP2026100001的成本最高，样品 · BCP2026100002最低" in result["finding"]
+    assert "样品 · BCP2026100001的成本是样品 · BCP2026100002的5.0倍" in result["suggestion"]
+
+
+def test_zero_cost_baseline_has_no_ratio(entry):
+    client, _, model, _ = entry
+    model.return_value = None
+    payload = {**_COST_TREND, "series_values": [0, 30], "series_labels": ["2026-10-24", "2026-10-27"]}
+    response = client.post(_PATH, json=payload, headers=_headers())
+
+    assert response.status_code == 200
+    result = response.json()["data"]
+    assert "%" not in result["finding"]
+    assert "2026-10-24的成本记录为0，2026-10-27的成本最高" in result["suggestion"]
+    assert "倍" not in result["suggestion"]
 
 
 def test_single_product_has_clear_reason_and_never_calls_model(entry):
