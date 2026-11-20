@@ -384,10 +384,9 @@ function buildTrendInsight(
   const finding =
     `区间合计${fmtValue(total, meta)}${vsPrevious(total, prevTotal && prevTotal > 0 ? prevTotal : null, meta, '合计')}` +
     `；${peak.label}最高，${fmtValue(peak.value, meta)}${ratioText}${partText}${halfText}${gapNote}。`;
-  const suggestion =
-    ratio !== null && ratio >= 1.5
-      ? `先查${peak.label}：比平均高${fmtPct(ratio - 1)}，看这一天的批次和${mainPart ? mainPart.name : '明细'}。`
-      : `各期差别不大（最高是平均的${ratio?.toFixed(1) ?? '—'}倍），重点看${mainPart ? mainPart.name : '合计'}有没有持续抬升。`;
+  const suggestion = ratio !== null && ratio >= 1.5
+    ? `先查${peak.label}：比平均高${fmtPct(ratio - 1)}，对照其他日期的${mainPart ? mainPart.name : '明细'}，核对峰值来自哪些记录。`
+    : undefined;
   return finish(finding, suggestion);
 }
 
@@ -484,7 +483,7 @@ function buildRankingInsight(
  * Extract PIE series slices: [{label, value}] from config.series[0].data[].
  * Each item may be {name, value} object or bare number.
  */
-function extractPieSlices(config: ChartWithMeta['config']): Array<{ label: string; value: number }> {
+export function extractPieSlices(config: ChartWithMeta['config']): Array<{ label: string; value: number }> {
   const series = config?.series;
   if (!series?.length) return [];
   const s = series[0];
@@ -535,6 +534,9 @@ export function buildProportionInsight(
   }
 
   const share = top.value / total;
+  const check = meta.yMetric === 'revenue' ? '核对本期订单的销量和成交单价，确认销售额主要来自哪些订单'
+    : meta.yMetric === 'cost' ? '核对费用明细的用量和单价，找出金额占比高的原因'
+      : '打开图表明细，核对本期哪些记录贡献最大';
   const prevSlices = chart.previous ? extractPieSlices(chart.previous.config).filter((s) => s.value > 0) : [];
   const prevTotal = prevSlices.reduce((s, p) => s + p.value, 0);
   const prevTop = prevSlices.find((s) => s.label === top.label);
@@ -548,14 +550,14 @@ export function buildProportionInsight(
     const rest = sorted.slice(1, 3).map((s) => `${s.label}${fmtPct(s.value / total)}`).join('、');
     return finish(
       `${top.label}占${fmtPct(share)}（${fmtValue(top.value, meta)}）${prevText}，是最大一项；其次${rest}。`,
-      `${top.label}每降1%，合计约降${(share).toFixed(2)}%，先从${top.label}查起。`,
+      `${top.label}占合计的${fmtPct(share)}，先从这一项${check}。`,
     );
   }
   const k = Math.min(3, sorted.length);
   const topK = sorted.slice(0, k).reduce((s, p) => s + p.value, 0);
   return finish(
-    `最大的${top.label}占${fmtPct(share)}（${fmtValue(top.value, meta)}）${prevText}；前${k}项合计${fmtPct(topK / total)}，各项较分散。`,
-    `前${k}项一起看比只盯一项有效，先看${top.label}和${second.label}。`,
+    `${top.label}占${fmtPct(share)}（${fmtValue(top.value, meta)}），是最大一项${prevText}；前${k}项合计占${fmtPct(topK / total)}，其余${sorted.length - k}项占${fmtPct((total - topK) / total)}。`,
+    `${top.label}和${second.label}合计占${fmtPct((top.value + second.value) / total)}，先从这两项${check}。`,
   );
 }
 
@@ -595,7 +597,7 @@ export function buildComparisonInsight(
   const widestText = widest ? `；差距最大在${widest.label}（${fmtPct(widest.gap)}）` : '';
   return finish(
     `${higher.name}较${lower.name}高${fmtPct(Math.abs(diff))}${widestText}。`,
-    widest ? `先对比${widest.label}这一项，看差距从哪来。` : `逐项对比${higher.name}和${lower.name}，看差距从哪来。`,
+    widest ? `${widest.label}的差距最大（${fmtPct(widest.gap)}），先核对两组在这一项的统计范围和原始明细。` : undefined,
   );
 }
 
@@ -626,9 +628,8 @@ export function buildKpiInsight(
   const gapText = achievement < 1 && !gated ? `，还差${fmtValue(target - actual, meta)}` : '';
   const finding = `达成${(achievement * 100).toFixed(1)}%${gapText}。`;
   let suggestion: string | undefined;
-  if (achievement < 0.8) suggestion = `差距超过两成，先查拖后腿的那一块。`;
-  else if (achievement < 1) suggestion = `还差${(100 - achievement * 100).toFixed(1)}个百分点，盯住剩余进度。`;
-  else suggestion = `已超出目标${(achievement * 100 - 100).toFixed(1)}个百分点，确认是否可持续。`;
+  if (achievement < 1) suggestion = `距离目标还差${(100 - achievement * 100).toFixed(1)}个百分点，按明细核对哪些任务还没有完成。`;
+  else if (achievement > 1) suggestion = `超出目标${(achievement * 100 - 100).toFixed(1)}个百分点，核对超额部分是否来自一次性记录。`;
   return finish(finding, suggestion);
 }
 
