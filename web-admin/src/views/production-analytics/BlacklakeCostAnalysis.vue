@@ -57,11 +57,22 @@ const trendInsight = computed(() => {
       && (row.materialCost ?? 0) >= 0 && !row.hasMaterialCredit && !excluded.has(row.costDate)
       ? [{ label: row.costDate, value: row.totalCost }] : []));
 });
-const productPoints = computed(() => props.data.products.flatMap(row => row.totalCost === null ? [] : [{
-  label: row.productName ? `${row.productName} · ${row.productCode}` : row.productCode,
-  value: row.totalCost,
-  code: row.productCode,
-}]));
+const productPoints = computed(() => {
+  const points = props.data.products.flatMap(row => row.totalCost === null ? [] : [{
+    label: row.productName ? `${row.productName} · ${row.productCode}` : row.productCode,
+    name: row.productName || row.productCode,
+    value: row.totalCost,
+    code: row.productCode,
+  }]);
+  const nameCounts = new Map<string, number>();
+  for (const { name } of points) {
+    nameCounts.set(name, (nameCounts.get(name) ?? 0) + 1);
+  }
+  return points.map(point => ({
+    ...point,
+    axisLabel: nameCounts.get(point.name) === 1 ? point.name : point.label,
+  }));
+});
 const productAnalysisPoints = computed(() => {
   const excluded = new Set(negativeOrders.value.map(row => row.productCode));
   return productPoints.value.filter(row => row.value >= 0 && !excluded.has(row.code));
