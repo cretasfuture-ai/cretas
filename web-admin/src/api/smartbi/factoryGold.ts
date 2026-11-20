@@ -173,9 +173,13 @@ export interface ExternalIssueQuantity {
 
 export interface ExternalCostMetrics {
   materialCost: number | null;
+  materialCostMissingOrders: number;
   laborCost: number | null;
+  laborCostMissingOrders: number;
   totalCost: number | null;
+  costMissingOrders: number;
   unitCosts: Array<{ unit: string; cost: number }>;
+  unitCostMissingOrders: number;
   inputByUnit: ExternalIssueQuantity[];
   issuedMaterialCost: number | null;
   yieldRate: number | null;

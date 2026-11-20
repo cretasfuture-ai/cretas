@@ -13,9 +13,9 @@ let trendChart: echarts.ECharts | undefined;
 let resize: ResizeObserver | undefined;
 
 const moneyFields = [
-  { key: 'totalCost', label: '总成本' },
-  { key: 'materialCost', label: '材料成本' },
-  { key: 'laborCost', label: '人工成本' },
+  { key: 'totalCost', label: '总成本', missingKey: 'costMissingOrders', missingLabel: '成本缺失' },
+  { key: 'materialCost', label: '材料成本', missingKey: 'materialCostMissingOrders', missingLabel: '材料成本缺失' },
+  { key: 'laborCost', label: '人工成本', missingKey: 'laborCostMissingOrders', missingLabel: '人工成本缺失' },
 ] as const;
 const yieldReasons = {
   missing_issue: '缺领料记录',
@@ -32,11 +32,11 @@ const time = new Intl.DateTimeFormat('zh-CN', {
 const snapshots = computed(() => {
   const { costCollectedAt, issueCollectedAt } = props.data;
   if (costCollectedAt && costCollectedAt === issueCollectedAt) {
-    return [{ label: '快照采集', at: costCollectedAt }];
+    return [{ label: '最近快照采集', at: costCollectedAt }];
   }
   return [
-    { label: '工单快照', at: costCollectedAt },
-    { label: '领料快照', at: issueCollectedAt },
+    { label: '最近工单快照', at: costCollectedAt },
+    { label: '最近领料快照', at: issueCollectedAt },
   ].filter((item): item is { label: string; at: string } => item.at !== null);
 });
 const orders = computed(() => props.data.workOrders.slice((orderPage.value - 1) * pageSize, orderPage.value * pageSize));
@@ -111,9 +111,12 @@ onBeforeUnmount(() => {
       ? '所选期间暂无黑湖工单成本和生产领料' : '尚未收到黑湖工单成本或生产领料快照'" />
     <template v-else>
       <div class="kpis">
-        <el-card v-for="{ key, label } in moneyFields" :key="key" shadow="never">
+        <el-card v-for="{ key, label, missingKey, missingLabel } in moneyFields" :key="key" shadow="never">
           <div class="metric-label">{{ label }}</div>
           <strong>{{ money(data.summary[key]) }}</strong>
+          <p v-if="data.summary[missingKey]" class="basis">
+            {{ missingLabel }} {{ data.summary[missingKey] }} 单，未计入合计
+          </p>
         </el-card>
         <el-card shadow="never">
           <div class="metric-label" title="按工单实际产出量加权，同单位内计算">平均单位成本</div>
@@ -121,6 +124,9 @@ onBeforeUnmount(() => {
             <strong>{{ money(item.cost, 4) }}</strong> / {{ item.unit }}
           </div>
           <strong v-if="!data.summary.unitCosts.length">—</strong>
+          <p v-if="data.summary.unitCostMissingOrders" class="basis">
+            单位成本缺失 {{ data.summary.unitCostMissingOrders }} 单，未计入平均
+          </p>
         </el-card>
       </div>
       <p class="basis">
@@ -149,11 +155,18 @@ onBeforeUnmount(() => {
           <el-table-column label="产品" min-width="190">
             <template #default="{ row }">{{ row.productName || row.productCode }}<br><small>{{ row.productCode }}</small></template>
           </el-table-column>
-          <el-table-column v-for="{ key, label } in moneyFields" :key="key" :label="label" align="right" min-width="128" sortable :prop="key">
-            <template #default="{ row }">{{ money(row[key]) }}</template>
+          <el-table-column v-for="{ key, label, missingKey, missingLabel } in moneyFields" :key="key"
+            :label="label" align="right" min-width="128" sortable :prop="key">
+            <template #default="{ row }">
+              {{ money(row[key]) }}
+              <div v-if="row[missingKey]" class="basis">{{ missingLabel }} {{ row[missingKey] }} 单</div>
+            </template>
           </el-table-column>
           <el-table-column label="平均单位成本" min-width="150">
-            <template #default="{ row }">{{ unitCosts(row.unitCosts) }}</template>
+            <template #default="{ row }">
+              {{ unitCosts(row.unitCosts) }}
+              <div v-if="row.unitCostMissingOrders" class="basis">单位成本缺失 {{ row.unitCostMissingOrders }} 单</div>
+            </template>
           </el-table-column>
           <el-table-column label="领料投入" min-width="150">
             <template #default="{ row }">{{ quantities(row.inputByUnit) }}</template>

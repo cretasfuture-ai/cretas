@@ -168,7 +168,7 @@ async def load_external_cost(factory_id: str, start: date | None, end: date | No
         snapshots = {row["dataset"]: row["snapshot_collected_at"] for row in states}
         work_orders = await conn.fetch(
             """SELECT work_order_code, cost_date, product_code, product_name, output_unit, output_qty,
-                      material_cost, labor_cost, total_cost, unit_cost
+                      material_cost, labor_cost, total_cost, unit_cost, snapshot_collected_at
                FROM fact_external_work_order_cost
                WHERE factory_id = $1 AND source_system = 'blacklake'
                  AND ($2::date IS NULL OR cost_date >= $2)
@@ -179,7 +179,7 @@ async def load_external_cost(factory_id: str, start: date | None, end: date | No
         # An order can consume material on days outside the selected completion range.
         issues = await conn.fetch(
             """SELECT line_id, issue_date, work_order_code, material_code, material_name, unit, quantity,
-                      effective_unit_price, issue_cost, price_source
+                      effective_unit_price, issue_cost, price_source, snapshot_collected_at
                FROM fact_external_material_issue
                WHERE factory_id = $1 AND source_system = 'blacklake'
                  AND ((($2::date IS NULL OR issue_date >= $2) AND ($3::date IS NULL OR issue_date <= $3))
@@ -212,7 +212,7 @@ def _quantities(issues: list) -> list[dict]:
             for unit, qty in sorted(by_unit.items(), key=lambda item: item[0] or "")]
 
 
-def _order_yield(order, issues: list, aligned: bool) -> tuple[Decimal | None, Decimal | None, str | None]:
+def _order_yield(order, issues: list) -> tuple[Decimal | None, Decimal | None, str | None]:
     if not issues:
         return None, None, "missing_issue"
     factor = _mass_factor(order["output_unit"])
@@ -221,7 +221,9 @@ def _order_yield(order, issues: list, aligned: bool) -> tuple[Decimal | None, De
         return None, None, "incompatible_units"
     if order["output_qty"] is None:
         return None, None, "missing_output"
-    if not aligned:
+    # The dataset watermarks can move even when a partial or empty snapshot
+    # leaves these facts alone. Compare the actual inputs' collection times.
+    if any(row["snapshot_collected_at"] != order["snapshot_collected_at"] for row in issues):
         return None, None, "snapshot_mismatch"
     if any(row["quantity"] <= 0 for row in issues):
         return None, None, "nonpositive_input"
@@ -248,10 +250,14 @@ def _cost_metrics(entries: list, issues: list, *, issue_snapshot_available: bool
     comparable = [(output, used) for _, output, used, _ in entries if used is not None]
     return {
         "materialCost": _sum_present(order["material_cost"] for order, *_ in entries),
+        "materialCostMissingOrders": sum(order["material_cost"] is None for order, *_ in entries),
         "laborCost": _sum_present(order["labor_cost"] for order, *_ in entries),
+        "laborCostMissingOrders": sum(order["labor_cost"] is None for order, *_ in entries),
         "totalCost": _sum_present(order["total_cost"] for order, *_ in entries),
+        "costMissingOrders": sum(order["total_cost"] is None for order, *_ in entries),
         "unitCosts": [{"unit": unit, "cost": unit_totals[unit] / unit_quantities[unit]}
                       for unit in sorted(unit_totals)],
+        "unitCostMissingOrders": sum(order["unit_cost"] is None for order, *_ in entries),
         "inputByUnit": _quantities(issues),
         "issuedMaterialCost": _sum_present(row["issue_cost"] for row in issues),
         "yieldRate": (sum(output for output, _ in comparable) * 100 / sum(used for _, used in comparable)
@@ -288,7 +294,7 @@ def external_cost_payload(data: ExternalCost, *, permission_message: str | None 
     for order in orders:
         code = order["work_order_code"]
         related = issues_by_order[code]
-        output, used, reason = _order_yield(order, related, cost_at is not None and cost_at == issue_at)
+        output, used, reason = _order_yield(order, related)
         entry = (order, output, used, reason)
         entries.append(entry)
         by_day[order["cost_date"]].append(entry)

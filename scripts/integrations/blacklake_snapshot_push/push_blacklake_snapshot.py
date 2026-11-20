@@ -23,15 +23,18 @@ import argparse
 import ctypes
 import ctypes.wintypes
 import json
+import logging
 import os
 import sqlite3
 import sys
 import urllib.error
 import urllib.request
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 SYSTEM = "blacklake"
 DATASET = "report_output"
@@ -257,11 +260,21 @@ def _matched_project(projects: dict[str, dict], code: str | None, identity) -> d
 
 
 def project_work_order_cost(data: dict, projects: dict[str, dict]) -> list[dict]:
+    candidates = [
+        (_text(cost.get("projectCode"), "projectCode"), cost)
+        for cost in _source_rows(data, "project_cost")
+        if cost.get("deleted") is not True
+    ]
+    counts = Counter(code for code, _ in candidates)
+    duplicated = [count for count in counts.values() if count > 1]
+    if duplicated:
+        logger.warning("project_cost：跳过 %d 个重复工单键（共 %d 行）", len(duplicated), sum(duplicated))
+
     rows = []
-    for cost in _source_rows(data, "project_cost"):
-        if cost.get("deleted") is True:
+    for code, cost in candidates:
+        # Neither record establishes which costing version should win.
+        if counts[code] > 1:
             continue
-        code = _text(cost.get("projectCode"), "projectCode")
         project = _matched_project(projects, code, cost.get("projectId"))
         business_date = (project.get("actualEndTime") or project.get("actualStartTime")
                          or project.get("createTime") or cost.get("createdAt"))

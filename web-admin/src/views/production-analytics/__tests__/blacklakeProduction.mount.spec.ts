@@ -47,7 +47,9 @@ const snapshot: ExternalProductionData = {
 };
 
 const costMetrics: ExternalCostMetrics = {
-  totalCost: 1234.56, materialCost: 1011.23, laborCost: 223.33, unitCosts: [{ unit: '盒', cost: 12.3456 }],
+  totalCost: 1234.56, materialCost: 1011.23, laborCost: 223.33, costMissingOrders: 0,
+  materialCostMissingOrders: 0, laborCostMissingOrders: 0,
+  unitCosts: [{ unit: '盒', cost: 12.3456 }], unitCostMissingOrders: 0,
   inputByUnit: [{ unit: 'kg', quantity: 8.2 }], issuedMaterialCost: 37.72,
   yieldRate: null, yieldComparableOrders: 0, workOrderCount: 1, priceMissingCount: 1, valuationIssueCount: 1,
   overheadMissingCount: 1,
@@ -149,6 +151,7 @@ describe('黑湖生产分析页面', () => {
     ));
     const external = page.getComponent(BlacklakeCostAnalysis);
     expect(external.get('time').attributes('datetime')).toBe(snapshot.snapshotCollectedAt);
+    expect(external.text()).not.toContain('成本缺失');
     for (const text of ['黑湖', '1,234.56', '1,011.23', '223.33', '12.3456',
       '每日成本趋势', '产品成本对比', '工单成本明细', 'WO-BLACKLAKE-1', '领料原料 A',
       '单位不可比', '移动均价', '不含制费（黑湖未提供）', '缺价 1 行', '计价待核 1 行']) {
@@ -160,6 +163,46 @@ describe('黑湖生产分析页面', () => {
         expect.objectContaining({ data: [223.33] }),
       ],
     }));
+    page.unmount();
+  });
+
+  it('在总成本和平均单位成本卡片旁标出未计入的缺失工单', async () => {
+    pythonFetch.mockResolvedValue({
+      success: true,
+      data: {
+        ...costSnapshot,
+        summary: { ...costMetrics, workOrderCount: 3, costMissingOrders: 1, unitCostMissingOrders: 2 },
+      },
+    });
+    const page = mount(FactoryCostAnalysis, mountOptions());
+    await flushPromises();
+    const cards = page.getComponent(BlacklakeCostAnalysis).get('.kpis').findAll('.el-card');
+    expect(cards[0].text()).toContain('1,234.56');
+    expect(cards[0].text()).toContain('成本缺失 1 单，未计入合计');
+    expect(cards[3].text()).toContain('12.3456');
+    expect(cards[3].text()).toContain('单位成本缺失 2 单，未计入平均');
+    page.unmount();
+  });
+
+  it('总成本齐全时仍单独提示材料和人工合计的缺失工单', async () => {
+    pythonFetch.mockResolvedValue({
+      success: true,
+      data: {
+        ...costSnapshot,
+        summary: { ...costMetrics, workOrderCount: 3, materialCostMissingOrders: 1, laborCostMissingOrders: 2 },
+        products: [{ ...costSnapshot.products[0], materialCostMissingOrders: 1, laborCostMissingOrders: 2 }],
+      },
+    });
+    const page = mount(FactoryCostAnalysis, mountOptions());
+    await flushPromises();
+    const analysis = page.getComponent(BlacklakeCostAnalysis);
+    const cards = analysis.get('.kpis').findAll('.el-card');
+    expect(cards[0].text()).toBe('总成本1,234.56');
+    expect(cards[1].text()).toContain('材料成本缺失 1 单，未计入合计');
+    expect(cards[2].text()).toContain('人工成本缺失 2 单，未计入合计');
+    const productTable = analysis.get('.el-table');
+    expect(productTable.text()).toContain('材料成本缺失 1 单');
+    expect(productTable.text()).toContain('人工成本缺失 2 单');
     page.unmount();
   });
 

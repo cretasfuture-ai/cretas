@@ -104,10 +104,8 @@ async def _publish(conn: asyncpg.Connection, factory: str, snapshot: asyncpg.Rec
                 ON CONFLICT (factory_id, source_system, {key_column}) DO UPDATE SET {updates}""",
             rows,
         )
-    await conn.execute(
-        f"""DELETE FROM {table} WHERE factory_id = $1 AND source_system = 'blacklake' AND snapshot_id <> $2""",
-        factory, snapshot_id,
-    )
+    # The collector sends a partial window. An omitted key (or an empty
+    # snapshot) carries no deletion signal for the historical facts.
     await conn.execute(
         """INSERT INTO external_cost_snapshot_state
                (factory_id, source_system, dataset, snapshot_id, snapshot_collected_at)

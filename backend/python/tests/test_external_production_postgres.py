@@ -298,10 +298,13 @@ async def test_nightly_module_exits_two_when_only_excluded_factories_exist(night
     assert DEMO_FIXTURE not in result.stderr
 
 
-def _work_order(code, *, day=DAY, unit="KG", qty="8.25", total="109.112345678", product=CODE):
+def _work_order(
+    code, *, day=DAY, unit="KG", qty="8.25", total="109.112345678", product=CODE, unit_cost="13.2257",
+    material="100.012345678", labor="9.10",
+):
     return dict(workOrderCode=code, costDate=day, productCode=product, productName="产品 A", outputUnit=unit,
-                outputQty=qty, materialCost="100.012345678", laborCost="9.10", otherCost="0.0",
-                totalCost=total, unitCost="13.2257")
+                outputQty=qty, materialCost=material, laborCost=labor, otherCost="0.0",
+                totalCost=total, unitCost=unit_cost)
 
 
 def _issue(line, order, *, day="2026-11-17", unit="g", quantity="10000", price="0",
@@ -328,8 +331,9 @@ async def test_nightly_external_cost_reaches_http_including_decimal_yield_price_
     await _snapshot(bronze, FACTORY, COLLECTED - timedelta(days=1),
                     [_work_order("OLD", total="99999")], dataset="project_cost")
     await _snapshot(bronze, FACTORY, COLLECTED, [
-        _work_order("WO-kg"), _work_order("WO-box", unit="盒", qty="12", total="20.02", product="P2"),
-        _work_order("WO-empty", day="2026-11-16", unit=None, qty=None, total=None, product="P3"),
+        _work_order("WO-kg"), _work_order("WO-box", unit="盒", qty="12", total="20.02", product="P2", unit_cost="0"),
+        _work_order("WO-empty", day="2026-11-16", total=None, product="P3", unit_cost=None),
+        _work_order("WO-components", day="2026-11-17", total="0", product="P4", unit_cost=None, material=None, labor=None),
     ], dataset="project_cost")
     await _snapshot(bronze, FACTORY, COLLECTED, [
         _issue("1", "WO-kg"),
@@ -367,7 +371,9 @@ async def test_nightly_external_cost_reaches_http_including_decimal_yield_price_
         assert summary["laborCost"] == Decimal("18.20")
         assert summary["issuedMaterialCost"] == Decimal("31.43125")
         assert summary["unitCosts"] == [{"unit": "KG", "cost": Decimal("13.2257")},
-                                        {"unit": "盒", "cost": Decimal("13.2257")}]
+                                        {"unit": "盒", "cost": 0}]
+        assert summary["costMissingOrders"] == summary["unitCostMissingOrders"] == 0
+        assert summary["materialCostMissingOrders"] == summary["laborCostMissingOrders"] == 0
         assert summary["priceMissingCount"] == summary["yieldComparableOrders"] == 1
         assert summary["valuationIssueCount"] == 2
         assert summary["overheadMissingCount"] == summary["workOrderCount"] == 2
@@ -385,8 +391,19 @@ async def test_nightly_external_cost_reaches_http_including_decimal_yield_price_
             assert details[line_id]["priceSource"] == "invalid_valuation" and details[line_id]["issueCost"] is None
         assert payload["daily"][0]["totalCost"] == summary["totalCost"]
         assert payload["products"][0]["totalCost"] == Decimal("109.112345678")
-        unfiltered = (await client.get(COST_ROUTE, headers=headers)).json()["data"]
-        assert unfiltered["summary"]["workOrderCount"] == 3
+        unfiltered = json.loads((await client.get(COST_ROUTE, headers=headers)).text, parse_float=Decimal)["data"]
+        assert unfiltered["summary"]["workOrderCount"] == 4
+        assert unfiltered["summary"]["costMissingOrders"] == 1
+        assert unfiltered["summary"]["unitCostMissingOrders"] == 2
+        assert unfiltered["summary"]["materialCostMissingOrders"] == unfiltered["summary"]["laborCostMissingOrders"] == 1
+        assert unfiltered["summary"]["totalCost"] == Decimal("129.132345678")
+        for group in (unfiltered["daily"][0], next(row for row in unfiltered["products"] if row["productCode"] == "P3")):
+            assert group["costMissingOrders"] == group["unitCostMissingOrders"] == 1
+            assert group["totalCost"] is None and group["unitCosts"] == []
+        for group in (unfiltered["daily"][1], next(row for row in unfiltered["products"] if row["productCode"] == "P4")):
+            assert group["totalCost"] == 0 and group["costMissingOrders"] == 0
+            assert group["materialCost"] is None and group["laborCost"] is None
+            assert group["materialCostMissingOrders"] == group["laborCostMissingOrders"] == 1
         native_period = await client.get(COST_ROUTE, params={"endDate": "2025-12-01"}, headers=headers)
         assert native_period.json()["data"] is None
         assert (await client.get(COST_ROUTE, params={"factory_id": "F006"}, headers=headers)).status_code == 403
@@ -411,22 +428,27 @@ async def test_nightly_external_cost_reaches_http_including_decimal_yield_price_
 
 
 @pytest.mark.asyncio
-async def test_external_cost_replay_replaces_latest_and_preserves_both_datasets_on_failure(stores, full_cost_access):
+async def test_external_cost_upsert_retains_history_on_partial_empty_and_failed_snapshots(stores, full_cost_access):
     bronze, source, target = stores
     await bronze.execute("INSERT INTO factory_external_integrations VALUES ($1, 'blacklake', 'ACTIVE')", FACTORY)
-    first = await _snapshot(bronze, FACTORY, COLLECTED, [_work_order("WO")], dataset="project_cost")
+    first = await _snapshot(
+        bronze, FACTORY, COLLECTED, [_work_order("WO"), _work_order("WO-closed")], dataset="project_cost",
+    )
     assert (await sync_external_cost(source, target, FACTORY))["snapshots"] == 1
     async with _client() as client:
         initial = (await client.get(COST_ROUTE, headers=_headers(role="factory_super_admin"))).json()["data"]
         assert initial["issueCollectedAt"] is None and initial["summary"]["priceMissingCount"] is None
         assert initial["workOrders"][0]["yieldUnavailableReason"] == "missing_issue"
-    await _snapshot(bronze, FACTORY, COLLECTED, [_issue("1", "WO")], dataset="production_issue")
+    await _snapshot(bronze, FACTORY, COLLECTED, [_issue("1", "WO"), _issue("3", "WO-closed")],
+                    dataset="production_issue")
     assert (await sync_external_cost(source, target, FACTORY))["snapshots"] == 2
     async with _tenant(target, FACTORY) as conn:
-        version = await conn.fetchval("SELECT xmin::text FROM fact_external_work_order_cost")
+        version = await conn.fetchval("SELECT xmin::text FROM fact_external_work_order_cost WHERE work_order_code = 'WO'")
     await sync_external_cost(source, target, FACTORY)
     async with _tenant(target, FACTORY) as conn:
-        assert await conn.fetchval("SELECT xmin::text FROM fact_external_work_order_cost") == version
+        assert await conn.fetchval(
+            "SELECT xmin::text FROM fact_external_work_order_cost WHERE work_order_code = 'WO'",
+        ) == version
 
     later = COLLECTED + timedelta(hours=1)
     await _snapshot(bronze, FACTORY, later, [_issue("2", "WO")], dataset="production_issue")
@@ -434,16 +456,50 @@ async def test_external_cost_replay_replaces_latest_and_preserves_both_datasets_
     with pytest.raises(ValueError, match="finite"):
         await sync_external_cost(source, target, FACTORY)
     async with _tenant(target, FACTORY) as conn:
-        assert await conn.fetchval("SELECT line_id FROM fact_external_material_issue") == "1"
-        assert await conn.fetchval("SELECT snapshot_id FROM fact_external_work_order_cost") == first
+        assert await conn.fetchval("SELECT array_agg(line_id ORDER BY line_id) FROM fact_external_material_issue") == ["1", "3"]
+        assert await conn.fetchval("SELECT array_agg(DISTINCT snapshot_id) FROM fact_external_work_order_cost") == [first]
 
-    await _snapshot(bronze, FACTORY, later + timedelta(hours=1), [], dataset="project_cost")
+    partial_at = later + timedelta(hours=1)
+    cost_update = await _snapshot(bronze, FACTORY, partial_at, [_work_order("WO", total="120")], dataset="project_cost")
+    issue_update = await _snapshot(bronze, FACTORY, partial_at, [_issue("1", "WO", quantity="11000")],
+                                   dataset="production_issue")
     await sync_external_cost(source, target, FACTORY)
     async with _client() as client:
         headers = _headers(role="factory_super_admin")
-        data = (await client.get(COST_ROUTE, headers=headers)).json()["data"]
-        assert not data["workOrders"] and data["summary"]["totalCost"] is None
-        assert data["materialIssues"][0]["lineId"] == "2"
+        partial = json.loads((await client.get(COST_ROUTE, headers=headers)).text, parse_float=Decimal)["data"]
+        orders = {row["workOrderCode"]: row for row in partial["workOrders"]}
+        assert set(orders) == {"WO", "WO-closed"}
+        assert orders["WO"]["totalCost"] == 120 and orders["WO"]["yieldRate"] == 75
+        assert orders["WO-closed"]["totalCost"] == Decimal("109.112345678")
+        assert orders["WO-closed"]["yieldRate"] == Decimal("82.5")
+        assert {row["lineId"]: row["quantity"] for row in partial["materialIssues"]} == {"1": 11000, "3": 10000}
+        async with _tenant(target, FACTORY) as conn:
+            assert await conn.fetchval(
+                "SELECT snapshot_id FROM fact_external_work_order_cost WHERE work_order_code = 'WO'",
+            ) == cost_update
+            assert await conn.fetchval(
+                "SELECT snapshot_id FROM fact_external_material_issue WHERE line_id = '1'",
+            ) == issue_update
+
+        await _snapshot(bronze, FACTORY, partial_at + timedelta(hours=1), [], dataset="project_cost")
+        await sync_external_cost(source, target, FACTORY)
+        after_empty_cost = json.loads((await client.get(COST_ROUTE, headers=headers)).text, parse_float=Decimal)["data"]
+        assert after_empty_cost["costCollectedAt"] != after_empty_cost["issueCollectedAt"]
+        await _snapshot(bronze, FACTORY, partial_at + timedelta(hours=2), [], dataset="production_issue")
+        await sync_external_cost(source, target, FACTORY)
+        after_empty_issue = json.loads((await client.get(COST_ROUTE, headers=headers)).text, parse_float=Decimal)["data"]
+        assert after_empty_issue["issueCollectedAt"] != partial["issueCollectedAt"]
+        for actual in (after_empty_cost, after_empty_issue):
+            for field in ("summary", "daily", "products", "workOrders", "materialIssues"):
+                assert actual[field] == partial[field]
+
+        await _snapshot(bronze, FACTORY, partial_at + timedelta(hours=3), [_issue("1", "WO", quantity="12000")],
+                        dataset="production_issue")
+        await sync_external_cost(source, target, FACTORY)
+        mixed = (await client.get(COST_ROUTE, headers=headers)).json()["data"]
+        orders = {row["workOrderCode"]: row for row in mixed["workOrders"]}
+        assert orders["WO"]["yieldUnavailableReason"] == "snapshot_mismatch"
+        assert orders["WO-closed"]["yieldRate"] == 82.5
         await bronze.execute("UPDATE factory_external_integrations SET status = 'SUSPENDED' WHERE factory_id = $1", FACTORY)
         assert (await client.get(COST_ROUTE, headers=headers)).json()["data"] is None
 
