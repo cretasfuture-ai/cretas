@@ -69,6 +69,7 @@ class PhraseShortcutEligibilitySseContractTest {
 
     @ParameterizedTest
     @ValueSource(strings = {
+            "9月20日发给上海连锁餐饮的牛肉是哪批原料做的，顺便列出本月出货金额",
             "9月20日发给某客户的牛肉是哪批原料做的，顺便列出本月出货金额",
             "9 月 20 号发给上海连锁餐饮的酱卤牛肉，是哪批原料做的？另外本月出货金额是多少？",
             ORIGINAL + "再列出本月出货金额",
@@ -86,6 +87,8 @@ class PhraseShortcutEligibilitySseContractTest {
 
         verify(h.intents).recognizeIntentWithConfidence(
                 eq(input), eq(FACTORY), eq(3), eq(USER_ID), eq(role), isNull(), isNull(), isNull(), eq(List.of()));
+        verify(h.service).sendSseEvent(any(), eq("result"), argThat(event ->
+                event instanceof IntentExecuteResponse response && "NEED_CLARIFICATION".equals(response.getStatus())));
         verify(h.service).sendSseEvent(any(), eq("complete"), any());
         verify(h.service, never()).sendSseEvent(any(), eq("error"), any());
         verifyNoInteractions(h.dispatch);

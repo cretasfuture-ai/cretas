@@ -10,6 +10,7 @@ import com.cretas.aims.ai.tool.WriteGuardService;
 import com.cretas.aims.ai.tool.impl.alert.AlertListTool;
 import com.cretas.aims.ai.tool.impl.crm.OrderListTool;
 import com.cretas.aims.ai.tool.impl.crm.OrderQueryTool;
+import com.cretas.aims.ai.tool.impl.foodsafety.BatchTraceByCustomerDateTool;
 import com.cretas.aims.ai.tool.impl.material.MaterialBatchQueryTool;
 import com.cretas.aims.ai.tool.impl.material.MaterialExpiringAlertTool;
 import com.cretas.aims.ai.tool.impl.purchase.PurchaseOrderListTool;
@@ -33,6 +34,9 @@ import com.cretas.aims.dto.equipment.EquipmentAlertDTO;
 import com.cretas.aims.dto.intent.IntentMatchResult;
 import com.cretas.aims.dto.material.MaterialBatchDTO;
 import com.cretas.aims.dto.material.MaterialBatchListFilter;
+import com.cretas.aims.dto.traceability.TraceabilityDTO;
+import com.cretas.aims.entity.Customer;
+import com.cretas.aims.entity.ShipmentRecord;
 import com.cretas.aims.entity.QualityInspection;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.RawMaterialType;
@@ -44,11 +48,16 @@ import com.cretas.aims.entity.inventory.SalesDeliveryRecord;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.IntentMatchRecordRepository;
+import com.cretas.aims.repository.CustomerRepository;
+import com.cretas.aims.repository.ShipmentRecordRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.inventory.SalesDeliveryRecordRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
+import com.cretas.aims.security.AuthenticatedActor;
+import com.cretas.aims.security.AuthenticatedActorType;
+import com.cretas.aims.security.PriceFieldResponseAdvice;
 import com.cretas.aims.service.AIIntentService;
 import com.cretas.aims.service.AIIntentDomainDefaultService;
 import com.cretas.aims.service.AnalysisRouterService;
@@ -65,6 +74,7 @@ import com.cretas.aims.service.QualityInspectionService;
 import com.cretas.aims.service.SemanticCacheService;
 import com.cretas.aims.service.ShipmentRecordService;
 import com.cretas.aims.service.SlotExtractor;
+import com.cretas.aims.service.TraceabilityService;
 import com.cretas.aims.service.TwoStageIntentClassifier;
 import com.cretas.aims.service.calibration.CorrectionAgentService;
 import com.cretas.aims.service.calibration.ExternalVerifierService;
@@ -110,7 +120,9 @@ import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockingDetails;
 import static org.mockito.Mockito.never;
@@ -232,6 +244,144 @@ class DateFilterChatEntryContractTest {
     }
 
     // ------------------------------------------------------------------ 质检记录 / 出货记录
+
+    private static final String TRACE_ORIGINAL = "9月20日发给上海连锁餐饮的酱卤牛肉是哪批原料做的";
+    private static final String TRACE_SPACED = "9 月 20 日发给上海连锁餐饮的酱卤牛肉，是哪批原料做的？";
+    private static final String TRACE_INTENT = "BATCH_TRACE_BY_CUSTOMER";
+    private static final String TRACE_FACTORY = "F006";
+    private static final String TRACE_BATCH = "DEMO-20261105-PB-001";
+
+    @ParameterizedTest
+    @CsvSource({TRACE_ORIGINAL + ",sales_manager", TRACE_ORIGINAL + ",factory_super_admin",
+            TRACE_SPACED + ",sales_manager", TRACE_SPACED + ",factory_super_admin"})
+    void customerTraceAppliesTheSameDayInTheOrdinaryReadEntry(String sentence, String role) throws Exception {
+        LocalDate today = LocalDate.now(java.time.ZoneId.of("Asia/Shanghai"));
+        LocalDate date = today.withMonth(9).withDayOfMonth(20);
+        if (date.isAfter(today)) {
+            date = date.minusYears(1);
+        }
+        Customer customer = new Customer();
+        customer.setId("trace-customer");
+        customer.setName("上海连锁餐饮");
+        CustomerRepository customers = mock(CustomerRepository.class);
+        when(customers.findByFactoryId(TRACE_FACTORY)).thenReturn(List.of(customer));
+        ShipmentRecordRepository shipments = mock(ShipmentRecordRepository.class);
+        when(shipments.findByFactoryIdAndCustomerIdOrderByShipmentDateDesc(TRACE_FACTORY, customer.getId()))
+                .thenReturn(List.of(traceShipment(date.plusDays(1), "OTHER-BATCH"),
+                        traceShipment(date, TRACE_BATCH)));
+        TraceabilityService traceability = mock(TraceabilityService.class);
+        TraceabilityDTO.MaterialInfo material = new TraceabilityDTO.MaterialInfo();
+        material.setMaterialName("鲜牛腱");
+        material.setBatchNumber("RM-TRACE-01");
+        TraceabilityDTO.FullTraceResponse trace = new TraceabilityDTO.FullTraceResponse();
+        trace.setMaterials(List.of(material));
+        when(traceability.getFullTrace(TRACE_FACTORY, TRACE_BATCH)).thenReturn(trace);
+        BatchTraceByCustomerDateTool tool = withMapper(new BatchTraceByCustomerDateTool());
+        ReflectionTestUtils.setField(tool, "customerRepository", customers);
+        ReflectionTestUtils.setField(tool, "shipmentRecordRepository", shipments);
+        ReflectionTestUtils.setField(tool, "traceabilityService", traceability);
+
+        IntentExecuteResponse response = executeTraceRead(sentence, role, tool);
+
+        assertThat(response.getStatus()).as(response.getMessage()).isEqualTo("SUCCESS");
+        assertThat(response.getIntentCode()).isEqualTo(TRACE_INTENT);
+        assertThat(response.getMetadata()).containsEntry("toolName", tool.getToolName());
+        var data = mapper.valueToTree(response.getResultData()).path("data");
+        assertThat(data.path("date").asText()).isEqualTo(date.toString());
+        assertThat(data.path("shipments").size()).isEqualTo(1);
+        assertThat(data.path("shipments").get(0).path("shipmentNumber").asText()).isEqualTo("SH-" + date);
+        assertThat(data.path("batchNumbers").get(0).asText()).isEqualTo(TRACE_BATCH);
+        assertThat(data.path("materialTrace").toString()).contains("RM-TRACE-01");
+        assertThat(response.getFormattedText()).contains(date.toString(), TRACE_BATCH, "RM-TRACE-01")
+                .doesNotContain("时间筛选", "不限时间");
+        assertThat(mapper.writeValueAsString(response.getResultData())).doesNotContain("timeRangeNotApplied");
+        assertThat(mapper.writeValueAsString(response.getMetadata())).doesNotContain("timeRangeNotApplied");
+        verify(traceability).getFullTrace(TRACE_FACTORY, TRACE_BATCH);
+        verify(traceability, never()).getFullTrace(anyString(), eq("OTHER-BATCH"));
+    }
+
+    @Test
+    void customerTraceStillWarnsWhenTheToolReceivesDateButDoesNotApplyIt() throws Exception {
+        var tool = withMapper(new BatchTraceByCustomerDateTool() {
+            @Override
+            protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params,
+                                                    Map<String, Object> context) {
+                assertThat(params).containsEntry("date", "9月20日");
+                return buildSimpleResult("查询完成", Map.of("date", params.get("date")));
+            }
+        });
+
+        IntentExecuteResponse response = executeTraceRead(TRACE_SPACED, "sales_manager", tool);
+
+        assertThat(response.getStatus()).isEqualTo("SUCCESS");
+        assertThat(mapper.writeValueAsString(response.getResultData())).contains("timeRangeNotApplied")
+                .doesNotContain("appliedTimeRange");
+        assertThat(response.getFormattedText()).startsWith("注意：");
+    }
+
+    @Test
+    void toolWithoutDateFilteringStillWarnsForTheRequestedRange() throws Exception {
+        EquipmentAlertsService alerts = mock(EquipmentAlertsService.class);
+        when(alerts.getAlertList(eq(F), any(PageRequest.class), any(), any(), any()))
+                .thenReturn(PageResponse.of(List.of(), 1, 20, 0L));
+        AlertListTool tool = withMapper(new AlertListTool());
+        ReflectionTestUtils.setField(tool, "equipmentAlertsService", alerts);
+
+        IntentExecuteResponse response = run(tool, "ALERT_LIST", "ALERT",
+                "查询上个月的设备告警", true, ROLE);
+
+        assertThat(response.getStatus()).isEqualTo("SUCCESS");
+        var warning = mapper.valueToTree(response.getResultData()).path("timeRangeNotApplied");
+        assertThat(warning.path("from").asText()).isEqualTo(lastMonthStart.toString());
+        assertThat(warning.path("to").asText()).isEqualTo(lastMonthEnd.toString());
+        assertThat(new ResultFormatterServiceImpl().format(response)).contains("不限时间");
+        verify(alerts).getAlertList(eq(F), any(PageRequest.class), any(), any(), any());
+    }
+
+    private ShipmentRecord traceShipment(LocalDate date, String batch) {
+        ShipmentRecord shipment = new ShipmentRecord();
+        shipment.setShipmentNumber("SH-" + date);
+        shipment.setShipmentDate(date);
+        shipment.setProductName("酱卤牛肉");
+        shipment.setBatchNumber(batch);
+        return shipment;
+    }
+
+    private IntentExecuteResponse executeTraceRead(String sentence, String role, ToolExecutor tool) throws Exception {
+        AIIntentService recognizer = mock(AIIntentService.class);
+        var intent = AIIntentConfig.builder().intentCode(TRACE_INTENT).intentName(TRACE_INTENT)
+                .intentCategory("QUERY").businessType("FACTORY").sensitivityLevel("LOW")
+                .toolName(tool.getToolName()).build();
+        when(recognizer.getIntentByCode(TRACE_FACTORY, TRACE_INTENT)).thenReturn(Optional.of(intent));
+        when(recognizer.hasPermission(TRACE_INTENT, role)).thenReturn(true);
+        when(registry.getExecutor(tool.getToolName())).thenReturn(Optional.of(tool));
+        ToolDispatchService traceDispatch = spy(dispatch);
+        doReturn(Map.of("date", "9月20日", "customerName", "上海连锁餐饮", "productName", "酱卤牛肉"))
+                .when(traceDispatch).extractParametersWithLLM(eq(TRACE_FACTORY), anyString(), eq(tool), anyMap());
+        var sse = new SseStreamingService(recognizer, mock(SemanticCacheService.class), initializedKnowledge(),
+                mock(AnalysisRouterService.class), mapper.copy().findAndRegisterModules(), registry, traceDispatch,
+                mock(DynamicToolSelectionService.class),
+                mock(DashScopeClient.class), mock(DashScopeConfig.class));
+        BusinessTypeGate businessType = mock(BusinessTypeGate.class);
+        when(businessType.resolveDomain(TRACE_FACTORY)).thenReturn("FACTORY");
+        ReflectionTestUtils.setField(sse, "businessTypeGate", businessType);
+        ReflectionTestUtils.setField(sse, "writeGuardService", new WriteGuardService());
+        var formatter = new ResultFormatterServiceImpl();
+        PriceFieldResponseAdvice priceView = mock(PriceFieldResponseAdvice.class);
+        when(priceView.maskedViewFor(any(), eq(1L))).thenAnswer(invocation -> invocation.getArgument(0));
+        ReflectionTestUtils.setField(formatter, "priceView", priceView);
+        ReflectionTestUtils.setField(sse, "resultFormatterService", formatter);
+        var steps = OrdinaryEntryPipeline.attachTurnSteps(sse);
+        try (var actor = AuthenticatedActor.trustedAsyncScope(
+                new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, 1L, TRACE_FACTORY, role))) {
+            IntentExecuteResponse response = new StreamTurnCollector(sse, steps).collect(TRACE_FACTORY,
+                    IntentExecuteRequest.builder().mode("READ").userInput(sentence).build(), 1L, role);
+            verify(recognizer, atLeastOnce()).hasPermission(TRACE_INTENT, role);
+            return response;
+        } finally {
+            sse.destroy();
+        }
+    }
 
     @ParameterizedTest(name = "识别分支={0}")
     @ValueSource(booleans = {true, false})
