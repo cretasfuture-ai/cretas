@@ -2140,6 +2140,14 @@ function normalizeChartLayout(opt: Record<string, unknown>): void {
   if (!opt || typeof opt !== 'object') return;
   const titleObj = opt.title as { text?: string } | undefined;
   const hasTitle = !!(titleObj && typeof titleObj === 'object' && titleObj.text);
+  if (hasTitle && Array.isArray(opt.series) && opt.series.length === 1 && opt.series[0]?.type === 'pie') {
+    // 饼图不使用 grid。把整个饼图及其外侧标签的布局区域放在标题与底部图例之间。
+    const pie = opt.series[0];
+    pie.top = 48;
+    pie.bottom = typeof opt.legend === 'object' && opt.legend !== null ? 30 : 8;
+    pie.center = ['50%', '50%'];
+    return;
+  }
   const grid = (typeof opt.grid === 'object' && opt.grid && !Array.isArray(opt.grid)
     ? opt.grid : {}) as Record<string, unknown>;
   grid.containLabel = true;
