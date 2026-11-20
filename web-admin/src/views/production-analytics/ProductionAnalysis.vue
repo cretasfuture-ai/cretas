@@ -449,7 +449,7 @@ onBeforeUnmount(() => {
     </div>
 
     <el-alert v-if="external.error.value" :title="external.error.value" type="warning" :closable="false" />
-    <BlacklakeProductionAnalysis v-if="external.data.value" :data="external.data.value" />
+    <BlacklakeProductionAnalysis v-if="external.data.value" :data="external.data.value" :factory-id="factoryId" />
     <template v-else>
     <!-- KPI 卡片 -->
     <div class="kpi-grid" v-if="dashboard?.kpis?.length">

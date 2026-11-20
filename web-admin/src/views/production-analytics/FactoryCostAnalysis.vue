@@ -638,7 +638,7 @@ onBeforeUnmount(() => {
       class="fca-error"
     />
     <el-alert v-if="external.error.value" :title="external.error.value" type="warning" :closable="false" class="fca-error" />
-    <BlacklakeCostAnalysis v-if="external.data.value" v-loading="loading" :data="external.data.value"
+    <BlacklakeCostAnalysis v-if="external.data.value" v-loading="loading" :data="external.data.value" :factory-id="factoryId"
       :can-view-price="canViewPrice" />
 
     <!-- ── 全局空状态: 无任何 gold 数据 ────────────────────── -->

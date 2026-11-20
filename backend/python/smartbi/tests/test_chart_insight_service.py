@@ -389,6 +389,32 @@ class TestEndpointRBAC:
         assert "factory_super_admin" in FINANCE_ROLES, "FINANCE_ROLES must include factory_super_admin"
         assert "warehouse_worker" not in FINANCE_ROLES, "warehouse_worker must NOT be in FINANCE_ROLES"
 
+    async def test_endpoint_checks_tenant_before_service_lookup(self, monkeypatch):
+        from importlib import import_module
+        from fastapi import FastAPI, Request
+        from fastapi.testclient import TestClient
+
+        api = import_module("smartbi.api.chart_insight")
+        lookup = AsyncMock(return_value=None)
+        monkeypatch.setattr(api, "_get_service", lookup)
+        app = FastAPI()
+        app.include_router(api.router)
+
+        @app.middleware("http")
+        async def identity(request: Request, call_next):
+            request.state.factory_id = "F001"
+            request.state.role = "factory_super_admin"
+            return await call_next(request)
+
+        payload = dict(chart_type="BAR", x_dim="product", y_metric="cost", data_pattern="test",
+                       factory_id="F002", series_values=[10], series_labels=["样本"])
+        with TestClient(app) as client:
+            assert client.post("/chart-insight", json=payload).status_code == 403
+            assert client.post("/chart-insight", json={**payload, "factory_id": "F001", "domain": "invalid"}).status_code == 400
+            lookup.assert_not_awaited()
+            assert client.post("/chart-insight", json={**payload, "factory_id": "F001"}).status_code == 503
+            lookup.assert_awaited_once()
+
 
 @pytest.mark.asyncio
 class TestU1Hardening:

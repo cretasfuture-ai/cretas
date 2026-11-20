@@ -744,15 +744,21 @@ async def test_page_endpoint_uses_tenant_period_freshness_and_native_precedence(
 
 
 @pytest.mark.asyncio
-async def test_factory_ask_data_uses_blacklake_facts_without_upload_or_remote_llm(stores, monkeypatch):
+async def test_factory_ask_data_uses_blacklake_facts_without_upload_or_remote_llm(stores, monkeypatch, full_cost_access):
+    from types import SimpleNamespace
     from smartbi.services.factory_charts import (
-        blacklake_production, captured_sources, detail_store, finance_sources, operational_sources,
+        blacklake_cost, blacklake_production, captured_sources, detail_store, finance_sources, operational_sources,
         settled_sources, trusted_business_sources,
     )
     bronze, source, target = stores
     await bronze.execute("INSERT INTO factory_external_integrations VALUES ($1, 'blacklake', 'ACTIVE')", FACTORY)
     await _snapshot(bronze, FACTORY, COLLECTED, [*PAYLOAD, _line("KG", "700", "6", code="POTHER")])
     assert await sync_external_production(source, target) == 1
+    await _snapshot(bronze, FACTORY, COLLECTED, [
+        _work_order("ASK-COST", total="180"),
+        _work_order("ASK-CREDIT", day="2026-11-04", product="CREDIT", material="-500", total="-499"),
+    ], dataset="project_cost")
+    assert (await sync_external_cost(source, target, FACTORY))["snapshots"] == 1
 
     async def no_other_sources(*args, **kwargs):
         return [], [], []
@@ -771,6 +777,13 @@ async def test_factory_ask_data_uses_blacklake_facts_without_upload_or_remote_ll
     monkeypatch.setattr(conversation_store, "_STORE", conversation_store.MemoryConversationStore())
 
     async def planner(question, catalog, *args, **kwargs):
+        if "工单总成本" in question:
+            selected = [item for item in catalog if item["sourceKey"] == "blacklake-cost"]
+            if "授权对照" in question:
+                assert not selected
+                return [], {"mode": "unavailable"}
+            assert len(selected) == 2
+            return [item["id"] for item in selected if ".trend:" in item["id"]], {"mode": "ai"}
         selected = [item for item in catalog if item["sourceKey"] == "blacklake-production"]
         assert "产品 A" not in json.dumps(selected, ensure_ascii=False)
         assert {item.get("sourceQuantityUnit") for item in selected if item["unit"] == "%"} == {"KG", "只", "包", "盒"}
@@ -790,6 +803,34 @@ async def test_factory_ask_data_uses_blacklake_facts_without_upload_or_remote_ll
     assert "黑湖生产报工" in result["facts"][0]["source"]
     assert "黑湖数据不含投入量，无法计算" in result["limitations"]
     assert CODE in result["analysisScopeLabel"]
+    report_scope = {"source": "business", "periodType": "month_range", "year": 2026, "startMonth": 11, "endMonth": 11}
+    async with _client() as client:
+        response = await client.post("/api/smartbi/financial-dashboard/factory-analysis",
+            headers=_headers(role="factory_super_admin"), json={**report_scope, "question": "请画黑湖每日工单总成本趋势"})
+        assert response.status_code == 200, response.text
+        cost_answer = response.json()["data"]
+        assert cost_answer["status"] == "answered"
+        assert [(fact["value"], fact["unit"]) for fact in cost_answer["facts"]] == [("180", "元")]
+        assert any("不含制费" in limitation for limitation in cost_answer["limitations"])
+        assert "2026-11-04" not in str(cost_answer["recommendations"])
+        assert any(item["sourceKey"] == "blacklake-cost" for item in cost_answer["catalog"])
+        negative_day = date(2026, 11, 4)
+        negative_only, error = await blacklake_cost.load(
+            FACTORY, negative_day, negative_day, SimpleNamespace(state=SimpleNamespace(factory_id=FACTORY)),
+        )
+        assert error is None
+        no_charts, gaps = blacklake_cost.build(negative_only)
+        assert no_charts == []
+        assert len(gaps) == 2 and all("排除后无可分析数据" in gap["missing"][0] for gap in gaps)
+
+        async def scoped_access(*_):
+            return cost_scope.CostScope(cost_scope.SCOPED, frozenset({CODE}))
+
+        monkeypatch.setattr(cost_scope, "resolve_cost_scope", scoped_access)
+        denied = await client.post("/api/smartbi/financial-dashboard/factory-analysis",
+            headers=_headers(role="factory_super_admin"), json={**report_scope, "question": "工单总成本授权对照"})
+        assert denied.status_code == 200, denied.text
+        assert all(item["sourceKey"] != "blacklake-cost" for item in denied.json()["data"]["catalog"])
     await bronze.execute(
         "UPDATE factory_external_integrations SET status = 'SUSPENDED' WHERE factory_id = $1",
         FACTORY,

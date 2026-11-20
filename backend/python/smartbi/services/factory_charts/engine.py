@@ -136,9 +136,14 @@ def _subject_id(identity_kind, identity_value):
         ('smartbi-subject-v2:' + identity_kind + ':' + identity_value).encode('utf-8')).hexdigest()[:16]
 
 
-def _catalog_entries(datasets, can_price):
+def _blacklake_sku_source(source):
     from smartbi.services.external_production import SOURCE_KEY
+    from .blacklake_cost import SOURCE_KEY as COST_SOURCE_KEY
 
+    return source in (SOURCE_KEY, COST_SOURCE_KEY)
+
+
+def _catalog_entries(datasets, can_price):
     entries = {}
     names_to_ids = {}
     for dataset in datasets:
@@ -147,6 +152,7 @@ def _catalog_entries(datasets, can_price):
             continue
         if getattr(dataset, 'financial', False) and not can_price:
             continue
+        blacklake_sku = _blacklake_sku_source(source)
         name_col, id_col = _product_columns(dataset.frame)
         if not name_col or name_col not in dataset.frame:
             continue
@@ -161,8 +167,8 @@ def _catalog_entries(datasets, can_price):
             else:
                 kind, value = 'name', name
             sid = _subject_id(kind, value)
-            sku = row.get('产品编码') if source == SOURCE_KEY else None
-            if source == SOURCE_KEY and not sku:
+            sku = row.get('产品编码') if blacklake_sku else None
+            if blacklake_sku and not sku:
                 continue
             label = f'{name} · {sku}' if sku and name != sku else name
             entry = {'id': sid, 'label': label, 'name': name, 'kind': kind, 'value': value}
@@ -232,8 +238,6 @@ def analysis_subjects(datasets, can_price):
 
 def scope_datasets(datasets, request, subjects, can_price):
     """Apply an opaque subject to product-bearing frames before build()."""
-    from smartbi.services.external_production import SOURCE_KEY
-
     if not getattr(request, 'guided', False):
         return list(datasets), None, '全厂范围'
     if not getattr(request, 'analysis_subject', None):
@@ -250,7 +254,7 @@ def scope_datasets(datasets, request, subjects, can_price):
     excluded_sources = []
     for dataset in datasets:
         source = str(dataset.source).split(' · ', 1)[0].lower()
-        if bool(chosen.get('sku')) != (source == SOURCE_KEY):
+        if bool(chosen.get('sku')) != _blacklake_sku_source(source):
             # External SKU identity is not a verified join to native products.
             excluded_sources.append(source)
             continue
@@ -892,7 +896,7 @@ def _card_layout(option, chart_id=''):
 
 
 def _build_dataset(dataset, request, can_price):
-    from . import blacklake_production
+    from . import blacklake_cost, blacklake_production
 
     source_key = dataset.source.split(' · ', 1)[0]
     trusted_source = source_key in _TRUSTED_SOURCE_PREFIXES
@@ -911,6 +915,8 @@ def _build_dataset(dataset, request, can_price):
         charts, gaps = wip_plan_flow_candidates(dataset, request)
     elif dataset.source.startswith(blacklake_production.SOURCE_KEY + ' · '):
         charts, gaps = blacklake_production.build(dataset)
+    elif source_key == blacklake_cost.SOURCE_KEY:
+        charts, gaps = blacklake_cost.build(dataset) if can_price else ([], [])
     elif (dataset.source.startswith('purchase-batch-lineage ·')
           and {"批次已用数量", "批次预留数量", "批次入库数量", "批次数量单位"}
           .issubset({str(column) for column in dataset.frame.columns})):
@@ -933,7 +939,8 @@ def _build_dataset(dataset, request, can_price):
         charts, gaps = factory_candidates(dataset, request, can_price)
     business_source = trusted_source or source_key in {
         'production', 'sales', 'purchase', 'quality', 'process', 'inventory', 'historical-inventory',
-        'production-inspection-fused', 'uploaded-production-inspection-fused', 'wip-plan-flow', blacklake_production.SOURCE_KEY,
+        'production-inspection-fused', 'uploaded-production-inspection-fused', 'wip-plan-flow',
+        blacklake_production.SOURCE_KEY, blacklake_cost.SOURCE_KEY,
     }
     if not business_source:
         from .financial_addons import build as financial_addons

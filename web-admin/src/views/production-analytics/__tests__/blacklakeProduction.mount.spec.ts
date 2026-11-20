@@ -1,8 +1,9 @@
-import { flushPromises, mount } from '@vue/test-utils';
+import { flushPromises, mount, RouterLinkStub } from '@vue/test-utils';
 import ElementPlus, { ElSelect } from 'element-plus';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ExternalCostData, ExternalCostMetrics, ExternalProductionData, ExternalProductionRow } from '@/api/smartbi/factoryGold';
 import BlacklakeCostAnalysis from '../BlacklakeCostAnalysis.vue';
+import BlacklakeBarChart from '../BlacklakeBarChart.vue';
 import BlacklakeProductionAnalysis from '../BlacklakeProductionAnalysis.vue';
 import FactoryCostAnalysis from '../FactoryCostAnalysis.vue';
 import ProductionAnalysis from '../ProductionAnalysis.vue';
@@ -13,7 +14,9 @@ const { pythonFetch, nativeDashboard, setOption, session } = vi.hoisted(() => ({
   setOption: vi.fn(),
   session: { factoryId: 'LIUSHANMEN', switchTo: (_factory: string) => {} },
 }));
-vi.mock('@/api/smartbi/common', () => ({ pythonFetch, PYTHON_LLM_TIMEOUT_MS: 300000 }));
+vi.mock('@/api/smartbi/common', () => ({
+  pythonFetch, PYTHON_LLM_TIMEOUT_MS: 300000, getPythonAuthHeaders: async () => ({ Authorization: 'Bearer fixture' }),
+}));
 vi.mock('@/api/productionAnalytics', () => ({ getProductionDashboard: nativeDashboard }));
 vi.mock('@/api/request', () => ({ default: { get: vi.fn().mockResolvedValue({ data: [] }) } }));
 vi.mock('@/store/modules/auth', async () => {
@@ -76,9 +79,14 @@ const costSnapshot: ExternalCostData = {
   }],
 };
 
-function mountOptions() {
-  return { global: { plugins: [ElementPlus], stubs: { ChartInsight: true, ChartInsightProvider: true } } };
+function mountOptions(realInsight = false) {
+  return { global: { plugins: [ElementPlus], stubs: {
+    RouterLink: RouterLinkStub, ChartInsight: !realInsight, ChartInsightProvider: !realInsight,
+  } } };
 }
+
+const latestChart = (metric: string) => [...setOption.mock.calls].reverse().find(([option]) =>
+  option.series?.some((series: { name: string }) => series.name === metric))?.[0];
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
@@ -96,9 +104,164 @@ afterEach(() => {
   vi.clearAllTimers();
   vi.useRealTimers();
   vi.clearAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe('黑湖生产分析页面', () => {
+  it.each([true, false])('四张图逐张使用图表分析接口，接口可用=%s', async (available) => {
+    const request = vi.fn(async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body));
+      return {
+        ok: available, status: available ? 200 : 503,
+        json: async () => ({ success: true, data: {
+          finding: `接口发现 ${body.y_metric}/${body.x_dim}`, suggestion: '接口建议',
+          source: 'llm', tier: 2,
+        } }),
+      };
+    });
+    vi.stubGlobal('fetch', request);
+    const costData = {
+      ...costSnapshot,
+      daily: [
+        ...costSnapshot.daily, { ...costMetrics, costDate: '2026-11-04',
+          totalCost: -140601.74, materialCost: -152933.11, hasMaterialCredit: true },
+        { ...costMetrics, costDate: '2026-11-05', totalCost: 90, materialCost: 50, hasMaterialCredit: false },
+      ],
+      products: [...costSnapshot.products, {
+        ...costMetrics, productCode: 'CREDIT', productName: '冲销样例', totalCost: 20,
+      }],
+      workOrders: [
+        ...costSnapshot.workOrders,
+        { ...costSnapshot.workOrders[0], costDate: '2026-11-05',
+          workOrderCode: 'NORMAL-ORDER', productCode: 'CREDIT', materialCost: 60, totalCost: 100 },
+        { ...costSnapshot.workOrders[0], costDate: '2026-11-05',
+          workOrderCode: 'CREDIT-ORDER', productCode: 'CREDIT', materialCost: -10, totalCost: -10 },
+      ],
+    };
+    pythonFetch.mockImplementation((path: string) => Promise.resolve({
+      success: true, data: path.includes('external-cost') ? costData : snapshot,
+    }));
+    const cost = mount(FactoryCostAnalysis, mountOptions(true));
+    const production = mount(ProductionAnalysis, mountOptions(true));
+    await flushPromises();
+    await vi.advanceTimersByTimeAsync(300);
+    await flushPromises();
+
+    for (const [page, wanted] of [
+      [cost, ['cost/time', 'cost/product']],
+      [production, ['quantity/time', 'quantity/product']],
+    ] as const) {
+      const blocks = page.findAll('.blacklake-chart-analysis');
+      expect(blocks).toHaveLength(2);
+      blocks.forEach((block, i) => {
+        if (available) {
+          expect(block.text()).toContain(`接口发现 ${wanted[i]}`);
+          expect(block.text()).toContain('接口建议');
+        } else {
+          expect(block.text()).toContain('分析暂不可用，请稍后重试');
+          expect(block.find('.chart-insight-finding').exists()).toBe(false);
+        }
+      });
+      const link = page.findAllComponents(RouterLinkStub).find(item => item.text() === '自由问数出图');
+      expect(link?.props('to')).toEqual({
+        path: '/smart-bi/analysis', query: { tab: 'query', mode: 'factory', source: 'business' },
+      });
+    }
+    const bodies = request.mock.calls.map(([url, init]) => {
+      expect(url).toContain('/api/smartbi/chart-insight');
+      expect(init.headers).toEqual({ Authorization: 'Bearer fixture' });
+      return JSON.parse(String(init.body));
+    });
+    expect(bodies).toHaveLength(4);
+    expect(bodies.every(body => body.factory_id === 'LIUSHANMEN')).toBe(true);
+    expect(bodies.find(body => body.y_metric === 'cost' && body.x_dim === 'time')?.series_labels)
+      .toEqual(['2026-11-18']);
+    expect(bodies.find(body => body.y_metric === 'cost' && body.x_dim === 'product')?.series_values)
+      .toEqual([1234.56]);
+    expect(cost.text()).toContain('不含制费');
+    expect(cost.text()).toContain('异常零单价不计入平均单位成本');
+    cost.unmount();
+    production.unmount();
+  });
+
+  it('两张柱图支持升序、降序和名称排序', async () => {
+    const cost = mount(BlacklakeCostAnalysis, {
+      ...mountOptions(),
+      props: {
+        data: { ...costSnapshot, products: [
+          { ...costSnapshot.products[0], productCode: 'Z', productName: 'Z', totalCost: 30 },
+          { ...costSnapshot.products[0], productCode: 'A', productName: 'A', totalCost: 20 },
+        ] },
+        factoryId: 'LIUSHANMEN', canViewPrice: true,
+      },
+    });
+    const production = mount(ProductionAnalysis, mountOptions());
+    await flushPromises();
+    for (const [page, title, desc, asc] of [
+      [cost, '产品工单总成本', [30, 20], [20, 30]],
+      [production, '成品入库良品排行（KG）', [100.125, 30], [30, 100.125]],
+    ] as const) {
+      const control = page.getComponent(BlacklakeBarChart).getComponent(ElSelect);
+      expect(latestChart(title)?.series[0].data).toEqual(desc);
+      control.vm.$emit('update:modelValue', 'asc');
+      await flushPromises();
+      expect(latestChart(title)?.series[0].data).toEqual(asc);
+      control.vm.$emit('update:modelValue', 'name');
+      await flushPromises();
+      const labels: string[] = latestChart(title)?.yAxis.data;
+      expect(labels).toEqual([...labels].sort(new Intl.Collator('zh-CN', { numeric: true }).compare));
+      control.vm.$emit('update:modelValue', 'desc');
+      await flushPromises();
+      expect(latestChart(title)?.series[0].data).toEqual(desc);
+    }
+    cost.unmount();
+    production.unmount();
+  });
+
+  it('三个成本表所有列均可排序，工单和领料排序覆盖分页外记录', async () => {
+    const page = mount(BlacklakeCostAnalysis, {
+      ...mountOptions(),
+      props: {
+        data: {
+          ...costSnapshot,
+          products: [
+            { ...costSnapshot.products[0], productCode: 'Z', productName: 'Z产品', totalCost: 30 },
+            { ...costSnapshot.products[0], productCode: 'A', productName: 'A产品', totalCost: 20 },
+          ],
+          workOrders: Array.from({ length: 21 }, (_, i) => ({
+            ...costSnapshot.workOrders[0], workOrderCode: `工单-${i}`, totalCost: i,
+          })),
+          materialIssues: Array.from({ length: 21 }, (_, i) => ({
+            ...costSnapshot.materialIssues[0], lineId: String(i), materialName: `原料-${i}`, issueCost: i,
+          })),
+        },
+        factoryId: 'LIUSHANMEN', canViewPrice: true,
+      },
+    });
+    await flushPromises();
+    const tables = page.findAll('.el-table');
+    expect(tables).toHaveLength(3);
+    for (const table of tables) {
+      expect(table.findAll('th.is-sortable')).toHaveLength(table.findAll('th').length);
+    }
+    const textRows = (index: number) => tables[index].findAll('tbody tr').map(row => row.text());
+    expect(textRows(0)[0]).toContain('Z产品');
+    await tables[0].get('th.is-sortable').trigger('click');
+    await flushPromises();
+    expect(textRows(0)[0]).toContain('A产品');
+    expect(textRows(1).join()).not.toContain('工单-20');
+    expect(textRows(2).join()).not.toContain('原料-20');
+    for (const [index, label, last] of [[1, '总成本', '工单-20'], [2, '计入金额', '原料-20']] as const) {
+      const header = tables[index].findAll('th').find(column => column.text() === label);
+      expect(header).toBeDefined();
+      await header?.trigger('click');
+      await header?.trigger('click');
+      await flushPromises();
+      expect(textRows(index)[0]).toContain(last);
+    }
+    page.unmount();
+  });
+
   it('由生产分析页调用真实客户端路径，并按单位、工序、产品隔离趋势和入库排行', async () => {
     const page = mount(ProductionAnalysis, mountOptions());
     await flushPromises();
@@ -115,7 +278,7 @@ describe('黑湖生产分析页面', () => {
     expect(analysis.text()).toContain('130.125');
     expect(analysis.text()).toContain('7.14%');
     expect(analysis.findAll('td').map(cell => cell.text())).not.toContain('230');
-    expect(setOption).toHaveBeenLastCalledWith(expect.objectContaining({
+    expect(latestChart('良品数量')).toEqual(expect.objectContaining({
       yAxis: expect.objectContaining({ name: 'KG' }),
       series: [expect.objectContaining({ data: [130.125] }), expect.objectContaining({ data: [10] })],
     }));
@@ -130,13 +293,13 @@ describe('黑湖生产分析页面', () => {
     await flushPromises();
     product.vm.$emit('update:modelValue', 'P2');
     await flushPromises();
-    expect(setOption).toHaveBeenLastCalledWith(expect.objectContaining({
+    expect(latestChart('良品数量')).toEqual(expect.objectContaining({
       series: [expect.objectContaining({ data: [30] }), expect.objectContaining({ data: [0] })],
     }));
     unit.vm.$emit('update:modelValue', '盒');
     await flushPromises();
     expect(analysis.text()).toContain('4%');
-    expect(setOption).toHaveBeenLastCalledWith(expect.objectContaining({
+    expect(latestChart('良品数量')).toEqual(expect.objectContaining({
       yAxis: expect.objectContaining({ name: '盒' }),
       series: [expect.objectContaining({ data: [48] }), expect.objectContaining({ data: [2] })],
     }));
@@ -159,7 +322,7 @@ describe('黑湖生产分析页面', () => {
       '单位不可比', '移动均价', '不含制费（黑湖未提供）', '缺价 1 行', '计价待核 1 行']) {
       expect(external.text()).toContain(text);
     }
-    expect(setOption).toHaveBeenLastCalledWith(expect.objectContaining({
+    expect(latestChart('总成本')).toEqual(expect.objectContaining({
       series: [
         expect.objectContaining({ data: [1234.56] }), expect.objectContaining({ data: [1011.23] }),
         expect.objectContaining({ data: [223.33] }),
@@ -209,7 +372,7 @@ describe('黑湖生产分析页面', () => {
     const rows = analysis.findAll('tr');
     expect(rows.find(row => row.text().includes('MISSING-UNIT-COST'))?.text()).toContain('缺失');
     expect(rows.find(row => row.text().includes('VALID-ZERO-COST'))?.text()).toContain('0.0000');
-    expect(setOption).toHaveBeenLastCalledWith(expect.objectContaining({
+    expect(latestChart('总成本')).toEqual(expect.objectContaining({
       series: [
         expect.objectContaining({ data: [-140601.74, -8] }),
         expect.objectContaining({
