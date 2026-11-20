@@ -9,6 +9,7 @@ import com.cretas.aims.entity.source.SourceIndividual;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.repository.datacenter.OperationLogRepository;
 import com.cretas.aims.repository.source.SourceIndividualRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -39,6 +40,7 @@ import java.util.UUID;
 public class SourceIndividualService {
 
     private final SourceIndividualRepository repository;
+    private final OperationLogRepository operationLogRepository;
 
     @org.springframework.beans.factory.annotation.Autowired
     private MaterialBatchRepository materialBatchRepository;
@@ -229,7 +231,7 @@ public class SourceIndividualService {
     }
 
     /**
-     * 撤销: 必填原因(≤255); 已被原料批次引用、或已被别的个体当作父本/母本的个体不许撤销
+     * 撤销: 必填原因(≤255); 现挂载或曾挂载过原料批次、或已被别的个体当作父本/母本的个体不许撤销
      * (撤销会让它从溯源链/系谱里消失); 先落原因/撤销人/时间再软删, 行保留,
      * 可经 {@link #listRevoked} 查回。
      *
@@ -265,7 +267,13 @@ public class SourceIndividualService {
             throw new BusinessException(409, "已被批次 " + batchNos
                     + (used.size() > 5 ? " 等 " + used.size() + " 个批次" : "") + " 使用，不能撤销")
                     .withCode("IN_USE")
-                    .withHint("先处理引用它的批次, 再撤销该个体档案");
+                    .withHint("可在个体谱系查看当前挂载的批次");
+        }
+        // 先查现挂载，再查解除日志。解除在同一事务内清除挂载并写日志。
+        if (!operationLogRepository.findMaterialBatchUnlinksByIndividual(factoryId, id).isEmpty()) {
+            throw new BusinessException(409, "该个体曾挂载原料批次，档案需保留以供追溯和召回")
+                    .withCode("IN_USE_HISTORY")
+                    .withHint("可在个体谱系的「曾挂载」分组查看批次及下游去向");
         }
         entity.setRevokeReason(r);
         entity.setRevokedBy(revokedBy);

@@ -1,5 +1,6 @@
 'use strict';
 const { redactText } = require('./sanitizer');
+const { isFactoryAnalysisUrl } = require('../config/factory-analysis-scope');
 function validateParallelRuns(runs, parent = {}) {
   if (!Array.isArray(runs) || runs.length < 2 || runs.length > 3) throw new Error('parallelRuns must contain 2 or 3 independent runs');
   if (parent.expectedFactoryId && parent.expectedFactoryId !== 'F006') throw new Error('Parallel acceptance is limited to F006');
@@ -58,7 +59,7 @@ async function runParallelSuites(parentPage, options, runSuiteWithPage) {
   const actorIds = output.map(item => item.actorId).filter(Boolean);
   const distinctActors = actorIds.length === runs.length && new Set(actorIds).size === runs.length;
   const intervals = output.flatMap(item => (item.result?.network?.apiEvidence || [])
-    .filter(r => r.method === 'POST' && /\/api\/mobile\/F006\/smart-bi\/factory-analysis\/?$/u.test(r.url) && r.status === 200 && Number.isFinite(r.durationMs))
+    .filter(r => r.method === 'POST' && isFactoryAnalysisUrl(r.url, item.result.actorProof?.factoryId) && r.status === 200 && Number.isFinite(r.durationMs))
     .map(r => ({ actorId: item.actorId, start: Date.parse(r.at), end: Date.parse(r.at) + r.durationMs })));
   const concurrentRequestsObserved = intervals.some((a, i) => intervals.slice(i + 1).some(b => a.actorId !== b.actorId && Math.min(a.end, b.end) > Math.max(a.start, b.start)));
   return { runId, productionReadonly: true, parallel: true, maxParallelRuns: 3, startedAt, finishedAt: new Date().toISOString(), runs: output, allSettled: true, distinctActors, concurrentRequestsObserved,

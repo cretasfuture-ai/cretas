@@ -8,6 +8,7 @@ import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.source.SourceIndividual;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.repository.datacenter.OperationLogRepository;
 import com.cretas.aims.repository.source.SourceIndividualRepository;
 import com.cretas.aims.service.lineage.LineageGraphAssembler;
 import org.junit.jupiter.api.BeforeEach;
@@ -91,7 +92,8 @@ class SourceIndividualDetailServiceTest {
         // material_batches.created_by → users(id) FK: 只 seed 批次不建全依赖树, 关 H2 FK 校验 (连接级)
         jdbcTemplate.execute("SET REFERENTIAL_INTEGRITY FALSE");
         assembler = mock(LineageGraphAssembler.class);
-        service = new SourceIndividualDetailService(repository, materialBatchRepository, assembler);
+        service = new SourceIndividualDetailService(
+                repository, materialBatchRepository, assembler, mock(OperationLogRepository.class));
 
         bull = persist(FACTORY, "SL-BULL-001", "1100000000001", "公", null, null);
         cow = persist(FACTORY, "SL-COW-002", "1100000000002", "母", null, null);

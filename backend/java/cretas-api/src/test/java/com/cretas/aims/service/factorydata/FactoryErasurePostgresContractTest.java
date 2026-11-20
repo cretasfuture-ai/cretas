@@ -306,23 +306,64 @@ class FactoryErasurePostgresContractTest {
 
     @Test
     void exportUnderTheAppAccountIncludesRowsOfStrictRlsTables() throws Exception {
+        assertThat(count(smartbiApp, "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace "
+                + "WHERE n.nspname='" + schema + "' AND c.relname='smart_bi_uploads' AND pg_has_role(c.relowner,'USAGE')"))
+                .as("app role has no parent-table ownership privilege").isZero();
         FactoryDataService d = data();
         long id = d.startExport(OPERATOR, FA);
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         d.writeExport(id, OPERATOR, FA, AttachmentMode.INDEX_ONLY, Set.of(FactoryDataService.Format.JSON), out);
         String all = new String(out.toByteArray(), java.nio.charset.StandardCharsets.ISO_8859_1);
         assertThat(all).contains("smartbi/json/agg_supplier_price.json");
+        boolean checkedForeignKey = false;
+        try (var zip = new java.util.zip.ZipInputStream(new java.io.ByteArrayInputStream(out.toByteArray()))) {
+            java.util.zip.ZipEntry entry;
+            while ((entry = zip.getNextEntry()) != null) {
+                if (!entry.getName().equals("smartbi/metadata/schema.json")) continue;
+                var metadata = new com.fasterxml.jackson.databind.ObjectMapper().readTree(zip.readAllBytes());
+                for (var constraint : metadata.get("constraints")) {
+                    if (constraint.get("table").asText().equals("smart_bi_field_defs")
+                            && constraint.get("type").asText().equals("FOREIGN KEY")) {
+                        assertThat(constraint.get("referencedSchema").asText()).isEqualTo(schema);
+                        assertThat(constraint.get("referencedTable").asText()).isEqualTo("smart_bi_uploads");
+                        assertThat(constraint.get("referencedColumn").asText()).isEqualTo("id");
+                        assertThat(constraint.get("updateRule").asText()).isEqualTo("NO ACTION");
+                        assertThat(constraint.get("deleteRule").asText()).isEqualTo("CASCADE");
+                        assertThat(constraint.get("definitionFingerprint").asText()).hasSize(32);
+                        checkedForeignKey = true;
+                    }
+                }
+            }
+        }
+        assertThat(checkedForeignKey).as("restricted app role retains exact FK metadata").isTrue();
         var preview = d.preview(OPERATOR, FA);
         assertThat(preview.databases().get(1).tables())
                 .anyMatch(t -> t.table().equals("agg_supplier_price") && t.rows() == 2);
     }
 
     @Test
+    void crossTenantLinkRefusesExportBeforeWritingZipBytes() throws Exception {
+        exec(main, "INSERT INTO " + schema + ".sales_orders (id, factory_id, note) VALUES (42424242, '"
+                + FB + "', 'other-tenant-order');"
+                + "INSERT INTO " + schema + ".order_links VALUES (87654321, 10, 42424242)");
+        FactoryDataService service = data();
+        long request = service.startExport(OPERATOR, FA);
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        assertThatThrownBy(() -> service.writeExport(request, OPERATOR, FA,
+                AttachmentMode.SKIP, Set.of(FactoryDataService.Format.JSON), output))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("1 条跨租户命中")
+                .hasMessageContaining("order_links_other_order_id_fkey")
+                .satisfies(error -> assertThat(error.getMessage()).doesNotContain(FB, "42424242", "87654321"));
+        assertThat(output.size()).isZero();
+    }
+
+    @Test
     void linkRowThatAlsoReferencesAnotherFactoryBlocksErasure() throws Exception {
-        exec(main, "INSERT INTO " + schema + ".order_links (id, order_id, other_order_id) VALUES (1, 10, 30);"
-                + "INSERT INTO " + schema + ".factory_links (id, from_factory, to_factory) VALUES (1, '" + FA + "', '" + FB + "')");
         FactoryErasureService erasure = erasure();
         long requestId = requestAndWait(erasure, true);
+        exec(main, "INSERT INTO " + schema + ".order_links (id, order_id, other_order_id) VALUES (1, 10, 30);"
+                + "INSERT INTO " + schema + ".factory_links (id, from_factory, to_factory) VALUES (1, '" + FA + "', '" + FB + "')");
         var preview = data().preview(OPERATOR, FA);
         assertThat(preview.databases().get(0).foreignHits())
                 .anyMatch(h -> h.table().equals("order_links") && h.kind() == FactoryDataScope.ForeignKind.OTHER_TENANT)

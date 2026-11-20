@@ -1,7 +1,34 @@
 async (page) => {
   const __modules = {
+    "config/factory-analysis-scope.js": function(module, exports, require) {
+'use strict';
+
+const { pathnameOf } = require('../core/url-utils');
+
+const FACTORY_ANALYSIS_FACTORY_IDS = Object.freeze(['F006', 'LIUSHANMEN']);
+const FACTORY_ANALYSIS_PATH = new RegExp(`^/api/mobile/(${FACTORY_ANALYSIS_FACTORY_IDS.join('|')})/smart-bi/factory-analysis/?$`, 'u');
+
+function assertFactoryAnalysisFactory(factoryId) {
+  if (!FACTORY_ANALYSIS_FACTORY_IDS.includes(factoryId)) {
+    throw new Error(`Factory analysis tenant is not allowed: ${factoryId || '(missing)'}. Allowed: ${FACTORY_ANALYSIS_FACTORY_IDS.join(', ')}`);
+  }
+}
+
+function isFactoryAnalysisUrl(url, expectedFactoryId) {
+  let pathname;
+  try { pathname = pathnameOf(url); } catch { return false; }
+  const factoryId = FACTORY_ANALYSIS_PATH.exec(pathname)?.[1];
+  return factoryId !== undefined
+    && (expectedFactoryId === undefined || factoryId === expectedFactoryId);
+}
+
+module.exports = { FACTORY_ANALYSIS_FACTORY_IDS, FACTORY_ANALYSIS_PATH, assertFactoryAnalysisFactory, isFactoryAnalysisUrl };
+
+},
     "config/readonly-post-whitelist.js": function(module, exports, require) {
 'use strict';
+
+const { FACTORY_ANALYSIS_PATH } = require('./factory-analysis-scope');
 
 const { pathnameOf } = require('../core/url-utils');
 
@@ -114,7 +141,7 @@ const READONLY_POST_WHITELIST = [
   {
     id: 'smartbi-factory-analysis',
     method: 'POST',
-    path: /^\/api\/mobile\/[^/]+\/smart-bi\/factory-analysis\/?$/,
+    path: FACTORY_ANALYSIS_PATH,
     bodyMatches: factoryAnalysisBodyMatches,
     rationale: 'Root-approved Java factory analysis contract; authenticated planner reads existing tenant-qualified chart facts and returns no business mutation.',
   },
@@ -576,6 +603,7 @@ module.exports = { establishCleanSession };
 'use strict';
 
 const { redactText, sanitizeUrl } = require('./sanitizer');
+const { isFactoryAnalysisUrl } = require('../config/factory-analysis-scope');
 
 const DEFAULT_NOISE_RULES = [
   { id: 'favicon', pattern: /favicon\.ico/i },
@@ -660,7 +688,7 @@ function installConsoleRecorder(context, options = {}) {
   return {
     expectClientOfflineResourceError(request) {
       const url = sanitizeUrl(request.url());
-      if (request.method() !== 'POST' || !/\/api\/mobile\/F006\/smart-bi\/factory-analysis\/?$/u.test(url)
+      if (request.method() !== 'POST' || !isFactoryAnalysisUrl(url)
         || !/^net::ERR_INTERNET_DISCONNECTED(?:\.Inspector)?$/u.test(String(request.failure()?.errorText || ''))) throw new Error('Unverified offline console exception');
       const matched = accepted.filter(item => item.type === 'error' && sanitizeUrl(item.location) === url
         && /^Failed to load resource: net::ERR_INTERNET_DISCONNECTED(?:\.Inspector)?$/u.test(item.text));
@@ -830,13 +858,14 @@ async function installMutationGuard(context, options = {}) {
       scenario: scenarioRef.value || 'unknown',
       at: new Date().toISOString(),
     };
-    if (classification.kind === 'auth') {
+    const allowed = options.allowMutationShape?.(classification, method, request.url(), requestBody) !== false;
+    if (classification.kind === 'auth' && allowed) {
       authRequests.push({ ...record, classificationId: classification.entry.id });
       allowedByRequest.set(request, classification.kind);
       await route.continue();
       return;
     }
-    if (classification.kind === 'readonly-post') {
+    if (classification.kind === 'readonly-post' && allowed) {
       readonlyPostRequests.push({ ...record, classificationId: classification.entry.id });
       allowedByRequest.set(request, classification.kind);
       await route.continue();
@@ -876,6 +905,12 @@ async function installMutationGuard(context, options = {}) {
     readonlyPostRequests,
     blockedMutationAttempts,
     actualBusinessWriteRequests,
+    recordBlockedConfirmation(url, confirmationType) {
+      blockedMutationAttempts.push({
+        method: 'UI', url: sanitizeUrl(url), scenario: scenarioRef.value || 'unknown',
+        at: new Date().toISOString(), confirmationType, safetyStatus: 'FAIL', blockedBeforeSend: true,
+      });
+    },
     get actualBusinessWrites() {
       return actualBusinessWriteRequests.length;
     },
@@ -903,6 +938,7 @@ module.exports = { MUTATING_METHODS, classifyMutation, installMutationGuard };
 
 const { parsePostData, redactText, sanitizeUrl, summarizePayload } = require('./sanitizer');
 const { normalizeQueryValues, splitUrl } = require('./url-utils');
+const { isFactoryAnalysisUrl } = require('../config/factory-analysis-scope');
 
 function normalizeDuplicateKey(method, url) {
   try {
@@ -961,7 +997,12 @@ function installNetworkRecorder(context, options = {}) {
 
   const onResponse = (response) => {
     const request = response.request();
-    if (!observedApi(request.url())) return;
+    if (!observedApi(request.url())) {
+      if (options.includeNonApiHttpErrors && response.status() >= 400) {
+        httpErrors.push({ method: request.method(), url: sanitizeUrl(request.url()), status: response.status() });
+      }
+      return;
+    }
     lastActivityAt = Date.now();
     const task = (async () => {
       const start = started.get(request);
@@ -1040,9 +1081,9 @@ function installNetworkRecorder(context, options = {}) {
     failedRequests,
     expectClientOfflineFailure(request) {
       const record = failureByRequest.get(request);
-      if (!record || record.method !== 'POST' || splitUrl(request.url()).pathname !== '/api/mobile/F006/smart-bi/factory-analysis'
+      if (!record || record.method !== 'POST' || !isFactoryAnalysisUrl(request.url())
         || !/^net::ERR_INTERNET_DISCONNECTED(?:\.Inspector)?$/u.test(String(request.failure()?.errorText || ''))
-        || failedRequests.some(item => item.expectedFault)) throw new Error('Expected exactly one verified F006 client-offline analysis request');
+        || failedRequests.some(item => item.expectedFault)) throw new Error('Expected exactly one verified client-offline factory analysis request');
       record.expectedFault = 'controlled-client-offline';
       return { ...record };
     },
@@ -1093,6 +1134,7 @@ module.exports = { installNetworkRecorder, normalizeDuplicateKey, pickResponseSu
     "core/parallel-run.js": function(module, exports, require) {
 'use strict';
 const { redactText } = require('./sanitizer');
+const { isFactoryAnalysisUrl } = require('../config/factory-analysis-scope');
 function validateParallelRuns(runs, parent = {}) {
   if (!Array.isArray(runs) || runs.length < 2 || runs.length > 3) throw new Error('parallelRuns must contain 2 or 3 independent runs');
   if (parent.expectedFactoryId && parent.expectedFactoryId !== 'F006') throw new Error('Parallel acceptance is limited to F006');
@@ -1151,7 +1193,7 @@ async function runParallelSuites(parentPage, options, runSuiteWithPage) {
   const actorIds = output.map(item => item.actorId).filter(Boolean);
   const distinctActors = actorIds.length === runs.length && new Set(actorIds).size === runs.length;
   const intervals = output.flatMap(item => (item.result?.network?.apiEvidence || [])
-    .filter(r => r.method === 'POST' && /\/api\/mobile\/F006\/smart-bi\/factory-analysis\/?$/u.test(r.url) && r.status === 200 && Number.isFinite(r.durationMs))
+    .filter(r => r.method === 'POST' && isFactoryAnalysisUrl(r.url, item.result.actorProof?.factoryId) && r.status === 200 && Number.isFinite(r.durationMs))
     .map(r => ({ actorId: item.actorId, start: Date.parse(r.at), end: Date.parse(r.at) + r.durationMs })));
   const concurrentRequestsObserved = intervals.some((a, i) => intervals.slice(i + 1).some(b => a.actorId !== b.actorId && Math.min(a.end, b.end) > Math.max(a.start, b.start)));
   return { runId, productionReadonly: true, parallel: true, maxParallelRuns: 3, startedAt, finishedAt: new Date().toISOString(), runs: output, allSettled: true, distinctActors, concurrentRequestsObserved,
@@ -1225,10 +1267,15 @@ const { createScenarioResult, assertScenarioResult } = require('./result-schema'
 const { sanitizeValue } = require('./sanitizer');
 const { pathnameOf } = require('./url-utils');
 const { runParallelSuites } = require('./parallel-run');
+const { isFactoryAnalysisUrl } = require('../config/factory-analysis-scope');
+const questionSet = require('../scenarios/factory-analysis-question-set-readonly');
 
 const SCENARIOS = [
   require('../scenarios/platform-factory-access-readonly'),
   require('../scenarios/smartbi-factory-analysis-readonly'),
+  questionSet,
+  require('../scenarios/lsm-production-analytics-readonly').dataAnalysis,
+  require('../scenarios/lsm-production-analytics-readonly').cost,
   require('../scenarios/smartbi-catalog-matrix-readonly'),
   require('../scenarios/smartbi-factory-readonly'),
   require('../scenarios/smartbi-guided-readonly'),
@@ -1308,6 +1355,12 @@ function describeHarness() {
   };
 }
 
+function reportExitCode(report) {
+  if (!report.safetyPassed) return 1;
+  if (report.scenarios.some(({ questionSet: set }) => set?.attempted > 0 && set.answered === 0)) return 2;
+  return report.scenarios.some(scenario => scenario.result !== 'PASS') ? 1 : 0;
+}
+
 function resolveScenarios(requested) {
   if (!requested || requested.length === 0) {
     return SCENARIOS.filter((scenario) => scenario.defaultEnabled !== false);
@@ -1329,18 +1382,31 @@ async function runSuiteWithPage(page, options = {}) {
   const runId = options.runId || new Date().toISOString().replace(/[:.]/g, '-');
   const evidenceDir = options.evidenceDir || `.playwright-mcp/production-readonly/${runId}`;
   const scenarioRef = { value: 'bootstrap' };
+  const selectedScenarios = resolveScenarios(options.scenarios);
 
   // The guard is installed before any target-origin navigation or login.
-  const mutationGuard = await installMutationGuard(context, { scenarioRef });
+  const mutationGuard = await installMutationGuard(context, {
+    scenarioRef,
+    allowMutationShape(classification, method, url, body) {
+      if (scenarioRef.value !== questionSet.id) return true;
+      return classification.entry?.id === 'smartbi-factory-analysis' && method === 'POST'
+        && new URL(url).origin === new URL(baseUrl).origin && isFactoryAnalysisUrl(url, expectedFactoryId)
+        && typeof scenarioRef.factoryAnalysisQuestion === 'string'
+        && body.source === 'business' && body.question === scenarioRef.factoryAnalysisQuestion;
+    },
+  });
   // Opt out of optional UI telemetry at its source. Its POST remains a guarded
   // mutation, and older deployed applications that ignore this marker still fail.
   await context.addInitScript(() => {
     window.__CRETAS_READONLY_HARNESS__ = true;
   });
-  const network = installNetworkRecorder(context, options.network || {});
+  const network = installNetworkRecorder(context, {
+    ...options.network,
+    includeNonApiHttpErrors: options.network?.includeNonApiHttpErrors
+      || selectedScenarios.some(scenario => scenario.includeNonApiHttpErrors),
+  });
   const consoleRecorder = installConsoleRecorder(context, options.console || {});
   const screenshot = createScreenshotWriter(page, evidenceDir, { sensitiveTexts: [expectedUsername] });
-  const selectedScenarios = resolveScenarios(options.scenarios);
   const startedAt = Date.now();
   const startedAtIso = new Date(startedAt).toISOString();
   let loginEvidence;
@@ -1348,6 +1414,8 @@ async function runSuiteWithPage(page, options = {}) {
 
   try {
     try {
+      for (const scenario of selectedScenarios) scenario.validateFactory?.(expectedFactoryId);
+      if (selectedScenarios.includes(questionSet)) questionSet.validateQuestions(options.factoryAnalysisQuestions);
       scenarioRef.value = 'clean-session';
       await establishCleanSession(page, baseUrl);
       scenarioRef.value = 'ui-login';
@@ -1356,6 +1424,7 @@ async function runSuiteWithPage(page, options = {}) {
         password: options.password,
         expectedUsername,
         expectedFactoryId,
+        requireFactoryResponseProof: selectedScenarios.some(scenario => scenario.validateFactory),
         expectedRole: options.expectedRole,
         allowMobileOnlyLanding: options.allowMobileOnlyLanding,
         appMountTimeoutMs: options.appMountTimeoutMs,
@@ -1377,6 +1446,8 @@ async function runSuiteWithPage(page, options = {}) {
         factoryAnalysisSubjectId: options.factoryAnalysisSubjectId,
         factoryAnalysisUploadedJoint: options.factoryAnalysisUploadedJoint,
         factoryAnalysisLifecycle: options.factoryAnalysisLifecycle,
+        factoryAnalysisQuestions: options.factoryAnalysisQuestions,
+        factoryAnalysisQuestionTimeoutMs: options.factoryAnalysisQuestionTimeoutMs,
         factoryCatalogFamilies: options.factoryCatalogFamilies,
         factoryCatalogCandidateIds: options.factoryCatalogCandidateIds,
         factoryCatalogSubjectId: options.factoryCatalogSubjectId,
@@ -1469,6 +1540,7 @@ async function runSuiteWithPage(page, options = {}) {
       results.push(assertScenarioResult(failure));
     }
     report.actorProof = actorProof;
+    report.exitCode = reportExitCode(report);
     const safeReport = sanitizeValue(report);
     const files = await writeEvidence(safeReport, evidenceDir, { productionReadonly: true, page });
     return { ...safeReport, evidence: files };
@@ -1480,7 +1552,7 @@ async function runSuiteWithPage(page, options = {}) {
   }
 }
 
-module.exports = { SCENARIOS, describeHarness, resolveScenarios, runSuiteWithPage };
+module.exports = { SCENARIOS, describeHarness, resolveScenarios, reportExitCode, runSuiteWithPage };
 
 },
     "core/sanitizer.js": function(module, exports, require) {
@@ -1557,7 +1629,10 @@ function summarizePayload(value, depth = 0) {
 function sanitizeValue(value, key = '', depth = 0) {
   if (SENSITIVE_KEY_RE.test(key)) return '[REDACTED]';
   if (value == null || typeof value === 'boolean' || typeof value === 'number') return value;
-  if (typeof value === 'string') return redactText(value);
+  if (typeof value === 'string') {
+    const questionEvidence = key === 'factoryAnalysisAnswer' || key === 'factoryAnalysisQuestion';
+    return redactText(value, questionEvidence ? Infinity : undefined);
+  }
   if (depth > 5) return '[DEPTH_LIMIT]';
   if (Array.isArray(value)) return value.slice(0, 200).map((item) => sanitizeValue(item, '', depth + 1));
   if (typeof value === 'object') {
@@ -1743,6 +1818,9 @@ async function performUiLogin(page, options) {
   const expectedFactoryId = options.expectedFactoryId || 'F006';
   const expectedRole = options.expectedRole ? String(options.expectedRole).toLowerCase() : null;
   if (!username || !password) throw new Error('E2E_USERNAME and E2E_PASSWORD are required for UI login');
+  if (options.requireFactoryResponseProof && /^lsmdemo_/iu.test(username)) {
+    throw new Error('Demo accounts are excluded from this acceptance run');
+  }
 
   const loginMount = await waitForAppMount(page, options.appMountTimeoutMs);
   if (!loginMount.appMounted) throw new Error('Login application did not mount before credential entry');
@@ -1755,19 +1833,28 @@ async function performUiLogin(page, options) {
 
   const matchesLogin = (request) => request.url().includes('/api/mobile/auth/unified-login')
     && request.method() === 'POST';
-  const outcomePromise = waitForLoginOutcome(page, matchesLogin);
   const submit = page.locator('button.login-button, button[type="submit"]').first();
-  await submit.click();
-  const outcome = await outcomePromise;
+  const [outcome] = await Promise.all([
+    waitForLoginOutcome(page, matchesLogin).then(async result => {
+      if (result.type === 'failure') return result;
+      let body = null;
+      try { body = await result.response.json(); } catch { body = null; }
+      return { ...result, body };
+    }),
+    submit.click(),
+  ]);
   if (outcome.type === 'failure') {
     throw new Error(`UI login request failed before response: ${outcome.request.failure()?.errorText || 'unknown network error'}`);
   }
-  const response = outcome.response;
-  let body = null;
-  try { body = await response.json(); } catch { body = null; }
+  const { response, body } = outcome;
   const login = compactLoginData(body);
   if (response.status() >= 400 || login.success === false) {
+    if (options.requireFactoryResponseProof) throw new Error(`UI login failed: HTTP ${response.status()}`);
     throw new Error(`UI login failed: HTTP ${response.status()} ${login.message || 'success=false'}`);
+  }
+  if (options.requireFactoryResponseProof && (login.success !== true || login.factoryId !== expectedFactoryId
+      || (body?.data?.factoryUser && body.data.factoryUser.factoryId !== expectedFactoryId))) {
+    throw new Error(`Live login response did not prove factory ${expectedFactoryId}`);
   }
   await page.waitForURL((url) => !url.pathname.includes('/login'), { timeout: 20_000 });
 
@@ -1778,6 +1865,7 @@ async function performUiLogin(page, options) {
       return {
         username: value.username || factoryUser.username || null,
         factoryId: value.factoryId || factoryUser.factoryId || null,
+        nestedFactoryId: factoryUser.factoryId || null,
         factoryName: value.factoryName || factoryUser.factoryName || null,
         role: value.role || factoryUser.role || null,
         userType: value.userType || null,
@@ -1792,8 +1880,14 @@ async function performUiLogin(page, options) {
   const actualFactoryId = platformSession ? 'PLATFORM' : stored.factoryId || login.factoryId;
   const actualFactoryName = stored.factoryName || login.factoryName;
   const actualRole = String(stored.platformRole || stored.role || login.role || '').toLowerCase();
-  if (actualUsername !== expectedUsername) throw new Error(`Tenant login username mismatch: expected ${expectedUsername}, got ${actualUsername}`);
+  if (actualUsername !== expectedUsername) {
+    if (options.requireFactoryResponseProof) throw new Error('Tenant login username mismatch');
+    throw new Error(`Tenant login username mismatch: expected ${expectedUsername}, got ${actualUsername}`);
+  }
   if (actualFactoryId !== expectedFactoryId) throw new Error(`Tenant factory mismatch: expected ${expectedFactoryId}, got ${actualFactoryId}`);
+  if (options.requireFactoryResponseProof && stored.nestedFactoryId && stored.nestedFactoryId !== expectedFactoryId) {
+    throw new Error('Stored factory user disagrees with the live login response');
+  }
   if (expectedRole && actualRole !== expectedRole) throw new Error(`Tenant role mismatch: expected ${expectedRole}, got ${actualRole || 'missing'}`);
 
   // 🔴 落地页也必须等应用挂载完再取样 —— 这是同一个缺陷的第二处, 而且更阴:
@@ -1962,7 +2056,7 @@ async function runReadOnlyPageScenario(ctx, definition) {
         result.screenshots.push(...screenshots);
       }
     }
-    if (definition.screenshot) result.screenshots.push(await ctx.screenshot(definition.id));
+    if (definition.screenshot) result.screenshots.push(await ctx.screenshot(definition.id, definition.screenshotOptions));
     // ⚠️ 「应用压根没挂载」与「挂载了但缺 landmark」必须分开报 —— 下一步动作相反:
     //    前者去查前端加载(构建/资源/首屏), 后者去查这条场景的期望或页面本身。
     //    ⛔ 都折叠成 UNVERIFIED/tool 就是把「没量到」塞进了「判不了」。
@@ -3053,6 +3147,191 @@ module.exports.existing = {
 };
 
 },
+    "scenarios/factory-analysis-question-set-readonly.js": function(module, exports, require) {
+'use strict';
+
+const { assertFactoryAnalysisFactory, isFactoryAnalysisUrl } = require('../config/factory-analysis-scope');
+const { createScenarioResult, assertScenarioResult } = require('../core/result-schema');
+
+const id = 'factory-analysis-question-set-readonly';
+const path = '/smart-bi/analysis?tab=query&mode=factory&source=business';
+const confirmationSelector = '[role="alertdialog"], [role="dialog"], .el-message-box, dialog[open]';
+
+function validateQuestions(questions) {
+  if (!Array.isArray(questions) || questions.length < 1 || questions.length > 20) {
+    throw new Error('Question set must contain 1–20 questions');
+  }
+  for (const [index, question] of questions.entries()) {
+    if (typeof question !== 'string' || !question.trim() || [...question].length > 200) {
+      throw new Error(`Question ${index + 1} must be a non-empty string of at most 200 characters`);
+    }
+  }
+  return questions;
+}
+
+function parseQuestionFile(text, markdown = false) {
+  const content = text.replace(/^\uFEFF/u, '');
+  if (markdown) {
+    const lines = content.split(/\r?\n/u);
+    const header = lines.findIndex(line => /^\|\s*问题\s*\|/u.test(line));
+    const questions = [];
+    if (header >= 0 && /^\|\s*-+/u.test(lines[header + 1] || '')) {
+      for (const line of lines.slice(header + 2)) {
+        const row = /^\|\s*([^|]+?)\s*\|/u.exec(line);
+        if (!row) break;
+        questions.push(row[1]);
+      }
+    }
+    return validateQuestions(questions);
+  }
+  let questions;
+  try { questions = JSON.parse(content); } catch { throw new Error('Question file must be a JSON string array'); }
+  return validateQuestions(questions);
+}
+
+function sourceEvidence(data) {
+  const selectedIds = new Set(Array.isArray(data.selectedIds) ? data.selectedIds : []);
+  const items = [
+    ...(data.recommendations || []),
+    ...(data.facts || []),
+    ...(data.catalog || []).filter(item => selectedIds.has(item.id)),
+  ];
+  const citations = [data.sourceKey, data.dataset, data.datasetId,
+    ...items.flatMap(item => [item.source, item.sourceKey, item.dataset, item.datasetId])];
+  const labels = [data.source, data.sourceLabel, ...citations].filter(value => typeof value === 'string' && value.trim());
+  return {
+    sourceIdentifiers: [...new Set(labels)],
+    selectedIds: [...selectedIds],
+    cites_blacklake: citations.some(value => typeof value === 'string'
+      && /^(?:blacklake-production|fact_external_production_daily|黑湖生产报工)(?:$|\s*·)/iu.test(value)),
+  };
+}
+
+async function askQuestion(ctx, question, row) {
+  const { page, baseUrl, expectedFactoryId, mutationGuard, scenarioRef } = ctx;
+  const actionTimeout = ctx.factoryAnalysisQuestionTimeoutMs ?? 30_000;
+  const answerTimeout = ctx.factoryAnalysisQuestionTimeoutMs ?? 125_000;
+  const suffix = `${id}-${row.index}`;
+  const submit = page.getByTestId('factory-analysis-submit');
+  const answer = page.getByTestId('factory-analysis-answer');
+  const input = page.locator('textarea[data-testid="factory-analysis-input"], [data-testid="factory-analysis-input"] textarea');
+  const wireQuestion = question.replace(/\r\n?/gu, '\n').trim();
+  const onResponse = response => {
+    const request = response.request();
+    if (request.method() !== 'POST' || !isFactoryAnalysisUrl(response.url(), expectedFactoryId)) return;
+    try {
+      const body = request.postDataJSON();
+      if (body?.source === 'business' && body.question === wireQuestion) {
+        row.httpStatus = response.status();
+        analysisResponse = response;
+      }
+    } catch { /* No matching factory-analysis response. */ }
+  };
+  const onDialog = async dialog => {
+    if (dialog.type() === 'confirm' || dialog.type() === 'prompt') {
+      mutationGuard.recordBlockedConfirmation(page.url(), dialog.type());
+    }
+    await dialog.dismiss().catch(() => {});
+  };
+  let analysisResponse;
+  const started = Date.now();
+  page.on('dialog', onDialog);
+  try {
+    await page.goto(`${baseUrl}${path}`, { waitUntil: 'domcontentloaded', timeout: actionTimeout });
+    await page.getByTestId('factory-analysis-source').getByText(/^(?:业务系统|业务数据)$/u)
+      .waitFor({ timeout: actionTimeout });
+    if (await page.locator(confirmationSelector).filter({ visible: true }).count()) {
+      mutationGuard.recordBlockedConfirmation(page.url(), 'visible-dialog');
+      return 'blocked-confirmation';
+    }
+    if (mutationGuard.blockedMutationAttempts.length) return 'blocked-mutation';
+    await input.fill(question, { timeout: actionTimeout });
+    page.on('response', onResponse);
+    scenarioRef.factoryAnalysisQuestion = wireQuestion;
+    await submit.click({ timeout: actionTimeout });
+    if (mutationGuard.blockedMutationAttempts.length) return 'blocked-mutation';
+    const terminal = await (await page.waitForFunction(selector => {
+      if ([...document.querySelectorAll(selector)].some(element => element.getClientRects().length
+        && getComputedStyle(element).visibility === 'visible')) return 'confirmation';
+      const chat = document.querySelector('[data-testid="factory-analysis-chat"]');
+      const turn = chat?.querySelector('.turn--assistant');
+      if (turn && !turn.querySelector('.el-skeleton')) return 'answer-settled';
+      if (chat?.querySelector('.state-alert.el-alert--error')) return 'ui-error';
+      return false;
+    }, confirmationSelector, { timeout: answerTimeout })).jsonValue();
+    if (terminal === 'confirmation') mutationGuard.recordBlockedConfirmation(page.url(), 'visible-dialog');
+    if (mutationGuard.blockedMutationAttempts.length) return 'blocked-mutation';
+    if (!analysisResponse) return 'missing-analysis-response';
+    if (!analysisResponse.ok()) return 'analysis-http-error';
+    const response = await analysisResponse.json();
+    const data = response?.data;
+    if (!response?.success || data?.factoryId !== expectedFactoryId || data?.source !== 'business') {
+      return 'invalid-analysis-response';
+    }
+    Object.assign(row, sourceEvidence(data));
+    row.analysisStatus = data.status || null;
+    if (typeof data.answer === 'string' && data.answer.trim()) row.factoryAnalysisAnswer = data.answer;
+    if (data.status !== 'answered' || row.factoryAnalysisAnswer === null) return 'no-completed-answer';
+    if (terminal !== 'answer-settled' || await answer.textContent({ timeout: actionTimeout }) !== row.factoryAnalysisAnswer) {
+      return 'answer-render-mismatch';
+    }
+    row.answerCompleted = true;
+    return null;
+  } catch (error) {
+    if (await page.locator(confirmationSelector).filter({ visible: true }).count().catch(() => 0)) {
+      mutationGuard.recordBlockedConfirmation(page.url(), 'visible-dialog');
+    }
+    if (mutationGuard.blockedMutationAttempts.length) return 'blocked-mutation';
+    return error?.name === 'TimeoutError' ? 'timeout' : 'question-interaction-error';
+  } finally {
+    delete scenarioRef.factoryAnalysisQuestion;
+    row.elapsedMs = Date.now() - started;
+    row.screenshot = await ctx.screenshot(suffix, { fullPage: true }).catch(() => null);
+    page.off('response', onResponse);
+    page.off('dialog', onDialog);
+  }
+}
+
+async function runQuestionSet(questions, ask, shouldStop = () => false) {
+  const rows = [];
+  for (const [index, question] of questions.entries()) {
+    if (shouldStop()) break;
+    const row = {
+      index: index + 1, factoryAnalysisQuestion: question, factoryAnalysisAnswer: null,
+      answerCompleted: false, analysisStatus: null, sourceIdentifiers: [], selectedIds: [],
+      cites_blacklake: false, httpStatus: null, elapsedMs: null, screenshot: null,
+    };
+    const reason = await ask(question, row);
+    row.failureReason = reason || (row.screenshot ? null : 'screenshot-failed');
+    row.status = row.failureReason ? 'failed' : 'answered';
+    rows.push(row);
+  }
+  return rows;
+}
+
+async function run(ctx) {
+  ctx.scenarioRef.value = id;
+  const questions = validateQuestions(ctx.factoryAnalysisQuestions);
+  const result = createScenarioResult(id, `${ctx.baseUrl}${path}`);
+  const start = Date.now();
+  const blocked = () => ctx.mutationGuard.blockedMutationAttempts.length || ctx.mutationGuard.actualBusinessWrites;
+  const rows = await runQuestionSet(questions, (question, row) => askQuestion(ctx, question, row), blocked);
+  const guard = ctx.mutationGuard.snapshot();
+  const answered = rows.filter(row => row.answerCompleted).length;
+  result.result = blocked() ? 'TOOL_ERROR' : rows.every(row => row.status === 'answered') ? 'PASS' : answered ? 'PARTIAL_DEFECT' : 'UNVERIFIED';
+  result.rootCauseClass = result.result === 'PASS' ? 'none' : 'tool';
+  result.pageEvidence = rows;
+  result.screenshots = rows.map(row => row.screenshot).filter(Boolean);
+  result.blockedMutationAttempts = guard.blockedMutationAttempts;
+  result.actualBusinessWrites = guard.actualBusinessWrites;
+  result.durationMs = Date.now() - start;
+  result.questionSet = { requested: questions.length, attempted: rows.length, answered };
+  return assertScenarioResult(result);
+}
+
+module.exports = { id, defaultEnabled: false, validateFactory: assertFactoryAnalysisFactory, validateQuestions, parseQuestionFile, sourceEvidence, runQuestionSet, run };
+
+},
     "scenarios/factory-management-workspaces-readonly.js": function(module, exports, require) {
 'use strict';
 
@@ -3420,6 +3699,123 @@ module.exports = {
       note: 'Read-only page load only. Review, retry, archive, restore, backup, export, and training actions are intentionally not invoked.',
     }),
   }),
+};
+
+},
+    "scenarios/lsm-production-analytics-readonly.js": function(module, exports, require) {
+'use strict';
+
+const { runReadOnlyPageScenario } = require('./_shared');
+
+const HUB_PATH = '/production/analysis-query';
+const COST_PATH = '/production-analytics/cost';
+const LIMITATION = /^出成率与生产成本\s*·\s*黑湖数据不含投入量，无法计算$/u;
+
+function validateFactory(factoryId) {
+  if (factoryId !== 'LIUSHANMEN') throw new Error('Production analytics acceptance is limited to LIUSHANMEN');
+}
+
+async function visibleText(locator) {
+  return (await locator.allInnerTexts()).map(text => text.trim()).filter(Boolean);
+}
+
+async function readSource(section) {
+  const source = section.locator('.blacklake-source:visible');
+  const [sourceLabel = ''] = await visibleText(source.locator('.blacklake-source__details strong:visible'));
+  const [limitation = ''] = await visibleText(source.locator('.el-alert__title:visible'));
+  const time = source.locator('.blacklake-source__details time:visible');
+  const [snapshotDisplay = ''] = await visibleText(time);
+  const snapshotCollectedAt = snapshotDisplay ? await time.first().getAttribute('datetime') : null;
+  return {
+    sourceLabel,
+    snapshotCollectedAt,
+    snapshotDisplay,
+    limitation,
+    sourceConfirmed: /^数据来源\s*黑湖$/u.test(sourceLabel),
+    snapshotVisible: Boolean(snapshotDisplay) && Number.isFinite(Date.parse(snapshotCollectedAt)),
+    yieldAndCostUnavailable: LIMITATION.test(limitation),
+  };
+}
+
+function assessment(passed) {
+  return { result: passed ? 'PASS' : 'UNVERIFIED', rootCauseClass: passed ? 'none' : 'data' };
+}
+
+async function inspectDataAnalysis(page, _body, ctx) {
+  await ctx.network.settle();
+  const hub = page.locator('.production-analysis-hub');
+  const section = hub.getByRole('region', { name: '黑湖生产数据分析', exact: true });
+  const tab = hub.getByRole('tab', { name: '生产数据分析', exact: true, selected: true });
+  const selected = await tab.isVisible();
+  const finalUrl = new URL(page.url());
+  const source = await readSource(section);
+  const daily = section.locator('.blacklake-card').filter({ has: page.getByRole('heading', { name: '每日报工趋势', exact: true }) });
+  const byProduct = section.locator('.blacklake-card').filter({ has: page.getByRole('heading', { name: /^成品入库良品排行（.+）$/u }) });
+  const checks = {
+    selectedDataAnalysisTab: selected && finalUrl.pathname === HUB_PATH && finalUrl.searchParams.get('tab') === 'data-analysis',
+    dailyGoodAndDefectChart: await daily.getByRole('img', { name: '每日良品与不良数量趋势图', exact: true }).isVisible(),
+    processScope: await daily.getByRole('combobox', { name: '工序', exact: true }).isVisible(),
+    productScope: await daily.getByRole('combobox', { name: '产品', exact: true }).isVisible(),
+    dailyGoodQuantity: await daily.getByRole('columnheader', { name: /^良品（.+）$/u }).isVisible(),
+    dailyDefectQuantity: await daily.getByRole('columnheader', { name: /^不良（.+）$/u }).isVisible(),
+    dailyDefectRate: await daily.getByRole('columnheader', { name: '不良率', exact: true }).isVisible(),
+    productGoodRanking: await byProduct.getByRole('columnheader', { name: /^良品（.+）$/u }).isVisible(),
+  };
+  const dailyRows = await daily.locator('.el-table__body tr:visible').count();
+  const productRows = await byProduct.locator('.el-table__body tr:visible').count();
+  return {
+    ...source, checks, dailyRows, productRows,
+    assessment: assessment(Object.values(checks).every(Boolean) && dailyRows > 0
+      && source.sourceConfirmed && source.snapshotVisible && source.yieldAndCostUnavailable),
+  };
+}
+
+async function inspectCost(page, _body, ctx) {
+  await ctx.network.settle();
+  const root = page.locator('.fca-root');
+  await root.locator('.el-loading-mask').first().waitFor({ state: 'hidden', timeout: 15_000 });
+  const titleVisible = await root.getByRole('heading', { name: '生产成本分析', exact: true }).isVisible();
+  const source = await readSource(root);
+  const errors = await visibleText(root.locator('.fca-error .el-alert__title:visible'));
+  const emptyText = await visibleText(root.locator('.fca-empty-title:visible, .fca-empty-desc:visible, .fca-inline-empty .el-empty__description:visible'));
+  const chartCount = await root.locator('.fca-chart-body:visible canvas:visible').count();
+  const kpiCount = await root.locator('.fca-kpi-card:visible').count();
+  const state = errors.length ? 'error'
+    : source.sourceLabel ? 'limitation'
+      : kpiCount || chartCount ? 'data'
+        : emptyText.length ? 'empty' : 'unknown';
+  return {
+    state, ...source, errors, emptyText, chartCount, kpiCount,
+    assessment: assessment(new URL(page.url()).pathname === COST_PATH && titleVisible && (
+      state === 'data' || state === 'empty'
+      || (state === 'limitation' && source.sourceConfirmed && source.snapshotVisible && source.yieldAndCostUnavailable)
+    )),
+  };
+}
+
+function scenario(id, path, inspect) {
+  return {
+    id, path, defaultEnabled: false, validateFactory, includeNonApiHttpErrors: true,
+    async run(ctx) {
+      validateFactory(ctx.expectedFactoryId);
+      if (ctx.loginEvidence?.factoryId !== ctx.expectedFactoryId
+          || !['factory_admin', 'factory_super_admin'].includes(ctx.loginEvidence.role)) {
+        throw new Error('Production analytics acceptance requires a verified LIUSHANMEN administrator');
+      }
+      const result = await runReadOnlyPageScenario(ctx, { id, path, inspect, screenshot: true, screenshotOptions: { fullPage: true } });
+      result.pageEvidence.push({
+        consoleErrorCount: result.consoleErrors.length,
+        http4xxCount: result.httpErrors.filter(({ status }) => status >= 400 && status < 500).length,
+        http5xxCount: result.httpErrors.filter(({ status }) => status >= 500 && status < 600).length,
+      });
+      return result;
+    },
+  };
+}
+
+module.exports = {
+  dataAnalysis: scenario('lsm-production-data-analysis-readonly', `${HUB_PATH}?tab=data-analysis`, inspectDataAnalysis),
+  cost: scenario('lsm-production-cost-readonly', COST_PATH, inspectCost),
 };
 
 },
@@ -6350,6 +6746,7 @@ module.exports = {
 'use strict';
 
 const { runReadOnlyPageScenario } = require('./_shared');
+const { assertFactoryAnalysisFactory, isFactoryAnalysisUrl } = require('../config/factory-analysis-scope');
 const {
   FOLLOWUP_ROUNDS,
   lifecycleBaseline,
@@ -6359,7 +6756,6 @@ const {
 } = require('./smartbi-factory-analysis-lifecycle');
 
 const PATH = '/smart-bi/analysis?tab=query&mode=factory';
-const ANALYSIS_PATH = /^\/api\/mobile\/[^/]+\/smart-bi\/factory-analysis\/?$/;
 const DETAILS_PATH = '/smartbi-api/api/smartbi/financial-dashboard/factory-details';
 const QUESTION = '汇总当前库存、生产和销售表现';
 const JOINT_QUESTION = '关联生产、检验和成本做多表分析';
@@ -6374,8 +6770,8 @@ function endpointPath(url) {
   try { return new URL(url).pathname; } catch { return String(url || '').split('?')[0]; }
 }
 
-function isAnalysisResponse(response) {
-  return response.request().method() === 'POST' && ANALYSIS_PATH.test(endpointPath(response.url()));
+function isAnalysisResponse(response, expectedFactoryId) {
+  return response.request().method() === 'POST' && isFactoryAnalysisUrl(response.url(), expectedFactoryId);
 }
 
 function isDetailsResponse(response) {
@@ -6427,7 +6823,9 @@ async function runFactoryAnalysisLifecycle(page, inspectCtx, initialBody, initia
       rounds.push({ round, pass: false, reason: 'missing-followup-control' });
       break;
     }
-    const responsePromise = page.waitForResponse(isAnalysisResponse, { timeout: 30_000 });
+    const responsePromise = page.waitForResponse(
+      response => isAnalysisResponse(response, inspectCtx.expectedFactoryId), { timeout: 30_000 },
+    );
     await followup.click();
     const response = await responsePromise;
     const body = await responseBody(response);
@@ -6692,7 +7090,7 @@ function qualitySemantic(value) {
   return /(quality|inspection|defect|良品|质量|检验|不良|production\.fused)/iu.test(String(value || ''));
 }
 
-function summaryFromResponse(status, body, request) {
+function summaryFromResponse(status, body, request, expectedFactoryId = 'F006') {
   const data = body?.data || {};
   const recommendations = Array.isArray(data.recommendations) ? data.recommendations : [];
   const facts = Array.isArray(data.facts) ? data.facts : [];
@@ -6713,7 +7111,7 @@ function summaryFromResponse(status, body, request) {
     answered: data.status === 'answered',
     unavailable: data.status === 'unavailable',
     clarification: data.status === 'clarification',
-    factoryScope: data.factoryId === 'F006',
+    factoryScope: data.factoryId === expectedFactoryId,
     source: data.source || null,
     period: periodSignature(data.period),
     recommendationCount: recommendations.length,
@@ -6754,7 +7152,7 @@ function assessJoint({ initial, selected, ui, details, exportAttempt }) {
     initialClarification: initialSummary.clarification === true,
     selectedSubjectRetried: selected?.attempted === true,
     selectedSubjectProvided: selectedSummary.requestSubjectPresent === true,
-    selectedFactoryF006: selectedSummary.factoryScope === true,
+    selectedFactoryScope: selectedSummary.factoryScope === true,
     selectedSourceBusiness: selectedSummary.source === 'business',
     selectedAnswered: selectedSummary.answered === true,
     fusedFamily: hasFused,
@@ -6790,7 +7188,7 @@ function assess({ initial, followup, ui, details, exportAttempt, joint, uploaded
   const checks = {
     initialHttp200: initialSummary.http200 === true,
     initialSuccess: initialSummary.envelopeSuccess === true,
-    factoryF006: initialSummary.factoryScope === true && followupSummary.factoryScope === true,
+    factoryScope: initialSummary.factoryScope === true && followupSummary.factoryScope === true,
     sourceBusiness: initialSummary.source === 'business' && followupSummary.source === 'business',
     samePeriod: Boolean(initialSummary.period) && initialSummary.period === followupSummary.period,
     answeredWithChartsAndFacts: initialAnswered && initialSummary.recommendationCount > 0 && initialSummary.factCount > 0,
@@ -6945,6 +7343,10 @@ async function downloadExportFormats(page, answer, evidenceDir, prefix, timeout 
 }
 
 async function run(ctx) {
+  const { expectedFactoryId, loginEvidence } = ctx;
+  assertFactoryAnalysisFactory(expectedFactoryId);
+  if (loginEvidence?.factoryId !== expectedFactoryId) throw new Error('Factory AI acceptance requires a matching authenticated factory');
+  const matchesAnalysisResponse = response => isAnalysisResponse(response, expectedFactoryId);
   return runReadOnlyPageScenario(ctx, {
     id: 'smartbi-factory-analysis-readonly',
     path: PATH,
@@ -6952,11 +7354,10 @@ async function run(ctx) {
     timeoutMs: 60_000,
     appMountTimeoutMs: 90_000,
     inspect: async (page, _body, inspectCtx) => {
-      if (inspectCtx.expectedFactoryId !== 'F006') throw new Error('Factory AI acceptance is limited to F006');
       await page.getByTestId('factory-analysis-chat').waitFor({ timeout: 60_000 });
       const initialResponse = await waitForResponse(
         page,
-        isAnalysisResponse,
+        matchesAnalysisResponse,
         async () => {
           await page.getByTestId('factory-analysis-input').fill(QUESTION);
           await page.getByTestId('factory-analysis-submit').click();
@@ -6965,7 +7366,7 @@ async function run(ctx) {
       const initialBody = await responseBody(initialResponse);
       const initial = {
         status: initialResponse.status(),
-        summary: summaryFromResponse(initialResponse.status(), initialBody, requestBody(initialResponse)),
+        summary: summaryFromResponse(initialResponse.status(), initialBody, requestBody(initialResponse), expectedFactoryId),
       };
 
       const uploadedJoint = validateUploadedJointOptions(
@@ -7005,7 +7406,7 @@ async function run(ctx) {
           const detailResponse = await responsePromise;
           const detailBody = detailResponse ? await responseBody(detailResponse) : {};
           details.success = Boolean(detailResponse && detailResponse.status() === 200 && detailBody.success === true
-            && detailBody.data?.factoryId === 'F006' && Array.isArray(detailBody.data?.rows));
+            && detailBody.data?.factoryId === expectedFactoryId && Array.isArray(detailBody.data?.rows));
           details.drawerVisible = await page.locator('.el-drawer:visible').count() > 0;
         }
       }
@@ -7031,11 +7432,11 @@ async function run(ctx) {
         : false;
       let followup = { summary: {} };
       if (await followupButton.count()) {
-        const followupResponse = await waitForResponse(page, isAnalysisResponse, () => followupButton.click());
+        const followupResponse = await waitForResponse(page, matchesAnalysisResponse, () => followupButton.click());
         const followupBody = await responseBody(followupResponse);
         followup = {
           status: followupResponse.status(),
-          summary: summaryFromResponse(followupResponse.status(), followupBody, requestBody(followupResponse)),
+          summary: summaryFromResponse(followupResponse.status(), followupBody, requestBody(followupResponse), expectedFactoryId),
         };
       }
 
@@ -7053,7 +7454,7 @@ async function run(ctx) {
       if (await newAnalysisButton.count()) {
         const jointInitialResponse = await waitForResponse(
           page,
-          isAnalysisResponse,
+          matchesAnalysisResponse,
           async () => {
             await newAnalysisButton.click();
             await page.getByTestId('factory-analysis-input').fill(JOINT_QUESTION);
@@ -7063,7 +7464,7 @@ async function run(ctx) {
         const jointInitialBody = await responseBody(jointInitialResponse);
         jointInitial = {
           status: jointInitialResponse.status(),
-          summary: summaryFromResponse(jointInitialResponse.status(), jointInitialBody, requestBody(jointInitialResponse)),
+          summary: summaryFromResponse(jointInitialResponse.status(), jointInitialBody, requestBody(jointInitialResponse), expectedFactoryId),
         };
 
         const subjects = Array.isArray(jointInitialBody?.data?.subjects) ? jointInitialBody.data.subjects : [];
@@ -7079,12 +7480,12 @@ async function run(ctx) {
           await subjectOption.click();
           const retryButton = page.getByRole('button', { name: '按当前产品重试', exact: true });
           await retryButton.waitFor({ timeout: 15_000 });
-          const selectedResponse = await waitForResponse(page, isAnalysisResponse, () => retryButton.click());
+          const selectedResponse = await waitForResponse(page, matchesAnalysisResponse, () => retryButton.click());
           jointSelectedBody = await responseBody(selectedResponse);
           jointSelected = {
             attempted: true,
             status: selectedResponse.status(),
-            summary: summaryFromResponse(selectedResponse.status(), jointSelectedBody, requestBody(selectedResponse)),
+            summary: summaryFromResponse(selectedResponse.status(), jointSelectedBody, requestBody(selectedResponse), expectedFactoryId),
           };
 
           if (jointSelected.summary.fusedCount > 0) {
@@ -7101,7 +7502,7 @@ async function run(ctx) {
                 const detailsResponse = await detailsPromise;
                 const detailBody = detailsResponse ? await responseBody(detailsResponse) : {};
                 jointDetails.success = Boolean(detailsResponse && detailsResponse.status() === 200
-                  && detailBody.success === true && detailBody.data?.factoryId === 'F006'
+                  && detailBody.success === true && detailBody.data?.factoryId === expectedFactoryId
                   && Array.isArray(detailBody.data?.rows));
                 if (await page.locator('.el-drawer:visible').count()) await page.keyboard.press('Escape').catch(() => {});
               }
@@ -7132,7 +7533,7 @@ async function run(ctx) {
         }
         const uploadedInitialResponse = await waitForResponse(
           page,
-          isAnalysisResponse,
+          matchesAnalysisResponse,
           async () => {
             await page.getByTestId('factory-analysis-input').fill(JOINT_QUESTION);
             await page.getByTestId('factory-analysis-submit').click();
@@ -7151,7 +7552,7 @@ async function run(ctx) {
           await subjectControl.click();
           await page.locator('[role="option"], .el-select-dropdown__item').filter({ hasText: subject.label }).first().click();
           const retryButton = page.getByRole('button', { name: '按当前产品重试', exact: true });
-          const selectedResponse = await waitForResponse(page, isAnalysisResponse, () => retryButton.click());
+          const selectedResponse = await waitForResponse(page, matchesAnalysisResponse, () => retryButton.click());
           uploadedSelected = { attempted: true, body: await responseBody(selectedResponse), request: requestBody(selectedResponse) };
           uploadedJoint.subjectId = selectedSubjectId;
           const uploadedCandidate = (uploadedSelected.body?.data?.recommendations || []).find(isFusedCandidate) || uploadedSelected.body?.data?.recommendations?.[0];
@@ -7206,7 +7607,7 @@ async function run(ctx) {
           }
           const followupButtons = page.locator('.followups:visible .el-button');
           const followupButton = followupButtons.filter({ hasText: '质量' }).first();
-          const followupResponse = await waitForResponse(page, isAnalysisResponse, async () => {
+          const followupResponse = await waitForResponse(page, matchesAnalysisResponse, async () => {
             if (await followupButton.count()) await followupButton.click();
             else {
               await page.getByTestId('factory-analysis-input').fill('再看质量指标');
@@ -7283,6 +7684,7 @@ module.exports = {
   assessUploadedJoint,
   id: 'smartbi-factory-analysis-readonly',
   defaultEnabled: false,
+  validateFactory: assertFactoryAnalysisFactory,
   run,
   assess,
   assessJoint,
@@ -8753,7 +9155,7 @@ module.exports.responseIsRecommendations = responseIsRecommendations;
 'use strict';
 const { runReadOnlyPageScenario } = require('./_shared');
 const { inspectCommercePage } = require('./smartbi-focused-acceptance-readonly');
-const PATH = '/api/mobile/F006/smart-bi/factory-analysis';
+const { isFactoryAnalysisUrl } = require('../config/factory-analysis-scope');
 const QUESTION = '联合看客户渠道销售、发货和库存';
 
 async function inspect(page, _body, ctx) {
@@ -8765,7 +9167,7 @@ async function inspect(page, _body, ctx) {
   let onFailed; let timer;
   const failed = new Promise((resolve, reject) => {
     onFailed = request => {
-      if (request.method() === 'POST' && new URL(request.url()).pathname === PATH) resolve(request);
+      if (request.method() === 'POST' && isFactoryAnalysisUrl(request.url(), ctx.expectedFactoryId)) resolve(request);
     };
     page.on('requestfailed', onFailed);
     timer = setTimeout(() => reject(new Error('Expected offline analysis request was not observed')), 15_000);

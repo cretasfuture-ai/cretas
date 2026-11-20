@@ -26,6 +26,7 @@ import {
   type SourceIndividual,
   type SourceIndividualPayload,
 } from '@/api/sourceIndividual';
+import IndividualDrawer from '@/views/traceability/IndividualDrawer.vue';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
@@ -39,6 +40,14 @@ const total = ref(0);
 const page = ref(1);
 const size = ref(20);
 const keyword = ref('');
+
+const detailVisible = ref(false);
+const detailId = ref<string | null>(null);
+
+function openDetail(id: string) {
+  detailId.value = id;
+  detailVisible.value = true;
+}
 
 const drawerVisible = ref(false);
 const drawerTitle = ref('登记源头个体');
@@ -302,7 +311,7 @@ async function submitRevoke() {
 
       <!--
         列宽预算 (1366 视口, 侧栏 220 展开): 1366 - 220 - 三层 20px 内边距×2 - 竖向滚动条 ≈ 1009px。
-        定宽合计 140+120+110+80+110+60+104+120 = 844, 加来源场 min 110 = 954 < 1009 —— 不出横向滚动条。
+        定宽合计 140+120+110+80+110+60+104+170 = 894, 加来源场 min 110 = 1004 < 1009。
         ⚠️ 原来 1180px 在 1440 上就出滚动条, 「DNA 比对」被右侧固定的「操作」列盖得只剩一个字 ——
         技术员最关心的那一列排第 3, 别再排在最右。
         空字段整格留空, ⛔ 不渲染 '-': 「没登记」不需要一个占位符来说明自己。
@@ -330,10 +339,13 @@ async function submitRevoke() {
         <el-table-column prop="sex" label="性别" width="60" />
         <el-table-column prop="birthDate" label="出生日期" width="104" />
         <el-table-column prop="originFarm" label="来源养殖场" min-width="110" show-overflow-tooltip />
-        <el-table-column v-if="canWrite" label="操作" width="120" fixed="right">
+        <el-table-column label="操作" :width="canWrite ? 170 : 100" fixed="right">
           <template #default="{ row }">
-            <el-button data-activity-action="source-individual.edit.open" link type="primary" @click="handleEdit(row)">编辑</el-button>
-            <el-button data-activity-action="source-individual.revoke.open" link type="danger" @click="openRevoke(row)">撤销</el-button>
+            <div class="individual-actions">
+              <el-button link type="primary" @click="openDetail(row.id)">查看谱系</el-button>
+              <el-button v-if="canWrite" data-activity-action="source-individual.edit.open" link type="primary" @click="handleEdit(row)">编辑</el-button>
+              <el-button v-if="canWrite" data-activity-action="source-individual.revoke.open" link type="danger" @click="openRevoke(row)">撤销</el-button>
+            </div>
           </template>
         </el-table-column>
       </el-table>
@@ -348,6 +360,13 @@ async function submitRevoke() {
       />
     </el-card>
 
+    <IndividualDrawer
+      v-if="factoryId"
+      v-model="detailVisible"
+      :individual-id="detailId"
+      :factory-id="factoryId"
+      hide-edit
+    />
     <el-drawer v-model="drawerVisible" :title="drawerTitle" size="520px" destroy-on-close>
       <el-form ref="formRef" :model="form" :rules="rules" label-width="110px">
         <el-form-item label="档案编号" prop="individualCode">
@@ -538,6 +557,15 @@ async function submitRevoke() {
 .pagination {
   margin-top: 12px;
   justify-content: flex-end;
+}
+
+.individual-actions {
+  display: flex;
+  gap: 8px;
+
+  .el-button + .el-button {
+    margin-left: 0;
+  }
 }
 
 .field-hint {

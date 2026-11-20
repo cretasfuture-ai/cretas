@@ -72,7 +72,7 @@ async def test_joint_planner_rejects_provider_selecting_excluded_standalone_alia
         {'id': 'standalone-first', 'familyId': 'production.output'},
         {'id': 'verified-joint', 'familyId': 'production.inspection_fused'},
     ])
-    assert not selected and mode['mode'] == 'unavailable'
+    assert selected == ['verified-joint'] and mode['mode'] == 'rule'
 
 
 @pytest.mark.asyncio
@@ -96,8 +96,8 @@ async def test_multiple_commerce_relationships_cannot_be_silently_dropped(monkey
         {'id': 'stock', 'familyId': 'commerce-joint.sales.stock'},
         {'id': 'unrelated', 'familyId': 'production.fused'},
     ])
-    assert (set(selected) == {'channel', 'stock'}) if not omit_one else not selected
-    assert mode['mode'] == ('unavailable' if omit_one else 'ai')
+    assert set(selected) == {'channel', 'stock'}
+    assert mode['mode'] == ('rule' if omit_one else 'ai')
     limits = conversation.limitations_for(
         [{'id': 'channel', 'analysis': {'familyId': 'commerce-joint.customer.channel'}}], [], question)
     assert any('销售-发货-库存' in text and '没有已验证' in text for text in limits)

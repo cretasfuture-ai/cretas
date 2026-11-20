@@ -13,6 +13,7 @@ import { createPinia, setActivePinia } from 'pinia';
 const h = vi.hoisted(() => ({
   routeMock: { query: {} as Record<string, string> },
   authState: { factoryId: 'F006', businessDomain: 'FACTORY', user: { id: 1 } } as Record<string, unknown>,
+  setOption: vi.fn(),
 }));
 
 /** 与 prod 截图同一组读数: C 43.99% / B 28.45% / A 27.56% */
@@ -33,6 +34,26 @@ const SHARE_PIE = {
   },
 };
 
+const WAN_YUAN_PIE = {
+  type: 'pie',
+  title: '各产品销售收入(万元)占比',
+  option: {
+    title: { text: '各产品销售收入(万元)占比', left: 'center' },
+    legend: { type: 'scroll', bottom: 0 },
+    series: [{
+      name: '销售收入(万元)', type: 'pie', radius: ['38%', '66%'], center: ['50%', '48%'],
+      label: { formatter: '{b}\n{d}%' },
+      data: [
+        { name: '酱牛肉', value: 161.90 }, { name: '卤鸭脖', value: 152 },
+        { name: '产品三', value: 134 }, { name: '产品四', value: 116 },
+        { name: '产品五', value: 107 }, { name: '产品六', value: 103 },
+        { name: '产品七', value: 92 }, { name: '卤鸭掌', value: 73.22 },
+      ],
+    }],
+  },
+};
+let replyChart = SHARE_PIE;
+
 type StreamCallbacks = {
   onCharts?: (charts: unknown[]) => Promise<void> | void;
   onDone?: (result: Record<string, unknown>) => Promise<void> | void;
@@ -40,8 +61,8 @@ type StreamCallbacks = {
 
 const chatAnalysisStreamMock = vi.fn((_params: unknown, cb: StreamCallbacks) => {
   void (async () => {
-    await cb.onCharts?.([SHARE_PIE]);
-    await cb.onDone?.({ success: true, answer: '按销售金额看，DEMO产品C占 43.99%，排第一。', charts: [SHARE_PIE] });
+    await cb.onCharts?.([replyChart]);
+    await cb.onDone?.({ success: true, answer: '按销售金额看，以下是各产品占比。', charts: [replyChart] });
   })();
   return { abort: vi.fn() };
 });
@@ -67,9 +88,8 @@ vi.mock('vue-router', () => ({
   useRouter: () => ({ push: vi.fn() }),
 }));
 vi.mock('@/utils/echarts', () => ({
-  default: { init: () => ({ setOption: vi.fn(), resize: vi.fn(), dispose: vi.fn() }) },
+  default: { init: () => ({ setOption: h.setOption, resize: vi.fn(), dispose: vi.fn() }) },
 }));
-vi.mock('@/utils/echarts-fmt', () => ({ processEChartsOptions: (o: unknown) => o }));
 vi.mock('@/composables/useChartResize', () => ({
   useChartResize: () => ({ observe: vi.fn(), disconnect: vi.fn() }),
 }));
@@ -133,6 +153,37 @@ beforeEach(() => {
   setActivePinia(createPinia());
   sessionStorage.clear();
   chatAnalysisStreamMock.mockClear();
+  h.setOption.mockClear();
+  replyChart = SHARE_PIE;
+});
+
+describe('BP 环形图销售收入', () => {
+  it('给标题和底部图例留出独立区域，原始图表数据照常送入 ECharts', async () => {
+    replyChart = WAN_YUAN_PIE;
+    await askShareAs('factory_super_admin');
+    expect(h.setOption).toHaveBeenCalledWith(expect.objectContaining({
+      title: WAN_YUAN_PIE.option.title,
+      legend: WAN_YUAN_PIE.option.legend,
+      series: [expect.objectContaining({
+        top: 48, bottom: 30, center: ['50%', '50%'], data: WAN_YUAN_PIE.option.series[0].data,
+      })],
+    }));
+  });
+
+  it('页脚保留原表的万元口径和小数精度', async () => {
+    replyChart = WAN_YUAN_PIE;
+    const text = insightText(await askShareAs('factory_super_admin'));
+    expect(text).toContain('酱牛肉占17.2%（161.90 万元）');
+    expect(text).not.toContain('¥');
+  });
+
+  it('万元列仍受价格查看权限控制', async () => {
+    replyChart = WAN_YUAN_PIE;
+    const text = insightText(await askShareAs('warehouse_manager'));
+    expect(text).toContain('酱牛肉是最大一项');
+    expect(text).toContain('无成本查看权限');
+    expect(text).not.toMatch(/161\.90|万元|¥/);
+  });
 });
 afterEach(() => { document.body.innerHTML = ''; });
 

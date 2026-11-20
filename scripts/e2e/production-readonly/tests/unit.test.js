@@ -30,6 +30,7 @@ require('./smartbi-factory-details.test');
 
 require('./parallel-run.test');
 require('./client-offline-evidence.test');
+require('./factory-analysis-scope.test');
 
 
 const {

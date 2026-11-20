@@ -25,9 +25,11 @@ vi.mock('@/store/modules/permission', () => ({
 }));
 
 const listMock = vi.fn();
+const detailMock = vi.fn();
 vi.mock('@/api/sourceIndividual', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/api/sourceIndividual')>()),
   listSourceIndividuals: (...args: unknown[]) => listMock(...args),
+  getSourceIndividualDetail: (...args: unknown[]) => detailMock(...args),
 }));
 vi.mock('@/api/request', () => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), del: vi.fn() }));
 
@@ -79,6 +81,7 @@ async function mountWith(content: SourceIndividual[]) {
 beforeEach(() => {
   routeMock.query = {};
   listMock.mockReset();
+  detailMock.mockReset();
 });
 
 describe('源头个体档案 — 列顺序', () => {
@@ -105,6 +108,60 @@ describe('源头个体档案 — 列顺序', () => {
   });
 });
 
+it('从档案列表可以查询已解除最后一批的个体谱系', async () => {
+  const [individual, noHistory] = rows();
+  const emptyDownstream = { productionBatches: [], finishedBatches: [], shipments: [] };
+  const detail = {
+    individual,
+    sire: null,
+    dam: null,
+    offspring: [],
+    siblingsBySire: [],
+    batches: [],
+    downstream: emptyDownstream,
+    previouslyLinkedBatches: [{
+      batchId: 'mb-old',
+      batchNumber: 'MB-OLD',
+      unlinkedAt: '2026-11-20T07:35:00',
+      reason: '核对耳标后解除',
+      operatorId: 42,
+    }],
+    previouslyLinkedDownstream: {
+      ...emptyDownstream,
+      shipments: [{ nodeType: 'SHIPMENT_RECORD', nodeId: 'sh-1', batchNumber: 'SHIP-OLD' }],
+    },
+  };
+  detailMock
+    .mockResolvedValueOnce({ success: true, data: detail })
+    .mockResolvedValueOnce({
+      success: true,
+      data: { ...detail, individual: noHistory, previouslyLinkedBatches: [], previouslyLinkedDownstream: emptyDownstream },
+    });
+  const wrapper = await mountWith([individual, noHistory]);
+  const viewButtons = wrapper.findAll('button').filter(button => button.text() === '查看谱系');
+
+  await viewButtons[0].trigger('click');
+  await flushPromises();
+  expect(detailMock).toHaveBeenCalledWith('F006', individual.id);
+  expect(wrapper.get('[data-testid="drawer-batches"]').text()).toContain('当前没有挂载');
+  const history = wrapper.get('[data-testid="drawer-previously-linked"]');
+  expect(history.text()).toContain('曾挂载');
+  expect(history.text()).toContain('MB-OLD');
+  expect(history.text()).toContain('2026-11-20 07:35:00');
+  expect(history.text()).toContain('核对耳标后解除');
+  expect(history.text()).toContain('用户 #42');
+  expect(history.text()).toContain('SHIP-OLD');
+  expect(wrapper.get('[data-testid="drawer-batches"]').text()).not.toContain('MB-OLD');
+  expect(wrapper.find('[data-testid="drawer-group-shipments"]').exists()).toBe(false);
+
+  await viewButtons[1].trigger('click');
+  await flushPromises();
+  expect(detailMock).toHaveBeenCalledWith('F006', noHistory.id);
+  expect(wrapper.get('[data-testid="drawer-title"]').text()).toBe(noHistory.individualCode);
+  expect(wrapper.find('[data-testid="drawer-previously-linked"]').exists()).toBe(false);
+  wrapper.unmount();
+});
+
 describe('源头个体档案 — 空字段不渲染 -', () => {
   it('SL-CATTLE-007 那种只有编号的行: 其它格整格留空, 一个 - 都没有', async () => {
     const wrapper = await mountWith(rows());
@@ -117,13 +174,13 @@ describe('源头个体档案 — 空字段不渲染 -', () => {
     const sparseCells = sparse.findAll('td').map((td) => td.text());
     expect(sparseCells).not.toContain('-');
     // 除编号与操作列, 其余格都是空串
-    expect(sparseCells.filter((t) => t !== '')).toEqual(['SL-CATTLE-007', '编辑撤销']);
+    expect(sparseCells.filter((t) => t !== '')).toEqual(['SL-CATTLE-007', '查看谱系编辑撤销']);
 
     // 阳性对照: 有值的那一行, 每一格都真的渲染出了值 —— 「空」不是「整张表都没渲染」
     const full = bodyRows.find((r) => r.text().includes('SL-BULL-001'))!;
     const fullCells = full.findAll('td').map((td) => td.text());
     expect(fullCells).toEqual([
-      'SL-BULL-001', '12345671', '已比中', 'CATTLE', '西门塔尔', '公', '2024-03-01', '胜龙一号场', '编辑撤销',
+      'SL-BULL-001', '12345671', '已比中', 'CATTLE', '西门塔尔', '公', '2024-03-01', '胜龙一号场', '查看谱系编辑撤销',
     ]);
   });
 });

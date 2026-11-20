@@ -3,6 +3,7 @@ package com.cretas.aims.ai.tool.impl.source;
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.dto.source.SourceIndividualDTO;
 import com.cretas.aims.dto.source.SourceIndividualDetailDTO;
+import com.cretas.aims.dto.source.SourceIndividualDetailDTO.PreviouslyLinkedBatch;
 import com.cretas.aims.dto.traceability.TraceabilityDTO;
 import com.cretas.aims.entity.enums.DnaVerificationStatus;
 import com.cretas.aims.entity.source.SourceIndividual;
@@ -21,6 +22,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * 源头个体（这头牛）查询 Tool —— FEAT-AI-LINEAGE-INDIVIDUAL-TOOLS-20260915。
@@ -72,7 +74,7 @@ public class SourceIndividualQueryTool extends AbstractBusinessTool {
     public String getDescription() {
         return "查询源头个体（一头牛 / 一头猪）的档案、系谱、后代、同父兄弟、去向, 或按 DNA 比对状态列个体. "
                 + "给档案编码 (如 SL-BULL-001) 或耳标号即可; 问「有哪些后代」用 ask=offspring, "
-                + "「父本母本是谁」用 ask=pedigree, 「这头牛去了哪 / 做成了哪批货」用 ask=downstream, "
+                + "「父本母本是谁」用 ask=pedigree, 「这头牛去了哪 / 做成了哪批货」用 ask=downstream（区分现挂载和曾挂载）, "
                 + "「哪几头 DNA 不匹配 / 未采样」只给 dna_status. 适用: "
                 + "\"SL-BULL-001 这头公牛有哪些后代\" / \"哪一头牛的 DNA 比对不匹配\" / \"这头牛去了哪\".";
     }
@@ -233,6 +235,7 @@ public class SourceIndividualQueryTool extends AbstractBusinessTool {
             case "downstream" -> {
                 data.put("batches", detail.getBatches());
                 data.put("downstream", detail.getDownstream());
+                putPreviouslyLinkedRecall(data, detail);
                 yield downstreamSummary(detail);
             }
             default -> {
@@ -240,12 +243,20 @@ public class SourceIndividualQueryTool extends AbstractBusinessTool {
                 data.put("dam", detail.getDam());
                 data.put("offspringCount", detail.getOffspring() == null ? 0 : detail.getOffspring().size());
                 data.put("batchCount", detail.getBatches() == null ? 0 : detail.getBatches().size());
+                putPreviouslyLinkedRecall(data, detail);
                 yield profileSummary(detail);
             }
         };
         String summary = lookupNote == null ? body : lookupNote + "。" + body;
         data.put("summary", summary);
         return buildSimpleResult(summary, data);
+    }
+
+    private static void putPreviouslyLinkedRecall(Map<String, Object> data, SourceIndividualDetailDTO detail) {
+        List<PreviouslyLinkedBatch> history = detail.getPreviouslyLinkedBatches();
+        data.put("previouslyLinkedBatches", history);
+        data.put("previouslyLinkedDownstream", detail.getPreviouslyLinkedDownstream());
+        data.put("previouslyLinkedBatchCount", history == null ? 0 : history.size());
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -322,7 +333,8 @@ public class SourceIndividualQueryTool extends AbstractBusinessTool {
         int offspring = d.getOffspring() == null ? 0 : d.getOffspring().size();
         int batches = d.getBatches() == null ? 0 : d.getBatches().size();
         sb.append(" · 后代 ").append(offspring).append(" 头");
-        sb.append(" · 挂了 ").append(batches).append(" 个原料批次");
+        sb.append(" · 现挂载 ").append(batches).append(" 个原料批次");
+        appendPreviouslyLinkedSummary(sb, d);
         return sb.toString();
     }
 
@@ -370,10 +382,25 @@ public class SourceIndividualQueryTool extends AbstractBusinessTool {
     private static String downstreamSummary(SourceIndividualDetailDTO d) {
         String code = d.getIndividual().getIndividualCode();
         List<SourceIndividualDetailDTO.BatchSummary> batches = d.getBatches();
-        if (batches == null || batches.isEmpty()) {
+        boolean hasCurrent = nonEmpty(batches);
+        boolean hasHistory = nonEmpty(d.getPreviouslyLinkedBatches());
+        if (!hasCurrent && !hasHistory) {
             return code + " 还没有入库成原料批次, 没有去向";
         }
-        StringBuilder sb = new StringBuilder(code).append(" 的去向: 原料批次 ");
+        StringBuilder sb = new StringBuilder(code).append(" 的去向: ");
+        if (hasCurrent) {
+            appendCurrentBatchSummary(sb, batches, d.getDownstream());
+        } else {
+            sb.append("现挂载 0 批");
+        }
+        appendPreviouslyLinkedSummary(sb, d);
+        return sb.toString();
+    }
+
+    private static void appendCurrentBatchSummary(StringBuilder sb,
+                                                   List<SourceIndividualDetailDTO.BatchSummary> batches,
+                                                   SourceIndividualDetailDTO.Downstream downstream) {
+        sb.append("现挂载原料批次 ");
         for (int k = 0; k < batches.size(); k++) {
             if (k > 0) sb.append("、");
             SourceIndividualDetailDTO.BatchSummary b = batches.get(k);
@@ -384,16 +411,43 @@ public class SourceIndividualQueryTool extends AbstractBusinessTool {
                 sb.append(")");
             }
         }
-        SourceIndividualDetailDTO.Downstream ds = d.getDownstream();
-        appendStage(sb, "生产批次", ds == null ? null : ds.getProductionBatches());
-        appendStage(sb, "成品", ds == null ? null : ds.getFinishedBatches());
-        appendStage(sb, "出货", ds == null ? null : ds.getShipments());
-        boolean anyDownstream = ds != null && (
-                nonEmpty(ds.getProductionBatches()) || nonEmpty(ds.getFinishedBatches()) || nonEmpty(ds.getShipments()));
-        if (!anyDownstream) {
-            sb.append(" —— 还没投产, 没有更下游的去向");
+        if (!appendDownstreamStages(sb, downstream)) {
+            sb.append("（暂无下游记录）");
         }
-        return sb.toString();
+    }
+
+    private static void appendPreviouslyLinkedSummary(StringBuilder sb, SourceIndividualDetailDTO detail) {
+        List<PreviouslyLinkedBatch> history = detail.getPreviouslyLinkedBatches();
+        if (!nonEmpty(history)) {
+            return;
+        }
+        sb.append("；曾挂载 ").append(history.size()).append(" 批 ");
+        sb.append(history.stream()
+                .map(batch -> batch.batchNumber() == null ? batch.batchId() : batch.batchNumber())
+                .collect(Collectors.joining("、")));
+        PreviouslyLinkedBatch latest = history.get(0);
+        sb.append("（最近一次解除");
+        if (latest.unlinkedAt() != null) {
+            sb.append("于 ").append(latest.unlinkedAt().toLocalDate());
+        }
+        if (latest.reason() != null && !latest.reason().isBlank()) {
+            sb.append("，原因 ").append(latest.reason());
+        }
+        sb.append("）");
+        if (!appendDownstreamStages(sb, detail.getPreviouslyLinkedDownstream())) {
+            sb.append("（暂无下游记录）");
+        }
+    }
+
+    private static boolean appendDownstreamStages(StringBuilder sb, SourceIndividualDetailDTO.Downstream downstream) {
+        if (downstream == null) {
+            return false;
+        }
+        int before = sb.length();
+        appendStage(sb, "生产批次", downstream.getProductionBatches());
+        appendStage(sb, "成品", downstream.getFinishedBatches());
+        appendStage(sb, "出货", downstream.getShipments());
+        return sb.length() > before;
     }
 
     private static void appendStage(StringBuilder sb, String stage, List<TraceabilityDTO.LineageNode> nodes) {

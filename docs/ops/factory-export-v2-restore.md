@@ -60,6 +60,38 @@ external FK dependency, unsupported sensitive CHECK/unique shape, or target
 system mismatch is a hard refusal. Constraints are never disabled and missing
 rows from another tenant are never copied to satisfy an FK.
 
+An external FK whose selected tenant rows all contain NULL is a schema-only
+dependency, not missing reference data. The producer proves the zero count in
+the same read-only snapshot. The CLI independently requires the exact FK,
+factory and same-schema descriptor, plus an explicit NULL in every canonical
+JSON child row. Missing/forged proof, a non-NULL value or cross-schema parent
+still refuses before mutation. Parent columns, PK/UNIQUE definitions, indexes
+and triggers remain independently compared against the protected schema archive;
+no shared parent rows enter the package or become tenant-owned.
+FK enumeration and ordinal column pairing use PostgreSQL catalogs, including
+when the exporter has only SELECT on a child table. A COPY table can supply a
+schema-only dependency, and its rows are never part of the ZIP inventory. The
+exporter checks both database scopes for cross-tenant hits before the first ZIP
+entry and reports constraint relationships and counts without row keys. In
+those same snapshots it compares column descriptions with the full catalog
+inventory and checks that every internal FK from a selected row has a selected
+parent. A missing column description or parent blocks the export.
+Composite MATCH FULL keys must be entirely NULL or resolve to a selected
+parent. MATCH SIMPLE keys with a NULL component remain exempt.
+
+While CRETAS writes its ZIP entries, a read-only heartbeat keeps the waiting
+SmartBI transaction on its original snapshot. The exporter releases CRETAS
+before writing SmartBI and joins the heartbeat before returning the SmartBI
+connection to the export thread.
+
+Existing v2 packages with legacy constraint descriptors and internal FKs use
+the original constraint dictionary for exact target comparison. The CLI
+independently checks the target catalog for cross-schema FKs on that path.
+Legacy descriptors cannot authorize an external FK or a zero-reference proof.
+Before opening a target connection, the CLI recomputes the package structure
+fingerprint and checks it against the package declaration and both protected
+baseline records, including when running in validation-only mode.
+
 Both empty destinations are checked before the first schema restore. Rows and
 migration rows share a transaction per database. PostgreSQL sequence changes
 and external `pg_restore` stages cannot form a cross-database transaction: on

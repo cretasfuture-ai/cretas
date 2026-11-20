@@ -72,6 +72,9 @@ async function performUiLogin(page, options) {
   const expectedFactoryId = options.expectedFactoryId || 'F006';
   const expectedRole = options.expectedRole ? String(options.expectedRole).toLowerCase() : null;
   if (!username || !password) throw new Error('E2E_USERNAME and E2E_PASSWORD are required for UI login');
+  if (options.requireFactoryResponseProof && /^lsmdemo_/iu.test(username)) {
+    throw new Error('Demo accounts are excluded from this acceptance run');
+  }
 
   const loginMount = await waitForAppMount(page, options.appMountTimeoutMs);
   if (!loginMount.appMounted) throw new Error('Login application did not mount before credential entry');
@@ -84,19 +87,28 @@ async function performUiLogin(page, options) {
 
   const matchesLogin = (request) => request.url().includes('/api/mobile/auth/unified-login')
     && request.method() === 'POST';
-  const outcomePromise = waitForLoginOutcome(page, matchesLogin);
   const submit = page.locator('button.login-button, button[type="submit"]').first();
-  await submit.click();
-  const outcome = await outcomePromise;
+  const [outcome] = await Promise.all([
+    waitForLoginOutcome(page, matchesLogin).then(async result => {
+      if (result.type === 'failure') return result;
+      let body = null;
+      try { body = await result.response.json(); } catch { body = null; }
+      return { ...result, body };
+    }),
+    submit.click(),
+  ]);
   if (outcome.type === 'failure') {
     throw new Error(`UI login request failed before response: ${outcome.request.failure()?.errorText || 'unknown network error'}`);
   }
-  const response = outcome.response;
-  let body = null;
-  try { body = await response.json(); } catch { body = null; }
+  const { response, body } = outcome;
   const login = compactLoginData(body);
   if (response.status() >= 400 || login.success === false) {
+    if (options.requireFactoryResponseProof) throw new Error(`UI login failed: HTTP ${response.status()}`);
     throw new Error(`UI login failed: HTTP ${response.status()} ${login.message || 'success=false'}`);
+  }
+  if (options.requireFactoryResponseProof && (login.success !== true || login.factoryId !== expectedFactoryId
+      || (body?.data?.factoryUser && body.data.factoryUser.factoryId !== expectedFactoryId))) {
+    throw new Error(`Live login response did not prove factory ${expectedFactoryId}`);
   }
   await page.waitForURL((url) => !url.pathname.includes('/login'), { timeout: 20_000 });
 
@@ -107,6 +119,7 @@ async function performUiLogin(page, options) {
       return {
         username: value.username || factoryUser.username || null,
         factoryId: value.factoryId || factoryUser.factoryId || null,
+        nestedFactoryId: factoryUser.factoryId || null,
         factoryName: value.factoryName || factoryUser.factoryName || null,
         role: value.role || factoryUser.role || null,
         userType: value.userType || null,
@@ -121,8 +134,14 @@ async function performUiLogin(page, options) {
   const actualFactoryId = platformSession ? 'PLATFORM' : stored.factoryId || login.factoryId;
   const actualFactoryName = stored.factoryName || login.factoryName;
   const actualRole = String(stored.platformRole || stored.role || login.role || '').toLowerCase();
-  if (actualUsername !== expectedUsername) throw new Error(`Tenant login username mismatch: expected ${expectedUsername}, got ${actualUsername}`);
+  if (actualUsername !== expectedUsername) {
+    if (options.requireFactoryResponseProof) throw new Error('Tenant login username mismatch');
+    throw new Error(`Tenant login username mismatch: expected ${expectedUsername}, got ${actualUsername}`);
+  }
   if (actualFactoryId !== expectedFactoryId) throw new Error(`Tenant factory mismatch: expected ${expectedFactoryId}, got ${actualFactoryId}`);
+  if (options.requireFactoryResponseProof && stored.nestedFactoryId && stored.nestedFactoryId !== expectedFactoryId) {
+    throw new Error('Stored factory user disagrees with the live login response');
+  }
   if (expectedRole && actualRole !== expectedRole) throw new Error(`Tenant role mismatch: expected ${expectedRole}, got ${actualRole || 'missing'}`);
 
   // 🔴 落地页也必须等应用挂载完再取样 —— 这是同一个缺陷的第二处, 而且更阴:

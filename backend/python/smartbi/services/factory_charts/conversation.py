@@ -16,11 +16,15 @@ import logging
 import re
 import secrets
 import time
+import unicodedata
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any, Mapping, Optional, Sequence
 
 from fastapi import HTTPException
+
+from .planner_catalog import catalog_limit, rule_selection, shortlist
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +33,22 @@ MAX_CONTEXTS = 128
 MAX_HISTORY = 8
 MAX_SELECTED_CHARTS = 4
 MAX_PLANNER_CATALOG = 512
+PLANNER_CACHE_TTL_SECONDS = 600.0
+MAX_PLANNER_CACHE_ENTRIES = 128
+_PLAN_CACHE: OrderedDict[tuple[str, str], tuple[float, tuple[str, ...], dict[str, str]]] = OrderedDict()
 _planner_monotonic = time.monotonic
+_cache_monotonic = time.monotonic
+
+
+class _OwnedHistory(list):
+    """Carry the authenticated owner through the route's existing history argument.
+
+    Only turns are serialized to the conversation store or the provider.
+    """
+
+    def __init__(self, turns, owner):
+        super().__init__(turns)
+        self.owner = owner
 
 
 @dataclass
@@ -52,6 +71,9 @@ class ConversationContext:
     lease_token: str = ""
     persisted_version: int = 0
 
+    def __post_init__(self):
+        self.history = _OwnedHistory(self.history, (self.user_id, self.role))
+
 
 _CONTEXTS: dict[str, ConversationContext] = {}
 
@@ -59,6 +81,7 @@ _CONTEXTS: dict[str, ConversationContext] = {}
 def clear_contexts() -> None:
     """Clear in-process contexts for tests and worker lifecycle hooks."""
     _CONTEXTS.clear()
+    _PLAN_CACHE.clear()
 
 
 def _purge(now: Optional[float] = None) -> None:
@@ -216,17 +239,30 @@ def _sanitized_history(history: Sequence[Mapping[str, Any]] | None,
     return result
 
 
+def _plan_cache_key(factory_id, question, catalog, history, subjects, required_families, limit):
+    owner = history.owner if isinstance(history, _OwnedHistory) else None
+    return factory_id, hashlib.sha256(json.dumps({
+        "owner": owner,
+        "question": question,
+        "catalog": catalog,
+        "subjects": subjects,
+        "requiredFamilies": sorted(required_families),
+        "history": _sanitized_history(history),
+        "limit": limit,
+    }, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+
+
 async def plan(question: str, catalog: Sequence[Mapping[str, Any]],
                history: Sequence[Mapping[str, Any]] | None = None,
                factory_id: Optional[str] = None,
                authorized_subjects: Sequence[Mapping[str, Any]] = (),
                authorized_recommendations: Sequence[Mapping[str, Any]] = ()) -> tuple[list[str], dict[str, Any]]:
-    """Ask the approved chart LLM to select existing ids, fail closed."""
+    """Prefer the approved chart model and use rules if it cannot select chart IDs."""
     if not catalog:
         return [], {"mode": "unavailable", "reason": "当前授权数据没有合格图表"}
-    # The full public catalogue is retained, but an oversized provider payload
-    # is a provider-unavailable condition, never a silent keyword fallback.
-    semantic = list(catalog)
+    question = unicodedata.normalize("NFC", question.strip())
+    authorized_catalog = list(catalog)
+    semantic = authorized_catalog
     required_families: set[str] = set()
     if len(semantic) > MAX_PLANNER_CATALOG:
         return [], {"mode": "unavailable", "reason": "合格图表目录超过AI规划安全上限"}
@@ -241,6 +277,20 @@ async def plan(question: str, catalog: Sequence[Mapping[str, Any]],
         if not required_families.issubset({item.get("familyId") for item in semantic}):
             return [], {"mode": "unavailable", "reason": "当前授权目录缺少本问题所需的已验证联合关系"}
         semantic = [item for item in semantic if item.get("familyId") in required_families]
+    limit = max(len(required_families), catalog_limit(MAX_PLANNER_CATALOG))
+    cache_key = None
+    if factory_id:
+        cache_key = _plan_cache_key(factory_id, question, authorized_catalog, history,
+                                    authorized_subjects, required_families, limit)
+        cached = _PLAN_CACHE.pop(cache_key, None)
+        if cached is not None and cached[0] > _cache_monotonic():
+            _PLAN_CACHE[cache_key] = cached
+            logger.info("Factory conversation planner cache hit")
+            return list(cached[1]), {**cached[2], "cache": "hit"}
+    rule_catalog = semantic
+    semantic = shortlist(question, semantic, required_families, limit)
+    logger.info("Factory conversation planner catalogue prefilter: %d -> %d",
+                len(authorized_catalog), len(semantic))
     aliases = {str(item.get("id")): "chart_" + hashlib.sha256(str(item.get("id")).encode("utf-8")).hexdigest()[:16]
                for item in semantic if item.get("id")}
     provider_semantic = [{**item, "id": aliases[str(item["id"])]} for item in semantic]
@@ -265,9 +315,11 @@ async def plan(question: str, catalog: Sequence[Mapping[str, Any]],
         "max_tokens": 900,
         "enable_thinking": False,
     }
-    if len(json.dumps(payload, ensure_ascii=False).encode("utf-8")) > 50000:
-        return [], {"mode": "unavailable", "reason": "图表规划请求超过安全上限"}
+    unavailable_reason = "当前授权目录没有与问题匹配的图表"
     try:
+        if len(json.dumps(payload, ensure_ascii=False).encode("utf-8")) > 50000:
+            unavailable_reason = "图表规划请求超过安全上限，当前授权目录没有与问题匹配的图表"
+            raise ValueError("planner payload exceeds 50000 bytes")
         from common.llm_metrics import llm_caller_context
         from common.llm_redactor import redaction_scope
         def _sensitive_values() -> dict[str, list[str]]:
@@ -311,24 +363,40 @@ async def plan(question: str, catalog: Sequence[Mapping[str, Any]],
                 collect_chart_strings(chart)
             return {key: list(dict.fromkeys(items)) for key, items in values.items() if items}
         from common.llm_router import call_chain, SLOT, LLMChainExhausted
-        provider_lookup = {alias: item for item, alias in ((item, aliases[str(item["id"])]) for item in semantic)}
+        provider_lookup = {aliases[str(item["id"])]: item for item in semantic}
+
+        def validated_selection(content: Any) -> tuple[list[str], int]:
+            parsed = _parse_llm_json(content)
+            if set(parsed) - {"selected_ids", "selectedIds", "reason"}:
+                raise ValueError("planner envelope contains unknown fields")
+            selected_aliases = parsed.get("selected_ids", parsed.get("selectedIds"))
+            if not isinstance(selected_aliases, list) or not selected_aliases:
+                raise ValueError("planner selection count invalid")
+
+            families: set[str] = set()
+            selected: list[str] = []
+            for alias in selected_aliases:
+                if not isinstance(alias, str) or alias not in provider_lookup:
+                    raise ValueError("planner alias outside eligible catalogue")
+                item = provider_lookup[alias]
+                family = str(item.get("familyId") or alias)
+                if family not in families:
+                    families.add(family)
+                    selected.append(str(item["id"]))
+
+            if not 1 <= len(selected) <= MAX_SELECTED_CHARTS:
+                raise ValueError("planner selection count invalid")
+            if not required_families.issubset(families):
+                raise ValueError("planner omitted requested joint relationship")
+            return selected, len(selected_aliases) - len(selected)
+
         def content_validator(content: str) -> Optional[str]:
             try:
-                checked = _parse_llm_json(content)
-                selected_aliases = checked.get("selected_ids", checked.get("selectedIds"))
-                if set(checked) - {"selected_ids", "selectedIds", "reason"}:
-                    return "planner envelope contains unknown fields"
-                if not isinstance(selected_aliases, list) or not selected_aliases or len(selected_aliases) > MAX_SELECTED_CHARTS:
-                    return "planner selection count invalid"
-                if len(set(selected_aliases)) != len(selected_aliases) or any(value not in provider_lookup for value in selected_aliases):
-                    return "planner alias outside eligible catalogue"
-                if len({str(provider_lookup[value].get("familyId") or value) for value in selected_aliases}) != len(selected_aliases):
-                    return "planner selected duplicate chart family"
-                if not required_families.issubset({provider_lookup[value].get("familyId") for value in selected_aliases}):
-                    return "planner omitted requested joint relationship"
+                validated_selection(content)
                 return None
-            except Exception as exc:
+            except ValueError as exc:
                 return str(exc)
+
         def _duplicate_family_failure(exc: Exception) -> bool:
             if not isinstance(exc, LLMChainExhausted):
                 return False
@@ -373,33 +441,27 @@ async def plan(question: str, catalog: Sequence[Mapping[str, Any]],
                     ),
                 })
                 if len(json.dumps(retry_payload, ensure_ascii=False).encode("utf-8")) > 50000:
-                    return [], {"mode": "unavailable", "reason": "图表规划纠正请求超过安全上限"}
+                    unavailable_reason = "图表规划纠正请求超过安全上限，当前授权目录没有与问题匹配的图表"
+                    raise ValueError("planner correction payload exceeds 50000 bytes") from first_error
                 response = await _call(retry_payload)
         choices = response.get("choices") if isinstance(response, Mapping) else None
         content = choices[0].get("message", {}).get("content") if choices else None
-        parsed = _parse_llm_json(content)
-        if set(parsed) - {"selected_ids", "selectedIds", "reason"}:
-            raise ValueError("planner envelope contains unknown fields")
-        selected_aliases = parsed.get("selected_ids", parsed.get("selectedIds"))
-        selected = [next(real for real, alias in aliases.items() if alias == value) for value in selected_aliases] if isinstance(selected_aliases, list) and all(value in aliases.values() for value in selected_aliases) else []
-        if not isinstance(selected, list) or not selected or len(selected) > MAX_SELECTED_CHARTS:
-            raise ValueError("planner selection count invalid")
-        if any(not isinstance(value, str) or not value for value in selected):
-            raise ValueError("planner id invalid")
-        if len(set(selected)) != len(selected):
-            raise ValueError("planner ids duplicated")
-        lookup = {str(item.get("id")): item for item in semantic}
-        if any(value not in lookup for value in selected):
-            raise ValueError("planner selected id outside eligible catalogue")
-        families = {str(lookup[value].get("familyId") or value) for value in selected}
-        if len(families) > MAX_SELECTED_CHARTS or len(families) != len(selected):
-            raise ValueError("planner selected too many chart families")
-        if not required_families.issubset(families):
-            raise ValueError("planner omitted requested joint relationship")
-        return selected, {"mode": "ai", "reason": "AI仅在当前授权目录中规划图表"}
+        selected, duplicate_count = validated_selection(content)
+        if duplicate_count:
+            logger.info("Factory conversation planner removed %d duplicate chart selections by family", duplicate_count)
+        mode = {"mode": "ai", "reason": "AI仅在当前授权目录中规划图表"}
     except Exception as exc:
-        logger.info("Factory conversation planner unavailable (%s)", type(exc).__name__)
-        return [], {"mode": "unavailable", "reason": "AI图表规划暂不可用或回复未通过候选校验"}
+        logger.warning("Factory conversation AI planner failed (%s): %s", type(exc).__name__, exc)
+        selected = rule_selection(question, rule_catalog, required_families, MAX_SELECTED_CHARTS)
+        if not selected:
+            return [], {"mode": "unavailable", "reason": unavailable_reason}
+        mode = {"mode": "rule", "reason": "按问题关键词从授权图表目录选择"}
+    if cache_key is not None:
+        _PLAN_CACHE[cache_key] = (_cache_monotonic() + PLANNER_CACHE_TTL_SECONDS, tuple(selected), mode)
+        _PLAN_CACHE.move_to_end(cache_key)
+        if len(_PLAN_CACHE) > MAX_PLANNER_CACHE_ENTRIES:
+            _PLAN_CACHE.popitem(last=False)
+    return selected, {**mode, "cache": "miss"}
 
 
 def facts_for(selected: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -432,7 +494,13 @@ def facts_for(selected: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
 
 def limitations_for(selected: Sequence[Mapping[str, Any]], catalog: Sequence[Mapping[str, Any]],
                     question: str = "") -> list[str]:
+    from smartbi.services.external_production import SOURCE_KEY
+
     limitations: list[str] = []
+    if re.search(r"单位成本|\bunit cost\b", question, re.I) and selected and all(
+        str(candidate.get("source", "")).split(" · ", 1)[0] == SOURCE_KEY for candidate in selected
+    ):
+        limitations.append("黑湖数据缺少制造成本，无法计算单位成本")
     for candidate in selected:
         findings = candidate.get("findings") if isinstance(candidate.get("findings"), Mapping) else {}
         explicit = findings.get("limitations") if isinstance(findings.get("limitations"), list) else []
@@ -548,8 +616,11 @@ def resolve_subject(question: str, subjects: Sequence[Mapping[str, Any]], explic
     # A product/SKU marker makes an unknown product explicit.  Generic
     # analysis words are excluded so normal questions keep factory scope.
     generic = re.search(r"(?:按|以|从|看)?产品(?:维度|类别|名称|排名|比较|分析|成本|产量|质量)|哪个产品|哪些产品", question)
-    marker = re.search(r"(?:产品|SKU|sku)[：:\s-]*([^，。！？?\s]{1,40})", question)
-    generic_prefixes = ("分析", "趋势", "质量", "成本", "产量", "销售", "采购", "比较", "哪个", "哪些", "高", "低", "变化", "结构", "排名", "按", "类别", "名称", "维度")
+    marker = re.search(r"(?:(?<!哪几个)(?<!什么)(?<!多少)产品|SKU|sku)[：:\s-]*([^，。！？?\s]{1,40})", question)
+    generic_prefixes = (
+        "分析", "趋势", "质量", "成本", "产量", "销售", "采购", "比较", "哪个", "哪些", "高", "低",
+        "变化", "结构", "排名", "按", "类别", "名称", "维度", "哪几个", "是哪几个", "有哪些",
+    )
     if marker and not generic and not marker.group(1).startswith(generic_prefixes):
         token = marker.group(1)
         base_matches = [(item_id, label) for item_id, label in entries
@@ -689,7 +760,8 @@ def touch_context(context: ConversationContext, question: str, selected_ids: Seq
                   unresolved_period: Optional[bool] = None,
                   period_error: Optional[str] = None) -> None:
     selected = [str(item) for item in selected_ids[:MAX_SELECTED_CHARTS]]
-    context.history = (context.history + [{"question": question[:1000], "selectedIds": selected}])[-MAX_HISTORY:]
+    context.history.append({"question": question[:1000], "selectedIds": selected})
+    del context.history[:-MAX_HISTORY]
     context.selected_ids = selected
     if unresolved_product is not None:
         context.unresolved_product = bool(unresolved_product)
