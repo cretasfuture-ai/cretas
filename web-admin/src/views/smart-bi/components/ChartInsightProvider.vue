@@ -38,6 +38,7 @@
       and the watcher inside useChartInsight re-evaluates insight state.
   -->
   <ChartInsight :insight="displayInsight" :loading="loading" :depth="depth" :factory-id="factoryId" />
+  <p v-if="unavailableText && !loading && !displayInsight" role="status">{{ unavailableText }}</p>
 </template>
 
 <script setup lang="ts">
@@ -68,6 +69,8 @@ const props = withDefaults(
      * Defaults to true (Tier2 is called on Tier1-null by default).
      */
     autoTier2?: boolean;
+    requireTier2?: boolean;
+    unavailableText?: string;
     /**
      * Display depth passed through to <ChartInsight>.
      * 'concise' = finding line only (default).
@@ -103,10 +106,11 @@ const { insight, loading } = useChartInsight(
   {
     factoryId: () => props.factoryId ?? '',
     autoTier2: props.autoTier2 !== false,
+    requireTier2: props.requireTier2,
   },
 );
 
-const displayInsight = computed(() => localizeInsight(insight.value, props.chart));
+const displayInsight = computed(() => props.requireTier2 ? insight.value : localizeInsight(insight.value, props.chart));
 
 function localizeInsight(raw: InsightResult | null, chart: ChartWithMeta | null): InsightResult | null {
   if (!raw || !chart) return raw;

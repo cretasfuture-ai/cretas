@@ -5,6 +5,7 @@ import com.cretas.aims.dto.yield.ProcessYieldAggDTO;
 import com.cretas.aims.service.yield.YieldAnalysisService;
 import com.cretas.aims.service.shortage.CostDeviationThresholdService;
 import com.cretas.aims.service.yield.balance.MaterialBalanceService;
+import com.cretas.aims.service.yield.balance.MaterialBalanceService.BatchReports;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -15,6 +16,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.function.Predicate;
 
 /**
  * 出成率「按工序」三种问法的取数与文字 (BP 问题 28, 2026-11-18), 由 {@link ReportBatchYieldRankTool} 调用:
@@ -63,6 +65,13 @@ final class ProcessYieldViews {
         }
     }
 
+    /** 报工没关联到工序 (老 CLK 批次等): 显示用名, 不让字面「null」出现在回答里。 */
+    static final String UNLINKED_PROCESS = "未关联工序";
+
+    static String displayProcess(String processName) {
+        return processName == null || processName.isBlank() ? UNLINKED_PROCESS : processName;
+    }
+
     /** 一条异常 (批次, 工序)。 */
     record Abnormal(String batchNumber, String productName, String processName, String level,
                     BigDecimal input, BigDecimal output, String unit, BigDecimal deviationPct) {
@@ -70,7 +79,7 @@ final class ProcessYieldViews {
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("batchNumber", batchNumber);
             m.put("productName", productName);
-            m.put("processName", processName);
+            m.put("processName", displayProcess(processName));
             m.put("level", level);
             m.put("standardDeviationLimit", warnPct);
             m.put("deviationPct", deviationPct);
@@ -124,8 +133,14 @@ final class ProcessYieldViews {
      */
     static Balance balance(MaterialBalanceService service, String factoryId, LocalDate start, LocalDate end,
                            ProductScope scope, AlertLine alert) {
-        BigDecimal alertPct = alert != null && alert.present() ? alert.pct() : null;
-        MaterialBalanceService.BatchBalance bb = service.blocksByBatch(factoryId, start, end, alertPct);
+        return balance(service.blocksByBatch(factoryId, start, end, alertPct(alert)), scope, alert);
+    }
+
+    private static BigDecimal alertPct(AlertLine alert) {
+        return alert != null && alert.present() ? alert.pct() : null;
+    }
+
+    private static Balance balance(MaterialBalanceService.BatchBalance bb, ProductScope scope, AlertLine alert) {
         List<Abnormal> out = new ArrayList<>();
         int incomparable = 0;
         for (MaterialBalanceTableDTO.PlanBlock block : bb.blocks()) {
@@ -142,7 +157,7 @@ final class ProcessYieldViews {
             }
         }
         out.sort(Comparator.comparing((Abnormal a) -> a.deviationPct() == null ? BigDecimal.ZERO : a.deviationPct()).reversed());
-        return new Balance(bb.warnPct(), bb.redPct(), out, incomparable, alertPct != null ? alert.source() : null);
+        return new Balance(bb.warnPct(), bb.redPct(), out, incomparable, alertPct(alert) != null ? alert.source() : null);
     }
 
     static boolean nameMatches(String processName, String keyword) {
@@ -196,15 +211,39 @@ final class ProcessYieldViews {
     }
 
     // ---------------- 损耗异常 ----------------
+    private static BatchReports lossReports(MaterialBalanceService service, String factoryId, LocalDate start,
+                                            LocalDate end, ProductScope scope) {
+        BatchReports reports = service.batchReports(factoryId, start, end);
+        return scope.active() ? reports.forProducts(scope::productMatches) : reports;
+    }
+
+    private static Predicate<String> lossProcessMatch(BatchReports batchReports, String processKeyword) {
+        if (processKeyword == null) return name -> true;
+        String keyword = normalize(processKeyword);
+        Predicate<String> exactMatch = name -> name != null && normalize(name).equals(keyword);
+        return batchReports.processNames().stream().anyMatch(exactMatch)
+                ? exactMatch
+                : name -> nameMatches(name, processKeyword);
+    }
+
+    private static Balance lossBalance(MaterialBalanceService service, BatchReports reports,
+                                       AlertLine alert) {
+        return balance(service.blocksByBatch(reports, alertPct(alert)), ProductScope.ALL, alert);
+    }
+
     static Map<String, Object> lossAnomaly(MaterialBalanceService service, String factoryId, LocalDate start,
                                            LocalDate end, int limit, String processKeyword, ProductScope scope,
-                                           String[] textOut, AlertLine alert) {
-        Balance b = balance(service, factoryId, start, end, scope, alert);
-        List<String> known = names(null, b);
-        List<Abnormal> all = new ArrayList<>();
-        for (Abnormal a : b.abnormal()) {
-            if (processKeyword == null || keywordMatches(a.processName(), processKeyword, known)) all.add(a);
+                                           String[] textOut, AlertLine alert, String windowNotice) {
+        BatchReports window = lossReports(service, factoryId, start, end, scope);
+        BatchReports scoped = window.forProcesses(lossProcessMatch(window.withBatchNumber(), processKeyword));
+        BatchReports reports = scoped.withBatchNumber();
+        int unbatched = scoped.size() - reports.size();
+        Balance b = lossBalance(service, reports, alert);
+        if (reports.size() == 0) {
+            return noBatchReportsInWindow(service, factoryId, start, end, scope, processKeyword,
+                    textOut, alert, b, windowNotice, unbatched);
         }
+        List<Abnormal> all = b.abnormal();
         List<Abnormal> shown = all.size() > limit ? all.subList(0, limit) : all;
         List<Map<String, Object>> rows = new ArrayList<>();
         for (Abnormal a : shown) rows.add(a.toMap(b.warnPct()));
@@ -217,29 +256,98 @@ final class ProcessYieldViews {
         data.put("incomparableCount", b.incomparableRows());
         data.put("rows", rows);
         data.put("basis", basis(b));
+        data.put("reportCountInWindow", reports.size());
+        data.put("unbatchedReportCountInWindow", unbatched);
+        data.put("windowWidened", windowNotice != null);
 
         StringBuilder sb = new StringBuilder();
+        if (windowNotice != null) sb.append(windowNotice).append("\n");
         sb.append(start).append(" 至 ").append(end).append(scope.active() ? "「" + scope.keyword() + "」" : "")
                 .append(processKeyword != null ? "「" + processKeyword + "」" : "");
         if (all.isEmpty()) {
-            sb.append(" 没有损耗异常的批次工序（未解释差额都在 ").append(pct(b.warnPct())).append(" 以内）。");
+            sb.append(" 有报工 ").append(reports.size()).append(" 条，没有损耗异常的批次工序（未解释差额都在 ").append(pct(b.warnPct())).append(" 以内）。");
         } else {
             sb.append(" 共 ").append(all.size()).append(" 个批次工序损耗异常（未解释差额占投入超过 ")
                     .append(pct(b.warnPct())).append("），偏差最大的 ").append(shown.size()).append(" 个：");
             int i = 0;
             for (Abnormal a : shown) {
                 sb.append("\n").append(++i).append(". ").append(a.batchNumber()).append("（").append(a.productName())
-                        .append("）· ").append(a.processName()).append("：标准 ≤ ").append(pct(b.warnPct()))
+                        .append("）· ").append(displayProcess(a.processName())).append("：标准 ≤ ").append(pct(b.warnPct()))
                         .append("，实际偏差 ").append(pct(a.deviationPct())).append("（")
                         .append("RED".equals(a.level()) ? "红" : "黄").append("），投入 ")
                         .append(strip(a.input())).append(" → 产出 ").append(strip(a.output()))
                         .append(a.unit() == null ? "" : a.unit());
             }
         }
+        if (unbatched > 0) {
+            sb.append("\n另有 ").append(unbatched).append(" 条报工缺少批次号，未纳入批次损耗分析。");
+        }
         if (b.incomparableRows() > 0) {
             sb.append("\n另有 ").append(b.incomparableRows()).append(" 个批次工序单位不可比或没登记投入，没算偏差。");
         }
         sb.append("\n").append(basis(b));
+        textOut[0] = sb.toString();
+        return data;
+    }
+
+    /**
+     * 窗口内没有可归批次的报工时，说明无报工或缺少批次号。回查最近一次可归批次的报工及其七天异常数。
+     */
+    private static Map<String, Object> noBatchReportsInWindow(MaterialBalanceService service, String factoryId,
+                                                              LocalDate start, LocalDate end, ProductScope scope,
+                                                              String processKeyword, String[] textOut, AlertLine alert,
+                                                              Balance empty, String windowNotice, int unbatched) {
+        LocalDate historyStart = start.minusDays(365);
+        // 多读六天，最近报工若正好在回溯边界，也能计算以该日为末日的完整七天。
+        BatchReports historyReports = lossReports(service, factoryId, historyStart.minusDays(6), start.minusDays(1), scope);
+        Predicate<String> matches = lossProcessMatch(historyReports.since(historyStart).withBatchNumber(), processKeyword);
+        BatchReports history = historyReports.forProcesses(matches);
+        BatchReports batchHistory = history.withBatchNumber();
+        LocalDate latest = batchHistory.since(historyStart).latestDate();
+        Integer nearby = null;
+        LocalDate nearFrom = null;
+        if (latest != null) {
+            nearFrom = latest.minusDays(6);
+            nearby = lossBalance(service, batchHistory.since(nearFrom), alert).abnormal().size();
+        }
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("view", "loss_anomaly");
+        data.put("productKeyword", scope.keyword());
+        data.put("period", Map.of("startDate", start.toString(), "endDate", end.toString()));
+        data.put("noReportsInWindow", unbatched == 0);
+        data.put("reportCountInWindow", 0);
+        data.put("unbatchedReportCountInWindow", unbatched);
+        data.put("latestReportDate", latest == null ? null : latest.toString());
+        data.put("abnormalNearLatestReport", nearby);
+        data.put("windowWidened", windowNotice != null);
+        data.put("abnormalCount", 0);
+        data.put("incomparableCount", 0);
+        data.put("rows", new ArrayList<>());
+        data.put("basis", basis(empty));
+        StringBuilder sb = new StringBuilder();
+        if (windowNotice != null) sb.append(windowNotice).append("\n");
+        sb.append(start).append(" 至 ").append(end).append(scope.active() ? "「" + scope.keyword() + "」" : "")
+                .append(processKeyword != null ? "「" + processKeyword + "」" : "");
+        if (unbatched == 0) {
+            sb.append(" 这段时间没有任何报工记录");
+        } else {
+            sb.append(" 这段时间有 ").append(unbatched).append(" 条报工，因缺少批次号无法纳入批次损耗分析");
+        }
+        sb.append("，没法判断有没有损耗异常（不等于没有异常）。");
+        if (latest == null) {
+            int historyCount = history.since(historyStart).size();
+            if (historyCount == 0) {
+                sb.append("所问期间之前，近一年也没有报工记录。");
+            } else {
+                sb.append("所问期间之前，近一年有 ").append(historyCount)
+                        .append(" 条报工，因缺少批次号无法纳入批次损耗分析。");
+            }
+        } else {
+            sb.append("所问期间之前最近一次可归批次的报工是 ").append(latest).append("，").append(nearFrom).append(" 至 ").append(latest)
+                    .append(" 有 ").append(nearby).append(" 个批次工序的未解释差额超过 ").append(pct(empty.warnPct()))
+                    .append("。想看那段时间可以问「本月有哪些损耗异常」或「近 30 天有哪些损耗异常」，或直接说日期。");
+        }
+        sb.append("\n").append(basis(empty));
         textOut[0] = sb.toString();
         return data;
     }
@@ -409,7 +517,7 @@ final class ProcessYieldViews {
         for (Abnormal a : hit) {
             if (++i > 10) break;
             sb.append("\n  ").append(i).append(". ").append(a.batchNumber()).append("（").append(a.productName()).append("）· ")
-                    .append(a.processName()).append("：偏差 ").append(pct(a.deviationPct()));
+                    .append(displayProcess(a.processName())).append("：偏差 ").append(pct(a.deviationPct()));
         }
     }
 

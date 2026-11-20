@@ -1598,6 +1598,7 @@ public class ArApServiceImpl implements ArApService {
             if (invoice.getDueDate() == null || !invoice.getDueDate().isBefore(today)) continue;
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("transactionNumber", invoice.getTransactionNumber());
+            row.put("counterpartyId", invoice.getCounterpartyId());
             row.put("counterpartyName", invoice.getCounterpartyName());
             row.put("outstanding", amt);
             row.put("dueDate", invoice.getDueDate());

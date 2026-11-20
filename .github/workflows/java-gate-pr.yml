@@ -55,6 +55,7 @@ jobs:
       pull-requests: read  # merge_group 的 PR 元数据
     outputs:
       run: ${{ steps.filter.outputs.run }}
+      restore_cli: ${{ steps.restore-paths.outputs.run }}
       runner: ${{ steps.route.outputs.runner }}
       route_policy: ${{ steps.route.outputs.route_policy }}
       mini_group_verified: ${{ steps.route.outputs.mini_group_verified }}
@@ -96,6 +97,13 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
         run: python3 scripts/ci/changed-paths.py --patterns scripts/ci/trigger-paths/java-gate-pr.txt
+      - id: restore-paths
+        continue-on-error: true # missing output fails only factory-restore-cli
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
+        run: python3 scripts/ci/changed-paths.py --patterns scripts/ci/trigger-paths/java-factory-restore-cli.txt
 
   fast-contracts-shard:
     needs: changes
@@ -501,6 +509,42 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: bash scripts/ci/java-gate-shard-summary.sh postgres-reversal-concurrency "$RESULT"
 
+
+  factory-restore-cli:
+    name: factory-restore-cli
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.result != 'skipped' && needs.changes.outputs.restore_cli != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      MAVEN_OPTS: -Xmx2g
+    steps:
+      - name: Require CLI change detection to succeed
+        if: ${{ needs.changes.result != 'success' || needs.changes.outputs.restore_cli != 'true' }}
+        run: exit 1
+      - uses: actions/checkout@v4
+        with:
+          # PR merge tree / merge group, with the legacy exporter revision in history.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: temurin
+      - name: Restore Maven repository (warmed on main)
+        if: ${{ runner.environment != 'self-hosted' }}
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.m2/repository
+          key: maven-gate-${{ hashFiles('backend/java/cretas-api/pom.xml') }}
+          restore-keys: maven-gate-
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install restore CLI dependency
+        run: python3 -m pip install 'psycopg2-binary>=2.9,<3'
+      - name: Run and verify the isolated factory restore CLI cases
+        run: bash scripts/ci/run-with-test-postgres.sh --factory-restore-cli
 
   final-full-suite:
     needs: changes

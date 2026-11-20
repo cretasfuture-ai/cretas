@@ -123,7 +123,8 @@ public final class TimeRangeFilter {
         String[] range = said.split("~", 2);
         Map<String, Object> out = new LinkedHashMap<>(result);
         if (supported(parametersSchema)) {
-            out.put(APPLIED, Map.of("from", range[0], "to", range[1]));
+            // 工具可能收敛或放宽了窗口。以工具回报的实际起止为准。
+            out.putIfAbsent(APPLIED, Map.of("from", range[0], "to", range[1]));
         } else {
             Map<String, Object> notApplied = new LinkedHashMap<>(Map.of("from", range[0], "to", range[1]));
             if (parametersSchema != null && parametersSchema.get(NOTICE) instanceof String custom) {

@@ -21,6 +21,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Predicate;
 
 /**
  * 物料平衡表: 在 {@code production_reports} (YIELD) 上按「计划 → 工序」汇合, 每个<b>工序任务</b>先单独过
@@ -54,6 +55,60 @@ public class MaterialBalanceService {
     /** 按批次拆开的物料平衡: 每个块只含一个批次 (批次号原样), 同一套阈值与保密排除。 */
     public record BatchBalance(BigDecimal warnPct, BigDecimal redPct, List<MaterialBalanceTableDTO.PlanBlock> blocks) {}
 
+    /** 已按工厂、日期和工艺保密范围读取的 YIELD 报工。 */
+    public static final class BatchReports {
+        private final String factoryId;
+        private final List<Map<String, Object>> rows;
+
+        private BatchReports(String factoryId, List<Map<String, Object>> rows) {
+            this.factoryId = factoryId;
+            this.rows = rows;
+        }
+
+        public int size() {
+            return rows.size();
+        }
+
+        public BatchReports withBatchNumber() {
+            return new BatchReports(factoryId, rows.stream().filter(MaterialBalanceService::hasBatchNumber).toList());
+        }
+
+        public BatchReports forProducts(Predicate<String> matches) {
+            return new BatchReports(factoryId, rows.stream().filter(row -> matches.test(str(row.get("product_name")))).toList());
+        }
+
+        public List<String> processNames() {
+            return rows.stream().map(row -> str(row.get("process_name"))).distinct().toList();
+        }
+
+        public BatchReports forProcesses(Predicate<String> matches) {
+            return new BatchReports(factoryId, rows.stream().filter(row -> matches.test(str(row.get("process_name")))).toList());
+        }
+
+        public BatchReports since(LocalDate start) {
+            return new BatchReports(factoryId, rows.stream().filter(row -> {
+                LocalDate date = toDate(row.get("report_date"));
+                return date != null && !date.isBefore(start);
+            }).toList());
+        }
+
+        public LocalDate latestDate() {
+            LocalDate latest = null;
+            for (Map<String, Object> row : rows) {
+                LocalDate date = toDate(row.get("report_date"));
+                if (date != null && (latest == null || date.isAfter(latest))) latest = date;
+            }
+            return latest;
+        }
+    }
+
+    private static LocalDate toDate(Object o) {
+        if (o instanceof LocalDate d) return d;
+        if (o instanceof java.sql.Date d) return d.toLocalDate();
+        if (o instanceof java.util.Date d) return new java.sql.Date(d.getTime()).toLocalDate();
+        return null;
+    }
+
     public BatchBalance blocksByBatch(String factoryId, LocalDate startDate, LocalDate endDate) {
         return blocksByBatch(factoryId, startDate, endDate, null);
     }
@@ -64,19 +119,32 @@ public class MaterialBalanceService {
      */
     public BatchBalance blocksByBatch(String factoryId, LocalDate startDate, LocalDate endDate,
                                       BigDecimal warnOverridePct) {
+        return blocksByBatch(batchReports(factoryId, startDate, endDate), warnOverridePct);
+    }
+
+    public BatchReports batchReports(String factoryId, LocalDate startDate, LocalDate endDate) {
         ProcessSecretAggregateExclusions.Scope excluded =
                 aggregateExclusions.forCurrentCaller(factoryId, "material balance by batch");
         List<Map<String, Object>> rows = reportRepo.findYieldReportsForBalance(factoryId, startDate, endDate,
                 "", excluded.productTypeIdsOrSentinel(), excluded.planIdsOrSentinel());
-        Thresholds t = thresholdProvider.forFactory(factoryId);
+        return new BatchReports(factoryId, rows);
+    }
+
+    private static boolean hasBatchNumber(Map<String, Object> row) {
+        String batchNumber = str(row.get("batch_number"));
+        return batchNumber != null && !batchNumber.isBlank();
+    }
+
+    public BatchBalance blocksByBatch(BatchReports reports, BigDecimal warnOverridePct) {
+        Thresholds t = thresholdProvider.forFactory(reports.factoryId);
         if (warnOverridePct != null && warnOverridePct.signum() > 0) {
             BigDecimal warn = warnOverridePct.divide(HUNDRED);
             t = new Thresholds(warn, t.red().max(warn));
         }
         Map<String, List<Map<String, Object>>> byBatch = new LinkedHashMap<>();
-        for (Map<String, Object> r : rows) {
+        for (Map<String, Object> r : reports.rows) {
+            if (!hasBatchNumber(r)) continue;
             String no = str(r.get("batch_number"));
-            if (no == null) continue; // 没有批次号的报工没法按批次说, 不进这个视图
             byBatch.computeIfAbsent(no, k -> new ArrayList<>()).add(r);
         }
         List<MaterialBalanceTableDTO.PlanBlock> blocks = new ArrayList<>();

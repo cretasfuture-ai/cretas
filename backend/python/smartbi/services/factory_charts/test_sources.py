@@ -33,6 +33,16 @@ class FakeConnection:
         return next(rows for name, marker, rows in self.rows_by_source if name == source)
 
     async def fetchval(self, sql, *params):
+        if "FROM factory_external_integrations" in sql:
+            assert "SELECT EXISTS" in sql
+            assert "WHERE factory_id = $1 AND external_system = 'blacklake' AND status = 'ACTIVE'" in sql
+            assert "external_source_snapshots" not in sql
+            assert len(params) == 1
+            self.calls.append(('fetchval', 'external_cost_integration', sql, params))
+            integrations = next((rows for name, _, rows in self.rows_by_source if name == 'external_cost_integration'), [])
+            return any(row["factory_id"] == params[0] and row["external_system"] == "blacklake"
+                       and row["status"] == "ACTIVE" for row in integrations)
+
         assert "SELECT EXISTS" in sql and "FROM external_source_snapshots" in sql
         assert "s.factory_id = $1" in sql and "s.external_system = 'blacklake'" in sql
         assert "i.factory_id = s.factory_id AND i.external_system = s.external_system" in sql

@@ -3,8 +3,11 @@ import { computed, ref, watch, watchEffect, onBeforeUnmount } from 'vue';
 import echarts from '@/utils/echarts';
 import type { ExternalProductionData } from '@/api/smartbi/factoryGold';
 import BlacklakeProductionSource from './BlacklakeProductionSource.vue';
+import BlacklakeBarChart from './BlacklakeBarChart.vue';
+import BlacklakeChartAnalysis from './BlacklakeChartAnalysis.vue';
+import { blacklakeInsightChart } from './blacklakeChartData';
 
-const props = defineProps<{ data: ExternalProductionData }>();
+const props = defineProps<{ data: ExternalProductionData; factoryId: string }>();
 const FINISHED = '成品入库';
 const unit = ref('');
 const process = ref('');
@@ -61,6 +64,13 @@ const productLabel = (code: string, name: string) => {
   if (code && name && code !== name) return `${name} · ${code}`;
   return name || code || '未登记产品';
 };
+const dailyMetric = computed(() => `${process.value}每日良品（${unit.value}）`);
+const dailyInsight = computed(() => blacklakeInsightChart(dailyMetric.value, 'line', 'quantity',
+  daily.value.map(row => ({ label: row.day, value: row.good }))));
+const rankingPoints = computed(() => ranking.value.map(row => ({
+  label: productLabel(row.code, row.name), value: row.good,
+})));
+const reportBasis = '仅分析黑湖报工数量，不同工序和单位分别统计。报工来源未提供投入量或制造成本。';
 
 watchEffect(() => {
   const element = chartElement.value;
@@ -75,7 +85,7 @@ watchEffect(() => {
     }
   }
   chart.setOption({
-    tooltip: { trigger: 'axis', confine: true },
+    tooltip: { trigger: 'axis', confine: true, renderMode: 'richText' },
     legend: { bottom: 0 },
     grid: { top: 36, right: 24, bottom: 54, left: 24, containLabel: true },
     xAxis: { type: 'category', boundaryGap: false, data: daily.value.map(row => row.day) },
@@ -96,6 +106,8 @@ onBeforeUnmount(() => {
 <template>
   <section aria-label="黑湖生产数据分析">
     <BlacklakeProductionSource :data="data" />
+    <p v-if="units.length"><RouterLink
+      :to="{ path: '/smart-bi/analysis', query: { tab: 'query', mode: 'factory', source: 'business' } }">自由问数出图</RouterLink></p>
     <el-empty v-if="!units.length" :description="data.rows.length ? '所选期间没有工序和单位均明确的黑湖记录' : '所选期间暂无黑湖生产报工'" />
     <template v-else>
       <el-card shadow="never" class="blacklake-card">
@@ -125,6 +137,8 @@ onBeforeUnmount(() => {
         <p class="basis">按单一单位、单一工序统计。不良率为不良数量 ÷（良品数量＋不良数量）。</p>
         <p v-if="hasUnclassifiedRows" class="basis">缺少工序或单位的报工未计入汇总。</p>
         <div ref="chartElement" class="daily-chart" role="img" aria-label="每日良品与不良数量趋势图" />
+        <BlacklakeChartAnalysis :chart="dailyInsight" :factory-id="factoryId" :metric="dailyMetric"
+          :basis="reportBasis" />
         <el-table :data="daily" max-height="320" stripe empty-text="所选产品暂无报工">
           <el-table-column prop="day" label="日期" min-width="112" />
           <el-table-column :label="`良品（${unit}）`" align="right" min-width="100">
@@ -141,6 +155,8 @@ onBeforeUnmount(() => {
 
       <el-card shadow="never" class="blacklake-card">
         <template #header><h3>成品入库良品排行（{{ unit }}）</h3></template>
+        <BlacklakeBarChart :points="rankingPoints" :title="`成品入库良品排行（${unit}）`" :unit="unit"
+          :factory-id="factoryId" :basis="`${reportBasis} 仅纳入有产品编码的成品入库记录。`" />
         <el-table :data="ranking" max-height="320" stripe empty-text="该单位暂无有编码的成品入库记录">
           <el-table-column type="index" label="名次" width="68" />
           <el-table-column label="产品" min-width="175">

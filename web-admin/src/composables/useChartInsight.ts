@@ -112,6 +112,8 @@ export interface UseChartInsightOpts {
    * Defaults to true.
    */
   autoTier2?: boolean;
+  /** Use the authenticated insight service for charts that require server analysis. */
+  requireTier2?: boolean;
 }
 
 export interface UseChartInsightReturn {
@@ -141,7 +143,9 @@ export function useChartInsight(
   opts?: UseChartInsightOpts,
 ): UseChartInsightReturn {
   const autoTier2 = opts?.autoTier2 ?? true;
-  const getFactoryId: () => string = opts?.factoryId ?? (() => '');
+  const getFactoryId = () => {
+    try { return opts?.factoryId?.() ?? ''; } catch { return ''; }
+  };
 
   const insight = ref<InsightResult | null>(null);
   const loading = ref(false);
@@ -152,10 +156,11 @@ export function useChartInsight(
 
   watch(
     // Watch source deeply so changes inside the chart object trigger re-evaluation.
-    () => source(),
-    async (newSource) => {
+    () => [source(), getFactoryId(), safePerms(perms).canViewFinance] as const,
+    async ([newSource, factoryId], _previous, onCleanup) => {
       // Bump stale token — any previous in-flight request will see a mismatch.
       const token = ++_staleToken;
+      onCleanup(() => { _staleToken++; });
 
       if (!newSource) {
         insight.value = null;
@@ -167,7 +172,7 @@ export function useChartInsight(
       const currentPerms = safePerms(perms);
 
       // --- Tier 1: synchronous, 0 tokens ---
-      const tier1 = buildChartInsight(chart, currentPerms);
+      const tier1 = opts?.requireTier2 ? null : buildChartInsight(chart, currentPerms);
 
       if (tier1 !== null) {
         // Tier1 hit — set immediately, no Tier2.
@@ -184,6 +189,7 @@ export function useChartInsight(
       }
 
       // Signal loading while we wait for slot + debounce + fetch.
+      insight.value = null;
       loading.value = true;
 
       // Debounce: short delay to coalesce rapid watch triggers.
@@ -198,9 +204,6 @@ export function useChartInsight(
       // Stale check after potentially waiting in queue.
       if (_staleToken !== token) {
         releaseSlot();
-        // If this instance is no longer loading (superseded watcher reset it), leave it.
-        // Only reset loading if we were the one who set it for this token.
-        loading.value = false;
         return;
       }
 
@@ -214,14 +217,10 @@ export function useChartInsight(
         }
 
         const freshPerms = safePerms(perms);
-        const freshFactoryId = (() => {
-          try { return getFactoryId(); } catch { return ''; }
-        })();
-
         const result = await fetchTier2Insight(
           freshSource.chart,
           freshPerms,
-          freshFactoryId,
+          factoryId,
         );
 
         // Final stale check after await.
