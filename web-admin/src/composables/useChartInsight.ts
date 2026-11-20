@@ -119,6 +119,7 @@ export interface UseChartInsightOpts {
 export interface UseChartInsightReturn {
   insight: Ref<InsightResult | null>;
   loading: Ref<boolean>;
+  unavailableReason: Ref<string | null>;
 }
 
 // ============================================================
@@ -149,6 +150,7 @@ export function useChartInsight(
 
   const insight = ref<InsightResult | null>(null);
   const loading = ref(false);
+  const unavailableReason = ref<string | null>(null);
 
   // Stale-guard token: bumped whenever source or factoryId changes.
   // Any async path captures its token at start; on completion checks if still current.
@@ -161,6 +163,7 @@ export function useChartInsight(
       // Bump stale token — any previous in-flight request will see a mismatch.
       const token = ++_staleToken;
       onCleanup(() => { _staleToken++; });
+      unavailableReason.value = null;
 
       if (!newSource) {
         insight.value = null;
@@ -226,8 +229,11 @@ export function useChartInsight(
         // Final stale check after await.
         if (_staleToken !== token) return;
 
-        // Honest-null: fetchTier2Insight returns null on failure — accept it.
-        insight.value = result ?? null;
+        if (result && 'reason' in result) {
+          unavailableReason.value = result.reason;
+        } else {
+          insight.value = result;
+        }
       } catch {
         // Any unexpected error → honest-null (禁止降级处理: no fabrication).
         if (_staleToken === token) {
@@ -243,5 +249,5 @@ export function useChartInsight(
     { immediate: true, deep: true },
   );
 
-  return { insight, loading };
+  return { insight, loading, unavailableReason };
 }

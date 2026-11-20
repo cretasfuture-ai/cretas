@@ -39,7 +39,7 @@
   -->
   <ChartInsight :insight="displayInsight" :loading="loading" :depth="depth" :factory-id="factoryId" />
   <p v-if="emptyPie" role="status">暂无可计算占比的数据。</p>
-  <p v-else-if="unavailableText && !loading && !displayInsight" role="status">{{ unavailableText }}</p>
+  <p v-else-if="statusText && !loading && !displayInsight" role="status">{{ statusText }}</p>
 </template>
 
 <script setup lang="ts">
@@ -103,7 +103,7 @@ const props = withDefaults(
 const emptyPie = computed(() => props.chart?.chartType?.toLowerCase() === 'pie'
   && !extractPieSlices(props.chart.config).some(({ value }) => value > 0));
 
-const { insight, loading } = useChartInsight(
+const { insight, loading, unavailableReason } = useChartInsight(
   // source: reactive getter — returns { chart } when chart prop is non-null, null otherwise
   () => (props.chart != null && !emptyPie.value ? { chart: props.chart } : null),
   // perms: reactive getter — re-reads props.perms on each evaluation
@@ -116,6 +116,23 @@ const { insight, loading } = useChartInsight(
 );
 
 const displayInsight = computed(() => props.requireTier2 ? insight.value : localizeInsight(insight.value, props.chart));
+
+const unavailableMessages = new Map([
+  ['INSUFFICIENT_DATA', '当前只有一条或没有可比较的记录。可扩大日期范围，或放宽图表筛选条件。'],
+  ['BUDGET_EXHAUSTED', '工厂的自动分析用量已达上限。可先查看图表数据，需要自动分析时请联系管理员确认用量。'],
+  ['RESULT_UNAVAILABLE', '暂时没有可核实的分析结论。可先查看图表的数据和明细。'],
+  ['SERVICE_UNAVAILABLE', '当前无法连接图表分析服务。可先查看图表数据，或联系管理员检查服务。'],
+  ['UNAUTHORIZED', '登录已失效，请重新登录后查看分析。'],
+  ['PERMISSION_DENIED', '当前账号无法查看这张图的分析，请联系工厂管理员核对权限。'],
+]);
+const statusText = computed(() => {
+  const reason = unavailableReason.value;
+  if (reason) {
+    return unavailableMessages.get(reason) ?? unavailableMessages.get('RESULT_UNAVAILABLE');
+  }
+  if (props.requireTier2 && props.chart) return unavailableMessages.get('RESULT_UNAVAILABLE');
+  return props.unavailableText;
+});
 
 function localizeInsight(raw: InsightResult | null, chart: ChartWithMeta | null): InsightResult | null {
   if (!raw || !chart) return raw;

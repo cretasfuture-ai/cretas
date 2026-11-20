@@ -1114,7 +1114,7 @@ interface Tier2ResponseData {
   finding: string;
   implication?: string;
   suggestion?: string;
-  source: 'rules' | 'template' | 'llm';
+  source: InsightResult['source'];
   tier: number;
   /** G4: corpus row key for the feedback endpoint */
   input_hash?: string | null;
@@ -1123,6 +1123,7 @@ interface Tier2ResponseData {
 interface Tier2Response {
   success: boolean;
   data: Tier2ResponseData | null;
+  code?: string;
 }
 
 /**
@@ -1154,7 +1155,8 @@ const PYTHON_SMARTBI_URL =
  *
  * - `factory_id` MUST equal the JWT factoryId — pass the component's prop factoryId.
  * - On success: returns mapped InsightResult (tier:2, source from response).
- * - On data:null / non-2xx / any error: returns null (honest-null, no fabrication).
+ * - Returns the API reason for a known empty response or access/service error.
+ * - Returns null when the server does not provide a reason.
  * - Never throws to the caller.
  *
  * @param chart      ChartWithMeta (provides meta, config, chartType for request body)
@@ -1165,7 +1167,7 @@ export async function fetchTier2Insight(
   chart: ChartWithMeta,
   perms: UserPermissions,
   factoryId: string,
-): Promise<InsightResult | null> {
+): Promise<InsightResult | { reason: string } | null> {
   if (!chart.meta) return null;
   // The authenticated Tier 2 endpoint accepts factory/finance only. Restaurant
   // charts can still use Tier 1; do not issue a known-invalid request or relabel
@@ -1211,12 +1213,17 @@ export async function fetchTier2Insight(
 
     if (!response.ok) {
       console.warn(`[chart-insight] Tier2 HTTP ${response.status} for factory ${factoryId}`);
+      if (response.status === 401) return { reason: 'UNAUTHORIZED' };
+      if (response.status === 403) return { reason: 'PERMISSION_DENIED' };
+      if (response.status === 503) return { reason: 'SERVICE_UNAVAILABLE' };
       return null;
     }
 
     const json = (await response.json()) as Tier2Response;
 
-    if (!json.success || !json.data) return null;
+    if (!json.success || !json.data) {
+      return typeof json.code === 'string' ? { reason: json.code } : null;
+    }
 
     const d = json.data;
     return {

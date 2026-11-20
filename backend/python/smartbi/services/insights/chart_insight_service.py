@@ -1,18 +1,17 @@
 """Chart Auto-Insight — Tier 2 backend service (v4 — claims-pinning architecture).
 
-Design: docs/superpowers/specs/2026-06-10-chart-insight-distillation-redesign.md §2 C1+C3
-
 Architecture (v4):
   signature = SHA256(chartType|xDim|yMetric|agg|domain|dataPattern|permissionTier)
               NOTE: factoryId is NOT in the signature (cross-tenant signature sharing).
 
   get_insight serve flow:
     1. Cross-tenant guard: jwt_factory_id != ctx.factory_id → None
-    2. budget_tracker is None → fail-closed (None + WARN)
-    3. budget.check_budget blocked → None
+    2. Insufficient comparison data or missing budget tracker → explicit reason
+    3. budget.check_budget blocked → BUDGET_EXHAUSTED (outside the opt-in deterministic path)
     4. _call_llm(ctx) → structured dict {claims, finding, implication, suggestion} or None
-    5. _validate_claims(llm_obj, ctx) — server-side recompute + numeric-adjacency gate → None rejects
-    6. finance_hidden ¥ serve-gate: scan validated text with _ABSOLUTE_AMOUNT_RE → None if any match
+    5. _validate_claims(llm_obj, ctx) — recompute values and check numeric attribution.
+       Missing or rejected model output can use a rule-generated comparison for supported charts.
+    6. finance_hidden ¥ serve-gate: refuse validated output with absolute currency amounts.
     7. Return InsightResult(source="llm", tier=2)
 
   In-database template table (ai_insight_templates) is preserved for offline M4 curation;
@@ -23,7 +22,7 @@ Architecture (v4):
   - Cross-tenant (jwt_factory_id != ctx.factory_id) → blocked immediately
   - permission_tier ALWAYS server-derived (from caller_role via API endpoint) — body ignored
   - finance_hidden callers: prompt excludes changeAmt + raw series; ¥ serve-gate hard-blocks
-  - budget_tracker=None → fail-closed (no LLM, return None + WARN)
+  - budget_tracker=None → fail-closed (no LLM, return SERVICE_UNAVAILABLE + WARN)
   - _validate_claims rejects hallucinated entity swaps and invented numbers (no-fake-data)
 """
 from __future__ import annotations
@@ -31,10 +30,12 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 from common.process_secret_harness import with_process_secret_harness
 import os
 import re
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Dict, List, Optional
 
 from .claim_recompute import recompute_claim, infer_sign_from_prose
@@ -103,9 +104,16 @@ class InsightResult:
     finding: str
     implication: Optional[str] = None
     suggestion: Optional[str] = None
-    source: str = "template"   # "template" | "llm"
+    source: str = "template"   # "template" | "llm" | "cache" | "rules"
     tier: int = 2
     input_hash: Optional[str] = None  # G4: corpus row key — exposed so frontend can send feedback
+
+
+class InsightUnavailable(str, Enum):
+    INSUFFICIENT_DATA = "INSUFFICIENT_DATA"
+    BUDGET_EXHAUSTED = "BUDGET_EXHAUSTED"
+    SERVICE_UNAVAILABLE = "SERVICE_UNAVAILABLE"
+    RESULT_UNAVAILABLE = "RESULT_UNAVAILABLE"
 
 
 # ---------------------------------------------------------------------------
@@ -135,6 +143,63 @@ def _metric_label(ctx: ChartInsightContext) -> str:
         "pct": "占比",
     }
     return mapping.get((ctx.y_metric or "").lower(), "指标")
+
+
+def _is_comparison_chart(ctx: ChartInsightContext) -> bool:
+    return (
+        ctx.domain == "factory"
+        and ctx.aggregation == "sum"
+        and ctx.y_metric in {"cost", "quantity"}
+        and (ctx.chart_type, ctx.x_dim) in {("LINE", "time"), ("BAR", "time"), ("BAR", "product")}
+    )
+
+
+def _comparison_insight(ctx: ChartInsightContext) -> Optional[InsightResult]:
+    """Describe the submitted points after an unusable model response."""
+    if not _is_comparison_chart(ctx):
+        return None
+    if ctx.y_metric == "cost" and ctx.permission_tier != "finance_visible":
+        return None
+
+    values, labels = ctx.series_values, ctx.series_labels
+    if len(values) < 2 or len(values) != len(labels) or len(set(labels)) != len(labels):
+        return None
+    if not all(math.isfinite(value) for value in values) or not all(label.strip() for label in labels):
+        return None
+
+    high_idx = max(range(len(values)), key=values.__getitem__)
+    low_idx = min(range(len(values)), key=values.__getitem__)
+    high, low = values[high_idx], values[low_idx]
+    metric = "成本" if ctx.y_metric == "cost" else "数量"
+    if high == low:
+        finding = f"这张图里，有记录的各项{metric}相同。"
+    else:
+        high_label, low_label = labels[high_idx], labels[low_idx]
+        if ctx.x_dim == "time":
+            finding = f"有记录的日期里，{high_label}的{metric}最高，{low_label}最低。"
+            first, last = values[0], values[-1]
+            if first > 0 and last >= 0:
+                change = (last - first) / first * 100
+                if math.isfinite(change) and round(abs(change), 1) > 0:
+                    direction = "多" if change > 0 else "少"
+                    finding += f"{labels[-1]}比{labels[0]}{direction}{_fmt_pct(abs(change))}。"
+        else:
+            finding = f"参与比较的产品中，{high_label}的{metric}最高，{low_label}最低。"
+            total = sum(values)
+            if low >= 0 and math.isfinite(total):
+                finding += f"{high_label}占这些产品合计{_fmt_pct(high / total * 100)}。"
+
+    suggestion = (
+        "可查看最高和最低对应的工单，分别核对材料费和人工费。"
+        if ctx.y_metric == "cost"
+        else "可打开对应的报工明细，核对工序、单位和数量。"
+    )
+    if high == low:
+        suggestion = "可扩大日期范围，查看其他记录是否有变化。"
+
+    if ctx.permission_tier == "finance_hidden" and _ABSOLUTE_AMOUNT_RE.search(finding):
+        return None
+    return InsightResult(finding=finding, suggestion=suggestion, source="rules")
 
 
 def _deterministic_insight(ctx: ChartInsightContext) -> Optional[InsightResult]:
@@ -787,17 +852,10 @@ class ChartInsightService:
         *,
         caller_role: Optional[str] = None,
         jwt_factory_id: Optional[str] = None,
-    ) -> Optional[InsightResult]:
-        """Return an InsightResult or None (data insufficient, hallucination, or blocked).
+    ) -> InsightResult | InsightUnavailable | None:
+        """Return verified or rule-generated text, or a reason when analysis is unavailable.
 
-        Serve flow (v4 claims-pinning):
-          1. Cross-tenant guard: jwt_factory_id != ctx.factory_id → None
-          2. budget_tracker None → fail-closed (None + WARN)
-          3. budget.check_budget blocked → None
-          4. _call_llm(ctx) → structured {claims, finding, implication, suggestion} or None
-          5. _validate_claims(llm_obj, ctx) → None rejects hallucinated values
-          6. finance_hidden ¥ serve-gate: _ABSOLUTE_AMOUNT_RE scan validated text → None if match
-          7. Return InsightResult(source="llm", tier=2)
+        Invalid domain and cross-tenant requests stop before the cache, budget or model.
 
         jwt_factory_id: factory_id from verified JWT; if provided, OVERRIDES ctx.factory_id.
         caller_role: role string from JWT for RBAC permission gating.
@@ -830,6 +888,9 @@ class ChartInsightService:
             series_values=ctx.series_values,
             series_labels=ctx.series_labels,
         )
+
+        if _is_comparison_chart(resolved_ctx) and sum(map(math.isfinite, resolved_ctx.series_values)) < 2:
+            return InsightUnavailable.INSUFFICIENT_DATA
 
         # Demo/common-chart flywheel: serve accepted corpus rows or deterministic
         # templates before any LLM budget gate. This keeps demo chart narration useful
@@ -878,15 +939,15 @@ class ChartInsightService:
         # budget_tracker None → fail-closed
         if self._budget_tracker is None:
             logger.warning(
-                "[chart-insight] budget_tracker is None — fail-closed: returning None without calling LLM"
+                "[chart-insight] budget tracker unavailable — skipping the model"
             )
-            return None
+            return InsightUnavailable.SERVICE_UNAVAILABLE
 
         # Budget check
         budget = await self._budget_tracker.check_budget(effective_factory_id)
         if budget.blocked:
             logger.info("[chart-insight] budget blocked for factory=%s", effective_factory_id)
-            return None
+            return InsightUnavailable.BUDGET_EXHAUSTED
 
         # C2 MF4: compute stable data-rich input_text (used as corpus key + read-back cache key)
         input_text = _corpus_input_text(resolved_ctx)
@@ -972,16 +1033,15 @@ class ChartInsightService:
         # so budget must reflect all LLM calls to prevent undercounting.
         await self._budget_tracker.consume(effective_factory_id, 800)
 
-        if llm_obj is None:
-            return None
-
         # C1.2: claims-pinning validation (recompute + numeric-adjacency gate)
-        validated = _validate_claims(llm_obj, resolved_ctx)
+        validated = _validate_claims(llm_obj, resolved_ctx) if llm_obj is not None else None
         if validated is None:
             logger.info(
-                "[chart-insight] _validate_claims rejected LLM response (hallucination or no claims)"
+                "[chart-insight] model result unavailable for factory=%s chart=%s dimension=%s reason=%s",
+                effective_factory_id, resolved_ctx.chart_type, resolved_ctx.x_dim,
+                "no_response" if llm_obj is None else "claims_rejected",
             )
-            return None
+            return _comparison_insight(resolved_ctx) or InsightUnavailable.RESULT_UNAVAILABLE
 
         # A6: direction-word check — annotate growth claims where prose direction ≠ recomputed sign
         validated = _annotate_direction_mismatch(validated, llm_obj, resolved_ctx)
@@ -998,7 +1058,7 @@ class ChartInsightService:
                 logger.info(
                     "[chart-insight] finance_hidden ¥ serve-gate: rejected absolute ¥ in output"
                 )
-                return None
+                return InsightUnavailable.RESULT_UNAVAILABLE
 
         # C2 MF2: gate-passed → persist accepted output into corpus (fire-and-forget).
         # Only accepted outputs are stored. Rejected paths (validate None / ¥-gate None)

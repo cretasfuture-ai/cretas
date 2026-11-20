@@ -21,6 +21,7 @@ from __future__ import annotations
 from smartbi.services.insights.chart_insight_service import (
     ChartInsightService,
     ChartInsightContext,
+    InsightUnavailable,
     compute_signature,
     DEFAULT_PROMOTE_THRESHOLD,
     _POISON_VERB_RE,
@@ -223,13 +224,13 @@ class TestChartInsightService:
         svc._call_llm = AsyncMock(return_value=llm_response)
         return svc
 
-    async def test_budget_blocked_returns_none(self):
-        """Budget blocked → service returns None (no LLM call)."""
+    async def test_budget_blocked_returns_reason(self):
+        """Budget blocked → explicit reason and no LLM call."""
         ctx = _make_context()
         svc = self._make_service(budget=FakeBudgetBlocked())
 
         result = await svc.get_insight(ctx, caller_role="factory_super_admin")
-        assert result is None
+        assert result is InsightUnavailable.BUDGET_EXHAUSTED
         svc._call_llm.assert_not_called()
 
     async def test_factory_common_chart_uses_deterministic_template_before_llm(self, monkeypatch):
@@ -455,7 +456,7 @@ class TestU1Hardening:
     # ---- budget tracker None → fail-closed ----
 
     async def test_budget_tracker_none_fail_closed(self):
-        """budget_tracker=None → get_insight returns None without AttributeError."""
+        """A missing budget tracker fails closed without an LLM call."""
         ctx = _make_context()
         # Use a valid claims-pinning response so failure is exclusively from budget=None
         valid_claims_response = {
@@ -466,9 +467,7 @@ class TestU1Hardening:
         }
         svc = self._make_service_with_none_tracker(llm_response=valid_claims_response)
         result = await svc.get_insight(ctx, caller_role="factory_super_admin")
-        assert result is None, (
-            f"budget_tracker=None must return None (fail-closed), got: {result}"
-        )
+        assert result is InsightUnavailable.SERVICE_UNAVAILABLE
         svc._call_llm.assert_not_called()
 
     # ---- token realistic count ----
@@ -845,16 +844,16 @@ class TestGetInsightClaimsPinning:
         assert "堂食" in result.finding
 
     # ------------------------------------------------------------------
-    # Test 2: finance_hidden + ¥ in validated finding → gate rejects (return None)
+    # Test 2: finance_hidden + ¥ in finding → no insight is served
     # ------------------------------------------------------------------
 
     async def test_finance_hidden_yuan_rejected(self):
-        """finance_hidden caller + ¥ literal in LLM finding → serve-gate returns None."""
+        """A finance_hidden caller cannot receive a finding containing ¥."""
         svc = self._make_service(permission_tier="finance_hidden")
         ctx = self._make_ctx(permission_tier="finance_hidden")
 
         # Claims are technically valid (62 is correct for 堂食 share), but finding contains ¥
-        # The ¥ serve-gate must fire and return None for finance_hidden callers.
+        # The response must provide no insight to finance_hidden callers.
         structured_response_with_yuan = {
             "claims": [{"entity": "堂食", "stat_type": "share", "value": 62.0}],
             "finding": "堂食占62%，绝对营收¥12345万。",   # ← ¥ literal
@@ -865,17 +864,14 @@ class TestGetInsightClaimsPinning:
 
         result = await svc.get_insight(ctx, caller_role="warehouse_worker", jwt_factory_id="F001")
 
-        assert result is None, (
-            "finance_hidden + ¥ in finding must return None (serve-gate must fire), "
-            f"got result={result}"
-        )
+        assert result is InsightUnavailable.RESULT_UNAVAILABLE
 
     # ------------------------------------------------------------------
-    # Test 3: entity-swap claim → _validate_claims rejects → get_insight returns None
+    # Test 3: entity-swap claim → _validate_claims rejects
     # ------------------------------------------------------------------
 
-    async def test_entity_swap_llm_falls_to_none(self):
-        """LLM claims 外卖=62% (entity wrong; real is 堂食=62%) → _validate_claims rejects → None."""
+    async def test_entity_swap_llm_returns_unavailable(self):
+        """LLM claims 外卖=62% (entity wrong; real is 堂食=62%) → _validate_claims rejects."""
         svc = self._make_service(permission_tier="finance_visible")
         ctx = self._make_ctx(permission_tier="finance_visible")
 
@@ -892,10 +888,7 @@ class TestGetInsightClaimsPinning:
 
         result = await svc.get_insight(ctx, caller_role="factory_super_admin", jwt_factory_id="F001")
 
-        assert result is None, (
-            "Entity-swap (外卖=62 when real is 堂食=62) must be rejected by _validate_claims "
-            f"and get_insight must return None; got result={result}"
-        )
+        assert result is InsightUnavailable.RESULT_UNAVAILABLE
 
 
 # ---------------------------------------------------------------------------
@@ -1099,10 +1092,7 @@ class TestCorpus:
         ):
             result = await svc.get_insight(ctx, caller_role="factory_super_admin", jwt_factory_id="F001")
 
-        # Must return None (entity-swap rejected by _validate_claims)
-        assert result is None, (
-            f"Entity-swap response must be rejected (None), got {result}"
-        )
+        assert result is InsightUnavailable.RESULT_UNAVAILABLE
 
         # Persist must NOT be called for rejected outputs
         assert len(persist_calls) == 0, (
@@ -1209,8 +1199,7 @@ class TestBudgetOnFailure:
 
         result = await svc.get_insight(ctx, caller_role="factory_super_admin", jwt_factory_id="F001")
 
-        # Service must return None (LLM failed)
-        assert result is None, f"LLM failure must produce None result, got {result}"
+        assert result is InsightUnavailable.RESULT_UNAVAILABLE
 
         # consume() must have been called at least once
         assert len(consume_calls) > 0, (

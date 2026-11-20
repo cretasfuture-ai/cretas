@@ -1,5 +1,6 @@
 import importlib
 
+import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
@@ -21,17 +22,18 @@ def _app() -> FastAPI:
 async def _fake_calculator():
     class FakeCalculator:
         async def get_capabilities(self, factory_id: str):
-            assert factory_id == "F006"
+            assert factory_id in {"F006", "LIUSHANMEN"}
             return {"date"}
 
     return FakeCalculator()
 
 
-def test_default_cohort_includes_f006_and_preserves_existing_factories():
+def test_default_cohort_includes_lsm_and_preserves_existing_factories():
     assert capability_api._parse_rollout_factories(None) == {
         "F001",
         "RES_3101_009",
         "F006",
+        "LIUSHANMEN",
     }
 
 
@@ -50,16 +52,26 @@ def test_authenticated_factory_guard_still_rejects_missing_and_cross_tenant():
     assert cross_tenant.json()["detail"] == "Cross-tenant access denied"
 
 
-def test_f006_default_rollout_is_visible_to_authenticated_same_factory(monkeypatch):
+@pytest.mark.parametrize("factory", ["F006", "LIUSHANMEN"])
+def test_default_rollout_is_visible_to_authenticated_same_factory(monkeypatch, factory):
+    monkeypatch.setattr(capability_api, "_ROLLOUT_FACTORIES", capability_api._parse_rollout_factories(None))
     monkeypatch.setattr(capability_api, "_get_calculator", _fake_calculator)
-    response = TestClient(_app()).get(
-        "/api/smartbi/capability/F006",
-        headers={"X-Test-Factory": "F006"},
+    client = TestClient(_app())
+    response = client.get(
+        f"/api/smartbi/capability/{factory}",
+        headers={"X-Test-Factory": factory},
     )
 
     assert response.status_code == 200
-    assert response.json()["factory_id"] == "F006"
+    assert response.json()["factory_id"] == factory
     assert response.json()["available_fields"] == ["date"]
+
+    cross_tenant = client.get(
+        f"/api/smartbi/capability/{factory}",
+        headers={"X-Test-Factory": "F001"},
+    )
+    assert cross_tenant.status_code == 403
+    assert cross_tenant.json()["detail"] == "Cross-tenant access denied"
 
 
 def test_operator_override_supports_explicit_cohort_and_wildcard(monkeypatch):

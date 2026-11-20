@@ -1353,9 +1353,7 @@ describe('fetchTier2Insight', () => {
 
     // Response is mapped correctly
     expect(result).not.toBeNull();
-    expect(result!.tier).toBe(2);
-    expect(result!.source).toBe('llm');
-    expect(result!.finding).toBe('外卖占比较高，注意渠道结构均衡');
+    expect(result).toMatchObject({ tier: 2, source: 'llm', finding: '外卖占比较高，注意渠道结构均衡' });
   });
 
   it('data:null response → returns null (honest-null, no fabrication)', async () => {
@@ -1371,7 +1369,18 @@ describe('fetchTier2Insight', () => {
     expect(result).toBeNull();
   });
 
-  it('HTTP error (non-2xx) → returns null, does not throw', async () => {
+  it('preserves the reason from a successful response without an analysis', async () => {
+    const { fetchTier2Insight } = await import('../chartInsight');
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(JSON.stringify({
+      success: true, data: null, code: 'INSUFFICIENT_DATA',
+    })));
+
+    await expect(fetchTier2Insight(pieChart, finPerms, 'F001')).resolves.toEqual({
+      reason: 'INSUFFICIENT_DATA',
+    });
+  });
+
+  it('HTTP 403 → returns the permission reason without exposing the server detail', async () => {
     const { fetchTier2Insight } = await import('../chartInsight');
 
     vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
@@ -1381,7 +1390,7 @@ describe('fetchTier2Insight', () => {
       json: async () => ({ detail: 'factory mismatch' }),
     } as unknown as Response);
 
-    await expect(fetchTier2Insight(pieChart, finPerms, 'F001')).resolves.toBeNull();
+    await expect(fetchTier2Insight(pieChart, finPerms, 'F001')).resolves.toEqual({ reason: 'PERMISSION_DENIED' });
   });
 
   it('network error → returns null, does not throw', async () => {
@@ -1436,8 +1445,7 @@ describe('fetchTier2Insight', () => {
 
     const result = await fetchTier2Insight(pieChart, finPerms, 'F001');
     expect(result).not.toBeNull();
-    expect(result!.source).toBe('template');
-    expect(result!.tier).toBe(2);
+    expect(result).toMatchObject({ source: 'template', tier: 2 });
   });
 });
 

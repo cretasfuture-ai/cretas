@@ -154,6 +154,7 @@ async def chart_insight(request: Request, body: ChartInsightRequest) -> Dict[str
 
     Returns:
         {success: true, data: {finding, implication?, suggestion?, source, tier}}
+        {success: true, data: null, code, message} when analysis is unavailable
         {success: false, message: "..."} on error
     """
     # ------------------------------------------------------------------
@@ -215,6 +216,7 @@ async def chart_insight(request: Request, body: ChartInsightRequest) -> Dict[str
     # ------------------------------------------------------------------
     from smartbi.services.insights.chart_insight_service import (
         ChartInsightContext,
+        InsightUnavailable,
     )
 
     # U1.4: derive permission_tier server-side from JWT role — NEVER trust body.permission_tier
@@ -262,12 +264,19 @@ async def chart_insight(request: Request, body: ChartInsightRequest) -> Dict[str
             },
         )
 
-    if result is None:
-        # Data insufficient, budget blocked, or RBAC blocked — do not fabricate
+    if result is None or isinstance(result, InsightUnavailable):
+        code = "PERMISSION_DENIED" if result is None else result.value
         return {
             "success": True,
             "data": None,
-            "message": "No insight available (data insufficient, budget blocked, or permission denied)",
+            "code": code,
+            "message": {
+                "PERMISSION_DENIED": "Chart analysis access denied.",
+                "INSUFFICIENT_DATA": "At least two data points are needed for comparison.",
+                "BUDGET_EXHAUSTED": "The factory has reached its chart analysis usage limit.",
+                "SERVICE_UNAVAILABLE": "Chart analysis service is unavailable.",
+                "RESULT_UNAVAILABLE": "No verified analysis is available for this chart.",
+            }[code],
         }
 
     return {
