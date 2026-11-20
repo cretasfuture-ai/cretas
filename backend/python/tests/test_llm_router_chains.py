@@ -59,11 +59,10 @@ def test_every_text_slot_has_a_floor():
     没有这条, 某次注册表重写把 tencent/zhipu 删空后, 所有槽会在最后一个
     aliyun 条目过期的那天同时变成空链 —— 而 CI 全绿。
 
-    VL 是唯一豁免项(spec §9.1: 业务不用, 明确报错优于文本模型瞎猜图片)。
-    豁免名单硬编码在 _NO_TEXT_TAIL_SLOTS, 想再豁免一个槽必须改代码留下 diff。
+    视觉及概率槽没有文本地板。CHART 使用独立链，仍须有阿里云 A 地板。
     """
     for slot in SLOT:
-        if slot in llm_router._NO_TEXT_TAIL_SLOTS:
+        if slot in {SLOT.VL, SLOT.WAREHOUSE_VL, SLOT.DECISION}:
             continue
         chain = llm_router.SLOT_MODELS[slot]
         assert chain, f"{slot.value} 链为空"

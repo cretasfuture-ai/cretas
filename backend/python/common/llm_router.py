@@ -9,8 +9,9 @@ candidates require LLM_WAREHOUSE_CANDIDATES_ENABLED=1; the DeepSeek candidate
 retains its separate LLM_WAREHOUSE_V41_ENABLED=1 gate.
 
 🔴 2026-11-12 (LLM-PROVIDER-SWITCH, Steve 定稿「长期是阿里云模型配合本地模型」): 链 = 阿里云 + 本地
-local_canada/qwen3:8b; 实测本地胜任的槽(`_LOCAL_FIRST_SLOTS`: chat / simple_text / chart / mapper)本地第一,
+local_canada/qwen3:8b; 实测本地胜任的槽(`_LOCAL_FIRST_SLOTS`: chat / simple_text / mapper)本地第一,
 其余阿里云第一、本地兜底。本地一跳有并发上限(`_LOCAL_MAX_INFLIGHT`), 忙时直接换阿里云不排队。
+图表槽使用独立 Aurora → 阿里云 A 链。
 OpenAI / Anthropic 的提供方代码在(Anthropic 走原生 Messages API, `common.llm_anthropic`), 但**默认不进任何链**:
 只在配了出口 `LLM_EGRESS_PROXY` + key 时可选启用(意图细选 Luna = `call_decision_choice`;
 生成链另需 `LLM_PAID_GENERATIVE=1`, 追加在阿里云与本地之后)。
@@ -18,7 +19,7 @@ OpenAI / Anthropic 的提供方代码在(Anthropic 走原生 Messages API, `comm
 ⚠️ 2026-10-07: `aistore` / `deepseek` / `zhipu` 三类账号已整体清出(Steve 复审裁定
 「清掉死通道, 大模型后备只留我们自己的阿里云账号」, 见 `_REGISTRY_AUDIT_DATE` 上方)。
 今天在册的只有 aliyun_a_vl / aliyun_b_vl 两个云账号(2026-11-03 aliyun_c 下线, Steve 裁定)加
-自有机器上的 local_canada; 文本槽的链全部来自 `_TEXT_TAIL`。下面 09-15 那段是当时的订正, 存档。
+自有机器上的 local_canada 和 aurora_chart。下面 09-15 那段是当时的订正, 存档。
 
 ⚠️ 2026-09-15 订正: 上面原文写的是「≥10 个模型横跨 aliyun_c → aliyun_b →
 aliyun_a → zhipu」。那条链**早就不存在了** —— `_provider_config` 里的通用文本
@@ -67,6 +68,7 @@ import httpx
 
 from common.llm_client import (
     EgressRedactionError,
+    _RedactingLLMClient,
     current_egress_tokens,
     get_llm_http_client,
     get_llm_proxied_http_client,
@@ -406,8 +408,11 @@ def decision_choice_enabled() -> bool:
 #   REVIEW / REASONING 同属长篇解读档, 跟随 INSIGHTS; DECISION 粗选 top3 4/8、交际目的 6/8
 #   (阿里云 8/8、8/8), 且 mini 代理丢弃 logprobs ⇒ 不进 DECISION; VL / WAREHOUSE_VL 本地没有看图模型。
 _LOCAL_FIRST_SLOTS: frozenset = frozenset()  # 在 SLOT 定义之后填, 见下方 _LOCAL_FIRST_SLOT_NAMES
-_LOCAL_FIRST_SLOT_NAMES: Tuple[str, ...] = ("chat", "simple_text", "chart", "mapper")
+_LOCAL_FIRST_SLOT_NAMES: Tuple[str, ...] = ("chat", "simple_text", "mapper")
 _LOCAL_PAIR: Tuple[str, str] = ("local_canada", "qwen3:8b")
+# The opt-in, on-demand chart gateway has its own fixed local pair. Keeping it
+# out of the general registry also keeps unattended registry inference off Aurora.
+_AURORA_CHART_PAIR: Tuple[str, str] = ("aurora_chart", "qwen3:14b")
 
 # 付费账号的标价(美元 / 百万 token, 输入, 输出; 2026-11-12 官方定价页)。用途: ① 日费用估算;
 # ② 计费护栏 —— test_paid_models_stay_in_the_cheap_tier 钉住「任何付费条目单价不超过上限」,
@@ -966,6 +971,10 @@ def _refuse_reason(account: str, model: str,
     call-time expiry hard-drop. The expiry drop MUST happen here, not just via sort:
     an ascending-expiry sort puts the most-expired model at the HEAD (tried first) —
     refusing at call time is the actual billing guard (billing-audit CRITICAL 1)."""
+    if account == _AURORA_CHART_PAIR[0]:
+        if (account, model) != _AURORA_CHART_PAIR:
+            return "not_allowlisted"
+        return "provider_disabled" if account in _DISABLED_ACCOUNTS else None
     today = today or _today()
     if _registry_stale(today) and (account, model) not in _MINIMAL_SAFE_SET:
         return "registry_stale"          # fail SAFE: only minimal set until re-audit
@@ -1630,8 +1639,8 @@ _SLOT_POOLS: Dict[SLOT, List[Tuple[str, str]]] = {
     # SIMPLE_TEXT — low-risk rewrite / summary / classification only.
     # ⚠️ 它「低风险」不代表可以没有兜底: 低风险指的是**任务**, 不是**可用性**。
     SLOT.SIMPLE_TEXT: list(_FAST_TEXT_POOL),
-    # CHART — 紧凑 JSON (关思考 + json_object)。与 CHAT 同一批快模型。
-    SLOT.CHART: list(_STRICT_JSON_POOL),
+    # CHART — 独立 Aurora 网关，阿里云 A 为唯一后备。
+    SLOT.CHART: [_AURORA_CHART_PAIR, ("aliyun_a_vl", "qwen3.8-flash")],
     # MAPPER — 短 JSON 字段映射。契约是「短 JSON, 快而有界」, 由
     # test_mapper_uses_bounded_fast_models_without_max_or_reasoners 强制:
     # 池内不得含 _THINKING_ONLY / _SLOW_MODELS / Max 档。
@@ -1733,18 +1742,20 @@ _ABSOLUTE_LAST: frozenset = frozenset({
 })
 
 # VL 槽不追加文本地板 —— 文本模型看不见图片, 追加只会把「明确失败」变成
-# 「拿一段瞎猜的文字冒充图片理解」。这个集合是 _build_chain 的唯一例外,
-# 也是 test_every_text_slot_has_a_floor 的唯一豁免项。
+# 「拿一段瞎猜的文字冒充图片理解」。
 #
 # DECISION (2026-10-02) 同理: 契约是 top_logprobs, 而文本地板(当时是 zhipu)没有在这个
 # 契约下测过 —— 追加它只会把「拿不到概率 → 明确失败, 调用方回旧路径」变成
 # 「拿到一个没有概率的字母」。
-_NO_TEXT_TAIL_SLOTS: frozenset = frozenset({SLOT.VL, SLOT.WAREHOUSE_VL, SLOT.DECISION})
+# CHART 使用独立、显式排序的链，阿里云 A 是它的文本地板。
+_NO_TEXT_TAIL_SLOTS: frozenset = frozenset({SLOT.VL, SLOT.WAREHOUSE_VL, SLOT.DECISION, SLOT.CHART})
 
 
 def _build_chain(slot: SLOT) -> List[Tuple[str, str]]:
     """一个槽的最终链 = 阿里云 + 本地的基础链(排序见 `_sort_base_entries`) → 本地优先的槽把本地挪到链头
     → 付费两家(仅可选启用时)追加在最后。2026-11-12 Steve 定的格局, 见 `_PAID_ACCOUNTS` / `_LOCAL_FIRST_SLOTS`。"""
+    if slot is SLOT.CHART:
+        return [pair for pair in _SLOT_POOLS[slot] if pair[0] not in _DISABLED_ACCOUNTS]
     entries = list(_SLOT_POOLS[slot])
     if slot not in _NO_TEXT_TAIL_SLOTS:
         entries += _TEXT_TAIL
@@ -2195,6 +2206,14 @@ def _validate_output(slot: SLOT, content: str) -> Optional[str]:
 
 def _provider_config(account: str) -> Tuple[str, str]:
     """Return (base_url, api_key) for a provider account."""
+    if account == _AURORA_CHART_PAIR[0]:
+        endpoint = os.getenv("LLM_AURORA_CHART_BASE_URL", "").strip().rstrip("/")
+        token = os.getenv("LLM_AURORA_CHART_TOKEN", "").strip()
+        # Pin the only destination so an incorrect setting cannot use F006,
+        # another loopback service, or a public endpoint.
+        if endpoint == "http://127.0.0.1:11440/v1" and token:
+            return endpoint, token
+        return "", ""
     mapping = {
         # aliyun_c (May 14 2026): 3rd Aliyun bailian account — brand-new free
         # quota intact (1M/SKU per Steve console screenshot). Sits at chain
@@ -2329,7 +2348,7 @@ DEFAULT_CHAIN: List[str] = [
     # 2026-11-12: OpenAI / Anthropic 只在可选启用时出现在链上(见 `_PAID_ACCOUNTS`)。
     "aliyun_a_vl", "aliyun_b_vl", "anthropic", "openai",
     # 2026-11-03: 自有机器上的本地模型兜底(Steve 裁定), 见 `_TEXT_TAIL`。
-    "local_canada",
+    "local_canada", _AURORA_CHART_PAIR[0],
 ]
 
 
@@ -2367,6 +2386,15 @@ def _client_for(account: str) -> Any:
     if account in _EGRESS_PROXY_ACCOUNTS and egress_proxy_url():
         return get_llm_proxied_http_client()
     return get_llm_http_client()
+
+
+async def _post_aurora_chart(url: str, *, headers: dict, json: dict, timeout: httpx.Timeout) -> httpx.Response:
+    from common.llm_metrics import metrics_response_hook
+
+    async with httpx.AsyncClient(
+        trust_env=False, follow_redirects=False, event_hooks={"response": [metrics_response_hook]},
+    ) as transport:
+        return await _RedactingLLMClient(transport).post(url, headers=headers, json=json, timeout=timeout)
 
 
 def _auth_headers(account: str, api_key: str) -> Dict[str, str]:
@@ -2487,6 +2515,7 @@ _BUDGET_AWARE_FAST_SLOTS = frozenset({
 _FAST_SLOT_RESERVE_RATIO = 0.40
 _FAST_SLOT_RESERVE_CAP_SECONDS = 1.0
 _MIN_ATTEMPT_TIMEOUT_SECONDS = 0.05
+_AURORA_CHART_ATTEMPT_TIMEOUT_SECONDS = 52.0  # 40 项目录的 14B 实测 p95 46.30s
 
 
 def _has_callable_fallback(
@@ -2550,11 +2579,17 @@ def _note_empty_key(tag: str, account: str, errors: list) -> None:
     """
     if account not in _EMPTY_KEY_WARNED:
         _EMPTY_KEY_WARNED.add(account)
-        logger.warning(
-            f"[{tag}] {account}: **API key 为空**, 该账号在链上但每次都会被跳过。"
-            f" ⇒ 查它的环境变量是不是存在但值为空(`存在` 不等于 `有值`)。"
-            f" 本进程内该账号只提示这一次。"
-        )
+        if account == _AURORA_CHART_PAIR[0]:
+            logger.warning(
+                "[%s] %s: 缺少有效的 LLM_AURORA_CHART_BASE_URL 或 LLM_AURORA_CHART_TOKEN，跳过本跳",
+                tag, account,
+            )
+        else:
+            logger.warning(
+                f"[{tag}] {account}: **API key 为空**, 该账号在链上但每次都会被跳过。"
+                f" ⇒ 查它的环境变量是不是存在但值为空(`存在` 不等于 `有值`)。"
+                f" 本进程内该账号只提示这一次。"
+            )
     errors.append(f"{account}: empty_api_key")
 
 def providers_ready(slot: SLOT = SLOT.CHAT) -> Optional[bool]:
@@ -2721,7 +2756,6 @@ async def _call_chain_attempts(
     # stable sort over _SLOT_POOLS + _TEXT_TAIL, see _build_chain's docstring) — this
     # function does NOT re-sort it. _refuse_reason drops expired/unsafe entries so
     # heads auto-switch as grants lapse, without anyone hand-reordering the list.
-    client = get_llm_http_client()
     errors: List[str] = []
     deadline = (
         time.monotonic() + total_timeout
@@ -2780,7 +2814,6 @@ async def _call_chain_attempts(
             _normalize_payload_for_provider({**payload, "model": model}, account),
         )
         headers = _auth_headers(account, api_key)
-        client = _client_for(account)
         holds_local = False
         if account == _LOCAL_ACCOUNT:
             if not _local_try_acquire():
@@ -2802,6 +2835,8 @@ async def _call_chain_attempts(
             )
             if holds_local:
                 request_timeout = min(request_timeout, _LOCAL_ATTEMPT_TIMEOUT_S)
+            if account == _AURORA_CHART_PAIR[0]:
+                request_timeout = min(request_timeout, _AURORA_CHART_ATTEMPT_TIMEOUT_SECONDS)
             # Apr 28 2026 (post-review P1, then reviewer round 2 correction):
             # API consistency only — bare `timeout=timeout` and
             # `timeout=httpx.Timeout(timeout)` are EQUIVALENT in httpx (a bare
@@ -2811,10 +2846,11 @@ async def _call_chain_attempts(
             # wrong. Keeping the explicit form matches `call_chain_stream`
             # below for readability — no behavior change.
             if account == "anthropic":
-                post = _post_anthropic(client, slot, model, base_url, headers, req_payload,
+                post = _post_anthropic(_client_for(account), slot, model, base_url, headers, req_payload,
                                        request_timeout)
             else:
-                post = client.post(
+                send = _post_aurora_chart if account == _AURORA_CHART_PAIR[0] else _client_for(account).post
+                post = send(
                     f"{base_url}/chat/completions",
                     headers=headers,
                     json=req_payload,
@@ -2879,6 +2915,9 @@ async def _call_chain_attempts(
                 logger.info(f"[llm_router] slot={slot.value} OK via {account}/{model}")
                 return body_json
 
+            if account == _AURORA_CHART_PAIR[0] and resp.status_code == 429:
+                errors.append(f"{account}/{model}: local_busy")
+                continue
             if _is_quota_exhausted(resp.status_code, body_text):
                 _cb_record_failure(cb_key)
                 _quota_record_exhausted(cb_key)
@@ -3317,6 +3356,10 @@ async def _call_chain_stream_attempts(
     payload.setdefault("stream_options", {"include_usage": True})
 
     for account, model in slot_chain:
+        # The dedicated chart gateway produces a complete JSON plan.
+        if account == _AURORA_CHART_PAIR[0]:
+            errors.append(f"{account}/{model}: non_stream_only")
+            continue
         if not model:
             continue
         # ⛔ Unified billing-safety gate — SAME _refuse_reason as call_chain. This
