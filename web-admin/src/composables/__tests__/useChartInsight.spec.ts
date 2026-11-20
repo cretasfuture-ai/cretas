@@ -14,7 +14,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { nextTick } from 'vue';
+import { effectScope, nextTick, ref } from 'vue';
 
 // ─── Top-level mocks (hoisted by vitest) ─────────────────────────────────────
 
@@ -112,6 +112,33 @@ describe('useChartInsight', () => {
     expect(insight.value).toBeNull();
     expect(loading.value).toBe(false);
     expect(mockFetchTier2Insight).not.toHaveBeenCalled();
+  });
+
+  it('server-only analysis drops an old in-flight result when factory changes with the same chart', async () => {
+    mockBuildChartInsight.mockReturnValue(TIER1_RESULT);
+    let resolveOld: (value: InsightResult) => void = () => {};
+    mockFetchTier2Insight
+      .mockImplementationOnce(() => new Promise<InsightResult>(resolve => { resolveOld = resolve; }))
+      .mockResolvedValueOnce(TIER2_RESULT);
+    const factory = ref('F001');
+    const chart = makeChart();
+    const scope = effectScope();
+    try {
+      const result = scope.run(() => useChartInsight(() => ({ chart }), () => FINANCE_PERMS, {
+        factoryId: () => factory.value, requireTier2: true,
+      }))!;
+      await vi.runAllTimersAsync();
+      expect(mockFetchTier2Insight).toHaveBeenNthCalledWith(1, chart, FINANCE_PERMS, 'F001');
+      factory.value = 'F002';
+      await vi.runAllTimersAsync();
+      expect(mockFetchTier2Insight).toHaveBeenNthCalledWith(2, chart, FINANCE_PERMS, 'F002');
+      resolveOld({ ...TIER2_RESULT, finding: '旧工厂结果' });
+      await Promise.resolve();
+      expect(result.insight.value).toEqual(TIER2_RESULT);
+      expect(mockBuildChartInsight).not.toHaveBeenCalled();
+    } finally {
+      scope.stop();
+    }
   });
 
   // ─── Behavior 2: Tier1 null → Tier2 called; failure → honest-null ────────

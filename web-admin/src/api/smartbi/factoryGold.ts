@@ -178,7 +178,12 @@ export interface ExternalCostMetrics {
   laborCostMissingOrders: number;
   totalCost: number | null;
   costMissingOrders: number;
-  unitCosts: Array<{ unit: string; cost: number }>;
+  unitCosts: Array<{
+    unit: string;
+    cost: number;
+    workOrderCount: number;
+    zeroMaterialCostOrders: number;
+  }>;
   unitCostMissingOrders: number;
   inputByUnit: ExternalIssueQuantity[];
   issuedMaterialCost: number | null;
@@ -228,7 +233,7 @@ export interface ExternalCostData {
   stale: boolean;
   permissionMessage: string | null;
   summary: ExternalCostMetrics | null;
-  daily: Array<ExternalCostMetrics & { costDate: string }>;
+  daily: Array<ExternalCostMetrics & { costDate: string; hasMaterialCredit: boolean }>;
   products: Array<ExternalCostMetrics & { productCode: string; productName: string | null }>;
   workOrders: ExternalWorkOrderCost[];
   materialIssues: ExternalMaterialIssue[];

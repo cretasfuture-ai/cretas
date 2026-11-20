@@ -188,15 +188,6 @@ async def chart_insight(request: Request, body: ChartInsightRequest) -> Dict[str
             jwt_factory_id, body.factory_id, caller_role,
         )
 
-    if body.domain not in {"factory", "finance"}:
-        return JSONResponse(
-            status_code=400,
-            content={
-                "success": False,
-                "message": "Unsupported chart domain; use factory or finance.",
-                "code": "UNSUPPORTED_DOMAIN",
-            },
-        )
         return JSONResponse(
             status_code=403,
             content={
@@ -207,6 +198,15 @@ async def chart_insight(request: Request, body: ChartInsightRequest) -> Dict[str
                     "These must match."
                 ),
                 "code": "FACTORY_MISMATCH",
+            },
+        )
+    if body.domain not in {"factory", "finance"}:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "success": False,
+                "message": "Unsupported chart domain; use factory or finance.",
+                "code": "UNSUPPORTED_DOMAIN",
             },
         )
 
