@@ -7,6 +7,7 @@ from contextlib import AsyncExitStack
 import logging
 
 from smartbi.config import get_cretas_pool, get_pg_pool
+from smartbi.gold.external_cost_etl import sync_external_cost
 from smartbi.gold.external_production_etl import DEMO_FACTORY_PREFIX
 from smartbi.gold.factory_production_etl import FactoryEtlStats, run_factory_etl_with_retry
 from smartbi.gold.supplier_price_ingest_etl import run_supplier_price_ingest
@@ -16,6 +17,7 @@ logger = logging.getLogger(__name__)
 _DISCOVERY_SQL = """
     SELECT factory_id,
            bool_or(pipeline = 'production') AS has_production,
+           bool_or(pipeline = 'external_cost') AS has_external_cost,
            bool_or(pipeline = 'supplier_price') AS has_material_batches
     FROM (
         SELECT DISTINCT factory_id, 'production' AS pipeline
@@ -26,6 +28,12 @@ _DISCOVERY_SQL = """
         UNION
         SELECT DISTINCT factory_id, 'production'
         FROM external_source_snapshots WHERE dataset = 'report_output'
+        UNION
+        SELECT DISTINCT s.factory_id, 'external_cost'
+        FROM external_source_snapshots AS s
+        JOIN factory_external_integrations AS i USING (factory_id, external_system)
+        WHERE s.external_system = 'blacklake' AND i.status = 'ACTIVE'
+          AND s.dataset IN ('project_cost', 'production_issue')
         UNION
         SELECT DISTINCT factory_id, 'supplier_price'
         FROM material_batches WHERE deleted_at IS NULL
@@ -71,6 +79,7 @@ async def run_refresh(factory_ids: list[str] | None) -> int:
         for row in factories:
             for enabled, name, run in (
                 (row["has_production"], "factory_production", run_factory_etl_with_retry),
+                (row["has_external_cost"], "external_cost", sync_external_cost),
                 (row["has_material_batches"], "supplier_price", run_supplier_price_ingest),
             ):
                 if enabled:

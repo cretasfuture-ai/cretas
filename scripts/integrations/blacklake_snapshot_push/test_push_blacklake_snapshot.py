@@ -7,6 +7,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
+from decimal import Decimal
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -32,6 +33,70 @@ PAYLOAD = {
 
 
 class ProjectionTest(unittest.TestCase):
+    def test_cost_and_production_issue_project_only_business_fields_in_push_request(self):
+        private = {"workerName": "PERSON-PRIVATE", "wages": "WAGE-PRIVATE",
+                   "workerHours": "HOURS-PRIVATE", "actualLaborCostDetails": {"id": "W-1"}}
+        payload = {"data": {
+            "project": [{"id": 100, "projectCode": "WO1", "actualEndTime": "2026-11-18 14:00:00",
+                         "projectUnit": "KG", "numberofGoodProducts": Decimal("7.0123"), **private}],
+            "project_cost": [
+                {"projectId": 100, "projectCode": "WO1", "productCode": "CP1", "productName": "成品", "unitName": "KG",
+                 "createdAt": "2026-11-06T00:00:00+08:00", "realAmount": Decimal("6.3"),
+                 "actualMaterialCost": "31.123456", "actualLaborCost": "8.13", "actualOtherCost": 0,
+                 "actualOutsourceCost": 1, "totalActualCost": Decimal("40.253456"), "actualUnitCost": "5.740406",
+                 **private},
+            ],
+            "stock_order": [
+                {"id": 1000, "bizType": "32", "orderStatus": 1, "bizAt": "2026-11-17 12:11:00",
+                 "originCodeList": [{"code": "WO1"}],
+                 "orderDetails": [
+                     {"id": 123, "associatedBizOrderType": 10, "associatedBizOrderId": "100",
+                      "associatedBizOrderCode": "WO1",
+                      "productCode": "RM01", "productName": "原料", "unitName": "克", "qty": "8123",
+                      "costUnitPrice": "0", "changedCostAmountSigned": "0",
+                      "movingWeightedAverageCost": "0.0041234", **private},
+                     {"id": 124, "associatedBizOrderType": 10, "associatedBizOrderId": 101,
+                      "associatedBizOrderCode": "WO1",
+                      "productCode": "RM01", "qty": 1, **private},
+                 ], **private},
+                {"id": 1001, "bizType": 32, "orderStatus": 1, "bizAt": "2026-11-18 13:00:00",
+                 "orderDetails": [{"id": 123, "productCode": "RM01", "qty": 2, **private}]},
+                {"bizType": 31, "orderStatus": 1, "orderDetails": [{"id": "not-issue", **private}]},
+                {"bizType": 32, "orderStatus": 0, "orderDetails": [{"id": "pending", **private}]},
+                {"bizType": 32, "orderStatus": 2, "orderDetails": [{"id": "cancelled", **private}]},
+            ],
+            "project_cost_detail": [{**private}],
+        }}
+        body = p.build_request({"source_factory_id": "local"}, {
+            "id": "fixture", "finished": "2026-11-20T00:01:11+00:00",
+        }, payload)
+        serialized = p.encode_body(body).decode("utf-8")
+        for leaked in (*private, "PERSON-PRIVATE", "WAGE-PRIVATE", "HOURS-PRIVATE", "actualOutsourceCost",
+                       "project_cost_detail", "not-issue", "pending", "cancelled"):
+            self.assertNotIn(leaked, serialized)
+        self.assertEqual(body["datasets"]["project_cost"], [{
+            "workOrderCode": "WO1", "costDate": "2026-11-18", "productCode": "CP1", "productName": "成品",
+            "outputUnit": "KG", "outputQty": "7.0123", "materialCost": "31.123456", "laborCost": "8.13",
+            "otherCost": "0", "totalCost": "40.253456", "unitCost": "5.740406",
+        }])
+        self.assertEqual(body["datasets"]["production_issue"], [
+            {"lineId": "1000:123", "issueDate": "2026-11-17", "workOrderCode": "WO1", "materialCode": "RM01",
+             "materialName": "原料", "unit": "克", "quantity": "8123", "costUnitPrice": "0",
+             "signedCostAmount": "0", "movingAveragePrice": "0.0041234"},
+            {"lineId": "1000:124", "issueDate": "2026-11-17", "workOrderCode": None, "materialCode": "RM01",
+             "materialName": None, "unit": None, "quantity": "1", "costUnitPrice": None,
+             "signedCostAmount": None, "movingAveragePrice": None},
+            {"lineId": "1001:123", "issueDate": "2026-11-18", "workOrderCode": None, "materialCode": "RM01",
+             "materialName": None, "unit": None, "quantity": "2", "costUnitPrice": None,
+             "signedCostAmount": None, "movingAveragePrice": None},
+        ])
+
+        payload["data"]["project"].append({"projectCode": "WO1", "id": 101})
+        with self.assertRaisesRegex(ValueError, "工单编码或 ID 重复"):
+            p.build_request({"source_factory_id": "local"}, {
+                "id": "fixture", "finished": "2026-11-20T00:01:11+00:00",
+            }, payload)
+
     def test_aggregates_by_date_product_process_unit_and_drops_people_and_pay(self):
         rows = p.project_report_output(PAYLOAD)
         self.assertEqual(len(rows), 2)
