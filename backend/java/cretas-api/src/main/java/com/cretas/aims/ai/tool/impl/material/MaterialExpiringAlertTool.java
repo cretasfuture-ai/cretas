@@ -1,13 +1,20 @@
 package com.cretas.aims.ai.tool.impl.material;
 
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
+import com.cretas.aims.ai.tool.ExpiryDateWindow;
+import com.cretas.aims.ai.tool.TimeRangeFilter;
+import com.cretas.aims.config.TimeNormalizationRules;
 import com.cretas.aims.dto.material.MaterialBatchDTO;
 import com.cretas.aims.service.MaterialBatchService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
+import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -28,6 +35,11 @@ public class MaterialExpiringAlertTool extends AbstractBusinessTool {
      * 默认预警天数
      */
     private static final int DEFAULT_WARNING_DAYS = 7;
+
+    private static final Pattern EXPIRY_WORDS = Pattern.compile("到期|过期|临期");
+    private static final String COUNT = "([0-9０-９]{1,4}|[一二两三四五六七八九十]{1,3})";
+    private static final Pattern FUTURE_WINDOW = Pattern.compile(
+            COUNT + "\\h*(天|周)\\h*(?:之?内|后)|未来\\h*" + COUNT + "\\h*天");
 
     /** 复合问法「快过期的有哪些？库存够不够？」第二问的触发词; 同时带出低库存预警 (同 material_low_stock_alert 的服务)。 */
     private static final java.util.regex.Pattern LOW_STOCK_WORDS =
@@ -63,6 +75,7 @@ public class MaterialExpiringAlertTool extends AbstractBusinessTool {
         warningDays.put("minimum", 1);
         warningDays.put("maximum", 365);
         properties.put("warningDays", warningDays);
+        ExpiryDateWindow.declareParameters(properties);
 
         schema.put("properties", properties);
 
@@ -80,24 +93,33 @@ public class MaterialExpiringAlertTool extends AbstractBusinessTool {
 
     @Override
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params, Map<String, Object> context) throws Exception {
-        // 获取预警天数，默认7天
-        Integer warningDays = getInteger(params, "warningDays", DEFAULT_WARNING_DAYS);
+        Object said = params.get("originalUserInput") != null ? params.get("originalUserInput") : params.get("userInput");
+        String text = said instanceof String input ? input : "";
+        LocalDate today = LocalDate.now();
+        applyFutureExpiryWindow(params, text, today);
+        int warningDays = getInteger(params, "warningDays", DEFAULT_WARNING_DAYS);
+        ExpiryDateWindow dates = ExpiryDateWindow.resolve(params, today, today.plusDays(warningDays));
+        int horizon = Math.toIntExact(ChronoUnit.DAYS.between(today, dates.to()));
 
-        log.info("查询即将过期原材料预警: factoryId={}, warningDays={}", factoryId, warningDays);
+        log.info("查询即将过期原材料预警: factoryId={}, warningDays={}", factoryId, horizon);
 
         // 调用服务获取即将过期批次
-        List<MaterialBatchDTO> expiringBatches = materialBatchService.getExpiringBatches(factoryId, warningDays);
+        List<MaterialBatchDTO> expiringBatches = horizon < 0 ? List.of()
+                : materialBatchService.getExpiringBatches(factoryId, horizon).stream()
+                        .filter(batch -> dates.includes(batch.getExpireDate()))
+                        .collect(Collectors.toList());
 
         // 构建返回结果
         Map<String, Object> result = new HashMap<>();
         result.put("total", expiringBatches.size());
-        result.put("warningDays", warningDays);
+        result.put("warningDays", horizon);
+        String period = dates.from() + " 至 " + dates.to();
 
         if (expiringBatches.isEmpty()) {
-            result.put("message", String.format("未来 %d 天内没有即将过期的原材料批次", warningDays));
+            result.put("message", "到期日范围 " + period + " 内没有即将过期的原材料批次。");
             result.put("batches", Collections.emptyList());
         } else {
-            result.put("message", String.format("共有 %d 个批次将在 %d 天内过期", expiringBatches.size(), warningDays));
+            result.put("message", "到期日范围 " + period + " 内有 " + expiringBatches.size() + " 批即将到期。");
             // 转换为简洁格式，按剩余天数排序
             List<Map<String, Object>> batchList = expiringBatches.stream()
                     .sorted(Comparator.comparing(MaterialBatchDTO::getRemainingDays, Comparator.nullsLast(Comparator.naturalOrder())))
@@ -106,11 +128,28 @@ public class MaterialExpiringAlertTool extends AbstractBusinessTool {
             result.put("batches", batchList);
         }
 
-        Object said = params.get("originalUserInput") != null ? params.get("originalUserInput") : params.get("userInput");
-        if (said instanceof String text && LOW_STOCK_WORDS.matcher(text).find()) {
+        if (LOW_STOCK_WORDS.matcher(text).find()) {
             result.put("lowStockWarnings", materialBatchService.getLowStockWarnings(factoryId));
         }
         return result;
+    }
+
+    /** 从原话绑定到期范围。调度层也在记录本轮查询条件前使用这一口径。 */
+    public static boolean applyFutureExpiryWindow(Map<String, Object> params, String text, LocalDate today) {
+        if (text == null || !EXPIRY_WORDS.matcher(text).find()) {
+            return false;
+        }
+        Matcher window = FUTURE_WINDOW.matcher(text);
+        if (!window.find()) {
+            return false;
+        }
+        String count = window.group(1) != null ? window.group(1) : window.group(3);
+        int days = TimeNormalizationRules.parseCount(count) * ("周".equals(window.group(2)) ? 7 : 1);
+        LocalDate end = today.plusDays(days);
+        params.put("startDate", today.toString());
+        params.put("endDate", end.toString());
+        params.put(TimeRangeFilter.SAID, today + "~" + end);
+        return true;
     }
 
     /**

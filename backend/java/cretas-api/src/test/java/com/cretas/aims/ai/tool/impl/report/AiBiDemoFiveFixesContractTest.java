@@ -37,8 +37,8 @@ class AiBiDemoFiveFixesContractTest {
             "近期的批次, 13",
             "近二十五天, 24",
             "最近1天, 0",
-            "查询7天内到期的原料, 7",
-            "7天内到期的原料, 7"})
+            "查询7天内入库的原料, 7",
+            "7天内已出货的订单, 7"})
     void recentNDaysAllowsSpacesAndChineseNumerals(String text, long expectedDays) {
         TimeNormalizationRules.TimeRange r = new TimeNormalizationRules().normalize(text, NOW).orElseThrow();
         long days = ChronoUnit.DAYS.between(r.getStart().toLocalDate(), NOW.toLocalDate());

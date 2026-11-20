@@ -37,7 +37,6 @@ backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/gateway/descriptor
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/gateway/mcp/MCPExternalPolicyTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/impl/crm/OrderDeleteToolTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/impl/crm/OrderListToolTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/impl/crm/OrderQueryToolTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/impl/crm/OrderTodayToolTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/impl/dataop/BatchUpdateToolQuantitySemanticTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/impl/dataop/InventoryOperationToolClearDeltaSemanticTest.java
@@ -117,7 +116,6 @@ backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/impl/workdesk/Cust
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/impl/workdesk/CustomerRevenueTrendToolTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/impl/workdesk/HaccpStatusQueryToolTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/impl/workdesk/IncomeStatementQueryToolTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/impl/workdesk/MaterialDisposalRecommendationToolTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/impl/workdesk/MaterialTodayReceivingQueryToolTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/impl/workdesk/OpportunityFunnelStatsToolTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/impl/workdesk/OpportunityStageAlertToolTest.java

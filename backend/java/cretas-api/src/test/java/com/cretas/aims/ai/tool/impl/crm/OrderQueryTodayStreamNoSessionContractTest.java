@@ -61,7 +61,8 @@ class OrderQueryTodayStreamNoSessionContractTest {
         when(salesService.getSalesOrderById("F001", "SO-ID-1")).thenReturn(order);
         when(repository.findByFactoryIdAndDateRange(eq("F001"), eq(LocalDate.now()), eq(LocalDate.now())))
                 .thenReturn(List.of(order));
-        OrderQueryTool tool = new OrderQueryTool(salesService, repository);
+        OrderQueryTool tool = new OrderQueryTool(salesService, repository,
+                mock(com.cretas.aims.repository.inventory.SalesDeliveryRecordRepository.class));
 
         JsonNode page = run(tool, "order_query", "{}");
         assertThat(page.path("success").asBoolean()).as(page.toString()).isTrue();

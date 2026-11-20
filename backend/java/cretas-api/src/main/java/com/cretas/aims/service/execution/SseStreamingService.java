@@ -766,32 +766,26 @@ public class SseStreamingService {
             boolean intentHasNoTool = streamBoundToolName == null || streamBoundToolName.isBlank();
             if (dynamicToolSelectionService.isSkillsEnabled() && intentHasNoTool) {
                 try {
-                    IntentExecuteResponse skillResponse = dynamicToolSelectionService.trySkillRoute(
-                            request.getUserInput(), factoryId, userId, userRole);
+                    // 排产的「几个班」也是缺产分析的输入，按已定意图绑定 Skill，避免被排班关键词改道。
+                    boolean preferBoundSkill = "PRODUCTION_DEMAND_ANALYSIS".equals(intent.getIntentCode())
+                            && com.cretas.aims.config.BusinessQueryPhrases.productionDemandQuestion(request.getUserInput());
+                    IntentExecuteResponse skillResponse = preferBoundSkill
+                            ? dynamicToolSelectionService.tryExplicitSkillRouteForIntent(
+                                    intent, request.getUserInput(), factoryId, userId, userRole)
+                            : dynamicToolSelectionService.trySkillRoute(request.getUserInput(), factoryId, userId, userRole);
+                    if (skillResponse == null && preferBoundSkill) {
+                        skillResponse = dynamicToolSelectionService.trySkillRoute(
+                                request.getUserInput(), factoryId, userId, userRole);
+                    } else if (skillResponse == null) {
+                        skillResponse = dynamicToolSelectionService.tryExplicitSkillRouteForIntent(
+                                intent, request.getUserInput(), factoryId, userId, userRole);
+                    }
                     if (skillResponse != null) {
                         skillResponse = enrichNeedMoreInfo(skillResponse, request, intent, factoryId, userId);
                         applySharedResultSteps(skillResponse, intent, streamBoundToolName, factoryId, userId);
                         sendSseEvent(emitter, "result", skillResponse);
                         sendSseEvent(emitter, "complete", Map.of(
                                 "status", skillResponse.getStatus(),
-                                "cacheHit", false,
-                                "totalLatencyMs", System.currentTimeMillis() - startTime
-                        ));
-                        emitter.complete();
-                        return;
-                    }
-
-                    // Sprint 9 P0.1 fix (2026-05-21): tool_name=NULL intent (WORKDESK 等)
-                    // 当 trySkillRoute (keyword 匹用户原文) 失败时, 用 intent_code 显式查 Skill.
-                    IntentExecuteResponse explicitSkillResp = dynamicToolSelectionService
-                            .tryExplicitSkillRouteForIntent(intent, request.getUserInput(), factoryId, userId, userRole);
-                    if (explicitSkillResp != null) {
-                        explicitSkillResp = enrichNeedMoreInfo(
-                                explicitSkillResp, request, intent, factoryId, userId);
-                        applySharedResultSteps(explicitSkillResp, intent, streamBoundToolName, factoryId, userId);
-                        sendSseEvent(emitter, "result", explicitSkillResp);
-                        sendSseEvent(emitter, "complete", Map.of(
-                                "status", explicitSkillResp.getStatus(),
                                 "cacheHit", false,
                                 "totalLatencyMs", System.currentTimeMillis() - startTime
                         ));
@@ -881,18 +875,30 @@ public class SseStreamingService {
         }
         try {
             // 否定说法 (别查库存了 / 不要报工) 由调用方 (管线 1.4) 按本轮唯一一次判定挡掉, 这里不再判第二遍
-            Optional<String> phrase = knowledgeBase.matchPhrase(userInput.toLowerCase().trim(), "FACTORY");
+            Optional<String> completeQuery = com.cretas.aims.config.BusinessQueryPhrases.intentCode(userInput);
+            if (completeQuery.isEmpty()
+                    && com.cretas.aims.config.BusinessQueryPhrases.costProductName(userInput).isPresent()) {
+                var costTool = toolRegistry.getExecutor("report_cost_query").orElse(null);
+                if (costTool instanceof com.cretas.aims.ai.tool.impl.report.ReportCostQueryTool cost
+                        && cost.matchesNamedCostQuestion(factoryId, userInput)) {
+                    completeQuery = Optional.of("COST_QUERY");
+                }
+            }
+            String normalized = userInput.toLowerCase().trim();
+            Optional<String> phrase = completeQuery.or(() -> knowledgeBase.matchPhrase(normalized, "FACTORY"));
             if (phrase.isEmpty()) {
                 return null;
             }
             // 2026-11-17 F006 数字班组: 带条件 (物料 / 时间 / 客户) 或多个子问的句子不走短语快捷, 交给决策层
-            Optional<Map.Entry<String, String>> hit = knowledgeBase.matchPhraseHit(userInput.toLowerCase().trim(), "FACTORY");
-            String hitPhrase = hit != null && hit.isPresent() && phrase.get().equals(hit.get().getValue())
-                    ? hit.get().getKey() : null;
-            if (!PhraseShortcutEligibility.isUnconditionedSimple(userInput, hitPhrase, phrase.get())) {
-                log.info("[SSE-EarlyPhrase] 带条件/复合问句不走短语快捷: phrase='{}', residual='{}'", hitPhrase,
-                        PhraseShortcutEligibility.residual(userInput, hitPhrase));
-                return null;
+            if (completeQuery.isEmpty()) {
+                Optional<Map.Entry<String, String>> hit = knowledgeBase.matchPhraseHit(normalized, "FACTORY");
+                String hitPhrase = hit != null && hit.isPresent() && phrase.get().equals(hit.get().getValue())
+                        ? hit.get().getKey() : null;
+                if (!PhraseShortcutEligibility.isUnconditionedSimple(userInput, hitPhrase, phrase.get())) {
+                    log.info("[SSE-EarlyPhrase] 带条件/复合问句不走短语快捷: phrase='{}', residual='{}'", hitPhrase,
+                            PhraseShortcutEligibility.residual(userInput, hitPhrase));
+                    return null;
+                }
             }
             String code = phrase.get();
             if (com.cretas.aims.ai.catalog.FactoryIntentCatalog.isRetiredIntent(code)) {

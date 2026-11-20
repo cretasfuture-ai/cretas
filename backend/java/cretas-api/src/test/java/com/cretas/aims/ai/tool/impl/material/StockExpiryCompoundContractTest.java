@@ -39,7 +39,7 @@ class StockExpiryCompoundContractTest {
         MaterialBatchDTO b = new MaterialBatchDTO();
         b.setBatchNumber("MB-1");
         b.setMaterialName("花椒");
-        b.setExpireDate(LocalDate.parse("2026-11-20"));
+        b.setExpireDate(LocalDate.now().plusDays(2));
         b.setRemainingDays(2);
         b.setCurrentQuantity(new BigDecimal("8"));
         b.setUnit("kg");
@@ -62,7 +62,7 @@ class StockExpiryCompoundContractTest {
                 new HashMap<>(Map.of("originalUserInput", "哪些原料库存快不够了？有没有快过期的？")), Map.of());
         String reply = reply(result, "MATERIAL_LOW_STOCK_ALERT");
 
-        assertThat(reply).contains("牛腱").contains("安全库存 50kg").contains("花椒").contains("2026-11-20");
+        assertThat(reply).contains("牛腱", "安全库存 50kg", "花椒", expiring().getExpireDate().toString());
         assertThat(reply).doesNotContain("待收");
     }
 

@@ -497,7 +497,7 @@ public class TimeNormalizationRules {
         return parseCount(m.group(1) != null ? m.group(1) : m.group(2));
     }
 
-    static int parseCount(String text) {
+    public static int parseCount(String text) {
         if (text.chars().allMatch(Character::isDigit)) {
             return Integer.parseInt(text);
         }

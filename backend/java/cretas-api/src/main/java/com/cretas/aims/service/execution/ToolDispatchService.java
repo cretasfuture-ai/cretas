@@ -17,6 +17,7 @@ import com.cretas.aims.ai.tool.gateway.ToolExecutionGateway;
 import com.cretas.aims.ai.tool.gateway.ToolExecutionMode;
 import com.cretas.aims.ai.tool.gateway.ToolExecutionResult;
 import com.cretas.aims.ai.tool.gateway.ToolExecutionSource;
+import com.cretas.aims.ai.tool.impl.material.MaterialExpiringAlertTool;
 import com.cretas.aims.config.TimeNormalizationRules;
 import com.cretas.aims.dev.faultinjection.ToolExecutionFaultInjector;
 import com.cretas.aims.dto.ai.IntentExecuteRequest;
@@ -45,6 +46,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -657,6 +659,8 @@ public class ToolDispatchService {
                     : matchResult != null && matchResult.getPreprocessedQuery() != null
                     ? matchResult.getPreprocessedQuery()
                     : shortcutPreprocess(request, factoryId, userId);
+            boolean expiryWindowBound = !boundConfirmation && tool instanceof MaterialExpiringAlertTool
+                    && MaterialExpiringAlertTool.applyFutureExpiryWindow(params, request.getUserInput(), LocalDate.now());
             if (!boundConfirmation && preprocessed != null) {
                 PreprocessedQuery pq = preprocessed;
                 Map<String, PreprocessedQuery.ResolvedReference> refs = pq.getResolvedReferences();
@@ -701,7 +705,8 @@ public class ToolDispatchService {
 
                 // 2.6. 从预处理结果中提取时间范围
                 // 用户原话里根本没说时间 (预处理按上下文补出的日期不算「你说的」): 不带时间参数, 也不出「不能按时间筛选」提示
-                if (pq.hasTimeRange() && com.cretas.aims.ai.tool.TimeRangeFilter.mentionsTime(request.getUserInput())) {
+                if (!expiryWindowBound && pq.hasTimeRange()
+                        && com.cretas.aims.ai.tool.TimeRangeFilter.mentionsTime(request.getUserInput())) {
                     TimeNormalizationRules.TimeRange timeRange = pq.getPrimaryTimeRange();
                     if (timeRange != null && timeRange.isValid()) {
                         params.put("startDate", timeRange.getStart().toLocalDate().toString());

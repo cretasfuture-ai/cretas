@@ -3,8 +3,10 @@ package com.cretas.aims.ai.tool.impl.report;
 import com.cretas.aims.ai.dto.ToolCall;
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.entity.ProductionBatch;
+import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.enums.ProductionBatchStatus;
 import com.cretas.aims.repository.ProductionBatchRepository;
+import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.security.PriceFieldResponseAdvice;
 import com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -93,6 +95,41 @@ class ReportCostQueryToolContractTest {
     void isReadOnly_soConsultTabDoesNotBlockIt() {
         // 缺陷原样: 旧实现 AccessMode.WRITE -> 咨询页「请切换到操作页」, 成本问题一律答不出
         assertEquals(ToolExecutor.AccessMode.READ, tool.getAccessMode());
+    }
+
+    @Test
+    void shortProductNameFromOriginalQuestionKeepsAllFourCostsScoped() throws Exception {
+        String fullName = "演示·酱卤牛肉250g";
+        ProductType beef = new ProductType();
+        beef.setName(fullName);
+        beef.setId("PT-" + fullName);
+        ProductType duck = new ProductType();
+        duck.setName("酱鸭");
+        duck.setId("PT-酱鸭");
+        ProductTypeRepository catalog = mock(ProductTypeRepository.class);
+        when(catalog.findByFactoryIdAndIsActiveTrue("F1")).thenReturn(List.of(beef, duck));
+        ReflectionTestUtils.setField(tool, "productTypeRepository", catalog);
+        thisMonth.add(batch(fullName, "600", "100", "50", "40", "80", "kg", ProductionBatchStatus.COMPLETED, false));
+        thisMonth.add(batch("酱鸭", "999", "0", "0", "0", "50", "盒", ProductionBatchStatus.COMPLETED, false));
+
+        JsonNode result = run("""
+                {"originalUserInput":"酱卤牛肉成本怎么构成"}
+                """).get("data");
+
+        assertTrue(result.get("message").asText().contains(fullName));
+        JsonNode totals = result.get("data").get("totals");
+        assertEquals(600, totals.get("materialCost").asInt());
+        assertEquals(100, totals.get("laborCost").asInt());
+        assertEquals(50, totals.get("equipmentCost").asInt());
+        assertEquals(40, totals.get("otherCost").asInt());
+        assertEquals(1, result.get("data").get("products").size());
+
+        for (String question : List.of("酱卤牛肉成本怎么构成", "请帮我算人工成本怎么算")) {
+            JsonNode selected = run(mapper.writeValueAsString(Map.of("originalUserInput", question,
+                    "productName", "酱鸭"))).path("data").path("data");
+            assertEquals("酱鸭", selected.path("products").path(0).path("productName").asText());
+            assertEquals(999, selected.path("totals").path("materialCost").asInt());
+        }
     }
 
     @Test
