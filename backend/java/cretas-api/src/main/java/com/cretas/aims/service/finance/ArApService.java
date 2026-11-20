@@ -287,7 +287,8 @@ public interface ArApService {
 
     /**
      * 已逾期（到期日早于今天、未结清 &gt; 0）的应收单据明细，与 {@link #getAgingAnalysis} CUSTOMER 分支同源同范围同口径：
-     * 各行 outstanding 之和 == 账龄各逾期桶之和。每行 transactionNumber / counterpartyName / outstanding / dueDate / daysOverdue。
+     * 各行 outstanding 之和 == 账龄各逾期桶之和。每行包含 transactionNumber、counterpartyId、counterpartyName、
+     * outstanding、dueDate 和 daysOverdue。
      */
     List<Map<String, Object>> getOverdueReceivableDocuments(String factoryId);
 

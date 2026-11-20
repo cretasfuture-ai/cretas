@@ -73,6 +73,7 @@ class AccountsReceivableCollectFirstContractTest {
     private static Map<String, Object> doc(String no, String customer, String amount, long days) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("transactionNumber", no);
+        m.put("counterpartyId", "id-" + customer);
         m.put("counterpartyName", customer);
         m.put("outstanding", new BigDecimal(amount));
         m.put("daysOverdue", days);
@@ -134,7 +135,7 @@ class AccountsReceivableCollectFirstContractTest {
         JsonNode data = payload.path("data");
         assertTrue(m.contains("22 家客户、22 张单据，合计 ¥25300.00"), m);
         assertTrue(m.contains("客户-22：¥2200.00") && m.contains("客户-03：¥300.00"), m);
-        assertTrue(m.contains("另有 2 家逾期客户"), m);
+        assertTrue(m.contains("另有 2 家逾期客户") && m.contains("上方合计覆盖全部 22 家逾期客户"), m);
         assertFalse(m.contains("客户-02") || m.contains("客户-01"), m);
         assertEquals(20, data.path("overdueCustomers").size());
         assertEquals(2, data.path("omittedOverdueCustomerCount").asInt());
@@ -142,9 +143,9 @@ class AccountsReceivableCollectFirstContractTest {
     }
 
     @Test
-    void defaultViewStillListsOverdueCustomersWhenCustomerBalancesAreZero() throws Exception {
+    void overdueCustomerQuestionInDefaultViewStillListsCustomersWhenBalancesAreZero() throws Exception {
         when(customers.findCustomersWithOutstandingBalance("F1")).thenReturn(List.of());
-        String m = run("{}");
+        String m = run("{\"originalUserInput\":\"哪些客户有逾期应收？先催哪几张单，为什么？\"}");
         assertTrue(m.contains("鲜湘缘：¥39086.00") && m.contains("建议先催"), m);
         assertTrue(m.contains("客户应收余额口径"), m);
     }

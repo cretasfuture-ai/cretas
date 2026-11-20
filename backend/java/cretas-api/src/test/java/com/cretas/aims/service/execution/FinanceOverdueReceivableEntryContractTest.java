@@ -16,20 +16,23 @@ import com.cretas.aims.entity.Customer;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.config.AIIntentConfig;
 import com.cretas.aims.entity.crew.DigitalCrewDelegationLock;
+import com.cretas.aims.entity.finance.ArApTransaction;
 import com.cretas.aims.repository.CustomerRepository;
+import com.cretas.aims.repository.SupplierRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.crew.DigitalCrewDelegationLockRepository;
 import com.cretas.aims.repository.crew.DigitalCrewMemberSettingRepository;
 import com.cretas.aims.repository.crew.DigitalCrewRoleMappingRepository;
 import com.cretas.aims.repository.crew.DigitalCrewSettingLogRepository;
 import com.cretas.aims.repository.crew.DigitalCrewWorkItemRepository;
+import com.cretas.aims.repository.finance.ArApTransactionRepository;
 import com.cretas.aims.security.AuthenticatedActor;
 import com.cretas.aims.security.AuthenticatedActorType;
 import com.cretas.aims.service.PermissionService;
 import com.cretas.aims.service.PreviewTokenService;
 import com.cretas.aims.service.crew.DigitalCrewService;
-import com.cretas.aims.service.finance.ArApService;
 import com.cretas.aims.service.finance.FinanceRowScopeQuery;
+import com.cretas.aims.service.finance.impl.ArApServiceImpl;
 import com.cretas.aims.service.impl.ResultFormatterServiceImpl;
 import com.cretas.aims.service.intent.LegacyIntentExitMetrics;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -38,15 +41,18 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.PlatformTransactionManager;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.util.Comparator;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.function.Consumer;
+import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -55,6 +61,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -93,6 +100,69 @@ class FinanceOverdueReceivableEntryContractTest {
 
     @Test
     void workdeskListsAllOverdueCustomersAndTheirTotalsWithRealTool() throws Exception {
+        String text = runRealOverdueTool(QUESTION, true, List.of(
+                overdueDoc("AR-1", "SH", "演示·上海连锁餐饮", "8514", 45),
+                overdueDoc("AR-2", "SH", "演示·上海连锁餐饮", "6912", 31),
+                overdueDoc("AR-3", "NJ", "演示·南京食品经销商", "33000", 70),
+                overdueDoc("AR-4", "NJ", "演示·南京食品经销商", "516", 65),
+                overdueDoc("AR-5", "SZ", "演示·苏州精品商超", "17424", 1)));
+        assertThat(text).contains("逾期应收共 3 家客户、5 张单据，合计 ¥66366.00", "客户应收余额口径")
+                .containsSubsequence("建议先催", "单号 AR-3", "理由：逾期最久且金额最大", "单号 AR-1", "单号 AR-2")
+                .doesNotContain("单号 AR-4", "单号 AR-5");
+        assertThat(text).as("催收前三张之外的客户也须列出客户级逾期余额")
+                .contains("演示·苏州精品商超：¥17424.00",
+                        "演示·上海连锁餐饮：¥15426.00", "演示·南京食品经销商：¥33516.00");
+    }
+
+    @Test
+    void workdeskGroupsRenamedCustomerUsingOneSnapshotName() throws Exception {
+        String text = runRealOverdueTool(QUESTION, false, List.of(
+                overdueDoc("AR-1", "C-1", "原店名", "100", 30),
+                overdueDoc("AR-2", "C-1", "新店名", "200", 25)));
+        assertThat(text).contains("逾期应收共 1 家客户、2 张单据，合计 ¥300.00",
+                        "- 原店名：¥300.00", "单号 AR-2，客户 新店名")
+                .doesNotContain("- 新店名：");
+    }
+
+    @Test
+    void workdeskKeepsDifferentCustomersWithSameSnapshotNameSeparate() throws Exception {
+        String text = runRealOverdueTool(QUESTION, false, List.of(
+                overdueDoc("AR-1", "C-1", "原店名", "100", 30),
+                overdueDoc("AR-2", "C-1", "新店名", "200", 25),
+                overdueDoc("AR-3", "C-2", "原店名", "150", 20)));
+        assertThat(text).contains("逾期应收共 2 家客户、3 张单据，合计 ¥450.00")
+                .containsSubsequence("- 原店名：¥300.00", "- 原店名：¥150.00", "建议先催")
+                .doesNotContain("- 原店名：¥250.00", "- 新店名：");
+    }
+
+    @Test
+    void workdeskExplainsThatTheTotalIncludesOmittedCustomers() throws Exception {
+        String text = runRealOverdueTool(QUESTION, false, IntStream.rangeClosed(1, 22)
+                .mapToObj(i -> overdueDoc("AR-" + i, "C-" + i, "客户-%02d".formatted(i),
+                        String.valueOf(i * 100), 15))
+                .toList());
+        assertThat(text).contains("22 家客户、22 张单据，合计 ¥25300.00",
+                        "另有 2 家逾期客户，可在应收账龄页查看。上方合计覆盖全部 22 家逾期客户。")
+                .containsSubsequence("- 客户-22：¥2200.00", "- 客户-03：¥300.00", "建议先催")
+                .doesNotContain("- 客户-01：", "- 客户-02：");
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void workdeskOrdinaryOwedRankingKeepsMainBehavior(boolean hasCustomerBalance) throws Exception {
+        String text = runRealOverdueTool("哪个客户欠款最多？", hasCustomerBalance, List.of(
+                overdueDoc("AR-1", "C-1", "欠款样本", "100", 30)));
+        assertThat(text).doesNotContain("逾期客户明细");
+        if (hasCustomerBalance) {
+            assertThat(text).contains("合计 ¥100.00。\n建议先催", "客户应收余额口径",
+                    "客户欠款共 1 家、合计 ¥216.00，欠款最多的是 客户余额样本。");
+        } else {
+            assertThat(text).isEqualTo("当前没有客户欠款（客户应收余额为 0）。");
+        }
+    }
+
+    private String runRealOverdueTool(String question, boolean hasCustomerBalance,
+                                      List<ArApTransaction> invoices) throws Exception {
         StreamTurnCollectorEntryParityContractTest.Harness h = harness();
         h.useRealDispatch();
         ResultFormatterServiceImpl formatter = new ResultFormatterServiceImpl();
@@ -104,9 +174,11 @@ class FinanceOverdueReceivableEntryContractTest {
         ToolRbacEnforcer rbac = mock(ToolRbacEnforcer.class);
         when(rbac.check(eq(tool), any())).thenReturn(ToolRbacEnforcer.Decision.allow());
         ReflectionTestUtils.setField(h.toolDispatch, "toolRbacEnforcer", rbac);
-        ArApService arAp = mock(ArApService.class);
+        ArApTransactionRepository transactions = mock(ArApTransactionRepository.class);
         CustomerRepository customers = mock(CustomerRepository.class);
+        ArApServiceImpl arAp = new ArApServiceImpl(transactions, customers, mock(SupplierRepository.class));
         FinanceRowScopeQuery scope = mock(FinanceRowScopeQuery.class);
+        ReflectionTestUtils.setField(arAp, "financeRowScopeQuery", scope);
         ReflectionTestUtils.setField(tool, "arApService", arAp);
         ReflectionTestUtils.setField(tool, "customerRepository", customers);
         ReflectionTestUtils.setField(tool, "financeRowScopeQuery", scope);
@@ -117,38 +189,40 @@ class FinanceOverdueReceivableEntryContractTest {
         Customer balanceOnly = new Customer();
         balanceOnly.setName("客户余额样本");
         balanceOnly.setCurrentBalance(new BigDecimal("216.00"));
-        when(customers.findCustomersWithOutstandingBalance(FACTORY)).thenReturn(List.of(balanceOnly));
-        when(arAp.getOverdueReceivableDocuments(FACTORY)).thenReturn(List.of(
-                overdueDoc("AR-1", "演示·上海连锁餐饮", "8514", 45),
-                overdueDoc("AR-2", "演示·上海连锁餐饮", "6912", 31),
-                overdueDoc("AR-3", "演示·南京食品经销商", "33000", 70),
-                overdueDoc("AR-4", "演示·南京食品经销商", "516", 65),
-                overdueDoc("AR-5", "演示·苏州精品商超", "17424", 1)));
+        when(customers.findCustomersWithOutstandingBalance(FACTORY))
+                .thenReturn(hasCustomerBalance ? List.of(balanceOnly) : List.of());
+        LocalDate cutoff = LocalDate.of(9999, 12, 31);
+        when(transactions.findOverdueReceivables(FACTORY, cutoff)).thenReturn(invoices.stream()
+                .sorted(Comparator.comparing(ArApTransaction::getDueDate)).toList());
         AIIntentConfig ar = h.intent(AR_INTENT, "应收账龄", tool.getToolName(), ToolExecutor.AccessMode.READ);
         ar.setIntentCategory("ANALYSIS");
         ar.setRequiredPermission("finance:read");
         when(h.toolRegistry.getExecutor(tool.getToolName())).thenReturn(Optional.of(tool));
-        h.recognizerAnswers(recognized(ar));
+        h.recognizerAnswers(recognized(ar, question));
 
         IntentExecuteResponse response = h.sendThroughFacade(IntentExecuteRequest.builder()
-                .userInput(QUESTION).sessionId("workdesk-overdue-customers").mode("READ").build());
+                .userInput(question).sessionId("workdesk-overdue-customers").mode("READ").build());
 
-        verify(arAp).getOverdueReceivableDocuments(FACTORY);
+        if (hasCustomerBalance || QUESTION.equals(question)) {
+            verify(transactions).findOverdueReceivables(FACTORY, cutoff);
+        } else {
+            verify(transactions, never()).findOverdueReceivables(anyString(), any());
+        }
         assertThat(response.getStatus()).isEqualTo("SUCCESS");
         assertThat(response.getIntentCode()).isEqualTo(AR_INTENT);
-        String text = response.getFormattedText();
-        assertThat(text).contains("逾期应收共 3 家客户、5 张单据，合计 ¥66366.00",
-                        "客户应收余额口径")
-                .containsSubsequence("建议先催", "单号 AR-3", "理由：逾期最久且金额最大", "单号 AR-1", "单号 AR-2")
-                .doesNotContain("单号 AR-4", "单号 AR-5");
-        assertThat(text).as("催收前三张之外的客户也须列出客户级逾期余额")
-                .contains("演示·苏州精品商超：¥17424.00",
-                        "演示·上海连锁餐饮：¥15426.00", "演示·南京食品经销商：¥33516.00");
+        return response.getFormattedText();
     }
 
-    private static Map<String, Object> overdueDoc(String number, String customer, String amount, long days) {
-        return Map.of("transactionNumber", number, "counterpartyName", customer,
-                "outstanding", new BigDecimal(amount), "daysOverdue", days);
+    private static ArApTransaction overdueDoc(String number, String customerId, String customerName,
+                                              String amount, long daysOverdue) {
+        ArApTransaction invoice = new ArApTransaction();
+        invoice.setFactoryId(FACTORY);
+        invoice.setTransactionNumber(number);
+        invoice.setCounterpartyId(customerId);
+        invoice.setCounterpartyName(customerName);
+        invoice.setOutstandingAmount(new BigDecimal(amount));
+        invoice.setDueDate(LocalDate.now().minusDays(daysOverdue));
+        return invoice;
     }
 
     @ParameterizedTest(name = "{0}")
@@ -245,7 +319,11 @@ class FinanceOverdueReceivableEntryContractTest {
     }
 
     private static IntentMatchResult recognized(AIIntentConfig intent) {
-        return IntentMatchResult.builder().userInput(QUESTION).bestMatch(intent)
+        return recognized(intent, QUESTION);
+    }
+
+    private static IntentMatchResult recognized(AIIntentConfig intent, String question) {
+        return IntentMatchResult.builder().userInput(question).bestMatch(intent)
                 .matchMethod(IntentMatchResult.MatchMethod.SEMANTIC).confidence(0.93)
                 .requiresConfirmation(false).questionType(QuestionType.OPERATIONAL_COMMAND).build();
     }
