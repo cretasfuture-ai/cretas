@@ -157,10 +157,11 @@ async def test_p1_2_plan_vs_actual_rule_does_not_steal_a_question_about_another_
 async def test_p1_2_plan_vs_actual_rule_keeps_the_month_scope(monkeypatch):
     rows = [{"日期": "2026-09-10", "原表计划品项数": 50, "已产出计划品项数": 5, "计划品项达成率": 0.1,
              "计划外生产品项数": 7, "备注": None, "实产良品kg": 1.0}] + plan_day_rows()
-    _, _, prompts, calls = await ask(monkeypatch, "10月计划与实际差多少？", {5334: (rows, PLAN_DAY_FIELDS)},
-                                     plans=[{"intent": "none"}], candidates=PLAN_DAY)
-    assert "| 75 | 55 | 20 | 73.33% | 9 |" in prompts[0]        # 改前: 125 / 60 (九月也算进去)
-    assert "命中 10 / 11 行" in prompts[0] and calls == []
+    blocks = []
+    _, _, _, calls = await ask(monkeypatch, "10月计划与实际差多少？", {5334: (rows, PLAN_DAY_FIELDS)},
+                               plans=[{"intent": "none"}], candidates=PLAN_DAY, computed_blocks=blocks)
+    assert "| 75 | 55 | 20 | 73.33% | 9 |" in blocks[0]        # 改前: 125 / 60 (九月也算进去)
+    assert "命中 10 / 11 行" in blocks[0] and calls == []
 
 
 # ============ P1-3 按周汇总: 月份范围 + 聚合口径 ============
@@ -207,9 +208,10 @@ async def test_p1_2_3_unsupported_time_scopes_are_left_to_the_planner(
 
 
 async def test_p1_3_week_rollup_keeps_the_month_scope(monkeypatch):
-    _, _, prompts, calls = await ask(monkeypatch, "10月哪一周计划品项达成率最低？", {5334: (day_rate_rows(), PLAN_DAY_FIELDS)},
-                                     plans=[{"intent": "none"}], candidates=PLAN_DAY)
-    block = prompts[0]
+    blocks = []
+    _, _, _, calls = await ask(monkeypatch, "10月哪一周计划品项达成率最低？", {5334: (day_rate_rows(), PLAN_DAY_FIELDS)},
+                               plans=[{"intent": "none"}], candidates=PLAN_DAY, computed_blocks=blocks)
+    block = blocks[0]
     assert "2026-W37" not in block and "| 2026-W41 | 50.00% |" in block      # 改前: 九月 W37 5% 排第一
     assert "月份(按日期折算) == 10" in block and calls == []
 

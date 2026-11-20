@@ -18,6 +18,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field
+from itertools import islice
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence
 
 import pandas as pd
@@ -268,6 +269,14 @@ _TEXT_LIST_QUESTION = re.compile(
     r"\s*(?:有什么特殊情况|有哪些|有什么内容|有什么)[？?]?"
 )
 _TEXT_MARKDOWN_CHARS = re.compile(r"[\\\x60*_\[\]<>|&~]")
+_PRODUCTION_DETAIL_QUESTION = re.compile(
+    _MONTH_PREFIX + r"(?:(?P<miss>哪些产品计划了但没有生产)"
+    r"(?:[？?，,]\s*哪个最多)?|(?P<outside>有哪些计划外生产))"
+    r"(?:[？?，,。]?\s*(?:列出\s*)?(?:前|top\s*)\s*(?P<limit>[1-9][0-9]{0,3})\s*(?:个|笔|项)?)?"
+    r"[？?。]?", re.IGNORECASE,
+)
+_PLAN_ITEM_RATE = "计划品项达成率"
+_ISO_WEEK_LABEL = r"(?:\d{4}-)?W(?:0[1-9]|[1-4][0-9]|5[0-3])"
 
 # 原始列头，来源为 test_weimei_retest_r4b.py 的 weekly_additive_flow 阳性。
 _WEEKLY_SUM_COLUMNS = frozenset({"良品产量kg"})
@@ -275,7 +284,7 @@ _WEEKLY_SUM_COLUMNS = frozenset({"良品产量kg"})
 # 原始比率列头 -> (分子原始列头, 分母原始列头)。带公式的键也逐字核对公式。
 _WEEKLY_RATIO_COLUMNS = {
     # 味美上线修复，test_weimei_retest_r4.py 的 test_4_week_question_on_daily_table_is_rolled_up_by_the_program。
-    "计划品项达成率": ("已产出计划品项数", "原表计划品项数"),
+    _PLAN_ITEM_RATE: ("已产出计划品项数", "原表计划品项数"),
     # test_weimei_retest_r4b.py 的 r3_weekly_ratio 阳性。
     "计划品项达成率(合格品项数/抽检品项数)": ("合格品项数", "抽检品项数"),
     # test_weimei_retest_r4b.py 的 weekly_header_ratio 阳性。
@@ -389,21 +398,34 @@ def _metric_base(column: str) -> str:
     return re.sub(r"(?:kg|℃|[%％])$", "", label, flags=re.IGNORECASE).strip()
 
 
-def _valid_weekly_values(column: str, df: pd.DataFrame, roles: dict, *, counts_only: bool = False) -> bool:
+def _valid_weekly_values(column: str, df: pd.DataFrame, roles: dict, *, counts_only: bool = False,
+                         allow_empty: bool = False) -> bool:
     if column not in df.columns:
         return False
     role = roles.get(column, {})
     if role.get("is_time") or (role.get("is_dimension") and not role.get("is_measure")):
         return False
     values = _to_num(df[column].dropna())
-    if values.empty or not values.notna().all():
+    if (values.empty and not allow_empty) or not values.notna().all():
         return False
     return not counts_only or (len(values) == len(df) and (values.ge(0) & values.mod(1).eq(0)).all())
 
 
+def _valid_plan_item_counts(df: pd.DataFrame, num: str, den: str, roles: dict) -> bool:
+    if not all(_valid_weekly_values(c, df, roles, allow_empty=True) for c in (num, den)):
+        return False
+    produced, planned = _to_num(df[num]), _to_num(df[den])
+    return (
+        all((values.ge(0) & values.mod(1).eq(0)).all() for values in (produced.dropna(), planned.dropna()))
+        and produced[planned.gt(0)].notna().all()
+        and produced[~planned.gt(0)].fillna(0).eq(0).all()
+    )
+
+
 def week_rollup_plan(question: str, df: pd.DataFrame, field_meta: Optional[Sequence[dict]]) -> Optional[dict]:
     """Match a complete single-metric ranking or total question."""
-    if WEEK_ROLLUP_COL not in df.columns:
+    week_col = WEEK_ROLLUP_COL if WEEK_ROLLUP_COL in df.columns else "周"
+    if week_col not in df.columns:
         return None
     match = re.fullmatch(
         _MONTH_PREFIX + rf"(?:哪一?周\s*(?P<rank_metric>.+?)\s*(?P<rank>{_RANK_WORD})"
@@ -424,24 +446,38 @@ def week_rollup_plan(question: str, df: pd.DataFrame, field_meta: Optional[Seque
     roles = {f.get("original_name"): f for f in (field_meta or [])}
     label = _metric_base(column)
     pair = _WEEKLY_RATIO_COLUMNS.get(column)
+    plan_item_rank = column == _PLAN_ITEM_RATE and match["rank"]
+    if week_col == "周" and (not plan_item_rank or not df[week_col].astype(str).str.fullmatch(_ISO_WEEK_LABEL).all()):
+        return None
     if pair and match["rank"]:
-        if not all(_valid_weekly_values(c, df, roles, counts_only=True) for c in pair):
-            return None
         num, den = pair
-        metric = {"name": label + "(按周加权)", "func": "ratio", "num": [num], "den": [den]}
+        if plan_item_rank:
+            if not _valid_plan_item_counts(df, num, den, roles):
+                return None
+        elif not all(_valid_weekly_values(c, df, roles, counts_only=True) for c in pair):
+            return None
+        metrics = [{"name": label + "(按周加权)", "func": "ratio", "num": [num], "den": [den]}]
+        if plan_item_rank:
+            metrics.extend({"name": c, "func": "sum", "col": c} for c in pair)
         how = f"按周加权 = Σ{num} / Σ{den}, 不是逐日比率的平均"
     else:
         if column not in _WEEKLY_SUM_COLUMNS or not _valid_weekly_values(column, df, roles):
             return None
-        metric = {"name": label + "(按周合计)", "func": "sum", "col": column}
+        metrics = [{"name": label + "(按周合计)", "func": "sum", "col": column}]
         how = f"按周求和「{column}」"
     scope = f"只统计 {match['month']} 月的日期 (跨月的周只算该月的天); " if filters else ""
+    if week_col == WEEK_ROLLUP_COL:
+        basis = "这张表是按日表 (没有「周」列), 已由日期折算 ISO 周 (周一至周日) 后按周汇总"
+        scope += "回答须说明是按日表按周汇总的结果; "
+    else:
+        basis = "按原表周汇总"
     return {
-        "intent": "compute", "filters": filters, "group_by": [WEEK_ROLLUP_COL], "metrics": [metric],
-        "sort_by": metric["name"] if match["rank"] else WEEK_ROLLUP_COL,
-        "descending": match["rank"] in _HIGH_WORDS, "limit": 10 if match["rank"] else MAX_RESULT_ROWS,
-        "note": f"这张表是按日表 (没有「周」列), 已由日期折算 ISO 周 (周一至周日) 后按周汇总: {how}; {scope}"
-                "回答须说明是按日表按周汇总的结果; 没有数据的周 (值为空) 不参与排名",
+        "intent": "compute", "filters": filters, "group_by": [week_col], "metrics": metrics,
+        "sort_by": metrics[0]["name"] if match["rank"] else week_col,
+        "descending": match["rank"] in _HIGH_WORDS,
+        "limit": MAX_RESULT_ROWS if plan_item_rank or not match["rank"] else 10,
+        "note": f"{basis}: {how}; {scope}"
+                "没有数据的周 (值为空) 不参与排名",
     }
 
 
@@ -662,6 +698,7 @@ class ExecResult:
     all_group_labels: Optional[list] = None
     asks_total: bool = False
     hash_cols: set = field(default_factory=set)      # 整列带「#」转义前缀的编码列: 展示时去掉一个 #
+    incomplete_pair_coverage: Optional[tuple[int, int, int]] = None
 
 
 def strip_code_hash(s: str) -> str:
@@ -849,7 +886,7 @@ def _execute_plan(df: pd.DataFrame, plan: dict, question: str, strict_values: bo
         pct_cols = {m["name"] for m in metrics if m["func"] == "ratio"}
         sb = plan["sort_by"] if plan["sort_by"] in cols else (metrics[0]["name"])
         out = out.sort_values(sb, ascending=not plan["descending"], na_position="last")
-        shown = out.head(plan["limit"])
+        shown = out if plan.get("all_week_groups") else out.head(plan["limit"])
         # astype(object): 混合 int/float 列 .values 会整体升成 float (编码 22002 -> 22002.0 -> 22,002)
         res = ExecResult(cols, shown.astype(object).values.tolist(), total, matched, fdesc, notes,
                          group_by=gb, mode="grouped")
@@ -883,6 +920,14 @@ def _execute_plan(df: pd.DataFrame, plan: dict, question: str, strict_values: bo
         return res
 
     if metrics:  # 无分组: 对筛选后全表求一行汇总
+        if plan.get("plan_item_comparison") and matched:
+            has_plan = _to_num(work[metrics[0]["col"]]).abs().lt(float("inf")).fillna(False)
+            has_made = _to_num(work[metrics[1]["col"]]).abs().lt(float("inf")).fillna(False)
+            paired = int((has_plan & has_made).sum())
+            if paired != matched:
+                return ExecResult([m["name"] for m in metrics], [[None] * len(metrics)],
+                                  total, matched, fdesc, notes, mode="aggregate",
+                                  incomplete_pair_coverage=(int(has_plan.sum()), int(has_made.sum()), paired))
         vals = [_metric_value(work, m) for m in metrics]
         res = ExecResult([m["name"] for m in metrics], [vals], total, matched, fdesc, notes,
                          mode="aggregate")
@@ -1134,6 +1179,128 @@ class RowLevelOutcome:
     text: str = ""                 # refuse/text_listing: 完整答复; computed/uncomputed: 注入提示词的段落
     plan: Optional[dict] = None
     result: Optional[ExecResult] = None
+    answer: Optional[str] = None  # 可直接发布的确定性正文
+    charts: List[dict] = field(default_factory=list)
+
+
+def _production_detail_answer(
+    question: str, df: pd.DataFrame, field_meta: Optional[Sequence[dict]],
+) -> Optional[RowLevelOutcome]:
+    match = _PRODUCTION_DETAIL_QUESTION.fullmatch(question.strip())
+    if match is None:
+        return None
+    code, status, weight = "产品编码", "结论", "实产良品kg"
+    if not {code, status, weight}.issubset(df.columns):
+        return None
+    _, dates = _date_column(df, field_meta)
+    if dates is None or (match["month"] and dates.dt.year.nunique() != 1):
+        return None
+
+    month = match["month"]
+    scope = f"{month}月" if month else "当前数据中"
+    label = "计划了未生产" if match["miss"] else "计划外生产"
+    selected = df[status].eq(label)
+    if month:
+        selected &= dates.dt.month.eq(int(month))
+    work = df.loc[selected]
+    limit = min(int(match["limit"] or MAX_RESULT_ROWS), MAX_RESULT_ROWS)
+    roles = {f.get("original_name"): f for f in (field_meta or [])}
+    strip_hash = hash_escaped_column(df[code], roles.get(code))
+    codes = work[code].map(lambda v: _fmt(v, code=True, strip_hash=strip_hash)
+                           if pd.notna(v) and str(v).strip() else None)
+
+    def display_code(value):
+        return _TEXT_MARKDOWN_CHARS.sub(r"\\\g<0>", value) if value else "编码缺失"
+
+    if match["miss"]:
+        counts = codes.value_counts(sort=False).sort_values(ascending=False, kind="stable")
+        lines = [f"{scope}有 {len(work)} 条计划了未生产的记录，涉及 {len(counts)} 个产品编码。"]
+        if not counts.empty:
+            top = "、".join(display_code(c) for c in counts[counts.eq(counts.iloc[0])].head(limit).index)
+            lines.append(f"次数最多：{top}（{counts.iloc[0]} 次）。")
+        shown = counts.head(limit)
+        lines.extend(f"- {display_code(c)}：{n} 次" for c, n in shown.items())
+        missing = int(codes.isna().sum())
+        if missing:
+            lines.append(f"另有 {missing} 条记录缺少产品编码。")
+        result = ExecResult([code, "次数"], list(shown.items()), len(df), len(work),
+                            group_by=[code], mode="grouped", code_cols={code})
+        available = len(counts)
+    else:
+        weights = _to_num(work[weight])
+
+        def kg(value):
+            return f"{value:,.2f}".removesuffix("0") + " kg"
+
+        lines = [f"{scope}共有 {len(work)} 笔计划外生产。"]
+        if weights.notna().any():
+            prefix = "良品合计" if weights.notna().all() else "有重量记录的良品合计"
+            lines.append(f"{prefix} {kg(weights.sum())}。")
+        entries = zip(dates.loc[selected].dt.date, codes, weights)
+        lines.extend(
+            f"- {day} · {display_code(c)} · {kg(w) if pd.notna(w) else '重量缺失'}"
+            for day, c, w in islice(entries, limit)
+        )
+        result = None
+        available = len(work)
+    if available > limit:
+        lines.append(f"以上列出前 {limit} 项，共 {available} 项。")
+    return RowLevelOutcome("computed", result=result, answer="\n".join(lines))
+
+
+def _plan_item_comparison_answer(res: ExecResult, month: Optional[str]) -> str:
+    scope = f"{month}月" if month else "当前数据"
+    if not res.matched_rows:
+        return f"{scope}没有计划品项记录。"
+    if res.incomplete_pair_coverage is not None:
+        planned_rows, made_rows, paired_rows = res.incomplete_pair_coverage
+        period = "完整月份" if month else "当前数据范围"
+        return (f"{scope}共 {res.matched_rows} 条记录，计划品项数有值 {planned_rows} 条，"
+                f"计划内已产出数有值 {made_rows} 条，两列均有值 {paired_rows} 条。"
+                f"记录中有缺失或不可用的数值，无法计算{period}的缺口和达成率。")
+    planned, made, gap, rate, *outside = res.rows[0]
+    if planned is None or made is None or gap is None or gap != planned - made:
+        return f"{scope}的计划品项数或计划内已产出数缺失，无法计算缺口。"
+    answer = f"{scope}计划 {_fmt(planned)} 个品项，计划内已产出 {_fmt(made)} 个，缺口 {_fmt(gap)} 个。"
+    answer += f"计划品项达成率为 {_fmt(rate, pct=True)}。" if rate is not None else "计划品项数为 0，达成率不适用。"
+    if outside and outside[0] is not None:
+        answer += f"\n\n另有 {_fmt(outside[0])} 个计划外生产品项，单独统计。达成率以计划内已产出数和计划数计算。"
+    return answer
+
+
+def _plan_item_week_answer(res: ExecResult, descending: bool, month: Optional[str]) -> tuple[str, list]:
+    valid = [r for r in res.rows if pd.notna(r[1])]
+    excluded = [r[0] for r in res.rows if pd.isna(r[1])]
+    scope = f"{month}月内" if month else "当前数据中"
+    if res.group_by == [WEEK_ROLLUP_COL]:
+        scope = f"按日表汇总到周后，{scope}"
+    rank = "最高" if descending else "最低"
+    lines = []
+    if valid:
+        best_rate = valid[0][1]
+        for week, rate, made, planned in valid:
+            if rate != best_rate:
+                break
+            lines.append(f"{scope}，{week} 的计划品项达成率{rank}，为 {_fmt(rate, pct=True)}"
+                         f"（{_fmt(made)}/{_fmt(planned)}，缺口 {_fmt(planned - made)} 个品项）。")
+    else:
+        lines.append(f"{scope}没有可比较计划品项达成率的周。")
+    if excluded:
+        lines.append(f"{'、'.join(excluded)} 的原表计划品项数为空或为 0，已排除排名。")
+        res.notes.append(f"分母为零或为空的周有 {len(excluded)} 行为空，不参与排名")
+    if not valid:
+        return "\n".join(lines), []
+
+    weeks = sorted(res.rows, key=lambda r: r[0])
+    rates = {r[0]: round(r[1] * 100, 2) for r in valid}
+    title = "各周计划品项达成率"
+    chart = {"type": "bar", "title": title, "option": {
+        "tooltip": {"trigger": "axis"},
+        "xAxis": {"type": "category", "name": "周", "data": [r[0] for r in weeks]},
+        "yAxis": {"type": "value", "name": "%", "axisLabel": {"formatter": "{value}%"}},
+        "series": [{"type": "bar", "name": _PLAN_ITEM_RATE, "data": [rates.get(r[0]) for r in weeks]}],
+    }}
+    return "\n".join(lines), [chart]
 
 
 UNCOMPUTED_NOTE = (
@@ -1163,6 +1330,9 @@ async def answer_row_level(
     text_listing = _text_listing_answer(question, df, field_meta)
     if text_listing is not None:
         return RowLevelOutcome("text_listing", text_listing)
+    production_detail = _production_detail_answer(question, df, field_meta)
+    if production_detail is not None:
+        return production_detail
 
     df = with_gap_columns(df)
     df, cross_year = _with_calendar_columns(df, question, field_meta)
@@ -1184,10 +1354,25 @@ async def answer_row_level(
     if rule and rule[0] == "plan":
         try:
             vplan = validate_plan(rule[1], df)
+            metric_names = [m["name"] for m in vplan["metrics"]]
+            vplan["all_week_groups"] = (
+                bool(vplan["group_by"]) and tuple(metric_names[1:]) == _WEEKLY_RATIO_COLUMNS[_PLAN_ITEM_RATE]
+            )
+            vplan["plan_item_comparison"] = metric_names[:3] == [
+                "计划品项数合计", "已产出品项数合计", "缺口合计(计划-产出)",
+            ]
             res = execute_plan(df, vplan, question, field_meta)
         except PlanError as e:
             return RowLevelOutcome("uncomputed", UNCOMPUTED_NOTE.format(reason=str(e)), plan=rule[1])
-        return RowLevelOutcome("computed", render_block(question, res), plan=vplan, result=res)
+        answer = None
+        charts = []
+        month = re.match(_MONTH_PREFIX, question.strip()).group("month")
+        if vplan["all_week_groups"]:
+            answer, charts = _plan_item_week_answer(res, vplan["descending"], month)
+        elif vplan["plan_item_comparison"]:
+            answer = _plan_item_comparison_answer(res, month)
+        return RowLevelOutcome("computed", render_block(question, res), plan=vplan, result=res,
+                               answer=answer, charts=charts)
 
     cache_key = None
     if upload_key is not None:
