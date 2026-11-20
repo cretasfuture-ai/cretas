@@ -2,7 +2,7 @@
 /**
  * 经营分析「财务 → 利润分析」的系统毛利卡 (PROTO-GP-SHIPPED, Steve 2026-11-18 拍板)。
  *
- * 收入 = 发货收入 (已确认发货的发运单实发不含税金额, 与应收挂账同一批发运单), 成本 = 这些发运单实际出库批次成本。
+ * 发货收入按工厂配置的口径展示，成本取实际出库批次成本。
  * 系统数据优先: 本卡在前; 下方按上传报表计算的「毛利润 / 净利润」只作补充对照。
  * ⛔ 没有发货确认数据时显示「—」并说明, 不回退到订单金额, 不把 null 读成 0。
  * 金额是否可见由后端按工厂权限配置判定 (无权时金额为 null 或接口 403), 本卡只如实转述。
@@ -55,7 +55,10 @@ watch(() => [props.factoryId, props.periodStart, props.periodEnd], load, { immed
 const MASKED_NOTE = '无权查看金额（按工厂权限配置）';
 
 /** 后端状态 OK 但金额为 null ⇒ 被权限脱敏, 不是算不出。 */
-const masked = computed(() => data.value?.status === 'OK' && data.value.revenue == null);
+const masked = computed(() => {
+  const d = data.value;
+  return !!d && (d.status === 'OK' || d.status === 'COST_INCOMPLETE') && d.revenue == null;
+});
 const revenueKnown = computed(() => data.value?.revenue != null);
 const profitKnown = computed(() => data.value?.status === 'OK' && data.value.grossProfit != null);
 
@@ -63,8 +66,8 @@ const revenueNote = computed(() => {
   const d = data.value;
   if (!d) return '';
   if (masked.value) return MASKED_NOTE;
-  if (d.status === 'NO_SHIPMENT' || d.status === 'PRICE_MISSING') return d.unavailableReason || '';
-  return `${d.shipmentLineCount} 行已确认发货明细`;
+  if (!revenueKnown.value) return d.unavailableReason || '';
+  return d.shipmentLineCount ? `${d.shipmentLineCount} 行已确认发货明细` : '本期仅有已完成销售退货';
 });
 
 const profitNote = computed(() => {
@@ -92,7 +95,9 @@ function money(v: number | null | undefined): string {
 
     <div v-else-if="data" class="shipped-gp-grid">
       <div class="shipped-gp-cell">
-        <div class="shipped-gp-label">发货收入（不含税）</div>
+        <div class="shipped-gp-label" data-testid="shipped-gp-revenue-label">
+          {{ data.basis === 'NET' ? '发货收入（扣折扣与退货后净额）' : '发货收入（折扣前，未扣退货）' }}
+        </div>
         <div class="shipped-gp-value" data-testid="shipped-gp-revenue">
           {{ revenueKnown ? money(data.revenue) : '—' }}<small v-if="revenueKnown">元</small>
         </div>

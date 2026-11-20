@@ -1,6 +1,7 @@
 package com.cretas.aims.controller;
 
 import com.cretas.aims.dto.common.ApiResponse;
+import com.cretas.aims.dto.finance.report.ShippedRevenueBasis;
 import com.cretas.aims.dto.template.IndustryTemplatePackageDTO;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.security.AuthenticatedActor;
@@ -492,6 +493,8 @@ public class PlatformAssemblyInterviewController {
             private BigDecimal materialBalanceWarnPct;
             /** 物料平衡差额红色线 % (系统默认 15) */
             private BigDecimal materialBalanceRedPct;
+            /** 经营分析发货收入口径；未回答时保留工厂现值。 */
+            private ShippedRevenueBasis shippedRevenueBasis;
         }
 
         @Data

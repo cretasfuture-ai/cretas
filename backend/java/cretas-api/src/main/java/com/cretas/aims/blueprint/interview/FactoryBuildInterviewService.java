@@ -1061,6 +1061,9 @@ public class FactoryBuildInterviewService {
         choiceParam("skipReportingDefault", "工序报工能不能默认跳过",
                 "不需要每道工序都报工的话，可以默认跳过工序报工，只报最终产出。",
                 List.of("可以默认跳过", "不跳过，每道都报", "按系统默认")),
+        choiceParam("shippedRevenueBasis", "发货收入口径",
+                "经营分析里的系统毛利，要按折扣前的发货收入，还是按扣除订单折扣和本期已完成销售退货后的净额计算？",
+                List.of("折扣前，未扣退货", "扣折扣与退货后净额", "按系统默认")),
         optionalParam("balanceLines", "物料平衡提醒线",
                 "投入和产出对不上时，差多少黄色提醒、差多少红色报警？像「差5%提醒、差15%报警」这样说。"
                         + "不说就用系统默认（5% 提醒、15% 报警）。"),

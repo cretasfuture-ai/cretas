@@ -27,7 +27,7 @@ const BASIS = {
 
 function payload(p: Partial<ShippedGrossProfit>): ShippedGrossProfit {
   return {
-    periodStart: '2026-11-12', periodEnd: '2026-11-18', status: 'OK', shipmentLineCount: 0,
+    periodStart: '2026-11-12', periodEnd: '2026-11-18', status: 'OK', basis: 'GROSS', shipmentLineCount: 0,
     revenue: null, cost: null, grossProfit: null, marginRate: null, unavailableReason: null,
     ...BASIS, ...p,
   };
@@ -60,7 +60,21 @@ describe('ShippedGrossProfitCard', () => {
     expect(text(w, 'shipped-gp-cost')).toContain('7,453.18');
     expect(text(w, 'shipped-gp-profit')).toContain('6,856.82');
     expect(text(w, 'shipped-gp-profit-note')).toBe('毛利率 47.92%');
+    expect(text(w, 'shipped-gp-revenue-label')).toBe('发货收入（折扣前，未扣退货）');
     expect(text(w, 'shipped-gp-basis')).toContain('发货不含税单价');
+  });
+
+  it('NET: 显示净额口径并在折扣资料缺失时提示原因', async () => {
+    mockGet.mockResolvedValue({ success: true, data: payload({
+      basis: 'NET', status: 'ADJUSTMENT_INCOMPLETE', shipmentLineCount: 2,
+      revenueBasis: '本期已确认发货的不含税金额扣除订单折扣分摊及本期已完成销售退货',
+      unavailableReason: '发运单缺少有效的本厂订单折扣资料，请核对关联订单与折扣',
+    }) });
+    const w = await render();
+    expect(text(w, 'shipped-gp-revenue-label')).toBe('发货收入（扣折扣与退货后净额）');
+    expect(text(w, 'shipped-gp-revenue')).toBe('—');
+    expect(text(w, 'shipped-gp-profit')).toBe('—');
+    expect(text(w, 'shipped-gp-revenue-note')).toContain('缺少有效的本厂订单折扣资料');
   });
 
   it('NO_SHIPMENT: 三个数都是「—」并说明缺少发货确认数据, 不出现 0', async () => {

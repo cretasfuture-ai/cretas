@@ -284,6 +284,7 @@ public class FactorySettingsDTO {
     @NoArgsConstructor
     @AllArgsConstructor
     @Builder
+    @com.fasterxml.jackson.annotation.JsonIgnoreProperties("shippedRevenueBasis")
     public static class ProductionSettings {
         @Schema(description = "默认批次大小", example = "100")
         private Integer defaultBatchSize;

@@ -45,6 +45,7 @@ import com.cretas.aims.service.UserService;
 import com.cretas.aims.service.canvas.ThresholdKeyCatalog;
 import com.cretas.aims.service.canvas.ThresholdResolverService;
 import com.cretas.aims.service.factory.FactoryWarehouseService;
+import com.cretas.aims.service.finance.ShippedRevenueBasisSettings;
 import com.cretas.aims.service.material.MaterialCodeSegmentService;
 import com.cretas.aims.service.product.ProductPackagingSpecService;
 import com.cretas.aims.service.unit.ProductSpecificationConversionSyncService;
@@ -1089,6 +1090,11 @@ public class FactoryBuildApplyService {
         if (p.getMaterialBalanceRedPct() != null) {
             fs.setMaterialBalanceRedPct(p.getMaterialBalanceRedPct());
             result.getWrittenModules().add("materialBalanceRedPct=" + p.getMaterialBalanceRedPct());
+            any = true;
+        }
+        if (p.getShippedRevenueBasis() != null) {
+            ShippedRevenueBasisSettings.write(fs, p.getShippedRevenueBasis());
+            result.getWrittenModules().add(ShippedRevenueBasisSettings.KEY + "=" + p.getShippedRevenueBasis());
             any = true;
         }
         if (any) {

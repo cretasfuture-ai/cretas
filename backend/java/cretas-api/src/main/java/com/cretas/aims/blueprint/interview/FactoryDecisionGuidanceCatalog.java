@@ -49,6 +49,8 @@ final class FactoryDecisionGuidanceCatalog {
                     List.of("领料单", "报工"), List.of("必须先有", "不用")),
             entry("skipReportingDefault", "决定是否每道工序都要报工；不确定就选按系统默认。",
                     List.of("工序报工", "最终产出"), List.of("可以默认跳过", "不跳过，每道都报")),
+            entry("shippedRevenueBasis", "选择经营分析系统毛利使用的发货收入口径；按系统默认保留工厂现有设置。",
+                    List.of("经营分析", "订单折扣", "销售退货"), List.of("折扣前，未扣退货", "扣折扣与退货后净额")),
             entry("balanceLines", "投入产出差多少算异常由你们定；不说就沿用系统默认的 5% 提醒、15% 报警。",
                     List.of("物料平衡", "黄色提醒", "红色报警"), List.of("差5%提醒、差15%报警", "没有")),
             entry("inspectProducts", "需要检验的产品出产后会先待检，放行后才能发货或下道使用；不说就都不需要。",

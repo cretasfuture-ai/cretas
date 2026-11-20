@@ -5,8 +5,10 @@ import com.cretas.aims.controller.PlatformAssemblyInterviewController.ApplyAIIni
 import com.cretas.aims.controller.PlatformAssemblyInterviewController.ApplyAIInitRequest.TypeItem;
 import com.cretas.aims.controller.PlatformAssemblyInterviewController.ApplyAIInitResult;
 import com.cretas.aims.controller.PlatformAssemblyInterviewController.PlannedChange;
+import com.cretas.aims.dto.finance.report.ShippedRevenueBasis;
 import com.cretas.aims.entity.FactorySettings;
 import com.cretas.aims.repository.FactorySettingsRepository;
+import com.cretas.aims.service.finance.ShippedRevenueBasisSettings;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -97,6 +99,25 @@ class BuildPolicySwitchesContractTest {
     }
 
     @Test
+    void selectedRevenueBasisSharesTheExistingFactorySettingsRowAndPreservesProductionSettings() {
+        FactorySettings existing = new FactorySettings();
+        existing.setFactoryId(F);
+        existing.setProductionSettings("{\"defaultBatchSize\":120}");
+        when(settings.findByFactoryId(F)).thenReturn(Optional.of(existing));
+        FactoryPolicyItem p = new FactoryPolicyItem();
+        p.setShippedRevenueBasis(ShippedRevenueBasis.NET);
+
+        assertThat(planner.planChanges(F, request(p), true)).singleElement().satisfies(change -> {
+            assertThat(change.getKey()).isEqualTo("发货收入口径");
+            assertThat(change.getDetail()).isEqualTo("扣折扣与退货后净额");
+        });
+        FactorySettings saved = applyAndCapture(p);
+        assertThat(ShippedRevenueBasisSettings.read(saved.getFactoryId(), saved.getProductionSettings()))
+                .isEqualTo(ShippedRevenueBasis.NET);
+        assertThat(saved.getProductionSettings()).contains("\"defaultBatchSize\":120");
+    }
+
+    @Test
     void productInspectionAndReworkLimitArePassedThroughValidationAndShownInPreview() {
         ApplyAIInitRequest r = new ApplyAIInitRequest();
         ApplyAIInitRequest.SuggestedData sd = new ApplyAIInitRequest.SuggestedData();
@@ -141,6 +162,7 @@ class BuildPolicySwitchesContractTest {
         existing.setBlockStartOnOpenShortage(true);
         existing.setMaterialBalanceWarnPct(new BigDecimal("4"));
         existing.setMaterialBalanceRedPct(new BigDecimal("9"));
+        ShippedRevenueBasisSettings.write(existing, ShippedRevenueBasis.NET);
         when(settings.findByFactoryId(F)).thenReturn(Optional.of(existing));
         FactoryPolicyItem p = new FactoryPolicyItem();
         p.setRequireRequisitionBeforeReport(true);   // 只问了这一项
@@ -151,6 +173,8 @@ class BuildPolicySwitchesContractTest {
         assertThat(saved.getBlockStartOnOpenShortage()).isTrue();
         assertThat(saved.getMaterialBalanceWarnPct()).isEqualByComparingTo("4");
         assertThat(saved.getMaterialBalanceRedPct()).isEqualByComparingTo("9");
+        assertThat(ShippedRevenueBasisSettings.read(saved.getFactoryId(), saved.getProductionSettings()))
+                .isEqualTo(ShippedRevenueBasis.NET);
     }
 
     @Test
@@ -238,12 +262,12 @@ class BuildPolicySwitchesContractTest {
     }
 
     @Test
-    void policyBlockHasExactlyTheFiveWhitelistedFields() {
+    void policyBlockHasExactlyTheWhitelistedFields() {
         assertThat(java.util.Arrays.stream(FactoryPolicyItem.class.getDeclaredFields())
                 .map(java.lang.reflect.Field::getName).sorted().toList())
                 .containsExactly("blockStartOnOpenShortage", "materialBalanceRedPct",
                         "materialBalanceWarnPct", "requireRequisitionBeforeReport",
-                        "skipProcessReportingDefault");
+                        "shippedRevenueBasis", "skipProcessReportingDefault");
     }
 
     private List<String> validatePolicy(FactoryPolicyItem p) {

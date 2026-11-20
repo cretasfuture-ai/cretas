@@ -8,6 +8,7 @@ import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.FactoryRepository;
 import com.cretas.aims.repository.FactorySettingsRepository;
 import com.cretas.aims.service.FactorySettingsService;
+import com.cretas.aims.service.finance.ShippedRevenueBasisSettings;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -178,7 +179,8 @@ public class FactorySettingsServiceImpl implements FactorySettingsService {
     public FactorySettingsDTO.ProductionSettings updateProductionSettings(String factoryId,
                                                                           FactorySettingsDTO.ProductionSettings prodSettings) {
         FactorySettings settings = getSettingsEntity(factoryId);
-        settings.setProductionSettings(toJsonString(prodSettings));
+        settings.setProductionSettings(ShippedRevenueBasisSettings
+                .preserveOnUpdate(factoryId, settings.getProductionSettings(), toJsonString(prodSettings)));
         settingsRepository.save(settings);
 
         log.info("更新生产设置成功: factoryId={}", factoryId);
@@ -521,7 +523,9 @@ public class FactorySettingsServiceImpl implements FactorySettingsService {
 
         // 更新生产设置
         if (dto.getProductionSettings() != null) {
-            settings.setProductionSettings(toJsonString(dto.getProductionSettings()));
+            settings.setProductionSettings(ShippedRevenueBasisSettings
+                    .preserveOnUpdate(settings.getFactoryId(), settings.getProductionSettings(),
+                            toJsonString(dto.getProductionSettings())));
         }
 
         // 更新库存设置

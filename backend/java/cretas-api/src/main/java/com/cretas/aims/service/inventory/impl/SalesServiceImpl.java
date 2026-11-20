@@ -34,6 +34,7 @@ import com.cretas.aims.repository.CustomerRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.finance.ArApTransactionRepository;
+import com.cretas.aims.service.finance.ShipmentDiscountAllocation;
 import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
 import com.cretas.aims.repository.inventory.*;
 import com.cretas.aims.event.SalesOrderConfirmedEvent;
@@ -6458,8 +6459,8 @@ public class SalesServiceImpl implements SalesService {
         BigDecimal thisNet = netShippedValue(record);
         BigDecimal priorNet = priorShippedNetForOrder(order.getId(), record);
 
-        BigDecimal allocatedIncludingThis = allocateByRatio(discount, priorNet.add(thisNet), orderNet);
-        BigDecimal allocatedBefore = allocateByRatio(discount, priorNet, orderNet);
+        BigDecimal allocatedIncludingThis = ShipmentDiscountAllocation.cumulative(discount, priorNet.add(thisNet), orderNet);
+        BigDecimal allocatedBefore = ShipmentDiscountAllocation.cumulative(discount, priorNet, orderNet);
         BigDecimal share = allocatedIncludingThis.subtract(allocatedBefore);
         // 份额理论上非负 (累计只增不减); 真出现负数说明先前发货的口径与本次不一致 ——
         // ⛔ 不要把负折扣加到应收上(那会把应收调高), 记 WARN 后按 0 处理。
@@ -6469,18 +6470,6 @@ public class SalesServiceImpl implements SalesService {
             return BigDecimal.ZERO;
         }
         return share;
-    }
-
-    /** {@code round(discount × min(numerator / orderNet, 1), 2)}，HALF_UP。 */
-    private BigDecimal allocateByRatio(BigDecimal discount, BigDecimal numerator, BigDecimal orderNet) {
-        if (numerator == null || numerator.signum() <= 0) {
-            return BigDecimal.ZERO;
-        }
-        BigDecimal ratio = numerator.divide(orderNet, 10, java.math.RoundingMode.HALF_UP);
-        if (ratio.compareTo(BigDecimal.ONE) > 0) {
-            ratio = BigDecimal.ONE;   // 超发不多分折扣
-        }
-        return discount.multiply(ratio).setScale(2, java.math.RoundingMode.HALF_UP);
     }
 
     /**

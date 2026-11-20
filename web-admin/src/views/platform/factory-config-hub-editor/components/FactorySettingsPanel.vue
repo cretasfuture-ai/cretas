@@ -79,6 +79,13 @@
       <el-form-item label="启用成本核算">
         <el-switch v-model="form.enableCostCalculation" />
       </el-form-item>
+      <el-form-item label="发货收入口径">
+        <el-select v-model="form.shippedRevenueBasis" aria-label="发货收入口径">
+          <el-option label="折扣前，未扣退货" value="GROSS" />
+          <el-option label="扣折扣与退货后净额" value="NET" />
+        </el-select>
+        <el-text type="info" size="small">用于经营分析的系统毛利，收入均为不含税金额。</el-text>
+      </el-form-item>
       <el-form-item label="启用设备管理">
         <el-switch v-model="form.enableEquipmentManagement" />
       </el-form-item>
@@ -194,7 +201,7 @@ async function onSave() {
     const res = await updateSettings(props.factoryId, { ...form })
     if (res.success && res.data) {
       Object.assign(form, res.data)
-      ElMessage.success('工厂设置已保存，新建计划默认报工模式已更新')
+      ElMessage.success('工厂设置已保存')
     }
   } catch (e: any) {
     const errorCode = e?.response?.data?.errorCode
