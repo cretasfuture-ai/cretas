@@ -79,7 +79,9 @@ def summary_rows():
 
 
 async def test_q10_explains_that_outside_items_are_separate(monkeypatch):
-    events, done, _, _ = await ask_sheet(monkeypatch, 5334, summary_rows(), PLAN_DAY_FIELDS, "10月计划与实际差多少？")
+    rows = summary_rows()
+    rows.append(dict(rows[0], 日期="2024-09-30", 原表计划品项数=None, 计划外生产品项数=100))
+    events, done, _, _ = await ask_sheet(monkeypatch, 5334, rows, PLAN_DAY_FIELDS, "10月计划与实际差多少？")
     assert_stream(events, done)
     answer = done["answer"]
     assert "计划 25 个" in answer and "计划内已产出 12 个" in answer
@@ -87,14 +89,70 @@ async def test_q10_explains_that_outside_items_are_separate(monkeypatch):
     assert "另有 7 个计划外生产品项" in answer and "0.80" not in answer
 
 
+async def test_q10_zero_plan_is_complete_but_has_no_rate(monkeypatch):
+    rows = [row for row in summary_rows() if row["原表计划品项数"] == 0]
+    events, done, _, _ = await ask_sheet(monkeypatch, 5334, rows, PLAN_DAY_FIELDS, "10月计划与实际差多少？")
+    assert_stream(events, done)
+    assert "计划 0 个品项，计划内已产出 0 个，缺口 0 个" in done["answer"]
+    assert "计划品项数为 0，达成率不适用" in done["answer"]
+    assert "另有 2 个计划外生产品项" in done["answer"]
+
+
+async def test_r2_q10_reports_coverage_when_missing_values_offset(monkeypatch):
+    rows = [
+        {"日期": day, "原表计划品项数": plan, "已产出计划品项数": made,
+         "计划品项达成率": None, "计划外生产品项数": outside,
+         "备注": "合成数据", "实产良品kg": 100}
+        for day, plan, made, outside in [
+            ("2026-10-01", 9, None, 1),
+            ("2026-10-02", None, 9, 2),
+            ("2026-10-03", 10, 8, 3),
+        ]
+    ]
+    events, done, prompts, calls = await ask_sheet(
+        monkeypatch, 5334, rows, PLAN_DAY_FIELDS, "10月计划与实际差多少？",
+    )
+    assert_stream(events, done)
+    assert prompts == calls == []
+    assert done["charts"] == []
+    answer = done["answer"]
+    assert "10月共 3 条记录" in answer
+    assert "计划品项数有值 2 条" in answer and "计划内已产出数有值 2 条" in answer
+    assert "两列均有值 1 条" in answer
+    assert "无法计算完整月份的缺口和达成率" in answer
+    assert "89.47%" not in answer and "缺口 2 个" not in answer
+    assert "计划 19 个" not in answer and "计划内已产出 17 个" not in answer
+
+
+async def test_r2_r04_chart_includes_all_31_weeks_in_calendar_order(monkeypatch):
+    weeks = [f"2026-W{i:02d}" for i in range(1, 32)]
+    rows = [{"周": week, "原表计划品项数": 100, "已产出计划品项数": i,
+             "计划品项达成率": i / 100, "计划外生产品项数": 0,
+             "备注": "合成数据", "实产良品kg": 100}
+            for i, week in enumerate(weeks, 1)]
+    fields = [("周", False, True, False), *PLAN_DAY_FIELDS[1:]]
+    events, done, prompts, calls = await ask_sheet(
+        monkeypatch, 5335, list(reversed(rows)), fields, "哪一周计划品项达成率最低？",
+    )
+    assert_stream(events, done)
+    assert prompts == calls == []
+    assert "2026-W01" in done["answer"] and "1.00%" in done["answer"]
+    assert "1/100" in done["answer"] and "缺口 99" in done["answer"]
+    chart = done["charts"][0]["option"]
+    assert chart["xAxis"]["name"] == "周"
+    assert chart["xAxis"]["data"] == weeks
+    assert chart["series"][0]["data"] == list(range(1, 32))
+
+
 @pytest.mark.parametrize("denominator", [0, None])
 @pytest.mark.parametrize("weekly", [False, True], ids=["R04", "C04"])
 async def test_weekly_body_and_chart_use_the_same_weighted_week_values(monkeypatch, weekly, denominator):
     rows = summary_rows()
+    rows.append(dict(rows[-1], 日期="2024-10-29"))
     fields = PLAN_DAY_FIELDS
     if weekly:
         del rows[2]
-        rows = [dict(row, 周=week) for row, week in zip(rows, ["2024-W40", "2024-W41", "2024-W42", "2024-W43"])]
+        rows = [dict(row, 周=f"2024-W{week}") for week, row in enumerate(rows, 40)]
         rows[1].update(原表计划品项数=12, 已产出计划品项数=3, 计划品项达成率=0.25)
         for row in rows:
             del row["日期"]
@@ -110,8 +168,8 @@ async def test_weekly_body_and_chart_use_the_same_weighted_week_values(monkeypat
     assert "2024-W42" in answer and "排除" in answer and "0.80" not in answer
     chart = done["charts"][0]["option"]
     assert chart["xAxis"]["name"] == "周"
-    assert chart["xAxis"]["data"] == ["2024-W40", "2024-W41", "2024-W42", "2024-W43"]
-    assert chart["series"][0]["data"] == [66.67, 25.0, None, 75.0]
+    assert chart["xAxis"]["data"] == ["2024-W40", "2024-W41", "2024-W42", "2024-W43", "2024-W44"]
+    assert chart["series"][0]["data"] == [66.67, 25.0, None, 75.0, 75.0]
 
 
 async def test_outside_count_question_keeps_its_aggregate_path(monkeypatch):

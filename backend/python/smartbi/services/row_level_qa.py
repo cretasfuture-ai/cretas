@@ -698,6 +698,7 @@ class ExecResult:
     all_group_labels: Optional[list] = None
     asks_total: bool = False
     hash_cols: set = field(default_factory=set)      # 整列带「#」转义前缀的编码列: 展示时去掉一个 #
+    incomplete_pair_coverage: Optional[tuple[int, int, int]] = None
 
 
 def strip_code_hash(s: str) -> str:
@@ -885,7 +886,7 @@ def _execute_plan(df: pd.DataFrame, plan: dict, question: str, strict_values: bo
         pct_cols = {m["name"] for m in metrics if m["func"] == "ratio"}
         sb = plan["sort_by"] if plan["sort_by"] in cols else (metrics[0]["name"])
         out = out.sort_values(sb, ascending=not plan["descending"], na_position="last")
-        shown = out.head(plan["limit"])
+        shown = out if plan.get("all_week_groups") else out.head(plan["limit"])
         # astype(object): 混合 int/float 列 .values 会整体升成 float (编码 22002 -> 22002.0 -> 22,002)
         res = ExecResult(cols, shown.astype(object).values.tolist(), total, matched, fdesc, notes,
                          group_by=gb, mode="grouped")
@@ -919,6 +920,14 @@ def _execute_plan(df: pd.DataFrame, plan: dict, question: str, strict_values: bo
         return res
 
     if metrics:  # 无分组: 对筛选后全表求一行汇总
+        if plan.get("plan_item_comparison") and matched:
+            has_plan = _to_num(work[metrics[0]["col"]]).abs().lt(float("inf")).fillna(False)
+            has_made = _to_num(work[metrics[1]["col"]]).abs().lt(float("inf")).fillna(False)
+            paired = int((has_plan & has_made).sum())
+            if paired != matched:
+                return ExecResult([m["name"] for m in metrics], [[None] * len(metrics)],
+                                  total, matched, fdesc, notes, mode="aggregate",
+                                  incomplete_pair_coverage=(int(has_plan.sum()), int(has_made.sum()), paired))
         vals = [_metric_value(work, m) for m in metrics]
         res = ExecResult([m["name"] for m in metrics], [vals], total, matched, fdesc, notes,
                          mode="aggregate")
@@ -1243,6 +1252,12 @@ def _plan_item_comparison_answer(res: ExecResult, month: Optional[str]) -> str:
     scope = f"{month}月" if month else "当前数据"
     if not res.matched_rows:
         return f"{scope}没有计划品项记录。"
+    if res.incomplete_pair_coverage is not None:
+        planned_rows, made_rows, paired_rows = res.incomplete_pair_coverage
+        period = "完整月份" if month else "当前数据范围"
+        return (f"{scope}共 {res.matched_rows} 条记录，计划品项数有值 {planned_rows} 条，"
+                f"计划内已产出数有值 {made_rows} 条，两列均有值 {paired_rows} 条。"
+                f"记录中有缺失或不可用的数值，无法计算{period}的缺口和达成率。")
     planned, made, gap, rate, *outside = res.rows[0]
     if planned is None or made is None or gap is None or gap != planned - made:
         return f"{scope}的计划品项数或计划内已产出数缺失，无法计算缺口。"
@@ -1339,15 +1354,22 @@ async def answer_row_level(
     if rule and rule[0] == "plan":
         try:
             vplan = validate_plan(rule[1], df)
+            metric_names = [m["name"] for m in vplan["metrics"]]
+            vplan["all_week_groups"] = (
+                bool(vplan["group_by"]) and tuple(metric_names[1:]) == _WEEKLY_RATIO_COLUMNS[_PLAN_ITEM_RATE]
+            )
+            vplan["plan_item_comparison"] = metric_names[:3] == [
+                "计划品项数合计", "已产出品项数合计", "缺口合计(计划-产出)",
+            ]
             res = execute_plan(df, vplan, question, field_meta)
         except PlanError as e:
             return RowLevelOutcome("uncomputed", UNCOMPUTED_NOTE.format(reason=str(e)), plan=rule[1])
         answer = None
         charts = []
         month = re.match(_MONTH_PREFIX, question.strip()).group("month")
-        if res.group_by and tuple(res.columns[2:]) == _WEEKLY_RATIO_COLUMNS[_PLAN_ITEM_RATE]:
+        if vplan["all_week_groups"]:
             answer, charts = _plan_item_week_answer(res, vplan["descending"], month)
-        elif res.columns[:3] == ["计划品项数合计", "已产出品项数合计", "缺口合计(计划-产出)"]:
+        elif vplan["plan_item_comparison"]:
             answer = _plan_item_comparison_answer(res, month)
         return RowLevelOutcome("computed", render_block(question, res), plan=vplan, result=res,
                                answer=answer, charts=charts)
