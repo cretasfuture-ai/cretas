@@ -5,6 +5,14 @@ Cretas Web Admin. The MCP entry, Node CLI, and Playwright fixture tests share
 the same session cleanup, UI login, mutation guard, evidence schema, and
 scenario implementations.
 
+Use `cli-runner.mjs --production-readonly` by default when credentials need
+injection. Use the MCP filename entry when the MCP session can already supply
+secure UI login options. Each run uses one clean UI login session. Keep both
+`actualBusinessWrites` and blocked mutation attempts at zero. Use the checked-in
+entries in one browser, without copying scripts, reusing historical storageState,
+or inferring MCP availability from `.mcp.json`. Write-capable tests require an
+explicit test environment and must reject production hosts.
+
 ## Safety contract
 
 - Install the mutation guard before the first target-origin navigation.
@@ -135,7 +143,9 @@ from `E2E_USERNAME` and `E2E_PASSWORD`; expected identity comes from
 
 ### LIUSHANMEN 黑湖只读验收
 
-生产验收通过上方的 MCP filename 入口运行。通过安全注入把本地
+生产验收需要注入凭证时默认用 `cli-runner.mjs --production-readonly`，设置
+`E2E_FACTORY_ID=LIUSHANMEN` 并从本地环境提供下述管理员凭证。若 MCP 会话已具备安全
+登录条件，可用上方的 MCP filename 入口，把本地
 `.env.test` 中的 `TEST_LIUSHANMEN_ADMIN_USER` / `TEST_LIUSHANMEN_ADMIN_PASS`
 映射到 `username` / `password`，将 `expectedUsername` 设为同一管理员，
 `expectedFactoryId` 设为 `LIUSHANMEN`。可分别选择场景，也可在同一登录会话顺序运行。

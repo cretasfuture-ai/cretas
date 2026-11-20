@@ -33,8 +33,10 @@ entry is `scripts/e2e/production-readonly/`.
 ## Canonical entries and evidence
 
 - MCP: `scripts/e2e/production-readonly/mcp-entry.js` (generated bundle loaded
-  with `browser_run_code_unsafe(filename=...)`).
-- CLI: `node scripts/e2e/production-readonly/cli-runner.mjs`.
+  with `browser_run_code_unsafe(filename=...)` when the MCP session can already
+  supply secure UI login options).
+- CLI: `node scripts/e2e/production-readonly/cli-runner.mjs --production-readonly`
+  is the default when credentials need injection.
 - CI/unit drift gate:
   `node --test scripts/e2e/production-readonly/tests/unit.test.js`.
 - Local browser fixture:

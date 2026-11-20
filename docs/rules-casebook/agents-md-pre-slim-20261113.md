@@ -1,5 +1,7 @@
 # AGENTS.md
 
+本页保留 2026-11-13 瘦身前原文。现行生产只读验收入口见根目录 `AGENTS.md` 门禁 9。
+
 ## Codex 自动执行路由
 
 - 先读共享正文 `.claude/rules/execution-and-verification.md`：默认 `DIRECT`，有实际并行/隔离/独立证据收益才委派；模型/effort 使用用户当前选择，不设型号资格或切换门禁。

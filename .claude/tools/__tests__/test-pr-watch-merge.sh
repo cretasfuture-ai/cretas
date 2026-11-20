@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # pr-watch-merge.sh 的场景测试: 用假 gh (PR_WATCH_GH) 驱动, 不碰 GitHub。
+# 本地入口: bash .claude/tools/__tests__/test-pr-watch-merge.sh
 # 每个场景断言退出码、RESULT 行, 以及「该调/不该调 merge / update-branch」。
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -24,6 +25,7 @@ case "$1 $2" in
     f="$S/checks.$h.$c"; while [ ! -f "$f" ] && [ $c -gt 1 ]; do c=$((c-1)); f="$S/checks.$h.$c"; done
     [ -f "$f" ] && cat "$f"; [ -f "$f" ] && grep -q pending "$f" && exit 8; exit 0;;
   "pr update-branch") cat "$S/next_head" > "$S/head"; echo "updated";;
+  "api repos/{owner}/{repo}/rules/branches/main") echo rules-page;;
   "api graphql")
     case "$*" in *enqueuePullRequest*) case "$*" in *"h=$h"*) echo '{"data":{"enqueuePullRequest":{"mergeQueueEntry":{"state":"QUEUED"}}}}'; exit 0;; *) echo "head mismatch" >&2; exit 1;; esac;; esac
     # 队列读数: "<qon> <state> <inq> <sha>"; qseq 每行用一次, 用完沿用最后一行; 无 qseq 则无队列
@@ -105,7 +107,7 @@ printf "OPEN false \nOPEN true \nOPEN true \nMERGED false shaQ\n" > "$S/qseq"; r
 # S13 队列开: 入队后被踢出 (队列里检查没过) -> RED
 setup 13; echo true > "$S/queue"; printf "pass${G}build\n" > "$S/checks.h1.1"
 printf "OPEN false \nOPEN true \nOPEN false \n" > "$S/qseq"; run
-[ "$(rc)" = 1 ] && grep -q 'RESULT=RED.*dequeued' "$S/out" && ok S13-queue-dequeued-red || bad S13-queue-dequeued-red
+[ "$(rc)" = 1 ] && [ "$(cat "$S/qn")" = 4 ] && grep -q 'RESULT=RED.*dequeued' "$S/out" && ok S13-queue-dequeued-red || bad S13-queue-dequeued-red
 
 # S14 队列开: 入队命令后一直不在队列 -> UNMEASURED, 不当成功
 setup 14; echo true > "$S/queue"; printf "pass${G}build\n" > "$S/checks.h1.1"; printf "OPEN false \n" > "$S/qseq"; run
@@ -126,6 +128,21 @@ OPEN true
 MERGED false shaQ
 " > "$S/qseq"; run
 [ "$(rc)" = 0 ] && grep -q 'RESULT=MERGED.*queue=on' "$S/out" && ! called "squash" && ok S17-queue-read-error-not-no-queue || bad S17-queue-read-error-not-no-queue
+
+# S18 出队时状态短暂为 OPEN, 下一轮确认 MERGED。
+setup 18; echo true > "$S/queue"; printf "pass${G}build\n" > "$S/checks.h1.1"
+printf "OPEN false \nOPEN true \nOPEN false \nMERGED false shaQ\n" > "$S/qseq"; run
+if [ "$(rc)" = 0 ] && grep -q 'RESULT=MERGED.*sha=shaQ.*queue=on' "$S/out"; then
+  ok S18-queue-dequeue-then-merged
+else
+  cat "$S/out"
+  bad S18-queue-dequeue-then-merged
+fi
+
+# S19 出队后确认 PR 被关闭。
+setup 19; echo true > "$S/queue"; printf "pass${G}build\n" > "$S/checks.h1.1"
+printf "OPEN false \nOPEN true \nOPEN false \nCLOSED false\n" > "$S/qseq"; run
+[ "$(rc)" = 4 ] && grep -q 'RESULT=CLOSED.*queue=on' "$S/out" && ok S19-queue-dequeue-then-closed || bad S19-queue-dequeue-then-closed
 
 rm -rf "$T"
 echo "TOTAL=$((pass+failn)) PASS=$pass FAIL=$failn"

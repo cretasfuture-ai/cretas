@@ -6,12 +6,14 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const repoRoot = path.resolve(__dirname, '..', '..', '..', '..');
+const cliEntry = /cli-runner\.mjs --production-readonly/;
 
 test('canonical skill and compatibility pointer both route production to the shared harness', () => {
   const canonicalPath = path.join(repoRoot, '.agents', 'skills', 'e2e-web-admin', 'SKILL.md');
   const pointerPath = path.join(repoRoot, '.claude', 'skills', 'e2e-web-admin', 'SKILL.md');
   const canonical = fs.readFileSync(canonicalPath, 'utf8');
   const pointer = fs.readFileSync(pointerPath, 'utf8');
+  assert.match(canonical, cliEntry);
   assert.match(canonical, /scripts\/e2e\/production-readonly\/mcp-entry\.js/);
   assert.match(canonical, /actualBusinessWrites.*0/);
   assert.match(canonical, /F006 Production-Write Exception/);
@@ -27,6 +29,7 @@ test('canonical skill and compatibility pointer both route production to the sha
 test('project Playwright skill routes direct MCP production runs to the canonical guarded entry', () => {
   const skillPath = path.join(repoRoot, '.agents', 'skills', 'project-playwright-e2e', 'SKILL.md');
   const skill = fs.readFileSync(skillPath, 'utf8');
+  assert.match(skill, cliEntry);
   assert.match(skill, /browser_run_code_unsafe/);
   assert.match(skill, /scripts\/e2e\/production-readonly\/mcp-entry\.js/);
   assert.match(skill, /before-send mutation guard/);
@@ -39,14 +42,15 @@ test('project Playwright skill routes direct MCP production runs to the canonica
   assert.doesNotMatch(skill, /1\. Read `\.mcp\.json`/);
 });
 
-test('repository AGENTS policy pins production Web acceptance to the guarded MCP entry', () => {
+test('repository AGENTS policy pins both guarded production Web entries', () => {
   const agents = fs.readFileSync(path.join(repoRoot, 'AGENTS.md'), 'utf8');
-  assert.match(agents, /生产 Web Playwright 唯一入口/);
-  assert.match(agents, /scripts\/e2e\/production-readonly\/mcp-entry\.js/);
-  assert.match(agents, /before-send mutation guard/);
-  assert.match(agents, /actualBusinessWrites == 0/);
-  assert.match(agents, /blocked mutation attempts 为 0/);
-  assert.match(agents, /nonprod-business-flow-audit\.mjs/);
+  const gate = agents.match(/^9\. \*\*生产 Web 只读验收入口\*\*[^\r\n]*/m)?.[0] ?? '';
+  assert.match(gate, cliEntry);
+  assert.match(gate, /filename.*scripts\/e2e\/production-readonly\/mcp-entry\.js/);
+  assert.match(gate, /before-send mutation guard 与证据 schema/);
+  assert.match(gate, /actualBusinessWrites == 0/);
+  assert.match(gate, /blocked mutation attempts 为 0/);
+  assert.match(gate, /nonprod-business-flow-audit\.mjs/);
   assert.match(agents, /F006 生产业务写入特例/);
   assert.match(agents, /factoryUser\.factoryId == 'F006'/);
   assert.match(agents, /非 F006 租户按常设授权/);
@@ -55,6 +59,7 @@ test('repository AGENTS policy pins production Web acceptance to the guarded MCP
 
 test('production read-only README keeps the F006 write exception outside the guarded harness', () => {
   const readme = fs.readFileSync(path.join(repoRoot, 'scripts', 'e2e', 'production-readonly', 'README.md'), 'utf8');
+  assert.match(readme, cliEntry);
   assert.match(readme, /F006 production-write exception does not apply/);
   assert.match(readme, /authenticated tenant is F006/);
   assert.match(readme, /remains strictly zero-write/);

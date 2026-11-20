@@ -24,7 +24,7 @@
 - Source/UI/验收工具 WT：`C:/Users/Steve/cretas-factory-ai-dialogue-20261027`，分支 `codex/smartbi-focused-acceptance-20261029`。验收工具代码快照 `015f40598fe5e2c71cfc6e1e4f57a37d1358c0cd`；后续仅文档回执可能推进 HEAD，接管时读取实际 Git/PR。工具已通过 85 个相关 Node 测试、5 个本地异步 DOM fixture；没有生产 UI 通过声明。
 - Python feature WT：`C:/Users/Steve/cretas-smartbi-planner-20261029`，PR1294 已合并，保留测试证据，不继续改旧已 squash 分支。
 - Release WT：`C:/Users/Steve/cretas-smartbi-final-release-20261029`，仅用于 clean exact main 发布，接管时读取实际 detached HEAD。独占旧 Java target 已归档到其 ignored test-output，勿删除证据。
-- 唯一允许的生产 MCP filename：`C:/Users/Steve/my-prototype-logistics/.claude/worktrees/codex-factory-ai-mcp-20261027/scripts/e2e/production-readonly/mcp-entry.js`，当前 sparse HEAD 为 `015f40598fe5e2c71cfc6e1e4f57a37d1358c0cd`。
+- 本次验收指定的 MCP filename（现行入口见 `AGENTS.md` 门禁 9）：`C:/Users/Steve/my-prototype-logistics/.claude/worktrees/codex-factory-ai-mcp-20261027/scripts/e2e/production-readonly/mcp-entry.js`，当前 sparse HEAD 为 `015f40598fe5e2c71cfc6e1e4f57a37d1358c0cd`。
 
 ## 继续执行
 

@@ -46,8 +46,9 @@ Run this gate before production deployment so a compatibility defect does not fo
 
 ## Execution Preference
 
-For production read-only acceptance, use the repository's canonical shared
-harness first:
+For production read-only acceptance, use the shared harness. When credentials
+need injection, default to `scripts/e2e/production-readonly/cli-runner.mjs --production-readonly`.
+When the MCP session can already supply secure UI login options, use:
 
 ```text
 scripts/e2e/production-readonly/mcp-entry.js

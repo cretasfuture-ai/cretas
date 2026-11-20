@@ -30,8 +30,9 @@ entries so a convenient local runner cannot bypass production safety.
 
 ## Preferred Pattern
 
-For production read-only acceptance, use the shared direct Playwright MCP
-entry first:
+For production read-only acceptance, default to the shared
+`scripts/e2e/production-readonly/cli-runner.mjs --production-readonly` when credentials
+need injection. When the MCP session can already supply secure UI login options, use:
 
 ```text
 scripts/e2e/production-readonly/mcp-entry.js
