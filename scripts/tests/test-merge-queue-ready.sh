@@ -60,6 +60,8 @@ PATH_GUARD = "needs.changes.outputs.run != 'false'"
 SKIPPED_CHANGES = "needs.changes.result != 'skipped'"
 FAILED_CHANGES = "needs.changes.result != 'success'"
 FULL_READY = "!contains(github.event.pull_request.labels.*.name, 'java-full-ready')"
+CLI_JOB = "factory-restore-cli"
+CLI_PATH_GUARD = "needs.changes.outputs.restore_cli != 'false'"
 STEP_FILTERED = {
     ("java-gate-pr", "fast-contracts"): ("always()", [PATH_GUARD, FULL_READY]),
     ("java-gate-pr", "postgres-reversal-concurrency"): ("always()", [PATH_GUARD]),
@@ -176,10 +178,27 @@ def filtered_problems(name, doc, patterns_file_text=None):
                 bad.append(f"{name}/{jn}: 首个步骤必须显式拒绝 changes 失败")
             if len(steps) < 2 or any(if_terms(step.get("if")) != sorted(work_terms) for step in steps[1:]):
                 bad.append(f"{name}/{jn}: 工作步骤缺少 fail-safe 路径过滤")
-        elif PATH_GUARD not in cond:
+        elif (name, jn) != ("java-gate-pr", CLI_JOB) and PATH_GUARD not in cond:
             bad.append(f"{name}/{jn}: if 没用 fail-safe 判定 `{PATH_GUARD}` (实得 {cond!r})")
         if "!cancelled()" not in cond and "always()" not in cond:
             bad.append("%s/%s: if 缺 !cancelled()/always() —— changes 失败时下游会被跳过 (=必需检查通过)" % (name, jn))
+    if name == "java-gate-pr":
+        job = jobs.get(CLI_JOB) or {}
+        if job.get("name") != CLI_JOB or if_terms(job.get("if")) != sorted(["!cancelled()", SKIPPED_CHANGES, CLI_PATH_GUARD]):
+            bad.append(f"{name}/{CLI_JOB}: 作业必须使用固定名称和独立的 fail-safe 路径判定")
+        changes = ch or {}
+        path_step = next((s for s in changes.get("steps", []) if s.get("id") == "restore-paths"), {})
+        env = path_step.get("env") or {}
+        if ((changes.get("outputs") or {}).get("restore_cli") != "${{ steps.restore-paths.outputs.run }}"
+                or path_step.get("continue-on-error") is not True
+                or path_step.get("run") != "python3 scripts/ci/changed-paths.py --patterns scripts/ci/trigger-paths/java-factory-restore-cli.txt"
+                or env.get("BASE_SHA") != MG_BASE or env.get("HEAD_SHA") != MG_HEAD):
+            bad.append(f"{name}/{CLI_JOB}: 独立路径输出缺失或会影响原必需检查")
+        steps = job.get("steps") or []
+        first = steps[0] if steps else {}
+        if (first.get("if") != "${{ needs.changes.result != 'success' || needs.changes.outputs.restore_cli != 'true' }}"
+                or str(first.get("run", "")).strip() != "exit 1" or first.get("continue-on-error", False) is not False):
+            bad.append(f"{name}/{CLI_JOB}: 首个步骤必须拒绝缺失或失败的路径判定")
     return bad
 
 
@@ -271,7 +290,13 @@ neg += filtered_problems("web-admin-gate", d) == ["web-admin-gate/vitest: 首个
 d = copy.deepcopy(docs["java-gate-pr"])
 d["jobs"]["fast-contracts"]["steps"][-1]["if"] = "${{ " + PATH_GUARD + " || true }}"
 neg += filtered_problems("java-gate-pr", d) == ["java-gate-pr/fast-contracts: 工作步骤缺少 fail-safe 路径过滤"]
-expected_neg = 10 + len(STEP_FILTERED)
+d = copy.deepcopy(docs["java-gate-pr"])
+d["jobs"][CLI_JOB]["if"] = d["jobs"][CLI_JOB]["if"].replace(CLI_PATH_GUARD, PATH_GUARD)
+neg += filtered_problems("java-gate-pr", d) == [f"java-gate-pr/{CLI_JOB}: 作业必须使用固定名称和独立的 fail-safe 路径判定"]
+d = copy.deepcopy(docs["java-gate-pr"])
+next(s for s in d["jobs"]["changes"]["steps"] if s.get("id") == "restore-paths")["continue-on-error"] = False
+neg += filtered_problems("java-gate-pr", d) == [f"java-gate-pr/{CLI_JOB}: 独立路径输出缺失或会影响原必需检查"]
+expected_neg = 12 + len(STEP_FILTERED)
 print(f"READING: negative_controls_red={neg}/{expected_neg}")
 if neg != expected_neg:
     problems.append(f"阴性对照只有 {neg}/{expected_neg} 判红")
