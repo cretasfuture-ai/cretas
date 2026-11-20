@@ -4,6 +4,7 @@ const { runReadOnlyPageScenario } = require('./_shared');
 
 const HUB_PATH = '/production/analysis-query';
 const COST_PATH = '/production-analytics/cost';
+const DASHBOARD_PATH = '/smart-bi/dashboard';
 const LIMITATION = /^出成率与生产成本\s*·\s*黑湖数据不含投入量，无法计算$/u;
 
 function validateFactory(factoryId) {
@@ -88,9 +89,22 @@ async function inspectCost(page, _body, ctx) {
   };
 }
 
+async function inspectDashboard(page) {
+  const dashboard = page.getByRole('main', { name: '经营驾驶舱', exact: true });
+  const findings = dashboard.locator('.insight-card .insight-content:visible');
+  await findings.first().waitFor({ timeout: 20_000 }).catch(() => {});
+  const findingCount = (await visibleText(findings)).length;
+  return {
+    findingCount,
+    assessment: assessment(new URL(page.url()).pathname === DASHBOARD_PATH && findingCount > 0),
+  };
+}
+
 function scenario(id, path, inspect) {
   return {
     id, path, defaultEnabled: false, validateFactory, includeNonApiHttpErrors: true,
+    // This permits only the derived, same-tenant insight cache upsert and LLM quota use.
+    allowsChartInsight: true,
     async run(ctx) {
       validateFactory(ctx.expectedFactoryId);
       if (ctx.loginEvidence?.factoryId !== ctx.expectedFactoryId
@@ -111,4 +125,5 @@ function scenario(id, path, inspect) {
 module.exports = {
   dataAnalysis: scenario('lsm-production-data-analysis-readonly', `${HUB_PATH}?tab=data-analysis`, inspectDataAnalysis),
   cost: scenario('lsm-production-cost-readonly', COST_PATH, inspectCost),
+  dashboard: scenario('lsm-smartbi-dashboard-insight-readonly', DASHBOARD_PATH, inspectDashboard),
 };

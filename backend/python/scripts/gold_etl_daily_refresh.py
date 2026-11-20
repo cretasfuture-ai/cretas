@@ -1,4 +1,4 @@
-"""Run the factory Gold ETLs from the daily systemd timer."""
+"""Run held-corpus retention and factory Gold ETLs from the daily systemd timer."""
 from __future__ import annotations
 
 import argparse
@@ -11,6 +11,7 @@ from smartbi.gold.external_cost_etl import sync_external_cost
 from smartbi.gold.external_production_etl import DEMO_FACTORY_PREFIX
 from smartbi.gold.factory_production_etl import FactoryEtlStats, run_factory_etl_with_retry
 from smartbi.gold.supplier_price_ingest_etl import run_supplier_price_ingest
+from smartbi.services.process_secret_names import expire_held_rows
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +62,18 @@ async def _run_pipeline(name, run, source, target, factory_id: str) -> bool:
 
 async def run_refresh(factory_ids: list[str] | None) -> int:
     async with AsyncExitStack() as pools:
+        target = await get_pg_pool()
+        if target is None:
+            raise RuntimeError("SmartBI target pool unavailable")
+        pools.push_async_callback(target.close)
+        expiry_failed = False
+        try:
+            expired = await expire_held_rows(target, factory_ids, excluded_factory_prefix=DEMO_FACTORY_PREFIX)
+            logger.info("Held corpus expiry summary: scopes=%d deleted=%d", len(expired), sum(expired.values()))
+        except Exception:
+            logger.exception("Held corpus expiry failed")
+            expiry_failed = True
+
         source = await get_cretas_pool()
         if source is None:
             raise RuntimeError("Cretas source pool unavailable")
@@ -71,10 +84,6 @@ async def run_refresh(factory_ids: list[str] | None) -> int:
             logger.error("No eligible factories discovered for Gold ETL")
             return 2
 
-        target = await get_pg_pool()
-        if target is None:
-            raise RuntimeError("SmartBI target pool unavailable")
-        pools.push_async_callback(target.close)
         runs = failures = 0
         for row in factories:
             for enabled, name, run in (
@@ -88,7 +97,7 @@ async def run_refresh(factory_ids: list[str] | None) -> int:
                         failures += 1
 
         logger.info("Gold ETL summary: factories=%d runs=%d failures=%d", len(factories), runs, failures)
-        return 1 if failures else 0
+        return 1 if expiry_failed or failures else 0
 
 
 def main() -> int:
@@ -108,7 +117,7 @@ def main() -> int:
     try:
         return asyncio.run(run_refresh(factory_ids))
     except Exception:
-        logger.exception("Gold ETL could not complete discovery or initialize database pools")
+        logger.exception("Nightly refresh could not complete discovery or initialize database pools")
         return 2
 
 

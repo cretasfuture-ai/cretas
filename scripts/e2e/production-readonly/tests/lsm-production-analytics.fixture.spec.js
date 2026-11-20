@@ -9,7 +9,9 @@ test.use({ headless: false, viewport: { width: 1920, height: 1080 }, locale: 'zh
 
 const HUB = 'lsm-production-data-analysis-readonly';
 const COST = 'lsm-production-cost-readonly';
+const DASHBOARD = 'lsm-smartbi-dashboard-insight-readonly';
 const DATA_API = '/smartbi-api/api/smartbi/factory/external-production';
+const INSIGHT_API = '/smartbi-api/api/smartbi/chart-insight';
 const source = limitation => `<div class="blacklake-source">
   <div class="blacklake-source__details"><strong>数据来源　黑湖</strong>
   <span>快照采集　<time datetime="2026-11-20T00:00:00Z">2026年11月20日 08:00</time>（北京时间）</span></div>
@@ -30,8 +32,20 @@ const login = `<form><input placeholder="用户名"><input type="password"><butt
     document.body.innerHTML = ${JSON.stringify(shell('首页驾驶舱'))};
   };</script>`;
 
-async function runFixture(page, testInfo, { scenarios = [HUB, COST], factoryId = 'LIUSHANMEN', cost = 'limitation', zero = false, errors = false, write = false } = {}) {
+async function runFixture(page, testInfo, {
+  scenarios = [HUB, COST], factoryId = 'LIUSHANMEN', expectedFactoryId = 'LIUSHANMEN',
+  cost = 'limitation', zero = false, errors = false, write = false, insightFactoryId = null,
+} = {}) {
   const requests = [];
+  const insight = insightFactoryId === null ? '' : `<script>
+    fetch('${INSIGHT_API}', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ factory_id: ${JSON.stringify(insightFactoryId)} }),
+    }).then(response => response.json()).then(body => {
+      const target = document.querySelector('.insight-content');
+      if (target) target.textContent = body.data.finding;
+    }).catch(() => {});
+  </script>`;
   const fetched = `<script>fetch('${DATA_API}');</script>`;
   const hub = `<main class="production-analysis-hub"><div role="tab" aria-selected="true">生产数据分析</div>
     <section aria-label="黑湖生产数据分析">${source(zero ? '0%' : limitation)}
@@ -49,17 +63,29 @@ async function runFixture(page, testInfo, { scenarios = [HUB, COST], factoryId =
   const costPage = `<main class="fca-root"><h2>生产成本分析</h2><p>统计期间：2026年11月01日至2026年11月20日</p>${costDisplay[cost]}</main>${fetched}`
     + (errors ? '<img src="/missing.png"><script>fetch("/api/mobile/LIUSHANMEN/fixture-error"); console.error("fixture cost error");</script>' : '')
     + (write ? '<script>fetch("/api/mobile/LIUSHANMEN/fixture-mutation", { method: "POST" }).catch(() => {});</script>' : '');
+  const dashboard = `<main aria-label="经营驾驶舱"><h2>经营驾驶舱</h2>
+    <section class="insight-card"><h3>AI 智能洞察</h3><p>统计期间：2026年11月01日至2026年11月20日</p>
+      <p class="insight-content"></p></section></main>`;
   const server = http.createServer((req, res) => {
     const url = new URL(req.url, 'http://127.0.0.1');
     requests.push(`${req.method} ${url.pathname}${url.search}`);
     if (url.pathname === '/api/mobile/auth/unified-login') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ success: true, data: { factoryUser: { factoryId, username: 'fixture-admin', role: 'factory_super_admin', factoryName: '测试工厂' } } }));
+    } else if (url.pathname === INSIGHT_API) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, data: { finding: '测试洞察内容已经返回。' } }));
     } else if (url.pathname === DATA_API || url.pathname.endsWith('/fixture-error')) {
       res.writeHead(url.pathname === DATA_API ? 200 : 500, { 'Content-Type': 'application/json' });
       res.end('{}');
     } else {
-      const html = { '/login': login, '/dashboard': shell('首页驾驶舱'), '/production/analysis-query': shell(hub), '/production-analytics/cost': shell(costPage) }[url.pathname];
+      const html = {
+        '/login': login,
+        '/dashboard': shell('首页驾驶舱'),
+        '/production/analysis-query': shell(hub + insight),
+        '/production-analytics/cost': shell(costPage + insight),
+        '/smart-bi/dashboard': shell(dashboard + insight),
+      }[url.pathname];
       res.writeHead(html ? 200 : url.pathname === '/favicon.ico' ? 204 : 404, { 'Content-Type': 'text/html; charset=UTF-8' });
       res.end(html ? `<!doctype html><html><body>${html}</body></html>` : '');
     }
@@ -67,7 +93,7 @@ async function runFixture(page, testInfo, { scenarios = [HUB, COST], factoryId =
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   try {
     const report = await runSuiteWithPage(page, {
-      scenarios, expectedFactoryId: 'LIUSHANMEN', expectedUsername: 'fixture-admin', username: 'fixture-admin', password: 'fixture-only',
+      scenarios, expectedFactoryId, expectedUsername: 'fixture-admin', username: 'fixture-admin', password: 'fixture-only',
       baseUrl: `http://127.0.0.1:${server.address().port}`, evidenceDir: testInfo.outputPath('evidence'),
     });
     return { report, requests };
@@ -111,6 +137,40 @@ test('a local storage tenant cannot substitute for the live login response', asy
   expect(report.scenarios.map(item => [item.scenario, item.result])).toEqual([['ui-login', 'TOOL_ERROR']]);
   expect(JSON.stringify(report.scenarios)).toContain('Live login response did not prove factory LIUSHANMEN');
   expect(requests.some(item => item.startsWith('GET /production'))).toBe(false);
+});
+
+test('cost, production analysis and dashboard send their same-tenant chart insight POSTs', async ({ page }, testInfo) => {
+  const { report, requests } = await runFixture(page, testInfo, {
+    scenarios: [COST, HUB, DASHBOARD], insightFactoryId: 'LIUSHANMEN',
+  });
+  expect(report.scenarios.map(item => item.result), JSON.stringify(report.scenarios)).toEqual(['PASS', 'PASS', 'PASS']);
+  expect(report.scenarios[2].pageEvidence[1]).toMatchObject({ findingCount: 1 });
+  expect(report.readonlyPostRequests.map(item => [item.scenario, item.classificationId])).toEqual(
+    [COST, HUB, DASHBOARD].map(scenario => [scenario, 'smartbi-chart-insight']),
+  );
+  expect(requests.filter(item => item === `POST ${INSIGHT_API}`)).toHaveLength(3);
+  expect(report.actualBusinessWrites).toBe(0);
+  expect(report.blockedMutationAttempts).toHaveLength(0);
+});
+
+test('chart insight with a different body tenant is blocked before it reaches the server', async ({ page }, testInfo) => {
+  const { report, requests } = await runFixture(page, testInfo, {
+    scenarios: [COST], insightFactoryId: 'F006',
+  });
+  expect(report.scenarios.map(item => item.result)).toEqual(['TOOL_ERROR']);
+  expect(report.blockedMutationAttempts).toMatchObject([{ method: 'POST', blockedBeforeSend: true }]);
+  expect(report.readonlyPostRequests).toHaveLength(0);
+  expect(requests).not.toContain(`POST ${INSIGHT_API}`);
+  expect(report.actualBusinessWrites).toBe(0);
+});
+
+test('demo tenant is rejected before any request to the fixture server', async ({ page }, testInfo) => {
+  const { report, requests } = await runFixture(page, testInfo, {
+    scenarios: [COST], expectedFactoryId: 'LSMDEMO', factoryId: 'LSMDEMO', insightFactoryId: 'LSMDEMO',
+  });
+  expect(report.scenarios.map(item => [item.scenario, item.result])).toEqual([['bootstrap', 'TOOL_ERROR']]);
+  expect(requests).toHaveLength(0);
+  expect(report.actualBusinessWrites).toBe(0);
 });
 
 test('zero placeholder, HTTP errors, console errors and a blocked write cannot pass', async ({ page }, testInfo) => {

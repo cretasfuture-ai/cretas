@@ -176,6 +176,7 @@ async function performUiLogin(page, options) {
     status: response.status(),
     success: businessSuccess,
     responseBodyParsed: body !== null,
+    responseFactoryId: options.requireFactoryResponseProof ? login.factoryId : null,
     username: actualUsername,
     factoryId: actualFactoryId,
     factoryName: actualFactoryName,

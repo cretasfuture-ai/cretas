@@ -12,14 +12,17 @@ const { sanitizeValue } = require('./sanitizer');
 const { pathnameOf } = require('./url-utils');
 const { runParallelSuites } = require('./parallel-run');
 const { isFactoryAnalysisUrl } = require('../config/factory-analysis-scope');
+const { READONLY_POST_WHITELIST, chartInsightReadonlyPost } = require('../config/readonly-post-whitelist');
 const questionSet = require('../scenarios/factory-analysis-question-set-readonly');
+const lsmAnalytics = require('../scenarios/lsm-production-analytics-readonly');
 
 const SCENARIOS = [
   require('../scenarios/platform-factory-access-readonly'),
   require('../scenarios/smartbi-factory-analysis-readonly'),
   questionSet,
-  require('../scenarios/lsm-production-analytics-readonly').dataAnalysis,
-  require('../scenarios/lsm-production-analytics-readonly').cost,
+  lsmAnalytics.dataAnalysis,
+  lsmAnalytics.cost,
+  lsmAnalytics.dashboard,
   require('../scenarios/smartbi-catalog-matrix-readonly'),
   require('../scenarios/smartbi-factory-readonly'),
   require('../scenarios/smartbi-guided-readonly'),
@@ -127,10 +130,17 @@ async function runSuiteWithPage(page, options = {}) {
   const evidenceDir = options.evidenceDir || `.playwright-mcp/production-readonly/${runId}`;
   const scenarioRef = { value: 'bootstrap' };
   const selectedScenarios = resolveScenarios(options.scenarios);
+  let loginEvidence;
+  const chartInsightEntry = chartInsightReadonlyPost(
+    baseUrl,
+    () => selectedScenarios.some(s => s.allowsChartInsight && s.id === scenarioRef.value),
+    () => loginEvidence?.responseFactoryId,
+  );
 
   // The guard is installed before any target-origin navigation or login.
   const mutationGuard = await installMutationGuard(context, {
     scenarioRef,
+    readonlyPostWhitelist: [...READONLY_POST_WHITELIST, chartInsightEntry],
     allowMutationShape(classification, method, url, body) {
       if (scenarioRef.value !== questionSet.id) return true;
       return classification.entry?.id === 'smartbi-factory-analysis' && method === 'POST'
@@ -153,7 +163,6 @@ async function runSuiteWithPage(page, options = {}) {
   const screenshot = createScreenshotWriter(page, evidenceDir, { sensitiveTexts: [expectedUsername] });
   const startedAt = Date.now();
   const startedAtIso = new Date(startedAt).toISOString();
-  let loginEvidence;
   const results = [];
 
   try {
