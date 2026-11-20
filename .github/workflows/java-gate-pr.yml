@@ -531,7 +531,9 @@ jobs:
         with:
           java-version: '21'
           distribution: temurin
-      - uses: actions/cache/restore@v4
+      - name: Restore Maven repository (warmed on main)
+        if: ${{ runner.environment != 'self-hosted' }}
+        uses: actions/cache/restore@v4
         with:
           path: ~/.m2/repository
           key: maven-gate-${{ hashFiles('backend/java/cretas-api/pom.xml') }}
