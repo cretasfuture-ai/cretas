@@ -157,8 +157,12 @@ describe('黑湖生产分析页面', () => {
         if (available) {
           expect(block.text()).toContain(`接口发现 ${wanted[i]}`);
           expect(block.text()).toContain('接口建议');
+          expect(block.find('[role="status"]').exists()).toBe(false);
         } else {
-          expect(block.text()).toContain('分析暂不可用，请稍后重试');
+          expect(block.get('[role="status"]').text()).toBe(
+            '当前无法连接图表分析服务。可先查看图表数据，或联系管理员检查服务。',
+          );
+          expect(block.text()).not.toContain('请稍后重试');
           expect(block.find('.chart-insight-finding').exists()).toBe(false);
         }
       });

@@ -99,6 +99,37 @@ describe('ChartInsightProvider', () => {
     vi.useRealTimers();
   });
 
+  it.each([
+    ['INSUFFICIENT_DATA', '可扩大日期范围'],
+    ['BUDGET_EXHAUSTED', '请联系管理员确认用量'],
+  ])('shows the next step for %s and replaces it with a rule finding for the next chart', async (reason, nextStep) => {
+    mockFetchTier2Insight
+      .mockResolvedValueOnce({ reason })
+      .mockResolvedValueOnce({ finding: '11月17日比11月16日少51.0%。', source: 'rules', tier: 2 });
+    const chart = makeRankingChart();
+    const wrapper = mount(ChartInsightProvider, {
+      props: {
+        chart,
+        perms: PERMS,
+        factoryId: 'LIUSHANMEN',
+        requireTier2: true,
+        unavailableText: '分析暂不可用，请稍后重试',
+      },
+    });
+
+    await vi.runAllTimersAsync();
+    expect(wrapper.get('[role="status"]').text()).toContain(nextStep);
+    expect(wrapper.find('.chart-insight-finding').exists()).toBe(false);
+    expect(wrapper.text()).not.toContain('请稍后重试');
+
+    await wrapper.setProps({ chart: { ...chart, title: '下一张图' } });
+    await vi.runAllTimersAsync();
+    expect(wrapper.find('[role="status"]').exists()).toBe(false);
+    expect(wrapper.get('.chart-insight-rule-source').text()).toBe('规则生成');
+    expect(wrapper.get('.chart-insight-finding').text()).toContain('少51.0%');
+    wrapper.unmount();
+  });
+
   // ── Test 1: Tier1 hit → .chart-insight-finding rendered ───────────────────
 
   it('RANKING chart (Tier1 hit) → renders .chart-insight-finding with the insight text', async () => {
@@ -122,6 +153,7 @@ describe('ChartInsightProvider', () => {
     const finding = wrapper.find('.chart-insight-finding');
     expect(finding.exists()).toBe(true);
     expect(finding.text()).toBe(TIER1_FINDING);
+    expect(wrapper.find('.chart-insight-rule-source').exists()).toBe(false);
 
     // Tier2 must NOT have been called (Tier1 hit)
     expect(mockFetchTier2Insight).not.toHaveBeenCalled();

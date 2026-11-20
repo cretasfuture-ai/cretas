@@ -20,10 +20,10 @@ router = APIRouter(prefix="/api/smartbi/capability", tags=["Capability"])
 
 # spec §9.2: backend per-factory 灰度 — return 503 for non-whitelisted factories.
 # FE useCapability 收到 503 → fail-open → 老体验. 灰度通过 env var 调整, 不需 redeploy FE.
-# Default = "F001,RES_3101_009,F006" (Day 13 starter cohort plus F006).
+# Default cohort applies when an operator has not supplied an explicit list.
 # Set CAPABILITY_ROLLOUT_FACTORIES="*" to enable all (post-cohort observation period).
 import os  # noqa: E402
-_DEFAULT_ROLLOUT_FACTORIES = ("F001", "RES_3101_009", "F006")
+_DEFAULT_ROLLOUT_FACTORIES = ("F001", "RES_3101_009", "F006", "LIUSHANMEN")
 
 
 def _parse_rollout_factories(raw: Optional[str]) -> Optional[set[str]]:
