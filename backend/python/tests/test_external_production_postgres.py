@@ -104,10 +104,12 @@ async def stores(monkeypatch):
                 silver_admin = await asyncpg.connect(urlunsplit(silver))
                 try:
                     for filename in (
+                        "V20260531_01__smart_bi_distillation_samples.sql",
                         "V20260916_01__agg_supplier_price.sql",
                         "V20261002_01__factory_production_gold.sql",
                         "V20261003_01__agg_supplier_price_mb_dedup.sql",
                         "V20261004_01__fact_production_report.sql",
+                        "V20261104_01__distillation_secrecy_recheck_index.sql",
                         "V20261120_01__external_production_daily.sql",
                         "V20261120_02__external_production_cost.sql",
                     ):

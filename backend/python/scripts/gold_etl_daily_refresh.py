@@ -5,13 +5,21 @@ import argparse
 import asyncio
 from contextlib import AsyncExitStack
 import logging
+from pathlib import Path
+import sys
 
-from smartbi.config import get_cretas_pool, get_pg_pool
-from smartbi.gold.external_cost_etl import sync_external_cost
-from smartbi.gold.external_production_etl import DEMO_FACTORY_PREFIX
-from smartbi.gold.factory_production_etl import FactoryEtlStats, run_factory_etl_with_retry
-from smartbi.gold.supplier_price_ingest_etl import run_supplier_price_ingest
-from smartbi.services.process_secret_names import expire_held_rows
+# Match main.py and corpus_judge.py: the SmartBI services package uses bare
+# services.* imports, and systemd runs this module without main.py's bootstrap.
+_SMARTBI_DIR = str(Path(__file__).resolve().parents[1] / "smartbi")
+if _SMARTBI_DIR not in sys.path:
+    sys.path.insert(0, _SMARTBI_DIR)
+
+from smartbi.config import get_cretas_pool, get_pg_pool  # noqa: E402
+from smartbi.gold.external_cost_etl import sync_external_cost  # noqa: E402
+from smartbi.gold.external_production_etl import DEMO_FACTORY_PREFIX  # noqa: E402
+from smartbi.gold.factory_production_etl import FactoryEtlStats, run_factory_etl_with_retry  # noqa: E402
+from smartbi.gold.supplier_price_ingest_etl import run_supplier_price_ingest  # noqa: E402
+from smartbi.services.process_secret_names import expire_held_rows  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
