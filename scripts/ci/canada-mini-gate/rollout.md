@@ -20,7 +20,7 @@
 
 以下恢复步骤适用于使用新路由的 run。切换前创建的 run 按部署步骤用旧标签消费者排空。`runs-on` 在派发后固定。值班从首次确认目标 mini 作业为 `queued` 开始计时，**5 分钟**仍未被接单就启动托管恢复。发生在合并队列时，同时以队列的检查超时为上限，留出重新入队窗口。用 `gh run view <run-id> --json status,headSha` 核对 run，并分页读作业 API 的 `id`、`labels`、`status` 和 `runner_name`。
 
-- **普通 PR**：加 `ci-hosted` 标签。RN、Web、Java 会为同一 PR 创建托管 run 并取代等待的旧 run。Java 另保留 `java-full-ready` 的既有全量检查触发。无关标签跳过作业，使用独立并发组。标签已经存在或新 run 未创建时，走下面同 SHA 重跑流程。
+- **普通 PR**：加 `ci-hosted` 标签。RN、Web、Java 会为同一 PR 创建托管 run 并取代等待的旧 run。`java-full-ready` 同样触发三条工作流，只有 Java 启用全量门禁。成功判为无相关路径时，必需检查仍登记标准名称，跳过测试步骤。无关标签跳过作业，使用独立并发组。标签已经存在或新 run 未创建时，走下面同 SHA 重跑流程。
 - **仍在队列中的合并组，或普通 PR 的备用路径**：用 `gh run cancel <run-id>` 取消受影响的 run，等待它进入 `completed`，再 `gh run rerun <run-id>` 重跑完整工作流（包括 `changes`）。核对 `run_attempt > 1`、等于原值的 `head_sha` 和对应作业的 `runner_name`。开关仍开时路由日志应有 `ROUTE=hosted reason=retry-hosted`，已关时路由步骤可以跳过。只重跑失败作业时，即使保留了首次 `changes` 的 mini 输出，作业也由当前 attempt 直接转托管。完整重跑会刷新 `changes` 输出。
 - **组 SHA 已过期或 GitHub 拒绝重跑**：对仍需要合入的 PR 先加 `ci-hosted`，再由维护者重新入队。确认新合并组 SHA 已生成。含该 PR 或成员无法核对的整组走托管，回读三个工作流的作业状态及 runner；所需检查保持有效。
 

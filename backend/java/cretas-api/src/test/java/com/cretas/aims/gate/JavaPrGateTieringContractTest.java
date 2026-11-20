@@ -83,12 +83,10 @@ class JavaPrGateTieringContractTest {
                 .contains("bash \"$GITHUB_WORKSPACE/scripts/ci/run-with-test-postgres.sh\" \"$MVN\" -B test")
                 .doesNotContain("localhost:5432/$DB");
 
-        for (String job : List.of("fast-contracts-shard", "fast-contracts")) {
-            String condition = scalar(field(field(jobs, job), "if"));
-            assertThat(evaluate(condition, pr("synchronize", "", 21, "101"))).as(job).isEqualTo(true);
-            assertThat(evaluate(condition, pr("synchronize", FULL_READY, 21, "102")))
-                    .as("%s is covered by the final-candidate full suite", job).isEqualTo(false);
-        }
+        String fastShard = scalar(field(field(jobs, "fast-contracts-shard"), "if"));
+        assertThat(evaluate(fastShard, pr("synchronize", "", 21, "101"))).isEqualTo(true);
+        assertThat(evaluate(fastShard, pr("synchronize", FULL_READY, 21, "102")))
+                .as("the fast shards are covered by the final-candidate full suite").isEqualTo(false);
 
         // class lists live in files (sharded since 2026-11-10); the gate classes must stay on them
         assertThat(read(REPO_ROOT.resolve("scripts/ci/java-gate-fast-patterns.txt")))
@@ -206,6 +204,122 @@ class JavaPrGateTieringContractTest {
         assertThat(evaluate(condition, with(candidate, "cancelled", true)))
                 .as("a cancelled run must not start the full suite").isEqualTo(false);
     }
+
+    @Test
+    @DisplayName("required checks publish their names when their work is filtered out, including merge groups")
+    void requiredChecksPublishNamesForEligibleEvents() throws IOException {
+        var changed = pr("synchronize", "", 21, "120");
+        var unchanged = with(changed, "needs.changes.outputs.run", "false");
+        var fullReady = pr("labeled", FULL_READY, 21, "121");
+        var hosted = pr("labeled", "ci-hosted", 21, "122");
+        var group = mergeGroup("refs/heads/gh-readonly-queue/main/pr-21-a", "123");
+        var unchangedGroup = with(group, "needs.changes.outputs.run", "false");
+        var unrelated = with(pr("labeled", "documentation", 21, "124"), LABEL_NAMES,
+                List.of(FULL_READY, "ci-hosted", "documentation"));
+
+        for (RequiredCheck check : requiredChecks()) {
+            boolean fast = check.id().equals("fast-contracts");
+            assertRequiredCheck(check, changed, "changed PR", true);
+            assertRequiredCheck(check, unchanged, "run=false PR", false);
+            assertRequiredCheck(check, fullReady, "java-full-ready label event", !fast);
+            assertRequiredCheck(check, with(changed, LABEL_NAMES, List.of(FULL_READY)),
+                    "new head retaining java-full-ready", !fast);
+            assertRequiredCheck(check, hosted, "ci-hosted label event", true);
+            assertRequiredCheck(check, group, "changed merge group", true);
+            assertRequiredCheck(check, unchangedGroup, "run=false merge group", false);
+
+            assertThat(evaluate(check.changesIf(), unrelated)).as("%s ignores unrelated labels", check.id())
+                    .isEqualTo(false);
+            var skipped = with(unrelated, "needs.changes.result", "skipped");
+            assertThat(evaluate(check.jobIf(), skipped)).as("%s skips unrelated labels", check.id())
+                    .isEqualTo(false);
+            assertThat(reportedName(check.jobIf(), check.name(), skipped)).isNotEqualTo(check.id());
+        }
+    }
+
+    @Test
+    @DisplayName("required checks fail when changes fails, even if work would otherwise be skipped")
+    void requiredChecksFailClosedOnChangeDetectionFailure() throws IOException {
+        var fullReady = pr("labeled", FULL_READY, 21, "125");
+        var failed = with(fullReady, "needs.changes.result", "failure");
+        for (RequiredCheck check : requiredChecks()) {
+            Node guard = check.steps().getFirst();
+            for (String output : List.of("", "false")) {
+                var event = with(failed, "needs.changes.outputs.run", output);
+                assertPublishedName(check, check.jobIf(), event, "failed changes");
+                assertThat(evaluate(scalar(field(guard, "if")), event)).as("%s failure step", check.id())
+                        .isEqualTo(true);
+            }
+            assertThat(scalar(field(guard, "run")).strip().lines().toList()).endsWith("exit 1");
+            assertThat(((MappingNode) guard).getValue().stream().map(entry -> scalar(entry.getKeyNode())))
+                    .doesNotContain("continue-on-error");
+        }
+    }
+
+    @Test
+    @DisplayName("negative control: the old job-level path and full-ready filters lose the required names")
+    void requiredCheckNameAssertionsRejectOldJobFilters() throws IOException {
+        var unchanged = with(pr("synchronize", "", 21, "126"), "needs.changes.outputs.run", "false");
+        var fullReady = pr("labeled", FULL_READY, 21, "127");
+        for (RequiredCheck check : requiredChecks()) {
+            boolean java = check.id().equals("fast-contracts") || check.id().equals("postgres-reversal-concurrency");
+            String oldCondition = "${{ " + (java ? "always()" : "!cancelled()")
+                    + " && needs.changes.result != 'skipped' && needs.changes.outputs.run != 'false'"
+                    + (check.id().equals("fast-contracts")
+                            ? " && !contains(github.event.pull_request.labels.*.name, 'java-full-ready')" : "") + " }}";
+            assertThatThrownBy(() -> assertPublishedName(check, oldCondition, unchanged, "run=false PR"))
+                    .isInstanceOf(AssertionError.class).hasMessageContaining(check.id() + " / run=false PR");
+            if (check.id().equals("fast-contracts")) {
+                assertThatThrownBy(() -> assertPublishedName(check, oldCondition, fullReady, "java-full-ready label"))
+                        .isInstanceOf(AssertionError.class).hasMessageContaining("fast-contracts / java-full-ready label");
+            }
+        }
+    }
+
+    private static List<RequiredCheck> requiredChecks() throws IOException {
+        return List.of(requiredCheck(PR_GATE, "fast-contracts"), requiredCheck(PR_GATE, "postgres-reversal-concurrency"),
+                requiredCheck(REPO_ROOT.resolve(".github/workflows/rn-gate.yml"), "jest"),
+                requiredCheck(REPO_ROOT.resolve(".github/workflows/web-admin-gate.yml"), "vitest"));
+    }
+
+    private static RequiredCheck requiredCheck(Path path, String id) throws IOException {
+        Node workflow = new Yaml().compose(new StringReader(read(path)));
+        Node events = field(workflow, "on");
+        assertThat(values(field(field(events, "pull_request"), "types"))).contains("labeled", "synchronize");
+        assertThat(values(field(field(events, "merge_group"), "types"))).contains("checks_requested");
+        Node jobs = field(workflow, "jobs");
+        Node job = field(jobs, id);
+        assertThat(values(field(job, "needs"))).contains("changes");
+        return new RequiredCheck(id, scalar(field(job, "if")), scalar(field(job, "name")),
+                scalar(field(field(jobs, "changes"), "if")), ((SequenceNode) field(job, "steps")).getValue());
+    }
+
+    private static void assertRequiredCheck(RequiredCheck check, Map<String, Object> event,
+                                            String scenario, boolean runSteps) {
+        assertThat(evaluate(check.changesIf(), event)).as("%s / %s runs changes", check.id(), scenario).isEqualTo(true);
+        assertPublishedName(check, check.jobIf(), event, scenario);
+        List<Node> steps = check.steps();
+        assertThat(steps).hasSizeGreaterThan(1);
+        assertThat(evaluate(scalar(field(steps.getFirst(), "if")), event))
+                .as("%s / %s does not fail successful change detection", check.id(), scenario).isEqualTo(false);
+        for (Node step : steps.subList(1, steps.size())) {
+            assertThat(evaluate(scalar(field(step, "if")), event))
+                    .as("%s / %s work step", check.id(), scenario).isEqualTo(runSteps);
+        }
+    }
+
+    private static void assertPublishedName(RequiredCheck check, String condition, Map<String, Object> event,
+                                            String scenario) {
+        assertThat(reportedName(condition, check.name(), event)).as("%s / %s", check.id(), scenario)
+                .isEqualTo(check.id());
+    }
+
+    private static Object reportedName(String condition, String name, Map<String, Object> event) {
+        // GitHub leaves the expression literal when it skips the entire job.
+        return name.startsWith("${{") && truthy(evaluate(condition, event)) ? evaluate(name, event) : name;
+    }
+
+    private record RequiredCheck(String id, String jobIf, String name, String changesIf, List<Node> steps) {}
 
     private static Node field(Node node, String key) {
         var matches = ((MappingNode) node).getValue().stream()
