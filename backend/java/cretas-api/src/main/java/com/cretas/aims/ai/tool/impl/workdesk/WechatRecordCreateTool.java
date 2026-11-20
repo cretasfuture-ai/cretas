@@ -18,6 +18,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Optional;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 /**
  * 补录微信记录 Tool (Sprint 8 P1 — 卤味老板 Workdesk V1, WRITE + Preview).
@@ -48,6 +49,24 @@ public class WechatRecordCreateTool extends AbstractBusinessTool {
 
     /** Content 预览长度 (R2 context message). */
     private static final int CONTENT_PREVIEW_LEN = 40;
+
+    private static final Pattern EXPLICIT_INTERNAL_NOTE = Pattern.compile(
+            "\\s*补录(?:一条)?微信内部备注\\s*[,，]\\s*客户编号\\s*[:：]?\\s*"
+                    + "([0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})"
+                    + "\\s*[,，]\\s*消息内容\\s*[:：]\\s*(\\S.*)",
+            Pattern.DOTALL | Pattern.UNICODE_CHARACTER_CLASS);
+
+    /** 仅接受整句明确指定客户编号、内部方向和原文正文的补录指令。 */
+    public static Map<String, Object> explicitInternalNoteParameters(String input) {
+        if (input == null) {
+            return Map.of();
+        }
+        var match = EXPLICIT_INTERNAL_NOTE.matcher(input);
+        return match.matches() ? Map.of(
+                "customerId", match.group(1),
+                "direction", WechatDirection.INTERNAL.name(),
+                "messageContent", match.group(2)) : Map.of();
+    }
 
     @Autowired
     private WechatRecordService wechatRecordService;

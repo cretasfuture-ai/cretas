@@ -9,6 +9,7 @@ import com.cretas.aims.ai.dto.ChatMessage;
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.ToolRegistry;
 import com.cretas.aims.ai.tool.WriteGuardService;
+import com.cretas.aims.ai.tool.impl.workdesk.WechatRecordCreateTool;
 import com.cretas.aims.config.DashScopeConfig;
 import com.cretas.aims.config.IntentKnowledgeBase;
 import com.cretas.aims.config.IntentKnowledgeBase.QuestionType;
@@ -710,9 +711,17 @@ public class SseStreamingService {
                 return;
             }
 
-            // 6. 需要确认的情况
-            if (Boolean.TRUE.equals(matchResult.getRequiresConfirmation())
-                    && !Boolean.TRUE.equals(request.getForceExecute())) {
+            // 6. 识别澄清。整句明确指定的微信内部备注已经消除意图歧义，仍须经过下方写操作的全部准入。
+            Map<String, Object> explicitWechatNote = trustedFactoryActor
+                    && "WECHAT_CREATE".equals(intent.getIntentCode())
+                    && "wechat_record_create".equals(intent.getToolName())
+                    ? WechatRecordCreateTool.explicitInternalNoteParameters(request.getUserInput()) : Map.of();
+            Map<String, Object> existingContext = request.getContext();
+            boolean conflictingWechatParameters = existingContext != null && explicitWechatNote.entrySet().stream()
+                    .anyMatch(e -> !e.getValue().equals(existingContext.getOrDefault(e.getKey(), e.getValue())));
+            if (conflictingWechatParameters || (explicitWechatNote.isEmpty()
+                    && Boolean.TRUE.equals(matchResult.getRequiresConfirmation())
+                    && !Boolean.TRUE.equals(request.getForceExecute()))) {
                 IntentExecuteResponse clarificationResponse = buildClarificationResponseForStream(
                         matchResult, factoryId, userId, userRole, request.getMode());
                 if (trustedFactoryActor) {
@@ -807,7 +816,14 @@ public class SseStreamingService {
                 streamNoPermission(emitter, intent, admissionDenied, startTime);
                 return;
             }
-            prefillWriteToolParameters(factoryId, request, intent);
+            if (explicitWechatNote.isEmpty()) {
+                prefillWriteToolParameters(factoryId, request, intent);
+            } else {
+                Map<String, Object> context = request.getContext() == null
+                        ? new HashMap<>() : new HashMap<>(request.getContext());
+                context.putAll(explicitWechatNote);
+                request.setContext(WriteGuardService.withoutCallerConfirmation(context));
+            }
 
             // 7a.6 缺「要操作哪一个」(报工缺工序任务): 先列出本人可选的让他选, 再轮到通用缺参追问 ——
             //      否则 7b 会问「请提供工序任务编号」, 回「1」被当成 taskId=1 (prod 2026-11-14 F006)。
