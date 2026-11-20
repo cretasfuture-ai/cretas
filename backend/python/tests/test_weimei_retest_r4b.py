@@ -52,7 +52,9 @@ async def test_p1_1_thousands_separator_inside_a_number_is_not_a_clause_boundary
 @pytest.mark.parametrize(("answer", "expected"), [
     ("全月所有 A产品和 B产品一共 52 卷。全月一共 133 卷。", "全月所有 A产品和 B产品一共 133 卷。全月一共 133 卷。"),
     ("全月一共 999 卷，另有备注共 133 字。", "全月一共 133 卷，另有备注共 133 字。"),
-    ("全月一共 999 卷和 133 字。全月一共 52 卷。", "全月一共 133 卷和 133 字。全月一共 133 卷。"),
+    ("全月一共 999 卷和 133 字。全月一共 52 卷。", "全月一共 999 卷和 133 字。全月一共 133 卷。"),
+    ("全月卷膜用量合计 52 卷。全月一共 133 卷。", "全月卷膜用量合计 133 卷。全月一共 133 卷。"),
+    ("总计 52 卷。全月一共 133 卷。", "总计 133 卷。全月一共 133 卷。"),
     ("全月报废量一共 88 卷。全月一共用了 999 卷。", "全月报废量一共 88 卷。全月一共用了 133 卷。"),
 ])
 async def test_p1_1_each_whole_total_is_checked_against_its_own_metric(monkeypatch, answer, expected):
@@ -64,11 +66,21 @@ async def test_p1_1_each_whole_total_is_checked_against_its_own_metric(monkeypat
     assert done["answer"] == expected and done["answer_corrected"] is True
 
 
-async def test_p1_1_enumerated_subtotals_remain_local_even_when_they_cover_all_groups(monkeypatch):
-    answer = "全月 A产品 52 卷和 B产品 81 卷。全月一共 133 卷。"
-    _, done, _, _ = await ask(
-        monkeypatch, FILM_Q, {5321: (two_group_rows(52, 81), FILM_FIELDS)}, answer=answer, plans=[GROUP_PLAN],
+@pytest.mark.parametrize(("labels", "subtotal"), [
+    (("A产品", "B产品"), "全月 A产品 52 卷和 B产品 81 卷"),
+    (("A", "B"), "A一共 52 卷"),
+    (("A10", "A100"), "全月 A100 一共 81 卷"),
+    (("A10", "A100"), "全月所有 A100 一共 81 卷"),
+    (("A", "B"), "A 总计 52 卷"),
+    (("A", "B"), "一共 52 卷"),
+])
+async def test_p1_1_ambiguous_or_local_claim_is_unchanged(monkeypatch, labels, subtotal):
+    answer = f"{subtotal}。全月一共 133 卷。"
+    rows = [dict(row, 卷膜编码=label) for row, label in zip(two_group_rows(52, 81), labels)]
+    _, done, prompts, calls = await ask(
+        monkeypatch, FILM_Q, {5321: (rows, FILM_FIELDS)}, answer=answer, plans=[dict(GROUP_PLAN, limit=1)],
     )
+    assert len(calls) == 1 and "总用量 = 133" in prompts[0]
     assert done["answer"] == answer and done["answer_corrected"] is False
 
 
@@ -145,6 +157,9 @@ def day_rate_rows():
     ("10月计划与实际差多少", "cross_year", [{"col": "日期", "op": "==", "value": "2026-10"}], 2, 20),
     ("10月哪一周计划品项达成率最低", "cross_year", [{"col": "日期", "op": "==", "value": "2026-10"}], 2, 20),
     ("哪一周计划品项达成率最低", "cross_year", [], 4, 44),
+    ("上月计划与实际差多少", "single_year", [], 3, 40),
+    ("近两个月计划与实际差多少", "single_year", [], 3, 40),
+    ("10月前两周计划与实际差多少", "single_year", [], 3, 40),
 ])
 async def test_p1_2_3_unsupported_time_scopes_are_left_to_the_planner(
         monkeypatch, question, date_mode, filters, matched, value):
@@ -183,48 +198,107 @@ def temp_rows():
             [("2026-10-05", 30.0), ("2026-10-06", 40.0), ("2026-10-12", 36.0), ("2026-10-13", 36.0), ("2026-10-14", 36.0)]]
 
 
-async def test_p1_3_week_rollup_uses_the_mean_when_asked_and_never_sums_a_temperature(monkeypatch):
-    # 求和: W41=70 < W42=108; 平均: W41=35 < W42=36。「平均值最高」要的是 W42 的 36, 求和口径会写成 108
-    _, _, prompts, calls = await ask(monkeypatch, "10月哪一周温度平均值最高？", {5398: (temp_rows(), TEMP_FIELDS)},
-                                     plans=[{"intent": "none"}], candidates=TEMP_CAND)
-    block = prompts[0]
-    assert "温度(按周平均)" in block and "| 2026-W42 | 36 |" in block and "108" not in block
+@pytest.mark.parametrize(("question", "column"), [
+    ("10月的前两周，哪一周良品产量最高", "良品产量kg"),
+    ("上月哪一周良品产量最高", "良品产量kg"),
+    ("近两个月哪一周良品产量最高", "良品产量kg"),
+    ("哪一周良品产量最高？各线均需列出", "良品产量kg"),
+    ("10月哪一周累计产量最高", "累计产量kg"),
+    ("10月哪一周库存重量最高", "库存重量kg"),
+    ("哪一周余额数量最高", "余额数量"),
+    ("哪一周单位产量kg/人最高", "单位产量kg/人"),
+    ("哪一周单位产量kg/人的合计最高", "单位产量kg/人"),
+    ("哪一周计划品项达成率最低", "计划品项达成率"),
+    ("哪一周良品占比最高", "良品占比%"),
+    ("10月哪一周温度最高", "温度℃"),
+    ("10月哪一周温度平均值最高", "温度℃"),
+])
+async def test_weekly_scope_or_metric_outside_whitelist_calls_planner(monkeypatch, question, column):
+    fields = [("日期", False, False, True), (column, True, False, False), ("产线", False, True, False)]
+    rows = [{"日期": f"2026-10-{day:02d}", column: value, "产线": line}
+            for day, value, line in [(1, 10, "A"), (2, 50, "B"), (5, 60, "A"), (20, 1000, "B")]]
+    candidates = [replace(TEMP_CAND[0], field_names=[f[0] for f in fields])]
+    _, _, _, calls = await ask(monkeypatch, question, {5398: (rows, fields)}, candidates=candidates)
+    assert len(calls) == 1
+    assert "周(按日期折算)" in calls[0]
+
+
+@pytest.mark.parametrize(("question", "ranking"), [
+    ("10月哪一周良品产量最高", ["| 2026-W41 | 60 |", "| 2026-W40 | 40 |"]),
+    ("每周良品产量合计", ["| 2026-W40 | 840 |", "| 2026-W41 | 60 |"]),
+])
+async def test_weekly_additive_flow_is_summed_for_whitelisted_question(monkeypatch, question, ranking):
+    column = "良品产量kg"
+    fields = [("日期", False, False, True), (column, True, False, False)]
+    rows = [{"日期": date, column: value}
+            for date, value in [("2026-09-30", 800), ("2026-10-01", 10), ("2026-10-02", 30),
+                                ("2026-10-05", 20), ("2026-10-06", 40)]]
+    candidates = [replace(TEMP_CAND[0], field_names=[f[0] for f in fields])]
+    _, _, prompts, calls = await ask(monkeypatch, question, {5398: (rows, fields)}, candidates=candidates)
     assert calls == []
-    # 没说平均/合计、温度也不是可相加的量: 规则不替用户选口径, 交给规划器
-    _, _, _, calls2 = await ask(monkeypatch, "10月哪一周温度最高？", {5398: (temp_rows(), TEMP_FIELDS)},
-                                plans=[{"intent": "none"}], candidates=TEMP_CAND)
-    assert len(calls2) == 1
+    block = prompts[0].split("## 全表精确计算结果")[1]
+    assert [line for line in block.splitlines() if line.startswith("| 2026-W")] == ranking
 
 
-@pytest.mark.parametrize("question", ["哪一周单位产量kg/人最高", "哪一周单位产量kg/人的合计最高"])
-async def test_p1_3_weekly_per_person_output_needs_a_planner(question, monkeypatch):
-    fields = [("日期", False, False, True), ("单位产量kg/人", True, False, False)]
-    rows = [{"日期": f"2026-10-{i:02d}", "单位产量kg/人": 2} for i in range(1, 11)]
+@pytest.mark.parametrize("non_additive", [False, True])
+async def test_weekly_header_ratio_requires_two_additive_count_columns(monkeypatch, non_additive):
+    denominator = "库存件数" if non_additive else "生产件数"
+    ratio = f"良品率(良品件数/{denominator})"
+    fields = [("日期", False, False, True), ("良品件数", True, False, False),
+              (denominator, True, False, False), (ratio, True, False, False)]
+    rows = [{"日期": day, "良品件数": count, denominator: total, ratio: count / total}
+            for day, count, total in [("2026-10-05", 1, 10), ("2026-10-06", 2, 2)]]
+    candidates = [replace(TEMP_CAND[0], field_names=[f[0] for f in fields])]
+    _, _, prompts, calls = await ask(monkeypatch, "哪一周良品率最低", {5398: (rows, fields)}, candidates=candidates)
+    if non_additive:
+        assert len(calls) == 1
+    else:
+        assert calls == []
+        assert "| 2026-W41 | 25.00% |" in prompts[0]
+
+
+async def test_cross_year_weekly_ranking_uses_iso_week_groups_from_planner(monkeypatch):
+    column = "良品产量kg"
+    fields = [("日期", False, False, True), (column, True, False, False)]
+    rows = [{"日期": date, column: value}
+            for date, value in [("2025-12-24", 20), ("2025-12-29", 35), ("2026-01-02", 40),
+                                ("2026-01-07", 70)]]
     candidates = [replace(TEMP_CAND[0], field_names=[f[0] for f in fields])]
     plan = {"intent": "compute", "group_by": ["周(按日期折算)"],
-            "metrics": [{"name": "每人产量均值", "func": "mean", "col": "单位产量kg/人"}]}
-    _, _, prompts, calls = await ask(monkeypatch, question, {5398: (rows, fields)}, plans=[plan], candidates=candidates)
-    assert len(calls) == 1
-    block = prompts[0].split("## 全表精确计算结果")[1]
-    assert "| 2026-W40 | 2 |" in block and "| 2026-W41 | 2 |" in block
-
-
-async def test_p1_3_incidental_jun_does_not_change_weekly_sum_to_mean(monkeypatch):
-    fields = [("日期", False, False, True), ("产量kg", True, False, False)]
-    rows = [{"日期": f"2026-10-{i:02d}", "产量kg": 10} for i in range(1, 11)]
-    candidates = [replace(TEMP_CAND[0], field_names=[f[0] for f in fields])]
+            "metrics": [{"name": "周产量", "func": "sum", "col": column}],
+            "sort_by": "周产量", "descending": True}
     _, _, prompts, calls = await ask(
-        monkeypatch, "哪一周产量最高？各线均需列出", {5398: (rows, fields)}, candidates=candidates,
+        monkeypatch, "哪一周良品产量最高", {5398: (rows, fields)}, plans=[plan], candidates=candidates,
     )
-    assert calls == []
+    assert len(calls) == 1 and "使用「周(按日期折算)」分组" in calls[0]
     block = prompts[0].split("## 全表精确计算结果")[1]
-    assert "| 2026-W41 | 60 |" in block and "| 2026-W40 | 40 |" in block
+    assert "| 周(按日期折算) | 周产量 |" in block
+    assert [line for line in block.splitlines() if line.startswith("| 20")] == [
+        "| 2026-W01 | 75 |", "| 2026-W02 | 70 |", "| 2025-W52 | 20 |",
+    ]
 
 
-async def test_review_6_weekly_ranking_preserves_both_date_bounds(monkeypatch):
+async def test_unavailable_derived_week_does_not_resolve_to_date(monkeypatch):
+    column = "良品产量kg"
+    fields = [("日期", False, False, True), (column, True, False, False)]
+    rows = [{"日期": "2026-02-30", column: 10}]
+    candidates = [replace(TEMP_CAND[0], field_names=[f[0] for f in fields])]
+    week_plan = {"intent": "compute", "group_by": ["周(按日期折算)"],
+                 "metrics": [{"name": "周产量", "func": "sum", "col": column}]}
+    day_plan = {"intent": "compute", "sort_by": column, "descending": True, "limit": 1}
+    _, _, prompts, calls = await ask(
+        monkeypatch, "哪一周良品产量最高", {5398: (rows, fields)},
+        plans=[week_plan, day_plan], candidates=candidates,
+    )
+    assert len(calls) == 2 and "字段不存在: 周(按日期折算)" in calls[1]
+    assert "未按周汇总" in prompts[0] and "| 日期 | 周产量 |" not in prompts[0]
+
+
+@pytest.mark.parametrize("with_time", [False, True])
+async def test_review_6_weekly_ranking_preserves_both_date_bounds(monkeypatch, with_time):
     fields = [("日期", False, False, True), ("良品产量kg", True, False, False)]
     rows = [{"日期": "2026-09-30", "良品产量kg": 800}]
-    rows += [{"日期": f"2026-10-{day:02d}", "良品产量kg": kg}
+    rows += [{"日期": f"2026-10-{day:02d}" + ("T14:30:00" if with_time else ""), "良品产量kg": kg}
              for day, kg in [(1, 10), (5, 20), (15, 30), (16, 900), (23, 1000)]]
     candidates = [replace(TEMP_CAND[0], field_names=[f[0] for f in fields])]
     plan = {"intent": "compute", "filters": [
