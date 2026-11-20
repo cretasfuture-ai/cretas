@@ -63,12 +63,12 @@ import time
 from enum import Enum
 from threading import Lock
 from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple
+from urllib.request import getproxies
 
 import httpx
 
 from common.llm_client import (
     EgressRedactionError,
-    _RedactingLLMClient,
     current_egress_tokens,
     get_llm_http_client,
     get_llm_proxied_http_client,
@@ -2211,7 +2211,7 @@ def _provider_config(account: str) -> Tuple[str, str]:
         token = os.getenv("LLM_AURORA_CHART_TOKEN", "").strip()
         # Pin the only destination so an incorrect setting cannot use F006,
         # another loopback service, or a public endpoint.
-        if endpoint == "http://127.0.0.1:11440/v1" and token:
+        if endpoint == "http://127.0.0.1:11440/v1" and token and _aurora_chart_direct_route():
             return endpoint, token
         return "", ""
     mapping = {
@@ -2388,13 +2388,12 @@ def _client_for(account: str) -> Any:
     return get_llm_http_client()
 
 
-async def _post_aurora_chart(url: str, *, headers: dict, json: dict, timeout: httpx.Timeout) -> httpx.Response:
-    from common.llm_metrics import metrics_response_hook
-
-    async with httpx.AsyncClient(
-        trust_env=False, follow_redirects=False, event_hooks={"response": [metrics_response_hook]},
-    ) as transport:
-        return await _RedactingLLMClient(transport).post(url, headers=headers, json=json, timeout=timeout)
+def _aurora_chart_direct_route() -> bool:
+    # The shared redacting client reads proxy settings at process startup.
+    # Check the same environment before allowing a loopback bearer request.
+    proxies = getproxies()
+    bypass = {host.strip() for host in proxies.get("no", "").split(",")}
+    return not (proxies.get("http") or proxies.get("all")) or bool(bypass & {"*", "127.0.0.1"})
 
 
 def _auth_headers(account: str, api_key: str) -> Dict[str, str]:
@@ -2581,7 +2580,7 @@ def _note_empty_key(tag: str, account: str, errors: list) -> None:
         _EMPTY_KEY_WARNED.add(account)
         if account == _AURORA_CHART_PAIR[0]:
             logger.warning(
-                "[%s] %s: 缺少有效的 LLM_AURORA_CHART_BASE_URL 或 LLM_AURORA_CHART_TOKEN，跳过本跳",
+                "[%s] %s: LLM_AURORA_CHART_BASE_URL、LLM_AURORA_CHART_TOKEN 或回环代理豁免未就绪，跳过本跳",
                 tag, account,
             )
         else:
@@ -2849,8 +2848,7 @@ async def _call_chain_attempts(
                 post = _post_anthropic(_client_for(account), slot, model, base_url, headers, req_payload,
                                        request_timeout)
             else:
-                send = _post_aurora_chart if account == _AURORA_CHART_PAIR[0] else _client_for(account).post
-                post = send(
+                post = _client_for(account).post(
                     f"{base_url}/chat/completions",
                     headers=headers,
                     json=req_payload,

@@ -31,6 +31,7 @@ def configured_router(monkeypatch):
     monkeypatch.setenv("LLM_LOCAL_CANADA_API_KEY", "canada-test")
     monkeypatch.setenv("LLM_AURORA_CHART_BASE_URL", BASE_URL)
     monkeypatch.setenv("LLM_AURORA_CHART_TOKEN", "aurora-test")
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1")
 
 
 def test_chart_chain_has_only_aurora_then_aliyun_a_and_f006_stays_dedicated():
@@ -73,7 +74,6 @@ async def _ask():
 async def test_configured_chart_uses_aurora_and_its_separate_token(configured_router, monkeypatch):
     client = _ChartClient()
     monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
-    monkeypatch.setattr(llm_router, "_post_aurora_chart", client.post)
     assert (await _ask())["choices"][0]["message"]["content"] == CONTENT
     assert client.calls == [(BASE_URL + "/chat/completions", "Bearer aurora-test", AURORA[1], 0.08)]
 
@@ -82,33 +82,42 @@ async def test_configured_chart_uses_aurora_and_its_separate_token(configured_ro
 async def test_chart_caps_long_aurora_attempts_at_the_measured_budget(configured_router, monkeypatch):
     client = _ChartClient()
     monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
-    monkeypatch.setattr(llm_router, "_post_aurora_chart", client.post)
     await llm_router.call_chain(llm_router.SLOT.CHART, PAYLOAD, timeout=120, total_timeout=120)
     assert client.calls == [(BASE_URL + "/chat/completions", "Bearer aurora-test", AURORA[1], 52.0)]
 
 
 @pytest.mark.asyncio
-async def test_aurora_transport_ignores_environment_proxies(configured_router, monkeypatch):
+async def test_chart_skips_aurora_when_proxy_would_intercept_loopback(configured_router, monkeypatch, caplog):
     monkeypatch.setenv("HTTP_PROXY", "http://192.0.2.1:8080")
-    monkeypatch.delenv("NO_PROXY", raising=False)
-    actual_client = httpx.AsyncClient
+    monkeypatch.setenv("NO_PROXY", "localhost")
+    client = _ChartClient()
+    monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
+    assert (await _ask())["choices"][0]["message"]["content"] == CONTENT
+    assert [call[1:3] for call in client.calls] == [("Bearer a-test", ALIYUN_A[1])]
+    assert "回环代理豁免" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_proxied_environment_uses_shared_redaction_with_loopback_exemption(configured_router, monkeypatch):
+    from common.llm_client import _RedactingLLMClient
+
+    monkeypatch.setenv("ALL_PROXY", "http://192.0.2.1:8080")
     requests = []
 
     def handle(request):
         requests.append(request)
         return httpx.Response(200, json={"choices": [{"message": {"content": CONTENT}}]})
 
-    def direct_client(**options):
-        assert options["trust_env"] is False
-        assert options["follow_redirects"] is False
-        return actual_client(transport=httpx.MockTransport(handle), **options)
-
-    monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: _ChartClient())
-    monkeypatch.setattr(llm_router.httpx, "AsyncClient", direct_client)
-    assert (await _ask())["choices"][0]["message"]["content"] == CONTENT
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as inner:
+        wrapper = _RedactingLLMClient(inner)
+        monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: wrapper)
+        await llm_router.call_chain(llm_router.SLOT.CHART, {
+            "messages": [{"role": "user", "content": "return JSON，联系人电话 13912345678"}],
+        })
     assert len(requests) == 1
     assert str(requests[0].url) == BASE_URL + "/chat/completions"
     assert requests[0].headers["Authorization"] == "Bearer aurora-test"
+    assert b"13912345678" not in requests[0].content
 
 
 @pytest.mark.parametrize(("name", "value"), [
@@ -140,7 +149,6 @@ async def test_missing_or_invalid_aurora_config_skips_and_warns_once(
 async def test_chart_falls_back_to_aliyun_a_after_aurora_timeout_or_busy(configured_router, monkeypatch, failure):
     client = _ChartClient(failure)
     monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
-    monkeypatch.setattr(llm_router, "_post_aurora_chart", client.post)
     assert (await _ask())["choices"][0]["message"]["content"] == CONTENT
     assert [call[1:3] for call in client.calls] == [
         ("Bearer aurora-test", AURORA[1]), ("Bearer a-test", ALIYUN_A[1]),
