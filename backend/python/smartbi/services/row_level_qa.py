@@ -263,6 +263,11 @@ _HIGH_WORDS = ("最高", "最多", "最大", "最好", "最强", "最长")
 _MONTH_PREFIX = r"(?:(?P<month>1[0-2]|[1-9])\s*月\s*[,，]?\s*)?"
 _DAY_VALUE_RE = re.compile(r"^(\d{4}[-/]\d{1,2}[-/]\d{1,2})(?=$|[T ])")
 _RANK_WORD = "|".join(_LOW_WORDS + _HIGH_WORDS)
+_TEXT_LIST_QUESTION = re.compile(
+    _MONTH_PREFIX + r"(?P<column>[^「」\n，,？?]*?(?:说明|备注|附注))"
+    r"\s*(?:有什么特殊情况|有哪些|有什么内容|有什么)[？?]?"
+)
+_TEXT_MARKDOWN_CHARS = re.compile(r"[\\\x60*_\[\]<>|&~]")
 
 # 原始列头，来源为 test_weimei_retest_r4b.py 的 weekly_additive_flow 阳性。
 _WEEKLY_SUM_COLUMNS = frozenset({"良品产量kg"})
@@ -303,6 +308,48 @@ def _date_column(df: pd.DataFrame, field_meta: Optional[Sequence[dict]] = None):
         if pd.api.types.is_datetime64_any_dtype(parsed.dtype) and parsed.notna().all():
             return col, parsed
     return None, None
+
+
+def _text_listing_answer(
+    question: str, df: pd.DataFrame, field_meta: Optional[Sequence[dict]],
+) -> Optional[str]:
+    """逐行回答明确点名的说明/备注列。列名、类型或月份不明确时由规划器判断。"""
+    match = _TEXT_LIST_QUESTION.fullmatch(question.strip())
+    if match is None:
+        return None
+    column = match["column"]
+    if column not in df.columns:
+        return None
+    if any(f.get("original_name") == column and (f.get("is_measure") or f.get("is_time"))
+           for f in field_meta or []):
+        return None
+    notes = df[column].reset_index(drop=True).dropna()
+    if not notes.map(lambda value: isinstance(value, str)).all():
+        return None
+    notes = notes.map(str.strip)
+    notes = notes[notes.ne("")]
+
+    _, dates = _date_column(df, field_meta)
+    if dates is not None:
+        dates = dates.reset_index(drop=True)
+    month = match["month"]
+    if month:
+        if dates is None or dates.dt.year.nunique() != 1:
+            return None
+        notes = notes[dates.loc[notes.index].dt.month.eq(int(month))]
+
+    scope = f"{month}月" if month else "当前数据"
+    label = _TEXT_MARKDOWN_CHARS.sub(r"\\\g<0>", column)
+    lines = [f"{scope}「{label}」共有 {len(notes)} 条非空记录。"]
+    if not notes.empty:
+        lines.append("")
+    for index, value in notes.head(MAX_RESULT_ROWS).items():
+        label = dates.iloc[index].date().isoformat() if dates is not None else f"第 {index + 1} 行"
+        text = _TEXT_MARKDOWN_CHARS.sub(r"\\\g<0>", " ".join(value.splitlines()))
+        lines.append(f"- {label}：{text}")
+    if len(notes) > MAX_RESULT_ROWS:
+        lines.extend(["", f"以上列出前 {MAX_RESULT_ROWS} 条。"])
+    return "\n".join(lines)
 
 
 def _with_calendar_columns(
@@ -1083,8 +1130,8 @@ def strip_code_separators(answer: str, res: Optional[ExecResult]) -> tuple:
 
 @dataclass
 class RowLevelOutcome:
-    kind: str                      # refuse | computed | uncomputed | none
-    text: str = ""                 # refuse: 完整拒答; computed/uncomputed: 注入提示词的段落
+    kind: str                      # refuse | text_listing | computed | uncomputed | none
+    text: str = ""                 # refuse/text_listing: 完整答复; computed/uncomputed: 注入提示词的段落
     plan: Optional[dict] = None
     result: Optional[ExecResult] = None
 
@@ -1112,6 +1159,10 @@ async def answer_row_level(
     """
     if not (question or "").strip() or df is None or df.empty:
         return RowLevelOutcome("none")
+
+    text_listing = _text_listing_answer(question, df, field_meta)
+    if text_listing is not None:
+        return RowLevelOutcome("text_listing", text_listing)
 
     df = with_gap_columns(df)
     df, cross_year = _with_calendar_columns(df, question, field_meta)
