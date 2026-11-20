@@ -41,9 +41,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 /**
@@ -108,6 +110,7 @@ public class FactoryDataService {
     private final Set<Long> operatorAdminIds;
     private final Clock clock;
     private final int smartbiNetworkTimeoutMs;
+    private final Supplier<ScheduledExecutorService> heartbeatExecutor;
     /** 两个库都是 public; 测试用独立 schema。 */
     private final String schema;
     private final ObjectMapper json = new ObjectMapper().registerModule(new JavaTimeModule())
@@ -135,6 +138,15 @@ public class FactoryDataService {
     FactoryDataService(DataSource cretasDataSource, ObjectProvider<DataSource> smartbiDataSource,
                        FactoryObjectStore objectStore, FactoryDataRequestLedger ledger, Set<Long> operatorAdminIds,
                        Clock clock, String schema, int smartbiNetworkTimeoutMs) {
+        this(cretasDataSource, smartbiDataSource, objectStore, ledger, operatorAdminIds, clock, schema,
+                smartbiNetworkTimeoutMs, () -> Executors.newSingleThreadScheduledExecutor(
+                        Thread.ofVirtual().name("factory-export-snapshot-heartbeat").factory()));
+    }
+
+    FactoryDataService(DataSource cretasDataSource, ObjectProvider<DataSource> smartbiDataSource,
+                       FactoryObjectStore objectStore, FactoryDataRequestLedger ledger, Set<Long> operatorAdminIds,
+                       Clock clock, String schema, int smartbiNetworkTimeoutMs,
+                       Supplier<ScheduledExecutorService> heartbeatExecutor) {
         if (smartbiNetworkTimeoutMs <= 0) throw new IllegalArgumentException("SmartBI 导出连接的网络超时必须大于 0");
         this.cretasDataSource = cretasDataSource;
         this.smartbiDataSource = smartbiDataSource;
@@ -144,6 +156,7 @@ public class FactoryDataService {
         this.clock = clock;
         this.schema = schema;
         this.smartbiNetworkTimeoutMs = smartbiNetworkTimeoutMs;
+        this.heartbeatExecutor = heartbeatExecutor;
     }
 
     // ------------------------------------------------------------------ preview
@@ -394,7 +407,11 @@ public class FactoryDataService {
                             var cretasScope = FactoryDataScopeResolver.resolveVisible(cretas, Database.CRETAS, schema, factoryId);
                             rejectForeignHits(cretas, cretasScope);
                             var cretasMetadata = captureExportMetadata(cretas, cretasScope, factoryId);
-                            return exportDatabase(cretas, cretasScope, factoryId, fmt, writer, cretasMetadata);
+                            return writer.withWriteFailureHandler(e -> {
+                                var writeFailure = databaseWriteFailure(Database.CRETAS, e);
+                                if (failure != null) failure.compareAndSet(null, writeFailure);
+                                return writeFailure;
+                            }, () -> exportDatabase(cretas, cretasScope, factoryId, fmt, writer, cretasMetadata));
                         }));
                 return List.of(cretasManifest, exportDatabase(smartbi, smartbiScope, factoryId, fmt, writer, smartbiMetadata));
             });
@@ -455,7 +472,7 @@ public class FactoryDataService {
                 new ArrayList<>(scope.tables().values()), factoryId);
     }
 
-    private static <T> T withSnapshotHeartbeat(Connection waiting, Function<AtomicReference<Throwable>, T> work)
+    private <T> T withSnapshotHeartbeat(Connection waiting, Function<AtomicReference<Throwable>, T> work)
             throws SQLException {
         long idleMillis;
         try (PreparedStatement ps = waiting.prepareStatement(
@@ -470,8 +487,7 @@ public class FactoryDataService {
         T result = null;
         // The executor closes and joins the last heartbeat before the caller
         // uses the JDBC connection again or rolls back the read-only snapshot.
-        try (var executor = Executors.newSingleThreadScheduledExecutor(
-                Thread.ofVirtual().name("factory-export-snapshot-heartbeat").factory())) {
+        try (var executor = heartbeatExecutor.get()) {
             executor.scheduleWithFixedDelay(() -> {
                 try (PreparedStatement ps = waiting.prepareStatement("SELECT 1")) {
                     ps.setQueryTimeout(10);
@@ -550,7 +566,7 @@ public class FactoryDataService {
             m.put("migrationMetadata", writeMetadata(writer, dir + "/metadata/migrations.json",
                     sourceMetadata.migrations()));
         } catch (IOException e) {
-            throw new IllegalStateException(db + " 库写出失败: " + e.getMessage(), e);
+            throw databaseWriteFailure(db, e);
         }
         m.put("database", db.name());
         m.put("rows", rows);
@@ -563,6 +579,10 @@ public class FactoryDataService {
             if (m.containsKey(k)) ordered.put(k, m.get(k));
         }
         return ordered;
+    }
+
+    private static IllegalStateException databaseWriteFailure(Database db, IOException e) {
+        return new IllegalStateException(db + " 库写出失败: " + e.getMessage(), e);
     }
 
     private Map<String, Object> writeMetadata(FactoryDataPackageWriter writer, String path,

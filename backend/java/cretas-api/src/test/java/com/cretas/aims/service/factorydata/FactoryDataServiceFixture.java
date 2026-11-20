@@ -8,6 +8,8 @@ import java.io.OutputStream;
 import java.time.Clock;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.function.Supplier;
 
 /** 给别的包的真实 PG 测试用: 用测试 schema 构造整厂导出服务 (包内构造器)。 */
 public final class FactoryDataServiceFixture {
@@ -25,6 +27,13 @@ public final class FactoryDataServiceFixture {
         return new FactoryDataService(main, smartbiProvider(smartbi), new NoAttachments(),
                 new FactoryDataRequestLedger(main, Clock.systemDefaultZone()), operators, Clock.systemDefaultZone(),
                 schema, smartbiNetworkTimeoutMs);
+    }
+
+    static FactoryDataService create(DataSource main, DataSource smartbi, Set<Long> operators, String schema,
+                                     Supplier<ScheduledExecutorService> heartbeatExecutor) {
+        return new FactoryDataService(main, smartbiProvider(smartbi), new NoAttachments(),
+                new FactoryDataRequestLedger(main, Clock.systemDefaultZone()), operators, Clock.systemDefaultZone(),
+                schema, FactoryDataService.DEFAULT_SMARTBI_NETWORK_TIMEOUT_MS, heartbeatExecutor);
     }
 
     private static ObjectProvider<DataSource> smartbiProvider(DataSource smartbi) {

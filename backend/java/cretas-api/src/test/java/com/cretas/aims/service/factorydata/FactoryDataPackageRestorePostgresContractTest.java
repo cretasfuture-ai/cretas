@@ -17,6 +17,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.FilterOutputStream;
 import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
@@ -25,6 +26,7 @@ import java.nio.file.Path;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
@@ -34,10 +36,10 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.UnaryOperator;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
@@ -455,34 +457,24 @@ class FactoryDataPackageRestorePostgresContractTest {
         setUpSources();
         CountDownLatch heartbeatEntered = new CountDownLatch(1);
         CountDownLatch rollbackEntered = new CountDownLatch(1);
-        CountDownLatch heartbeatAboutToThrow = new CountDownLatch(1);
-        var heartbeatThread = new AtomicReference<Thread>();
+        var heartbeatExecutor = new HeartbeatCompletion();
         var writeFailure = new IOException("CRETAS ZIP write failed before rollback");
         var heartbeatFailure = new IllegalStateException("SmartBI heartbeat failed during CRETAS rollback");
         var rollbackFailure = new SQLException("CRETAS snapshot rollback failed");
         DataSource waiting = interceptHeartbeat(smartbiSource, sql -> {
-            heartbeatThread.set(Thread.currentThread());
             heartbeatEntered.countDown();
             awaitBarrier(rollbackEntered);
-            heartbeatAboutToThrow.countDown();
             throw heartbeatFailure;
         }, null);
         DataSource cretas = interceptConnection(source, (method, args) -> {
             if ("rollback".equals(method)) {
                 rollbackEntered.countDown();
-                awaitBarrier(heartbeatAboutToThrow);
-                // The failed scheduled task has returned to the idle executor before rollback throws.
-                Thread thread = heartbeatThread.get();
-                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-                while (thread.getState() != Thread.State.WAITING && System.nanoTime() < deadline) {
-                    TimeUnit.MILLISECONDS.sleep(5);
-                }
-                assertThat(thread.getState()).as("SmartBI heartbeat finished during CRETAS rollback")
-                        .isEqualTo(Thread.State.WAITING);
+                awaitBarrier(heartbeatExecutor.completed);
                 throw rollbackFailure;
             }
         });
-        FactoryDataService service = FactoryDataServiceFixture.create(cretas, waiting, Set.of(1L), sourceSchema);
+        FactoryDataService service = FactoryDataServiceFixture.create(cretas, waiting, Set.of(1L), sourceSchema,
+                () -> heartbeatExecutor);
         long request = service.startExport(OPERATOR, FACTORY);
         var bytes = new ByteArrayOutputStream();
         OutputStream output = afterHeartbeat(bytes, heartbeatEntered, writeFailure);
@@ -496,6 +488,80 @@ class FactoryDataPackageRestorePostgresContractTest {
                         .hasRootCause(heartbeatFailure));
         assertThat(service.ledger().find(request)).hasValueSatisfying(row ->
                 assertThat(row.errorMessage()).contains(writeFailure.getMessage()));
+    }
+
+    @Test
+    void zipFailureDuringTableWritePrecedesHeartbeatDuringStatementClose() throws Exception {
+        setUpSources();
+        var heartbeatEntered = new CountDownLatch(1);
+        var statementCloseEntered = new CountDownLatch(1);
+        var heartbeatExecutor = new HeartbeatCompletion();
+        var zipWriteFailed = new AtomicBoolean();
+        var statementClosed = new AtomicBoolean();
+        var rollbackStarted = new AtomicBoolean();
+        var writeFailure = new IOException("CRETAS ZIP write failed before statement close");
+        var heartbeatFailure = new IllegalStateException("SmartBI heartbeat failed during CRETAS statement close");
+        var closeFailure = new SQLException("CRETAS table statement close failed");
+        var rollbackFailure = new SQLException("CRETAS snapshot rollback failed");
+        DataSource waiting = interceptHeartbeat(smartbiSource, sql -> {
+            heartbeatEntered.countDown();
+            awaitBarrier(statementCloseEntered);
+            throw heartbeatFailure;
+        }, null);
+        DataSource cretas = interceptConnection(source, (method, args) -> {
+            if ("rollback".equals(method)) {
+                assertThat(statementClosed).isTrue();
+                rollbackStarted.set(true);
+                throw rollbackFailure;
+            }
+        }, real -> (PreparedStatement) Proxy.newProxyInstance(PreparedStatement.class.getClassLoader(),
+                new Class<?>[]{PreparedStatement.class}, (statement, method, args) -> {
+                    if ("close".equals(method.getName()) && zipWriteFailed.get()) {
+                        assertThat(rollbackStarted).isFalse();
+                        statementCloseEntered.countDown();
+                        awaitBarrier(heartbeatExecutor.completed);
+                        real.close();
+                        statementClosed.set(true);
+                        throw closeFailure;
+                    }
+                    return invokeJdbc(real, method, args);
+                }));
+        FactoryDataService service = FactoryDataServiceFixture.create(cretas, waiting, Set.of(1L), sourceSchema,
+                () -> heartbeatExecutor);
+        long request = service.startExport(OPERATOR, FACTORY);
+        var bytes = new ByteArrayOutputStream();
+        var output = new FilterOutputStream(bytes) {
+            @Override public void write(int value) throws IOException {
+                awaitBarrier(heartbeatEntered);
+                zipWriteFailed.set(true);
+                throw writeFailure;
+            }
+        };
+
+        Throwable failure = org.assertj.core.api.Assertions.catchThrowable(() -> service.writeExport(request, OPERATOR,
+                FACTORY, FactoryDataService.AttachmentMode.SKIP, Set.of(FactoryDataService.Format.JSON), output));
+        assertThat(statementClosed).isTrue();
+        assertThat(rollbackStarted).isTrue();
+        assertThat(heartbeatExecutor.isTerminated()).isTrue();
+        assertFailedExport(service, request, bytes);
+        assertThat(failure).hasRootCause(writeFailure);
+        assertThat(failure.getSuppressed()).hasSize(3).contains(closeFailure, rollbackFailure)
+                .anySatisfy(heartbeat -> assertThat(heartbeat).hasMessageContaining("快照心跳失败")
+                        .hasRootCause(heartbeatFailure));
+        assertThat(service.ledger().find(request)).hasValueSatisfying(row ->
+                assertThat(row.errorMessage()).contains(writeFailure.getMessage()));
+    }
+
+    private static final class HeartbeatCompletion extends ScheduledThreadPoolExecutor {
+        private final CountDownLatch completed = new CountDownLatch(1);
+
+        private HeartbeatCompletion() {
+            super(1, Thread.ofVirtual().factory());
+        }
+
+        @Override protected void afterExecute(Runnable task, Throwable failure) {
+            completed.countDown();
+        }
     }
 
     private static void awaitBarrier(CountDownLatch latch) {
@@ -577,6 +643,11 @@ class FactoryDataPackageRestorePostgresContractTest {
     }
 
     private static DataSource interceptConnection(DataSource original, SnapshotCall call) {
+        return interceptConnection(original, call, UnaryOperator.identity());
+    }
+
+    private static DataSource interceptConnection(DataSource original, SnapshotCall call,
+                                                  UnaryOperator<PreparedStatement> wrapTableStatement) {
         return new DelegatingDataSource(original) {
             @Override
             public Connection getConnection() throws SQLException {
@@ -586,14 +657,23 @@ class FactoryDataPackageRestorePostgresContractTest {
                 return (Connection) Proxy.newProxyInstance(Connection.class.getClassLoader(),
                         new Class<?>[]{Connection.class}, (proxy, method, args) -> {
                             call.beforeCall(method.getName(), args);
-                            try {
-                                return method.invoke(real, args);
-                            } catch (InvocationTargetException e) {
-                                throw e.getCause();
+                            Object result = invokeJdbc(real, method, args);
+                            if ("prepareStatement".equals(method.getName())
+                                    && args[0] instanceof String sql && sql.startsWith("SELECT * FROM ")) {
+                                return wrapTableStatement.apply((PreparedStatement) result);
                             }
+                            return result;
                         });
             }
         };
+    }
+
+    private static Object invokeJdbc(Object target, Method method, Object[] args) throws Throwable {
+        try {
+            return method.invoke(target, args);
+        } catch (InvocationTargetException e) {
+            throw e.getCause();
+        }
     }
 
     @Test

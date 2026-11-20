@@ -22,6 +22,7 @@ import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
 import java.lang.reflect.Array;
+import java.util.function.Function;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -41,6 +42,7 @@ public final class FactoryDataPackageWriter implements AutoCloseable {
     private final ZipOutputStream zip;
     private final List<Entry> entries = new ArrayList<>();
     private final byte[] redactionKey;
+    private Function<IOException, RuntimeException> writeFailureHandler;
 
     public FactoryDataPackageWriter(OutputStream out) {
         this(out, FactoryDataRedaction.newKey());
@@ -54,6 +56,21 @@ public final class FactoryDataPackageWriter implements AutoCloseable {
     public List<Entry> entries() { return List.copyOf(entries); }
 
     byte[] redactionKey() { return redactionKey.clone(); }
+
+    @FunctionalInterface
+    interface WriteWork<T> { T run() throws SQLException; }
+
+    /** The export thread alone owns this writer and its scoped failure handler. */
+    <T> T withWriteFailureHandler(Function<IOException, RuntimeException> handler, WriteWork<T> work)
+            throws SQLException {
+        var previous = writeFailureHandler;
+        writeFailureHandler = handler;
+        try {
+            return work.run();
+        } finally {
+            writeFailureHandler = previous;
+        }
+    }
 
     @FunctionalInterface
     interface RowsReader<T> { T read(ResultSet rs) throws SQLException, IOException; }
@@ -382,16 +399,22 @@ public final class FactoryDataPackageWriter implements AutoCloseable {
     private Entry writeEntry(String path, Body body, boolean bom) throws IOException, SQLException {
         MessageDigest sha = sha256();
         path = uniquePath(safeEntryPath(path));
-        zip.putNextEntry(new ZipEntry(path));
-        CountingStream counting = new CountingStream(new NonClosing(zip));
-        DigestOutputStream out = new DigestOutputStream(counting, sha);
-        if (bom) out.write(BOM);
-        long rows = body.write(out);
-        out.flush();
-        zip.closeEntry();
-        Entry entry = new Entry(path, rows, counting.count, HexFormat.of().formatHex(sha.digest()));
-        entries.add(entry);
-        return entry;
+        try {
+            zip.putNextEntry(new ZipEntry(path));
+            CountingStream counting = new CountingStream(new NonClosing(zip));
+            DigestOutputStream out = new DigestOutputStream(counting, sha);
+            if (bom) out.write(BOM);
+            long rows = body.write(out);
+            out.flush();
+            zip.closeEntry();
+            Entry entry = new Entry(path, rows, counting.count, HexFormat.of().formatHex(sha.digest()));
+            entries.add(entry);
+            return entry;
+        } catch (IOException e) {
+            // Table writes still own the JDBC result set and statement here.
+            if (writeFailureHandler != null) throw writeFailureHandler.apply(e);
+            throw e;
+        }
     }
 
     static String csv(String value) {
