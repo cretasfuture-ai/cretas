@@ -1,0 +1,12 @@
+# Java Gate's private PostgreSQL restore CLI job (PR and merge queue).
+.github/workflows/java-gate-pr.yml
+scripts/ci/changed-paths.py
+scripts/ci/trigger-paths/java-factory-restore-cli.txt
+scripts/ci/run-with-test-postgres.sh
+scripts/ci/run-factory-restore-cli-tests.py
+scripts/ci/resolve-maven.sh
+scripts/backup/create-owned-factory-restore-pg.py
+scripts/backup/restore-factory-export-v2.py
+backend/java/cretas-api/pom.xml
+backend/java/cretas-api/src/main/java/com/cretas/aims/service/factorydata/**
+backend/java/cretas-api/src/test/java/com/cretas/aims/service/factorydata/**

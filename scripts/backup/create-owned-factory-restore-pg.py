@@ -102,6 +102,7 @@ def main() -> int:
     os.environ["PGPASSFILE"] = str(passfile)
     with (data / "postgresql.conf").open("a", encoding="utf-8") as config:
         config.write(f"\nlisten_addresses='127.0.0.1'\nport={args.port}\n"
+                     "unix_socket_directories=''\n"
                      "archive_mode=off\nmax_connections=20\nmax_locks_per_transaction=1024\n")
     startup_state = {"complete": False}
     atexit.register(stop_failed_startup, root, data, args.pg_bin, int(time.time()) - 1, startup_state, restore)

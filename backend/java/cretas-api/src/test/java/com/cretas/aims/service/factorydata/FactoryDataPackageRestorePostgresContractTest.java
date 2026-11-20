@@ -936,7 +936,8 @@ class FactoryDataPackageRestorePostgresContractTest {
     }
 
     private static void dump(String pgBin, String host, String port, String pgUser, String database, Path output) throws Exception {
-        Process p = new ProcessBuilder(Path.of(pgBin, "pg_dump.exe").toString(), "-h", host, "-p", port, "-U", pgUser,
+        String executable = java.io.File.separatorChar == '\\' ? "pg_dump.exe" : "pg_dump";
+        Process p = new ProcessBuilder(Path.of(pgBin, executable).toString(), "-h", host, "-p", port, "-U", pgUser,
                 "-d", database, "--format=custom", "--schema-only", "--file", output.toString()).inheritIO().start();
         assertThat(p.waitFor()).isZero();
     }

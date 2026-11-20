@@ -22,6 +22,11 @@ fi
 for candidate in "${CRETAS_CI_PG_BIN:-}" /usr/lib/postgresql/17/bin /opt/homebrew/opt/postgresql@17/bin; do
     if [ -n "$candidate" ] && [ -x "$candidate/initdb" ]; then export PATH="$candidate:$PATH"; break; fi
 done
+# Restore verifies the cluster's ownership and SCRAM policy in addition to connecting.
+if [ "$#" -eq 1 ] && [ "$1" = --factory-restore-cli ]; then
+    initdb_bin=$(command -v initdb)
+    exec python3 "$(dirname "${BASH_SOURCE[0]}")/run-factory-restore-cli-tests.py" "$(dirname "$initdb_bin")"
+fi
 for tool in initdb pg_ctl createdb psql python3; do
     command -v "$tool" >/dev/null || { echo "Missing CI database tool: $tool" >&2; exit 2; }
 done
