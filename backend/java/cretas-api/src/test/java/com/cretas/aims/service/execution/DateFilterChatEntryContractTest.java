@@ -38,6 +38,7 @@ import com.cretas.aims.entity.inventory.SalesDeliveryRecord;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.inventory.SalesDeliveryRecordRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
@@ -425,26 +426,33 @@ class DateFilterChatEntryContractTest {
         assertThat(String.valueOf(plain)).doesNotContain("不能按时间筛选");
     }
 
-    @ParameterizedTest
+    @ParameterizedTest(name = "{0}")
     @CsvSource({
-            "最近一个月有哪些损耗异常, 2026-10-19, false",
-            "近30天有哪些损耗异常, 2026-10-21, false",
-            "近 30 天，有哪些损耗异常, 2026-10-21, false",
-            "最近有哪些损耗异常, 2026-10-21, true",
-            "本周有哪些损耗异常, 2026-11-16, false"
+            "最近一个月有哪些损耗异常, 2026-10-19, false, true",
+            "近30天有哪些损耗异常, 2026-10-21, false, true",
+            "近 30 天，有哪些损耗异常, 2026-10-21, false, true",
+            "最近有哪些损耗异常, 2026-10-21, true, true",
+            "本周有哪些损耗异常, 2026-11-16, false, true",
+            "最近有没有损耗异常, 2026-10-21, true, true",
+            "有没有损耗异常, 2026-10-21, false, false",
+            "这周有没有损耗异常, 2026-11-16, false, true",
+            "本月有没有损耗异常, 2026-11-01, false, true",
+            "近 30 天有没有损耗异常, 2026-10-21, false, true"
     })
-    void lossAnomalySseShortcutQueriesAndReportsTheSameWindow(String sentence, String from, boolean widened)
-            throws Exception {
+    void lossAnomalySseShortcutQueriesAndReportsTheSameWindow(
+            String sentence, String from, boolean widened, boolean timeStated) throws Exception {
         ProductionReportRepository reports = mock(ProductionReportRepository.class);
         when(reports.findYieldReportsForBalance(eq(F), any(), any(), eq(""), any(), any())).thenReturn(List.of(Map.of(
                 "batch_number", "PB-POSITIVE", "report_date", LOSS_TODAY, "product_name", "酱牛肉",
                 "process_name", "熟制杀菌", "input_quantity", BigDecimal.valueOf(100),
                 "output_quantity", BigDecimal.valueOf(80), "input_unit", "kg", "output_unit", "kg")));
         AIIntentService recognizer = configureLossAnomalySse(reports);
-        IntentExecuteResponse response = runSse(recognizer, sentence);
+        // 识别层按线上复测提供通用异常意图。短语直达成功时不会使用它。
+        var anomaly = recognitionTool(recognizer, "REPORT_ANOMALY", "report_anomaly");
+        IntentExecuteResponse response = runSse(recognizer, sentence, anomaly);
 
         assertThat(response.getStatus()).as(response.getMessage()).isEqualTo("SUCCESS");
-        assertThat(response.getIntentCode()).isEqualTo("REPORT_BATCH_YIELD_RANK");
+        assertThat(response.getIntentCode()).as(sentence).isEqualTo("REPORT_BATCH_YIELD_RANK");
         verify(recognizer, never()).recognizeIntentWithConfidence(
                 anyString(), anyString(), anyInt(), any(), anyString(), any(), any(), any(), any());
         verify(reports).findYieldReportsForBalance(eq(F), eq(LocalDate.parse(from)), eq(LOSS_TODAY),
@@ -455,9 +463,14 @@ class DateFilterChatEntryContractTest {
         var applied = result.path("appliedTimeRange");
         assertThat(period.path("startDate").asText()).isEqualTo(from);
         assertThat(period.path("endDate").asText()).isEqualTo(LOSS_TODAY.toString());
-        assertThat(applied.path("from").asText()).isEqualTo(period.path("startDate").asText());
-        assertThat(applied.path("to").asText()).isEqualTo(period.path("endDate").asText());
+        if (timeStated) {
+            assertThat(applied.path("from").asText()).isEqualTo(period.path("startDate").asText());
+            assertThat(applied.path("to").asText()).isEqualTo(period.path("endDate").asText());
+        } else {
+            assertThat(applied.isMissingNode()).isTrue();
+        }
         assertThat(data.path("windowWidened").asBoolean()).isEqualTo(widened);
+        assertThat(data.path("view").asText()).isEqualTo("loss_anomaly");
         assertThat(data.path("abnormalCount").asInt()).isEqualTo(1);
         assertThat(response.getMessage()).contains(from + " 至 " + LOSS_TODAY, "PB-POSITIVE");
     }
@@ -489,6 +502,71 @@ class DateFilterChatEntryContractTest {
         assertThat(data.path("abnormalNearLatestReport").isNull()).isTrue();
     }
 
+    @Test
+    void lossAnomalyYesNoWithNoReportsStatesThePeriodAndDataGap() throws Exception {
+        ProductionReportRepository reports = mock(ProductionReportRepository.class);
+        AIIntentService recognizer = configureLossAnomalySse(reports);
+
+        IntentExecuteResponse response = runSse(recognizer, "这周有没有损耗异常");
+
+        assertThat(response.getStatus()).as(response.getMessage()).isEqualTo("SUCCESS");
+        assertThat(response.getIntentCode()).isEqualTo("REPORT_BATCH_YIELD_RANK");
+        var data = mapper.valueToTree(response.getResultData()).path("data");
+        assertThat(data.path("view").asText()).isEqualTo("loss_anomaly");
+        assertThat(data.path("noReportsInWindow").asBoolean()).isTrue();
+        assertThat(response.getMessage()).contains("2026-11-16 至 2026-11-19", "没有任何报工记录",
+                        "没法判断有没有损耗异常")
+                .doesNotContain("没有损耗异常的批次工序");
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+            "最近有没有异常, REPORT_ANOMALY, report_anomaly",
+            "有什么异常, REPORT_ANOMALY, report_anomaly",
+            "最近有哪些质检不合格, QUALITY_CHECK_QUERY, quality_check_query"
+    })
+    void otherQueriesStillDispatchTheRecognizedTool(String sentence, String code, String toolName) throws Exception {
+        ProductionReportRepository reports = mock(ProductionReportRepository.class);
+        AIIntentService recognizer = configureLossAnomalySse(reports);
+        var recognized = recognitionTool(recognizer, code, toolName);
+        ToolExecutor tool = registry.getExecutor(toolName).orElseThrow();
+
+        IntentExecuteResponse response = runSse(recognizer, sentence, recognized);
+
+        assertThat(response.getStatus()).as(response.getMessage()).isEqualTo("SUCCESS");
+        assertThat(response.getIntentCode()).isEqualTo(code);
+        verify(tool).execute(any(), any());
+        verifyNoInteractions(reports);
+    }
+
+    @Test
+    void lowestBatchYieldStaysInBatchRanking() throws Exception {
+        ProductionReportRepository reports = mock(ProductionReportRepository.class);
+        AIIntentService recognizer = configureLossAnomalySse(reports);
+
+        IntentExecuteResponse response = runSse(recognizer, "出成率最低的批次");
+
+        assertThat(response.getStatus()).as(response.getMessage()).isEqualTo("SUCCESS");
+        assertThat(response.getIntentCode()).isEqualTo("REPORT_BATCH_YIELD_RANK");
+        var data = mapper.valueToTree(response.getResultData()).path("data");
+        assertThat(data.path("order").asText()).isEqualTo("lowest");
+        assertThat(data.has("rankedBatchCount")).isTrue();
+        assertThat(data.path("view").asText()).isNotEqualTo("loss_anomaly");
+        verifyNoInteractions(reports);
+    }
+
+    private IntentMatchResult recognitionTool(AIIntentService recognizer, String code, String toolName) throws Exception {
+        ToolExecutor tool = mock(ToolExecutor.class);
+        when(tool.getToolName()).thenReturn(toolName);
+        when(tool.getAccessMode()).thenReturn(ToolExecutor.AccessMode.READ);
+        when(tool.getParametersSchema()).thenReturn(Map.of("required", List.of()));
+        when(tool.execute(any(), any())).thenReturn("{\"success\":true,\"data\":{\"message\":\"查询完成\"}}");
+        configureSseIntent(recognizer, code, tool);
+        return IntentMatchResult.builder().bestMatch(recognizer.getIntentByCode(F, code).orElseThrow())
+                .confidence(0.96).matchMethod(IntentMatchResult.MatchMethod.SEMANTIC)
+                .questionType(IntentKnowledgeBase.QuestionType.OPERATIONAL_COMMAND).build();
+    }
+
     private AIIntentService configureLossAnomalySse(ProductionReportRepository reports) {
         ProcessSecretAggregateExclusions exclusions = mock(ProcessSecretAggregateExclusions.class);
         when(exclusions.forCurrentCaller(eq(F), anyString())).thenReturn(ProcessSecretAggregateExclusions.Scope.EMPTY);
@@ -500,6 +578,7 @@ class DateFilterChatEntryContractTest {
                 return LOSS_TODAY;
             }
         });
+        ReflectionTestUtils.setField(tool, "batchRepository", mock(ProductionBatchRepository.class));
         ReflectionTestUtils.setField(tool, "yieldAnalysisService", mock(YieldAnalysisService.class));
         ReflectionTestUtils.setField(tool, "materialBalanceService",
                 new MaterialBalanceService(reports, exclusions, thresholds, mapper));
@@ -544,11 +623,16 @@ class DateFilterChatEntryContractTest {
     }
 
     private IntentExecuteResponse runSse(AIIntentService recognizer, String sentence) throws Exception {
-        when(recognizer.recognizeIntentWithConfidence(eq(sentence), eq(F), eq(3), any(), eq(ROLE),
-                any(), any(), any(), eq(List.of()))).thenReturn(IntentMatchResult.builder()
+        return runSse(recognizer, sentence, IntentMatchResult.builder()
                 .matchMethod(IntentMatchResult.MatchMethod.NONE)
                 .questionType(IntentKnowledgeBase.QuestionType.OPERATIONAL_COMMAND)
                 .build());
+    }
+
+    private IntentExecuteResponse runSse(AIIntentService recognizer, String sentence, IntentMatchResult recognition)
+            throws Exception {
+        when(recognizer.recognizeIntentWithConfidence(eq(sentence), eq(F), eq(3), any(), eq(ROLE),
+                any(), any(), any(), eq(List.of()))).thenReturn(recognition);
         IntentKnowledgeBase knowledge = new IntentKnowledgeBase();
         knowledge.initDefaults();
         SemanticCacheService cache = mock(SemanticCacheService.class);
