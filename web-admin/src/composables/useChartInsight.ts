@@ -229,11 +229,12 @@ export function useChartInsight(
         // Final stale check after await.
         if (_staleToken !== token) return;
 
-        if (result && 'reason' in result) {
+        if (result === null) return;
+        if ('reason' in result) {
           unavailableReason.value = result.reason;
-        } else {
-          insight.value = result;
+          return;
         }
+        insight.value = result;
       } catch {
         // Any unexpected error → honest-null (禁止降级处理: no fabrication).
         if (_staleToken === token) {
