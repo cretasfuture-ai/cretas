@@ -102,11 +102,7 @@ class ProductProcessWorkflowCompletenessContractTest {
                     List.of(Map.of("materialTypeId", "label", "materialName", "标签", "standardQuantity", 0)));
             case "STANDARD_YIELD_INVALID" -> process.getData().remove("standardYieldRate");
             case "FIXED_RATIO_REQUIRED" -> process.getData().put("conversionRule", Map.of("mode", "FIXED_RATIO"));
-            case "INPUT_RATIO_INVALID" -> {
-                Map<String, Object> input = input();
-                input.put("inputShareRatio", 101);
-                process.getData().put("ports", List.of(input, output("kg")));
-            }
+            case "INPUT_RATIO_INVALID" -> setInputShareRatio(graph, 101);
             case "MATERIAL_UNCONNECTED" -> graph.getEdges().removeFirst();
             case "MATERIAL_BINDING_REQUIRED" -> finished.getData().remove("skuId");
             case "PENDING_CONFIRMATION" -> process.getData().put("pendingConfirmations",
@@ -118,6 +114,27 @@ class ProductProcessWorkflowCompletenessContractTest {
             assertThat(issue.code()).isEqualTo(rule);
             assertThat(issue.message()).isNotBlank();
             assertThat(issue.action()).isNotBlank();
+        });
+    }
+
+    @Test
+    void acceptsZeroInputShareWithoutReportingAnOmission() {
+        var graph = completeGraph();
+        setInputShareRatio(graph, 0);
+
+        assertThat(check(graph)).isEmpty();
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {-1, 101})
+    void rejectsInputSharesOutsideThePublishRange(int share) {
+        var graph = completeGraph();
+        setInputShareRatio(graph, share);
+
+        assertThat(check(graph)).singleElement().satisfies(issue -> {
+            assertThat(issue.code()).isEqualTo("INPUT_RATIO_INVALID");
+            assertThat(issue.nodeId()).isEqualTo("process");
+            assertThat(issue.portId()).isEqualTo("in");
         });
     }
 
@@ -149,8 +166,28 @@ class ProductProcessWorkflowCompletenessContractTest {
         product.setNetContentQuantity(new BigDecimal("400"));
         product.setNetContentUnit("g");
         when(products.findByIdIn(anyList())).thenReturn(List.of(product));
+        when(unitContracts.areEquivalent(FACTORY, outputUnit, outputUnit)).thenReturn(true);
         assertThat(codes(graph)).doesNotContain("COUNT_WEIGHT_REQUIRED", "CONVERSION_REQUIRED");
         product.setFactoryId("F007");
+        assertThat(codes(graph)).contains("COUNT_WEIGHT_REQUIRED", "CONVERSION_REQUIRED");
+    }
+
+    @Test
+    void usesTheUnitContractForLegacyPackagingAliasesAndDistinctPackageSizes() {
+        var graph = completeGraph();
+        setOutputUnit(graph, "case");
+        var product = new ProductType();
+        product.setId(PRODUCT);
+        product.setFactoryId(FACTORY);
+        product.setUnit("箱");
+        product.setNetContentQuantity(new BigDecimal("400"));
+        product.setNetContentUnit("g");
+        when(products.findByIdIn(anyList())).thenReturn(List.of(product));
+        when(unitContracts.areEquivalent(FACTORY, "case", "箱")).thenReturn(true);
+
+        assertThat(check(graph)).isEmpty();
+
+        product.setUnit("盒");
         assertThat(codes(graph)).contains("COUNT_WEIGHT_REQUIRED", "CONVERSION_REQUIRED");
     }
 
@@ -221,6 +258,12 @@ class ProductProcessWorkflowCompletenessContractTest {
         graph.getNodes().get(1).getData().put("outputUnit", unit);
         graph.getNodes().get(1).getData().put("ports", List.of(input(), output(unit)));
         graph.getNodes().get(2).getData().put("baseUnit", unit);
+    }
+
+    private void setInputShareRatio(ProductProcessWorkflowDTO graph, int share) {
+        var input = input();
+        input.put("inputShareRatio", share);
+        graph.getNodes().get(1).getData().put("ports", List.of(input, output("kg")));
     }
 
     private static Map<String, Object> input() {

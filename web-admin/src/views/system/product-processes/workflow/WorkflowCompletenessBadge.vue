@@ -21,8 +21,8 @@
       data-testid="workflow-completeness-panel"
     >
       <h3>工艺检查</h3>
+      <p v-if="state === 'checking' || !issues.length">{{ label }}</p>
       <WorkflowCompletenessList v-if="issues.length" :groups="groups" locatable @locate="locate" />
-      <p v-else>{{ label }}</p>
       <button v-if="state === 'failed'" type="button" class="completeness-badge__retry" @click="$emit('retry')">
         重新检查
       </button>
@@ -45,8 +45,9 @@ const open = defineModel<boolean>('open', { required: true });
 const trigger = ref<HTMLButtonElement>();
 const label = computed(() => {
   if (props.state === 'failed') return '检查未完成';
-  if (props.issues.length) return `${props.issues.length} 个遗漏`;
-  return props.state === 'ready' ? '检查通过' : '检查中…';
+  const count = props.issues.length;
+  if (props.state === 'checking') return count ? `检查中…（上次：${count} 个遗漏）` : '检查中…';
+  return count ? `${count} 个遗漏` : '检查通过';
 });
 
 function close() {

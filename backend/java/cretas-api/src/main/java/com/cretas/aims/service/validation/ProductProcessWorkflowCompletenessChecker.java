@@ -15,6 +15,7 @@ import com.cretas.aims.service.unit.UnitContractService;
 import com.cretas.aims.service.unit.UnitConversionContext;
 import com.cretas.aims.service.unit.UnitDimension;
 import com.cretas.aims.service.unit.UnitUsageScene;
+import com.cretas.aims.service.workflow.InputShareRatios;
 import com.cretas.aims.service.workflow.ProductProcessWorkflowRuntimeCompiler;
 import com.cretas.aims.service.workflow.WorkflowActualIoSemantics;
 import com.cretas.aims.service.workflow.WorkflowPendingConfirmations;
@@ -39,7 +40,6 @@ import java.util.regex.Pattern;
 @RequiredArgsConstructor
 public class ProductProcessWorkflowCompletenessChecker {
 
-    private static final BigDecimal HUNDRED = BigDecimal.valueOf(100);
     private static final Pattern FIXED_RATIO =
             Pattern.compile("^\\s*(\\d+(?:\\.\\d+)?)\\s+[^=]+?\\s*=\\s*(\\d+(?:\\.\\d+)?)\\s+[^=]+?\\s*$");
 
@@ -156,10 +156,12 @@ public class ProductProcessWorkflowCompletenessChecker {
                 add(issues, "INPUT_UNIT_REQUIRED", node, portId,
                         item(input, "这项投入") + "还没填单位", "选择投入的计量单位");
             }
-            BigDecimal share = number(input.get("inputShareRatio"));
-            if (input.get("inputShareRatio") != null && !inRange(share, HUNDRED)) {
+            try {
+                InputShareRatios.parsePercent(input.get("inputShareRatio"));
+            } catch (IllegalArgumentException error) {
                 add(issues, "INPUT_RATIO_INVALID", node, portId,
-                        item(input, "这项投入") + "的配比不在 0% 到 100% 之间", "填写大于 0% 且不超过 100% 的配比");
+                        item(input, "这项投入") + "的配比须在 0% 到 100% 之间",
+                        "填写 0% 到 100% 的数值，填 0% 表示这项投入不参与推算");
             }
         }
         Map<?, ?> rule = data.get("conversionRule") instanceof Map<?, ?> value ? value : Map.of();
@@ -327,7 +329,7 @@ public class ProductProcessWorkflowCompletenessChecker {
     private boolean hasNetWeight(String factoryId, ProductType product, String unit) {
         return product != null && positive(product.getNetContentQuantity())
                 && dimension(factoryId, product.getNetContentUnit()).orElse(null) == UnitDimension.MASS
-                && (Objects.equals(unit, product.getUnit()) || unitContracts.areEquivalent(factoryId, unit, product.getUnit()));
+                && unitContracts.areEquivalent(factoryId, unit, product.getUnit());
     }
 
     private Optional<UnitDimension> dimension(String factoryId, String unit) {
