@@ -7,8 +7,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 
 import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -40,28 +38,16 @@ public final class FactoryDataSchemaMetadata {
      */
     public static Snapshot capture(Connection conn, Database database, String schema,
                                    List<TableScope> tables, String factoryId) throws SQLException {
-        return capture(conn, database, schema, tables, factoryId, null);
+        return capture(new FactoryDataPreflightQueries(conn), database, schema, tables, factoryId);
     }
 
-    static Snapshot capture(Connection conn, Database database, String schema, List<TableScope> tables,
-                            String factoryId, FactoryDataExportFailures failures) throws SQLException {
+    static Snapshot capture(FactoryDataPreflightQueries queries, Database database, String schema,
+                            List<TableScope> tables, String factoryId) throws SQLException {
         // The metadata queries use pg_get_* definitions.  Bind the schema and
         // pg_catalog explicitly so source descriptors do not depend on a
         // caller's mutable search_path.
-        try (PreparedStatement ps = conn.prepareStatement(
-                "SELECT set_config('search_path', quote_ident(?) || ', pg_catalog', true)")) {
-            // Record a failed metadata query before statement cleanup can race the heartbeat.
-            FactoryDataExportFailures.Work<Void, SQLException> setSearchPath = () -> {
-                ps.setString(1, schema);
-                ps.executeQuery().close();
-                return null;
-            };
-            if (failures == null) {
-                setSearchPath.run();
-            } else {
-                failures.read(database + " 库读取失败", setSearchPath);
-            }
-        }
+        queries.query("SELECT set_config('search_path', quote_ident(?) || ', pg_catalog', true)",
+                ps -> ps.setString(1, schema), rs -> null);
         Set<String> names = tables.stream().map(TableScope::table).collect(Collectors.toCollection(TreeSet::new));
         Map<String, TableScope> exportedTables = tables.stream().filter(table -> table.category().exported())
                 .collect(Collectors.toMap(TableScope::table, table -> table));
@@ -70,7 +56,7 @@ public final class FactoryDataSchemaMetadata {
         structure.put("database", database.name());
         structure.put("sourceSchema", schema);
         structure.put("tables", tableScopes(tables));
-        List<Map<String, Object>> constraintMetadata = constraints(conn, schema, names);
+        List<Map<String, Object>> constraintMetadata = readConstraints(queries, schema, names).descriptors();
         rejectCrossSchemaReferences(constraintMetadata, schema);
         Set<String> dependencyNames = constraintMetadata.stream()
                 .map(c -> c.get("referencedTable"))
@@ -80,36 +66,36 @@ public final class FactoryDataSchemaMetadata {
                 .collect(Collectors.toCollection(TreeSet::new));
         Set<String> structureNames = new TreeSet<>(names);
         structureNames.addAll(dependencyNames);
-        List<Map<String, Object>> columnMetadata = columns(conn, schema, structureNames);
-        requireCompleteColumnMetadata(conn, schema, structureNames, columnMetadata);
+        List<Map<String, Object>> columnMetadata = columns(queries, schema, structureNames);
+        requireCompleteColumnMetadata(queries, schema, structureNames, columnMetadata);
         // Schema-only dependencies retain PK/UNIQUE definitions even when
         // this tenant needs no row from the referenced table.
-        ConstraintMetadata allConstraints = readConstraints(conn, schema, structureNames);
+        ConstraintMetadata allConstraints = readConstraints(queries, schema, structureNames);
         constraintMetadata = allConstraints.descriptors();
         rejectCrossSchemaReferences(constraintMetadata, schema);
         validateColumnTypes(columnMetadata);
-        validateRedactionConstraints(conn, schema, columnMetadata, constraintMetadata);
-        rejectMissingInternalParents(conn, database, schema, allConstraints, exportedTables, factoryId);
+        validateRedactionConstraints(queries, schema, columnMetadata, constraintMetadata);
+        rejectMissingInternalParents(queries, database, schema, allConstraints, exportedTables, factoryId);
         structure.put("columns", columnMetadata);
         structure.put("constraints", constraintMetadata);
-        List<Map<String, Object>> externalReferences = externalReferences(conn, schema,
+        List<Map<String, Object>> externalReferences = externalReferences(queries, schema,
                 constraintMetadata, exportedTables.keySet(), tables, factoryId);
         if (externalReferences.stream().anyMatch(row -> !"SCHEMA_ONLY_ZERO_REFERENCES".equals(row.get("action")))) {
             throw new IllegalStateException("导出表存在未随包提供的外部外键，拒绝生成可恢复包: " + externalReferences);
         }
         structure.put("externalReferences", externalReferences);
-        structure.put("indexes", indexes(conn, schema, structureNames));
-        structure.put("sequences", sequences(conn, schema));
-        structure.put("triggers", triggers(conn, schema, structureNames));
+        structure.put("indexes", indexes(queries, schema, structureNames));
+        structure.put("sequences", sequences(queries, schema));
+        structure.put("triggers", triggers(queries, schema, structureNames));
         structure.put("dependencyTables", dependencyNames);
-        structure.put("snapshot", snapshot(conn));
+        structure.put("snapshot", snapshot(queries));
         structure.put("restoreContract", "COMPATIBLE_SCHEMA_REQUIRED");
         structure.put("restoreStatus", "REQUIRES_PROTECTED_SCHEMA_BASELINE");
         structure.put("rawDdlIncluded", false);
         structure.put("coveredObjects", List.of("tables", "columns", "constraints", "indexes", "sequences", "triggers"));
         structure.put("fingerprintAlgorithm", "SHA-256");
         structure.put("fingerprint", fingerprint(structure));
-        Map<String, Object> migrationMetadata = migrations(conn, database, schema);
+        Map<String, Object> migrationMetadata = migrations(queries, database, schema);
         if (!Boolean.TRUE.equals(migrationMetadata.get("available"))
                 || !(migrationMetadata.get("fingerprint") instanceof String fingerprint)
                 || fingerprint.isBlank()) {
@@ -134,7 +120,7 @@ public final class FactoryDataSchemaMetadata {
         return out;
     }
 
-    private static void requireCompleteColumnMetadata(Connection conn, String schema, Set<String> tables,
+    private static void requireCompleteColumnMetadata(FactoryDataPreflightQueries queries, String schema, Set<String> tables,
                                                       List<Map<String, Object>> columns) throws SQLException {
         if (tables.isEmpty()) return;
         Map<String, Set<Object>> described = columns.stream().collect(Collectors.groupingBy(
@@ -150,27 +136,27 @@ public final class FactoryDataSchemaMetadata {
                   AND attribute.attnum > 0 AND NOT attribute.attisdropped
                 WHERE namespace.nspname = ? AND relation.relname IN (%s)
                 """.formatted(placeholders(tables.size()));
-        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+        queries.query(sql, ps -> {
             ps.setString(1, schema);
             int index = 2;
             for (String table : tables) ps.setString(index++, table);
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    String table = rs.getString(1);
-                    String column = rs.getString(2);
-                    unverified.remove(table);
-                    if (column != null && !described.getOrDefault(table, Set.of()).contains(column)) {
-                        throw new IllegalStateException("表列描述不完整，拒绝生成可恢复包: " + table);
-                    }
+        }, rs -> {
+            while (rs.next()) {
+                String table = rs.getString(1);
+                String column = rs.getString(2);
+                unverified.remove(table);
+                if (column != null && !described.getOrDefault(table, Set.of()).contains(column)) {
+                    throw new IllegalStateException("表列描述不完整，拒绝生成可恢复包: " + table);
                 }
             }
-        }
+            return null;
+        });
         if (!unverified.isEmpty()) {
             throw new IllegalStateException("无法从目录核实表列描述，拒绝生成可恢复包: " + unverified);
         }
     }
 
-    private static void rejectMissingInternalParents(Connection conn, Database database, String schema,
+    private static void rejectMissingInternalParents(FactoryDataPreflightQueries queries, Database database, String schema,
             ConstraintMetadata constraints, Map<String, TableScope> exported, String factoryId) throws SQLException {
         Map<InternalForeignKey, List<Map<String, Object>>> foreignKeys = new LinkedHashMap<>();
         for (Map<String, Object> constraint : constraints.descriptors()) {
@@ -184,8 +170,10 @@ public final class FactoryDataSchemaMetadata {
         Map<InternalForeignKey, Long> missing = new LinkedHashMap<>();
         for (var fk : foreignKeys.entrySet()) {
             InternalForeignKey key = fk.getKey();
-            var child = FactoryDataScopeResolver.ownedRows(conn, exported.get(key.child()), factoryId, "c.");
-            var parent = FactoryDataScopeResolver.ownedRows(conn, exported.get(key.parent()), factoryId, "p.");
+            var child = queries.read(() -> FactoryDataScopeResolver.ownedRows(queries.connection(),
+                    exported.get(key.child()), factoryId, "c."));
+            var parent = queries.read(() -> FactoryDataScopeResolver.ownedRows(queries.connection(),
+                    exported.get(key.parent()), factoryId, "p."));
             StringJoiner referenced = new StringJoiner(" AND ");
             // MATCH FULL exempts only an entirely NULL key. A partial NULL
             // reaches the anti-join and cannot match all parent components.
@@ -203,21 +191,18 @@ public final class FactoryDataSchemaMetadata {
                     + " p WHERE (" + parent.sql() + ") AND " + referenced + ")";
             List<Object> params = new ArrayList<>(child.params());
             params.addAll(parent.params());
-            try (PreparedStatement ps = conn.prepareStatement(sql)) {
-                FactoryDataScopeResolver.bind(ps, params);
-                try (ResultSet rs = ps.executeQuery()) {
-                    rs.next();
-                    long count = rs.getLong(1);
-                    if (count != 0) missing.put(key, count);
-                }
-            }
+            long count = queries.query(sql, ps -> FactoryDataScopeResolver.bind(ps, params), rs -> {
+                rs.next();
+                return rs.getLong(1);
+            });
+            if (count != 0) missing.put(key, count);
         }
         if (!missing.isEmpty()) {
             throw new IllegalStateException(database + " 库存在包内外键父行未选中，拒绝导出: " + missing);
         }
     }
 
-    private static List<Map<String, Object>> columns(Connection conn, String schema, Set<String> tables)
+    private static List<Map<String, Object>> columns(FactoryDataPreflightQueries queries, String schema, Set<String> tables)
             throws SQLException {
         if (tables.isEmpty()) return List.of();
         String sql = "SELECT c.table_name, c.column_name, c.ordinal_position, c.data_type, c.udt_name, c.is_nullable, "
@@ -233,49 +218,48 @@ public final class FactoryDataSchemaMetadata {
                 + "LEFT JOIN pg_attribute pa ON pa.attrelid = pc.oid AND pa.attname = c.column_name AND NOT pa.attisdropped "
                 + "WHERE c.table_schema = ? AND c.table_name IN ("
                 + placeholders(tables.size()) + ") ORDER BY c.table_name, c.ordinal_position";
-        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+        return queries.query(sql, ps -> {
             int i = 1;
             ps.setString(i++, schema);
             for (String table : tables) ps.setString(i++, table);
-            try (ResultSet rs = ps.executeQuery()) {
-                List<Map<String, Object>> out = new ArrayList<>();
-                while (rs.next()) {
-                    if ("USER-DEFINED".equals(rs.getString("data_type"))
-                            && "vector".equals(rs.getString("udt_name"))
-                            && !rs.getBoolean("extension_vector_type")) {
-                        throw new IllegalStateException("当前列不是 pgvector 扩展拥有的类型，拒绝生成包: "
-                                + rs.getString("table_name") + "." + rs.getString("column_name"));
-                    }
-                    Map<String, Object> row = new LinkedHashMap<>();
-                    row.put("table", rs.getString("table_name"));
-                    row.put("column", rs.getString("column_name"));
-                    row.put("ordinal", rs.getInt("ordinal_position"));
-                    row.put("dataType", rs.getString("data_type"));
-                    row.put("udtName", rs.getString("udt_name"));
-                    row.put("nullable", "YES".equals(rs.getString("is_nullable")));
-                    row.put("defaultFingerprint", sha256Text(rs.getString("column_default")));
-                    row.put("characterMaxLength", rs.getObject("character_maximum_length"));
-                    row.put("numericPrecision", rs.getObject("numeric_precision"));
-                    row.put("numericScale", rs.getObject("numeric_scale"));
-                    row.put("datetimePrecision", rs.getObject("datetime_precision"));
-                    row.put("identity", "YES".equals(rs.getString("is_identity")));
-                    row.put("identityGeneration", rs.getString("identity_generation"));
-                    row.put("generated", "ALWAYS".equals(rs.getString("is_generated")));
-                    row.put("generationFingerprint", sha256Text(rs.getString("generation_expression")));
-                    row.put("typeSignatureFingerprint", sha256Text(rs.getString("type_signature")));
-                    out.add(row);
+        }, rs -> {
+            List<Map<String, Object>> out = new ArrayList<>();
+            while (rs.next()) {
+                if ("USER-DEFINED".equals(rs.getString("data_type"))
+                        && "vector".equals(rs.getString("udt_name"))
+                        && !rs.getBoolean("extension_vector_type")) {
+                    throw new IllegalStateException("当前列不是 pgvector 扩展拥有的类型，拒绝生成包: "
+                            + rs.getString("table_name") + "." + rs.getString("column_name"));
                 }
-                return out;
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("table", rs.getString("table_name"));
+                row.put("column", rs.getString("column_name"));
+                row.put("ordinal", rs.getInt("ordinal_position"));
+                row.put("dataType", rs.getString("data_type"));
+                row.put("udtName", rs.getString("udt_name"));
+                row.put("nullable", "YES".equals(rs.getString("is_nullable")));
+                row.put("defaultFingerprint", sha256Text(rs.getString("column_default")));
+                row.put("characterMaxLength", rs.getObject("character_maximum_length"));
+                row.put("numericPrecision", rs.getObject("numeric_precision"));
+                row.put("numericScale", rs.getObject("numeric_scale"));
+                row.put("datetimePrecision", rs.getObject("datetime_precision"));
+                row.put("identity", "YES".equals(rs.getString("is_identity")));
+                row.put("identityGeneration", rs.getString("identity_generation"));
+                row.put("generated", "ALWAYS".equals(rs.getString("is_generated")));
+                row.put("generationFingerprint", sha256Text(rs.getString("generation_expression")));
+                row.put("typeSignatureFingerprint", sha256Text(rs.getString("type_signature")));
+                out.add(row);
             }
-        }
+            return out;
+        });
     }
 
-    static List<Map<String, Object>> constraints(Connection conn, String schema, Set<String> tables)
+    static List<Map<String, Object>> constraints(FactoryDataPreflightQueries queries, String schema, Set<String> tables)
             throws SQLException {
-        return readConstraints(conn, schema, tables).descriptors();
+        return readConstraints(queries, schema, tables).descriptors();
     }
 
-    private static ConstraintMetadata readConstraints(Connection conn, String schema, Set<String> tables)
+    private static ConstraintMetadata readConstraints(FactoryDataPreflightQueries queries, String schema, Set<String> tables)
             throws SQLException {
         if (tables.isEmpty()) return new ConstraintMetadata(List.of(), Set.of());
         // information_schema.table_constraints hides constraints from SELECT-only roles.
@@ -305,53 +289,52 @@ public final class FactoryDataSchemaMetadata {
                 WHERE pc.contype IN ('f', 'p', 'u', 'c')
                   AND child_namespace.nspname = ? AND child.relname IN (%s)
                 """.formatted(placeholders(tables.size()));
-        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+        return queries.query(sql, ps -> {
             int i = 1;
             ps.setString(i++, schema);
             for (String table : tables) ps.setString(i++, table);
-            try (ResultSet rs = ps.executeQuery()) {
-                List<Map<String, Object>> out = new ArrayList<>();
-                Set<InternalForeignKey> matchFull = new java.util.HashSet<>();
-                while (rs.next()) {
-                    Map<String, Object> row = new LinkedHashMap<>();
-                    row.put("table", rs.getString("table_name"));
-                    row.put("name", rs.getString("constraint_name"));
-                    row.put("type", rs.getString("constraint_type"));
-                    row.put("column", rs.getString("column_name"));
-                    row.put("ordinal", rs.getObject("ordinal_position"));
-                    row.put("referencedTable", rs.getString("referenced_table"));
-                    row.put("referencedSchema", rs.getString("referenced_schema"));
-                    row.put("referencedColumn", rs.getString("referenced_column"));
-                    row.put("updateRule", rs.getString("update_rule"));
-                    row.put("deleteRule", rs.getString("delete_rule"));
-                    row.put("definitionFingerprint", rs.getString("definition_fingerprint"));
-                    if ("FOREIGN KEY".equals(row.get("type"))) {
-                        if (row.values().stream().anyMatch(java.util.Objects::isNull)) {
-                            throw new IllegalStateException("外键目录描述不完整，拒绝导出: "
-                                    + row.get("table") + "." + row.get("name"));
-                        }
-                        String matchType = rs.getString("match_type");
-                        if ("f".equals(matchType)) {
-                            matchFull.add(new InternalForeignKey((String) row.get("table"),
-                                    (String) row.get("referencedTable"), (String) row.get("name")));
-                        } else if (!"s".equals(matchType)) {
-                            throw new IllegalStateException("外键匹配类型不受支持，拒绝导出: "
-                                    + row.get("table") + "." + row.get("name"));
-                        }
+        }, rs -> {
+            List<Map<String, Object>> out = new ArrayList<>();
+            Set<InternalForeignKey> matchFull = new java.util.HashSet<>();
+            while (rs.next()) {
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("table", rs.getString("table_name"));
+                row.put("name", rs.getString("constraint_name"));
+                row.put("type", rs.getString("constraint_type"));
+                row.put("column", rs.getString("column_name"));
+                row.put("ordinal", rs.getObject("ordinal_position"));
+                row.put("referencedTable", rs.getString("referenced_table"));
+                row.put("referencedSchema", rs.getString("referenced_schema"));
+                row.put("referencedColumn", rs.getString("referenced_column"));
+                row.put("updateRule", rs.getString("update_rule"));
+                row.put("deleteRule", rs.getString("delete_rule"));
+                row.put("definitionFingerprint", rs.getString("definition_fingerprint"));
+                if ("FOREIGN KEY".equals(row.get("type"))) {
+                    if (row.values().stream().anyMatch(java.util.Objects::isNull)) {
+                        throw new IllegalStateException("外键目录描述不完整，拒绝导出: "
+                                + row.get("table") + "." + row.get("name"));
                     }
-                    out.add(row);
+                    String matchType = rs.getString("match_type");
+                    if ("f".equals(matchType)) {
+                        matchFull.add(new InternalForeignKey((String) row.get("table"),
+                                (String) row.get("referencedTable"), (String) row.get("name")));
+                    } else if (!"s".equals(matchType)) {
+                        throw new IllegalStateException("外键匹配类型不受支持，拒绝导出: "
+                                + row.get("table") + "." + row.get("name"));
+                    }
                 }
-                out.sort(java.util.Comparator.comparing((Map<String, Object> row) -> String.valueOf(row.get("table")))
-                        .thenComparing(row -> String.valueOf(row.get("name")))
-                        .thenComparing(row -> String.valueOf(row.get("column")))
-                        .thenComparing(row -> String.valueOf(row.get("ordinal")))
-                        .thenComparing(row -> String.valueOf(row.get("referencedColumn"))));
-                return new ConstraintMetadata(out, matchFull);
+                out.add(row);
             }
-        }
+            out.sort(java.util.Comparator.comparing((Map<String, Object> row) -> String.valueOf(row.get("table")))
+                    .thenComparing(row -> String.valueOf(row.get("name")))
+                    .thenComparing(row -> String.valueOf(row.get("column")))
+                    .thenComparing(row -> String.valueOf(row.get("ordinal")))
+                    .thenComparing(row -> String.valueOf(row.get("referencedColumn"))));
+            return new ConstraintMetadata(out, matchFull);
+        });
     }
 
-    private static List<Map<String, Object>> indexes(Connection conn, String schema, Set<String> tables)
+    private static List<Map<String, Object>> indexes(FactoryDataPreflightQueries queries, String schema, Set<String> tables)
             throws SQLException {
         if (tables.isEmpty()) return List.of();
         String sql = "SELECT t.relname AS table_name, i.relname AS index_name, x.indisunique, x.indisprimary, "
@@ -364,31 +347,30 @@ public final class FactoryDataSchemaMetadata {
                 + "WHERE n.nspname = ? AND t.relname IN (" + placeholders(tables.size()) + ") "
                 + "GROUP BY t.relname, i.relname, i.oid, x.indisunique, x.indisprimary, x.indisvalid "
                 + "ORDER BY t.relname, i.relname";
-        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+        return queries.query(sql, ps -> {
             int i = 1;
             ps.setString(i++, schema);
             for (String table : tables) ps.setString(i++, table);
-            try (ResultSet rs = ps.executeQuery()) {
-                List<Map<String, Object>> out = new ArrayList<>();
-                while (rs.next()) {
-                    Map<String, Object> row = new LinkedHashMap<>();
-                    row.put("table", rs.getString("table_name"));
-                    row.put("name", rs.getString("index_name"));
-                    row.put("unique", rs.getBoolean("indisunique"));
-                    row.put("primary", rs.getBoolean("indisprimary"));
-                    row.put("valid", rs.getBoolean("indisvalid"));
-                    row.put("fingerprint", rs.getString("index_fingerprint"));
-                    java.sql.Array indexColumns = rs.getArray("columns");
-                    row.put("columns", indexColumns == null ? List.of()
-                            : java.util.Arrays.asList((Object[]) indexColumns.getArray()));
-                    out.add(row);
-                }
-                return out;
+        }, rs -> {
+            List<Map<String, Object>> out = new ArrayList<>();
+            while (rs.next()) {
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("table", rs.getString("table_name"));
+                row.put("name", rs.getString("index_name"));
+                row.put("unique", rs.getBoolean("indisunique"));
+                row.put("primary", rs.getBoolean("indisprimary"));
+                row.put("valid", rs.getBoolean("indisvalid"));
+                row.put("fingerprint", rs.getString("index_fingerprint"));
+                java.sql.Array indexColumns = rs.getArray("columns");
+                row.put("columns", indexColumns == null ? List.of()
+                        : java.util.Arrays.asList((Object[]) indexColumns.getArray()));
+                out.add(row);
             }
-        }
+            return out;
+        });
     }
 
-    private static List<Map<String, Object>> sequences(Connection conn, String schema) throws SQLException {
+    private static List<Map<String, Object>> sequences(FactoryDataPreflightQueries queries, String schema) throws SQLException {
         String sql = "SELECT s.sequence_name, s.data_type, s.start_value, s.minimum_value, s.maximum_value, "
                 + "s.increment, s.cycle_option, p.cache_size, p.last_value, t.relname AS owned_table, a.attname AS owned_column "
                 + "FROM information_schema.sequences s JOIN pg_namespace sn ON sn.nspname = s.sequence_schema "
@@ -398,55 +380,49 @@ public final class FactoryDataSchemaMetadata {
                 + "LEFT JOIN pg_class t ON t.oid = d.refobjid "
                 + "LEFT JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = d.refobjsubid "
                 + "WHERE s.sequence_schema = ? ORDER BY s.sequence_name";
-        try (PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, schema);
-            try (ResultSet rs = ps.executeQuery()) {
-                List<Map<String, Object>> out = new ArrayList<>();
-                while (rs.next()) {
-                    Map<String, Object> row = new LinkedHashMap<>();
-                    row.put("name", rs.getString("sequence_name"));
-                    row.put("dataType", rs.getString("data_type"));
-                    row.put("startValue", rs.getString("start_value"));
-                    row.put("minimumValue", rs.getString("minimum_value"));
-                    row.put("maximumValue", rs.getString("maximum_value"));
-                    row.put("increment", rs.getString("increment"));
-                    row.put("cycle", rs.getString("cycle_option"));
-                    row.put("cacheSize", rs.getObject("cache_size"));
-                    row.put("lastValue", rs.getObject("last_value"));
-                    String sequence = rs.getString("sequence_name");
-                    try (PreparedStatement state = conn.prepareStatement("SELECT is_called FROM "
-                            + FactoryDataScopeResolver.q(schema) + "." + FactoryDataScopeResolver.q(sequence))) {
-                        try (ResultSet stateRs = state.executeQuery()) {
-                            row.put("isCalled", stateRs.next() && stateRs.getBoolean(1));
-                        }
-                    }
-                    row.put("ownedTable", rs.getString("owned_table"));
-                    row.put("ownedColumn", rs.getString("owned_column"));
-                    out.add(row);
-                }
-                return out;
+        return queries.query(sql, ps -> ps.setString(1, schema), rs -> {
+            List<Map<String, Object>> out = new ArrayList<>();
+            while (rs.next()) {
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("name", rs.getString("sequence_name"));
+                row.put("dataType", rs.getString("data_type"));
+                row.put("startValue", rs.getString("start_value"));
+                row.put("minimumValue", rs.getString("minimum_value"));
+                row.put("maximumValue", rs.getString("maximum_value"));
+                row.put("increment", rs.getString("increment"));
+                row.put("cycle", rs.getString("cycle_option"));
+                row.put("cacheSize", rs.getObject("cache_size"));
+                row.put("lastValue", rs.getObject("last_value"));
+                String sequence = rs.getString("sequence_name");
+                String stateSql = "SELECT is_called FROM "
+                        + FactoryDataScopeResolver.q(schema) + "." + FactoryDataScopeResolver.q(sequence);
+                row.put("isCalled", queries.query(stateSql, state -> state.next() && state.getBoolean(1)));
+                row.put("ownedTable", rs.getString("owned_table"));
+                row.put("ownedColumn", rs.getString("owned_column"));
+                out.add(row);
             }
-        }
+            return out;
+        });
     }
 
-    private static Map<String, Object> migrations(Connection conn, Database database, String schema) throws SQLException {
+    private static Map<String, Object> migrations(FactoryDataPreflightQueries queries, Database database, String schema)
+            throws SQLException {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("format", "cretas-factory-source-migrations/2");
         out.put("sourceSchema", schema);
-        out.put("snapshot", snapshot(conn));
+        out.put("snapshot", snapshot(queries));
         String ledger = null;
         for (String candidate : database == Database.SMARTBI
                 ? List.of("smartbi_migrations", "smartbi_schema_history", "flyway_schema_history")
                 : List.of("flyway_schema_history", "cretas_schema_history")) {
-            try (PreparedStatement exists = conn.prepareStatement("SELECT to_regclass(?)")) {
-                exists.setString(1, schema + "." + candidate);
-                try (ResultSet rs = exists.executeQuery()) {
-                    rs.next();
-                    if (rs.getString(1) != null) {
-                        ledger = candidate;
-                        break;
-                    }
-                }
+            boolean found = queries.query("SELECT to_regclass(?)",
+                    ps -> ps.setString(1, schema + "." + candidate), rs -> {
+                        rs.next();
+                        return rs.getString(1) != null;
+                    });
+            if (found) {
+                ledger = candidate;
+                break;
             }
         }
         if (ledger == null) {
@@ -460,7 +436,7 @@ public final class FactoryDataSchemaMetadata {
             out.put("ledgerKind", "SMARTBI");
             String smartbiSql = "SELECT filename, version, checksum, applied_at, applied_by, duration_ms FROM "
                     + qualified + " ORDER BY applied_at, filename";
-            try (PreparedStatement ps = conn.prepareStatement(smartbiSql); ResultSet rs = ps.executeQuery()) {
+            return queries.query(smartbiSql, rs -> {
                 List<Map<String, Object>> rows = new ArrayList<>();
                 int rank = 0;
                 while (rs.next()) {
@@ -482,12 +458,12 @@ public final class FactoryDataSchemaMetadata {
                 out.put("fingerprintAlgorithm", "SHA-256");
                 out.put("fingerprint", fingerprint(rows));
                 return out;
-            }
+            });
         }
         out.put("ledgerKind", "FLYWAY");
         String sql = "SELECT installed_rank, version, description, type, script, checksum, installed_by, "
                 + "installed_on, execution_time, success FROM " + qualified + " ORDER BY installed_rank";
-        try (PreparedStatement ps = conn.prepareStatement(sql); ResultSet rs = ps.executeQuery()) {
+        return queries.query(sql, rs -> {
             List<Map<String, Object>> rows = new ArrayList<>();
             while (rs.next()) {
                 Map<String, Object> row = new LinkedHashMap<>();
@@ -508,13 +484,12 @@ public final class FactoryDataSchemaMetadata {
             out.put("fingerprintAlgorithm", "SHA-256");
             out.put("fingerprint", fingerprint(rows));
             return out;
-        }
+        });
     }
 
-    private static Map<String, Object> snapshot(Connection conn) throws SQLException {
-        try (PreparedStatement ps = conn.prepareStatement(
-                "SELECT current_database(), pg_current_snapshot()::text, txid_current(), clock_timestamp()::text");
-             ResultSet rs = ps.executeQuery()) {
+    private static Map<String, Object> snapshot(FactoryDataPreflightQueries queries) throws SQLException {
+        String sql = "SELECT current_database(), pg_current_snapshot()::text, txid_current(), clock_timestamp()::text";
+        return queries.query(sql, rs -> {
             rs.next();
             Map<String, Object> out = new LinkedHashMap<>();
             out.put("database", rs.getString(1));
@@ -523,7 +498,7 @@ public final class FactoryDataSchemaMetadata {
             out.put("capturedAt", rs.getString(4));
             out.put("crossDatabaseAtomic", false);
             return out;
-        }
+        });
     }
 
     private static String fingerprint(Object value) {
@@ -559,7 +534,7 @@ public final class FactoryDataSchemaMetadata {
         }
     }
 
-    private static List<Map<String, Object>> triggers(Connection conn, String schema, Set<String> tables)
+    private static List<Map<String, Object>> triggers(FactoryDataPreflightQueries queries, String schema, Set<String> tables)
             throws SQLException {
         if (tables.isEmpty()) return List.of();
         String sql = "SELECT c.relname AS table_name, t.tgname, p.proname AS function_name, "
@@ -569,27 +544,26 @@ public final class FactoryDataSchemaMetadata {
                 + "JOIN pg_namespace n ON n.oid = c.relnamespace JOIN pg_proc p ON p.oid = t.tgfoid "
                 + "WHERE n.nspname = ? AND NOT t.tgisinternal AND c.relname IN (" + placeholders(tables.size()) + ") "
                 + "ORDER BY c.relname, t.tgname";
-        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+        return queries.query(sql, ps -> {
             int i = 1;
             ps.setString(i++, schema);
             for (String table : tables) ps.setString(i++, table);
-            try (ResultSet rs = ps.executeQuery()) {
-                List<Map<String, Object>> out = new ArrayList<>();
-                while (rs.next()) {
-                    Map<String, Object> row = new LinkedHashMap<>();
-                    row.put("table", rs.getString("table_name"));
-                    row.put("name", rs.getString("tgname"));
-                    row.put("function", rs.getString("function_name"));
-                    row.put("functionFingerprint", rs.getString("function_fingerprint"));
-                    row.put("triggerFingerprint", rs.getString("trigger_fingerprint"));
-                    out.add(row);
-                }
-                return out;
+        }, rs -> {
+            List<Map<String, Object>> out = new ArrayList<>();
+            while (rs.next()) {
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("table", rs.getString("table_name"));
+                row.put("name", rs.getString("tgname"));
+                row.put("function", rs.getString("function_name"));
+                row.put("functionFingerprint", rs.getString("function_fingerprint"));
+                row.put("triggerFingerprint", rs.getString("trigger_fingerprint"));
+                out.add(row);
             }
-        }
+            return out;
+        });
     }
 
-    private static void validateRedactionConstraints(Connection conn, String schema,
+    private static void validateRedactionConstraints(FactoryDataPreflightQueries queries, String schema,
                                                      List<Map<String, Object>> columns,
                                                      List<Map<String, Object>> constraints) {
         Map<String, Integer> types = new java.util.HashMap<>();
@@ -649,9 +623,10 @@ public final class FactoryDataSchemaMetadata {
                 + "JOIN pg_namespace ns ON ns.oid = rel.relnamespace AND ns.nspname = tc.table_schema "
                 + "JOIN pg_constraint pc ON pc.conrelid = rel.oid AND pc.conname = tc.constraint_name "
                 + "WHERE tc.table_schema = ? AND tc.constraint_type = 'CHECK'";
-        try (PreparedStatement ps = conn.prepareStatement(checkSql)) {
-            ps.setString(1, schema);
-            try (ResultSet rs = ps.executeQuery()) {
+        var checks = new FactoryDataPreflightQueries(
+                queries.connection(), "无法读取 CHECK 约束安全形状", queries.failures());
+        try {
+            checks.query(checkSql, ps -> ps.setString(1, schema), rs -> {
                 while (rs.next()) {
                     String table = rs.getString(1);
                     String definition = rs.getString(3);
@@ -668,9 +643,8 @@ public final class FactoryDataSchemaMetadata {
                         }
                     }
                 }
-            } catch (SQLException e) {
-                throw new IllegalStateException("无法读取 CHECK 约束安全形状", e);
-            }
+                return null;
+            });
         } catch (SQLException e) {
             throw new IllegalStateException("无法读取 CHECK 约束安全形状", e);
         }
@@ -723,7 +697,7 @@ public final class FactoryDataSchemaMetadata {
         }
     }
 
-    private static List<Map<String, Object>> externalReferences(Connection conn, String schema,
+    private static List<Map<String, Object>> externalReferences(FactoryDataPreflightQueries queries, String schema,
             List<Map<String, Object>> constraints, Set<String> exportedTables, List<TableScope> scopes,
             String factoryId) throws SQLException {
         List<Map<String, Object>> out = new ArrayList<>();
@@ -743,20 +717,19 @@ public final class FactoryDataSchemaMetadata {
                     .filter(scope -> scope.table().equals(c.get("table")) && scope.category().exported())
                     .findFirst().orElse(null);
             if (child != null && factoryId != null && !factoryId.isBlank() && c.get("column") != null) {
-                FactoryDataScopeResolver.Where owned = FactoryDataScopeResolver.ownedRows(conn, child, factoryId);
+                FactoryDataScopeResolver.Where owned = queries.read(() ->
+                        FactoryDataScopeResolver.ownedRows(queries.connection(), child, factoryId));
                 String query = "SELECT count(*) FROM " + FactoryDataScopeResolver.q(schema) + "."
                         + FactoryDataScopeResolver.q(child.table()) + " WHERE (" + owned.sql() + ") AND "
                         + FactoryDataScopeResolver.q(String.valueOf(c.get("column"))) + " IS NOT NULL";
-                try (PreparedStatement ps = conn.prepareStatement(query)) {
-                    FactoryDataScopeResolver.bind(ps, owned.params());
-                    try (ResultSet rs = ps.executeQuery()) {
-                        rs.next();
-                        long referencingRows = rs.getLong(1);
-                        row.put("factoryId", factoryId);
-                        row.put("referencingRows", referencingRows);
-                        if (referencingRows == 0) row.put("action", "SCHEMA_ONLY_ZERO_REFERENCES");
-                    }
-                }
+                long referencingRows = queries.query(query, ps -> FactoryDataScopeResolver.bind(ps, owned.params()),
+                        rs -> {
+                            rs.next();
+                            return rs.getLong(1);
+                        });
+                row.put("factoryId", factoryId);
+                row.put("referencingRows", referencingRows);
+                if (referencingRows == 0) row.put("action", "SCHEMA_ONLY_ZERO_REFERENCES");
             }
             out.add(row);
         }

@@ -568,7 +568,8 @@ class FactoryDataPackageRestorePostgresContractTest {
     }
 
     private enum ExportFault {
-        HEARTBEAT_QUERY, CRETAS_METADATA_QUERY, CRETAS_READ, ZIP_WRITE, HEARTBEAT, STATEMENT_CLOSE, ROLLBACK
+        HEARTBEAT_QUERY, CRETAS_METADATA_QUERY, CRETAS_CONSTRAINT_QUERY, CRETAS_READ, ZIP_WRITE,
+        HEARTBEAT, STATEMENT_CLOSE, ROLLBACK
     }
 
     @ParameterizedTest(name = "{0} before {1}")
@@ -584,7 +585,8 @@ class FactoryDataPackageRestorePostgresContractTest {
             "ZIP_WRITE, ROLLBACK",
             // R3's other ordering: CRETAS writes while the failed heartbeat statement is closing.
             "HEARTBEAT_QUERY, ZIP_WRITE",
-            "CRETAS_METADATA_QUERY, HEARTBEAT"
+            "CRETAS_METADATA_QUERY, HEARTBEAT",
+            "CRETAS_CONSTRAINT_QUERY, HEARTBEAT"
     })
     void exportRecordsFirstFaultBeforeCleanup(ExportFault first, ExportFault second) throws Exception {
         setUpSources();
@@ -635,8 +637,11 @@ class FactoryDataPackageRestorePostgresContractTest {
         private ExportFaults(ExportFault first, ExportFault second) {
             this.first = first;
             this.second = second;
-            primary = first == ExportFault.ZIP_WRITE ? new IOException("first ZIP write")
-                    : new SQLException("first " + first);
+            primary = switch (first) {
+                case ZIP_WRITE -> new IOException("first ZIP write");
+                case CRETAS_CONSTRAINT_QUERY -> new SQLException("first " + ExportFault.CRETAS_METADATA_QUERY);
+                default -> new SQLException("first " + first);
+            };
             secondary = second == ExportFault.ZIP_WRITE ? new IOException("later ZIP write")
                     : new SQLException("later " + second);
         }
@@ -667,8 +672,10 @@ class FactoryDataPackageRestorePostgresContractTest {
             boolean metadata = first == ExportFault.CRETAS_METADATA_QUERY
                     && sql.startsWith("SELECT set_config('search_path',")
                     && searchPathStatements.incrementAndGet() == 2;
+            boolean constraints = first == ExportFault.CRETAS_CONSTRAINT_QUERY
+                    && sql.contains("FROM pg_catalog.pg_constraint pc");
             boolean firstTableRead = sql.startsWith("SELECT * FROM ") && firstTable.compareAndSet(false, true);
-            if (!metadata && !firstTableRead) return real;
+            if (!metadata && !constraints && !firstTableRead) return real;
             return (PreparedStatement) Proxy.newProxyInstance(PreparedStatement.class.getClassLoader(),
                     new Class<?>[]{PreparedStatement.class}, (proxy, method, args) -> {
                         if ("close".equals(method.getName())) {
@@ -683,7 +690,7 @@ class FactoryDataPackageRestorePostgresContractTest {
                             }
                             return null;
                         }
-                        if (metadata && "executeQuery".equals(method.getName())) {
+                        if ((metadata || constraints) && "executeQuery".equals(method.getName())) {
                             awaitBarrier(heartbeatEntered);
                             throw primary;
                         }

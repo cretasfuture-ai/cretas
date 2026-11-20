@@ -396,16 +396,18 @@ public class FactoryDataService {
             manifest.put("fileFormats", fmt.stream().map(Enum::name).toList());
             FactoryDataPackageWriter writer = new FactoryDataPackageWriter(out, failures);
             List<Map<String, Object>> dbManifests = withSnapshot(Database.SMARTBI, smartbiNetworkTimeoutMs, failures, smartbi -> {
-                var smartbiScope = FactoryDataScopeResolver.resolveVisible(smartbi, Database.SMARTBI, schema, factoryId);
-                rejectForeignHits(smartbi, smartbiScope);
-                var smartbiMetadata = captureExportMetadata(smartbi, smartbiScope, factoryId, failures);
+                var smartbiQueries = preflightQueries(smartbi, Database.SMARTBI, failures);
+                var smartbiScope = FactoryDataScopeResolver.resolveVisible(smartbiQueries, Database.SMARTBI, schema, factoryId);
+                rejectForeignHits(smartbiQueries, smartbiScope);
+                var smartbiMetadata = captureExportMetadata(smartbiQueries, smartbiScope, factoryId);
                 // Both preflights finish before the first ZIP entry. SMARTBI only
                 // receives heartbeat queries while CRETAS owns the writer.
                 var cretasManifest = withSnapshotHeartbeat(smartbi, failures, () ->
                         withSnapshot(Database.CRETAS, 0, failures, cretas -> {
-                            var cretasScope = FactoryDataScopeResolver.resolveVisible(cretas, Database.CRETAS, schema, factoryId);
-                            rejectForeignHits(cretas, cretasScope);
-                            var cretasMetadata = captureExportMetadata(cretas, cretasScope, factoryId, failures);
+                            var cretasQueries = preflightQueries(cretas, Database.CRETAS, failures);
+                            var cretasScope = FactoryDataScopeResolver.resolveVisible(cretasQueries, Database.CRETAS, schema, factoryId);
+                            rejectForeignHits(cretasQueries, cretasScope);
+                            var cretasMetadata = captureExportMetadata(cretasQueries, cretasScope, factoryId);
                             return exportDatabase(cretas, cretasScope, factoryId, fmt, writer, cretasMetadata, failures);
                         }));
                 return List.of(cretasManifest,
@@ -449,11 +451,11 @@ public class FactoryDataService {
         }
     }
 
-    private void rejectForeignHits(Connection conn, FactoryDataScope scope) throws SQLException {
+    private void rejectForeignHits(FactoryDataPreflightQueries queries, FactoryDataScope scope) throws SQLException {
         List<ForeignHit> hits = scope.foreignHits();
         if (hits.isEmpty()) return;
         Set<String> childTables = hits.stream().map(ForeignHit::table).collect(Collectors.toSet());
-        List<Map<String, Object>> constraints = FactoryDataSchemaMetadata.constraints(conn, schema, childTables);
+        List<Map<String, Object>> constraints = FactoryDataSchemaMetadata.constraints(queries, schema, childTables);
         Map<String, Long> counts = hits.stream().collect(Collectors.groupingBy(hit -> {
             List<String> names = constraints.stream()
                     .filter(c -> "FOREIGN KEY".equals(c.get("type")) && hit.table().equals(c.get("table"))
@@ -465,11 +467,16 @@ public class FactoryDataService {
         throw new IllegalStateException(scope.database() + " 库有 " + hits.size() + " 条跨租户命中，拒绝导出: " + counts);
     }
 
-    private FactoryDataSchemaMetadata.Snapshot captureExportMetadata(Connection conn, FactoryDataScope scope,
-                                                                     String factoryId,
-                                                                     FactoryDataExportFailures failures) throws SQLException {
-        return FactoryDataSchemaMetadata.capture(conn, scope.database(), schema,
-                new ArrayList<>(scope.tables().values()), factoryId, failures);
+    private static FactoryDataPreflightQueries preflightQueries(Connection conn, Database database,
+                                                                FactoryDataExportFailures failures) {
+        return new FactoryDataPreflightQueries(conn, database + " 库读取失败", failures);
+    }
+
+    private FactoryDataSchemaMetadata.Snapshot captureExportMetadata(FactoryDataPreflightQueries queries,
+                                                                     FactoryDataScope scope,
+                                                                     String factoryId) throws SQLException {
+        return FactoryDataSchemaMetadata.capture(queries, scope.database(), schema,
+                new ArrayList<>(scope.tables().values()), factoryId);
     }
 
     private <T> T withSnapshotHeartbeat(Connection waiting, FactoryDataExportFailures failures, Supplier<T> work) {
