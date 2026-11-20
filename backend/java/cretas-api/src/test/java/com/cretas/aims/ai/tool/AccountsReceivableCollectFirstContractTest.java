@@ -18,7 +18,9 @@ import java.math.BigDecimal;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.IntStream;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -56,7 +58,7 @@ class AccountsReceivableCollectFirstContractTest {
                 customer("鲜湘缘", "12000"), customer("味美", "8000"), customer("老张", "2276")));
         when(customers.findByFactoryId("F1")).thenReturn(List.of(customer("鲜湘缘", "12000")));
         when(arAp.getAgingAnalysis("F1", CounterpartyType.SUPPLIER)).thenReturn(List.of());
-        // 三张逾期单, 来自两家客户: AR-3 逾期最久且金额最大 (天数x金额最高), AR-1 次之, AR-2 最小
+        // 三张逾期单, 来自三家客户: AR-3 逾期最久且金额最大 (天数x金额最高), AR-1 次之, AR-2 最小
         when(arAp.getOverdueReceivableDocuments("F1")).thenReturn(List.of(
                 doc("AR-1", "味美", "9000", 40), doc("AR-2", "老张", "1000", 5), doc("AR-3", "鲜湘缘", "39086", 90)));
     }
@@ -78,9 +80,13 @@ class AccountsReceivableCollectFirstContractTest {
     }
 
     private String run(String args) throws Exception {
+        return runPayload(args).get("message").asText();
+    }
+
+    private JsonNode runPayload(String args) throws Exception {
         JsonNode r = mapper.readTree(tool.execute(ToolCall.of("t1", "accounts_receivable_aging", args),
                 Map.of("factoryId", "F1", "userId", 1L)));
-        return r.get("data").get("message").asText();
+        return r.get("data");
     }
 
     @Test
@@ -109,9 +115,38 @@ class AccountsReceivableCollectFirstContractTest {
     @Test
     void withoutAmountView_documentsStillListedButNoMoney() throws Exception {
         when(view.showsKey(any(), any())).thenReturn(false);
-        String m = run("{\"view\":\"overdue\"}");
+        JsonNode payload = runPayload("{\"view\":\"overdue\"}");
+        String m = payload.path("message").asText();
         assertTrue(m.contains("单号 AR-3") && m.contains("逾期 90 天"), m);
         assertFalse(m.contains("¥") || m.contains("39086") || m.contains("49086"), m);
+        JsonNode customers = payload.path("data").path("overdueCustomers");
+        assertEquals(3, customers.size());
+        customers.forEach(row -> assertFalse(row.has("outstanding")));
+    }
+
+    @Test
+    void moreThanTwentyCustomersStatesExactlyHowManyWereOmitted() throws Exception {
+        when(arAp.getOverdueReceivableDocuments("F1")).thenReturn(IntStream.rangeClosed(1, 22)
+                .mapToObj(i -> doc("AR-" + i, "客户-%02d".formatted(i), String.valueOf(i * 100), 15))
+                .toList());
+        JsonNode payload = runPayload("{\"view\":\"overdue\"}");
+        String m = payload.path("message").asText();
+        JsonNode data = payload.path("data");
+        assertTrue(m.contains("22 家客户、22 张单据，合计 ¥25300.00"), m);
+        assertTrue(m.contains("客户-22：¥2200.00") && m.contains("客户-03：¥300.00"), m);
+        assertTrue(m.contains("另有 2 家逾期客户"), m);
+        assertFalse(m.contains("客户-02") || m.contains("客户-01"), m);
+        assertEquals(20, data.path("overdueCustomers").size());
+        assertEquals(2, data.path("omittedOverdueCustomerCount").asInt());
+        assertEquals(3, data.path("collectFirst").size());
+    }
+
+    @Test
+    void defaultViewStillListsOverdueCustomersWhenCustomerBalancesAreZero() throws Exception {
+        when(customers.findCustomersWithOutstandingBalance("F1")).thenReturn(List.of());
+        String m = run("{}");
+        assertTrue(m.contains("鲜湘缘：¥39086.00") && m.contains("建议先催"), m);
+        assertTrue(m.contains("客户应收余额口径"), m);
     }
 
     @Test
