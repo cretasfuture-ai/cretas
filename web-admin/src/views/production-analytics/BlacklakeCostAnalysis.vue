@@ -247,9 +247,9 @@ onBeforeUnmount(() => {
       </el-card>
 
       <el-card v-if="products.length" shadow="never">
-        <template #header><h3>产品成本对比</h3></template>
+        <template #header><h3>产品成本对比（元）</h3></template>
         <BlacklakeBarChart :points="productPoints" :analysis-points="productAnalysisPoints" title="产品工单总成本"
-          unit="元" :factory-id="factoryId" :basis="`${basis} 含负成本工单的产品保留在图上，未纳入分析。`" cost />
+          :factory-id="factoryId" :basis="`${basis} 含负成本工单的产品保留在图上，未纳入分析。`" cost />
         <el-table :data="products" row-key="productCode" max-height="340" stripe
           :default-sort="{ prop: 'totalCost', order: 'descending' }" @sort-change="productSort = $event">
           <el-table-column prop="productName" label="产品" min-width="190" sortable="custom">

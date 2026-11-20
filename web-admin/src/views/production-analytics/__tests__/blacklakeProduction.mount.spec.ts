@@ -231,7 +231,7 @@ describe('黑湖生产分析页面', () => {
     });
     await flushPromises();
     const zoomed = latestChart('产品工单总成本');
-    expect(page.get('.bar-unit').text()).toBe('单位：元');
+    expect(page.findAll('h3').map(heading => heading.text())).toContain('产品成本对比（元）');
     expect(zoomed.xAxis.name).toBeUndefined();
     expect(zoomed.grid).toMatchObject({ outerBoundsMode: 'same', outerBoundsContain: 'axisLabel' });
     expect(zoomed.dataZoom).toEqual([expect.objectContaining({ type: 'slider', startValue: 0, endValue: 9 })]);
@@ -260,7 +260,7 @@ describe('黑湖生产分析页面', () => {
     });
     const production = mount(ProductionAnalysis, mountOptions());
     await flushPromises();
-    expect(production.get('.bar-unit').text()).toBe('单位：KG');
+    expect(production.findAll('h3').map(heading => heading.text())).toContain('成品入库良品排行（KG）');
     for (const [page, title, desc, asc] of [
       [cost, '产品工单总成本', [30, 20], [20, 30]],
       [production, '成品入库良品排行（KG）', [100.125, 30], [30, 100.125]],

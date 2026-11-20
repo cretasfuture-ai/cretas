@@ -155,7 +155,7 @@ onBeforeUnmount(() => {
 
       <el-card shadow="never" class="blacklake-card">
         <template #header><h3>成品入库良品排行（{{ unit }}）</h3></template>
-        <BlacklakeBarChart :points="rankingPoints" :title="`成品入库良品排行（${unit}）`" :unit="unit"
+        <BlacklakeBarChart :points="rankingPoints" :title="`成品入库良品排行（${unit}）`"
           :factory-id="factoryId" :basis="`${reportBasis} 仅纳入有产品编码的成品入库记录。`" />
         <el-table :data="ranking" max-height="320" stripe empty-text="该单位暂无有编码的成品入库记录">
           <el-table-column type="index" label="名次" width="68" />

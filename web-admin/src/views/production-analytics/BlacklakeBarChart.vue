@@ -8,7 +8,6 @@ const props = defineProps<{
   points: Array<{ label: string; value: number; axisLabel?: string }>;
   analysisPoints?: Array<{ label: string; value: number }>;
   title: string;
-  unit: string;
   factoryId: string;
   basis: string;
   cost?: boolean;
@@ -71,14 +70,11 @@ onBeforeUnmount(() => {
 
 <template>
   <template v-if="points.length">
-    <div class="bar-toolbar">
-      <el-select v-model="order" aria-label="柱状图排序" size="small" class="bar-order">
-        <el-option label="按数值降序" value="desc" />
-        <el-option label="按数值升序" value="asc" />
-        <el-option label="按名称排序" value="name" />
-      </el-select>
-      <span v-if="unit" class="bar-unit">单位：{{ unit }}</span>
-    </div>
+    <el-select v-model="order" aria-label="柱状图排序" size="small" class="bar-order">
+      <el-option label="按数值降序" value="desc" />
+      <el-option label="按数值升序" value="asc" />
+      <el-option label="按名称排序" value="name" />
+    </el-select>
     <div ref="element" class="bar-chart" role="img" :aria-label="title" />
     <BlacklakeChartAnalysis :chart="insight" :factory-id="factoryId" :metric="title"
       :basis="basis" :can-view-finance="cost" />
@@ -86,8 +82,6 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.bar-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
 .bar-order { width: 145px; }
-.bar-unit { color: var(--el-text-color-secondary); font-size: 13px; }
 .bar-chart { height: 268px; }
 </style>
