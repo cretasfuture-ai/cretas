@@ -1,5 +1,7 @@
 'use strict';
 
+const { FACTORY_ANALYSIS_PATH } = require('./factory-analysis-scope');
+
 const { pathnameOf } = require('../core/url-utils');
 
 const AUTH_REQUESTS = [
@@ -111,7 +113,7 @@ const READONLY_POST_WHITELIST = [
   {
     id: 'smartbi-factory-analysis',
     method: 'POST',
-    path: /^\/api\/mobile\/[^/]+\/smart-bi\/factory-analysis\/?$/,
+    path: FACTORY_ANALYSIS_PATH,
     bodyMatches: factoryAnalysisBodyMatches,
     rationale: 'Root-approved Java factory analysis contract; authenticated planner reads existing tenant-qualified chart facts and returns no business mutation.',
   },

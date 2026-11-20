@@ -2,6 +2,7 @@
 
 const { parsePostData, redactText, sanitizeUrl, summarizePayload } = require('./sanitizer');
 const { normalizeQueryValues, splitUrl } = require('./url-utils');
+const { isFactoryAnalysisUrl } = require('../config/factory-analysis-scope');
 
 function normalizeDuplicateKey(method, url) {
   try {
@@ -60,7 +61,12 @@ function installNetworkRecorder(context, options = {}) {
 
   const onResponse = (response) => {
     const request = response.request();
-    if (!observedApi(request.url())) return;
+    if (!observedApi(request.url())) {
+      if (options.includeNonApiHttpErrors && response.status() >= 400) {
+        httpErrors.push({ method: request.method(), url: sanitizeUrl(request.url()), status: response.status() });
+      }
+      return;
+    }
     lastActivityAt = Date.now();
     const task = (async () => {
       const start = started.get(request);
@@ -139,9 +145,9 @@ function installNetworkRecorder(context, options = {}) {
     failedRequests,
     expectClientOfflineFailure(request) {
       const record = failureByRequest.get(request);
-      if (!record || record.method !== 'POST' || splitUrl(request.url()).pathname !== '/api/mobile/F006/smart-bi/factory-analysis'
+      if (!record || record.method !== 'POST' || !isFactoryAnalysisUrl(request.url())
         || !/^net::ERR_INTERNET_DISCONNECTED(?:\.Inspector)?$/u.test(String(request.failure()?.errorText || ''))
-        || failedRequests.some(item => item.expectedFault)) throw new Error('Expected exactly one verified F006 client-offline analysis request');
+        || failedRequests.some(item => item.expectedFault)) throw new Error('Expected exactly one verified client-offline factory analysis request');
       record.expectedFault = 'controlled-client-offline';
       return { ...record };
     },
