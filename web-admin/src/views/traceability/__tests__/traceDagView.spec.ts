@@ -1,9 +1,9 @@
 import { mount } from '@vue/test-utils';
 import { nextTick } from 'vue';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { useVueFlow } from '@vue-flow/core';
 import TraceDagView from '../TraceDagView.vue';
-import { buildTraceGraph, chainOf, dagFitZoom, DAG_FONT, DAG_MIN_ZOOM, DAG_MAX_ZOOM } from '../traceGraph';
+import { buildTraceGraph, chainOf, dagFitZoom, DAG_FONT, DAG_MIN_ZOOM, DAG_MAX_ZOOM, DAG_NODE_H, DAG_NODE_W } from '../traceGraph';
 import { baseTrace, cattleNode, SEASONING_NODE, sixCattleTrace } from './fixtures';
 import type { FullTraceResponse } from '@/api/traceability';
 
@@ -211,6 +211,57 @@ describe('BP-53 默认视图字号与要点', () => {
 });
 
 describe('BP-54 默认缩放不低于可读下限', () => {
+  it('点击适应：重置平移和缩放，全部节点的包围盒进入固定栏下方的可视区', async () => {
+    const screenWidth = 2400;
+    const screenHeight = 608;
+    const barBottom = 112;
+    let canvasTop = 35;
+    const shell = document.createElement('div');
+    shell.className = 'app-main';
+    shell.innerHTML = '<header class="app-header" style="position:sticky;top:0"></header><nav class="workspace-tabs" style="position:sticky;top:64px"></nav><main></main>';
+    const [header, tabs, main] = shell.children;
+    vi.spyOn(header, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, screenWidth, 64));
+    vi.spyOn(tabs, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 64, screenWidth, 48));
+    vi.stubGlobal('innerHeight', screenHeight);
+    const width = vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(screenWidth);
+    document.body.append(shell);
+    const trace = richTrace();
+    const w = mount(TraceDagView, { props: { trace }, attachTo: main });
+    try {
+      const canvas = w.get<HTMLElement>('[data-testid="trace-dag-canvas"]').element;
+      const canvasBounds = () => new DOMRect(0, canvasTop, screenWidth, parseFloat(canvas.style.height));
+      vi.spyOn(canvas, 'getBoundingClientRect').mockImplementation(canvasBounds);
+      Object.defineProperty(canvas, 'clientHeight', { get: () => canvasBounds().height });
+      Object.defineProperty(canvas, 'scrollIntoView', {
+        value: () => { canvasTop = parseFloat(canvas.style.scrollMarginTop); },
+      });
+      await nextTick();
+      const flow = useVueFlow('trace-dag-flow');
+      await flow.setViewport({ x: 260, y: 72, zoom: 1.3 });
+      await w.get('[data-testid="trace-dag-fit"]').trigger('click');
+      await vi.waitFor(() => {
+        const bounds = canvasBounds();
+        const viewport = flow.viewport.value;
+        const rendered = w.findAll('[data-node-id]');
+        expect(rendered).toHaveLength(buildTraceGraph(trace).nodes.length);
+        for (const node of rendered) {
+          const { x, y } = flow.findNode(node.attributes('data-node-id'))!.computedPosition;
+          const left = bounds.left + viewport.x + x * viewport.zoom;
+          const top = bounds.top + viewport.y + y * viewport.zoom;
+          expect(top, node.attributes('data-node-id')).toBeGreaterThanOrEqual(Math.max(barBottom, bounds.top));
+          expect(top + DAG_NODE_H * viewport.zoom).toBeLessThanOrEqual(Math.min(screenHeight, bounds.bottom));
+          expect(left).toBeGreaterThanOrEqual(bounds.left);
+          expect(left + DAG_NODE_W * viewport.zoom).toBeLessThanOrEqual(bounds.right);
+        }
+      });
+    } finally {
+      w.unmount();
+      shell.remove();
+      width.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('容器比整图窄很多(整图适应缩放 <0.5): 默认真实视口缩放 ≥ 0.5 且停在起点(左侧)', async () => {
     const proto = HTMLElement.prototype;
     const orig = Object.getOwnPropertyDescriptor(proto, 'clientWidth');
@@ -229,6 +280,8 @@ describe('BP-54 默认缩放不低于可读下限', () => {
       // 手动缩到很小, 再点「适应」: 必须回到 ≥ 下限且在起点, 而不是整图缩到不可读
       const flow = useVueFlow('trace-dag-flow');
       await flow.setViewport({ x: 300, y: 5, zoom: 1.1 });
+      const canvas = w.get<HTMLElement>('[data-testid="trace-dag-canvas"]').element;
+      canvas.scrollLeft = 100;
       await w.get('[data-testid="trace-dag-fit"]').trigger('click');
       await nextTick();
       await new Promise((r) => setTimeout(r, 30));
@@ -236,6 +289,9 @@ describe('BP-54 默认缩放不低于可读下限', () => {
       expect(after.zoom).toBeGreaterThanOrEqual(DAG_MIN_ZOOM);
       expect(after.zoom).toBeGreaterThanOrEqual(0.5);
       expect(after.x).toBe(12);
+      expect(canvas.scrollLeft).toBe(0);
+      const graph = w.get<HTMLElement>('.vue-flow').element;
+      expect(parseFloat(graph.style.minWidth)).toBeGreaterThan(canvas.clientWidth);
       w.unmount();
     } finally {
       if (orig) Object.defineProperty(proto, 'clientWidth', orig);
