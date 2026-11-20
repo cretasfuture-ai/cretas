@@ -41,14 +41,24 @@ public final class FactoryDataPackageWriter implements AutoCloseable {
     private final ZipOutputStream zip;
     private final List<Entry> entries = new ArrayList<>();
     private final byte[] redactionKey;
+    private final FactoryDataExportFailures failures;
 
     public FactoryDataPackageWriter(OutputStream out) {
         this(out, FactoryDataRedaction.newKey());
     }
 
     public FactoryDataPackageWriter(OutputStream out, byte[] redactionKey) {
+        this(out, redactionKey, new FactoryDataExportFailures());
+    }
+
+    FactoryDataPackageWriter(OutputStream out, FactoryDataExportFailures failures) {
+        this(out, FactoryDataRedaction.newKey(), failures);
+    }
+
+    private FactoryDataPackageWriter(OutputStream out, byte[] redactionKey, FactoryDataExportFailures failures) {
         this.zip = new ZipOutputStream(out, StandardCharsets.UTF_8);
         this.redactionKey = redactionKey.clone();
+        this.failures = failures;
     }
 
     public List<Entry> entries() { return List.copyOf(entries); }
@@ -59,17 +69,29 @@ public final class FactoryDataPackageWriter implements AutoCloseable {
     interface RowsReader<T> { T read(ResultSet rs) throws SQLException, IOException; }
 
     /** 在同一个快照里按「本厂拥有的行」查一张表 (按主键排序), 交给 reader。 */
-    static <T> T queryOwned(Connection conn, String schema, TableScope ts, String factoryId, RowsReader<T> reader)
-            throws SQLException, IOException {
-        FactoryDataScopeResolver.Where where = FactoryDataScopeResolver.ownedRows(conn, ts, factoryId);
+    private <T> T queryOwned(Connection conn, String schema, TableScope ts, String factoryId, String path,
+                             RowsReader<T> reader) {
+        String read = "导出表读取失败 (" + path + ")";
+        FactoryDataScopeResolver.Where where = failures.read(read,
+                () -> FactoryDataScopeResolver.ownedRows(conn, ts, factoryId));
         String order = ts.pkColumn() != null ? " ORDER BY " + FactoryDataScopeResolver.q(ts.pkColumn()) : "";
         String sql = "SELECT * FROM " + FactoryDataScopeResolver.q(schema) + "." + FactoryDataScopeResolver.q(ts.table())
                 + " WHERE " + where.sql() + order;
-        try (PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setFetchSize(FETCH_SIZE);
-            FactoryDataScopeResolver.bind(ps, where.params());
-            try (ResultSet rs = ps.executeQuery()) {
-                return reader.read(rs);
+        PreparedStatement ps = failures.read(read, () -> conn.prepareStatement(sql));
+        try (var statement = failures.cleanup(ps, "导出表语句关闭失败 (" + path + ")")) {
+            ResultSet rs = failures.read(read, () -> {
+                ps.setFetchSize(FETCH_SIZE);
+                FactoryDataScopeResolver.bind(ps, where.params());
+                return ps.executeQuery();
+            });
+            try (var rows = failures.cleanup(rs, "导出表结果集关闭失败 (" + path + ")")) {
+                return failures.read(read, () -> {
+                    try {
+                        return reader.read(rs);
+                    } catch (IOException e) {
+                        throw failures.failure("ZIP 条目写出失败 (" + path + ")", e);
+                    }
+                });
             }
         }
     }
@@ -78,7 +100,7 @@ public final class FactoryDataPackageWriter implements AutoCloseable {
     public Entry writeTableJson(Connection conn, String dir, String schema, TableScope ts, String factoryId)
             throws SQLException, IOException {
         String path = dir + "/" + ts.table() + ".json";
-        return queryOwned(conn, schema, ts, factoryId, rs -> writeEntry(path, out -> {
+        return queryOwned(conn, schema, ts, factoryId, path, rs -> writeEntry(path, out -> {
             ResultSetMetaData md = rs.getMetaData();
             validateJsonTypes(md, ts.table());
             int n = md.getColumnCount();
@@ -106,7 +128,7 @@ public final class FactoryDataPackageWriter implements AutoCloseable {
     /** 把这张表加进该库的 Excel 工作簿 (工作簿在库写完后用 {@link #writeBook} 落进包里)。 */
     public long addToBook(Connection conn, FactoryDataXlsxBook book, String schema, TableScope ts, String factoryId)
             throws SQLException, IOException {
-        return queryOwned(conn, schema, ts, factoryId, rs -> book.addTable(ts.table(), rs));
+        return queryOwned(conn, schema, ts, factoryId, schema + "." + ts.table(), rs -> book.addTable(ts.table(), rs));
     }
 
     public Entry writeBook(String path, FactoryDataXlsxBook book) throws IOException {
@@ -127,7 +149,7 @@ public final class FactoryDataPackageWriter implements AutoCloseable {
     public Entry writeTable(Connection conn, String dir, String schema, TableScope ts, String factoryId)
             throws SQLException, IOException {
         String path = dir + "/" + ts.table() + ".csv";
-        return queryOwned(conn, schema, ts, factoryId, rs -> {
+        return queryOwned(conn, schema, ts, factoryId, path, rs -> {
                 return writeEntry(path, out -> {
                     ResultSetMetaData md = rs.getMetaData();
                     int n = md.getColumnCount();
