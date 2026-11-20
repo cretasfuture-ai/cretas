@@ -17,6 +17,9 @@ const order = ref<'desc' | 'asc' | 'name'>('desc');
 const element = ref<HTMLDivElement>();
 let chart: echarts.ECharts | undefined;
 let resize: ResizeObserver | undefined;
+const sliderWidth = 28;
+const sliderRight = 4;
+const axisGutter = 12;
 const byName = new Intl.Collator('zh-CN', { numeric: true });
 const sorted = computed(() => [...props.points].sort((a, b) => {
   const byValue = order.value === 'asc' ? a.value - b.value : b.value - a.value;
@@ -42,14 +45,20 @@ watchEffect(() => {
     }
   }
   const points = sorted.value;
+  const showSlider = points.length > 10;
   const axisLabels = new Map(points.map(point => [point.label, point.axisLabel ?? point.label]));
   chart.setOption({
     tooltip: { trigger: 'axis', confine: true, renderMode: 'richText' },
-    grid: { top: 10, right: 24, bottom: 28, left: 12, containLabel: true },
+    grid: {
+      top: 10, right: axisGutter + (showSlider ? sliderWidth + sliderRight : 0), bottom: 28, left: 12,
+      outerBoundsMode: 'same', outerBoundsContain: 'axisLabel',
+    },
     yAxis: { type: 'category', inverse: true, data: points.map(point => point.label),
       axisLabel: { width: 180, overflow: 'truncate', formatter: (label: string) => axisLabels.get(label) ?? label } },
-    xAxis: { type: 'value', name: props.unit },
-    dataZoom: points.length > 10 ? [{ type: 'slider', yAxisIndex: 0, startValue: 0, endValue: 9, right: 0 }] : [],
+    xAxis: { type: 'value' },
+    dataZoom: showSlider
+      ? [{ type: 'slider', yAxisIndex: 0, startValue: 0, endValue: 9, width: sliderWidth, right: sliderRight }]
+      : [],
     series: [{ type: 'bar', name: props.title, data: points.map(point => point.value), barMaxWidth: 26 }],
   }, true);
 }, { flush: 'post' });
@@ -62,11 +71,14 @@ onBeforeUnmount(() => {
 
 <template>
   <template v-if="points.length">
-    <el-select v-model="order" aria-label="柱状图排序" size="small" class="bar-order">
-      <el-option label="按数值降序" value="desc" />
-      <el-option label="按数值升序" value="asc" />
-      <el-option label="按名称排序" value="name" />
-    </el-select>
+    <div class="bar-toolbar">
+      <el-select v-model="order" aria-label="柱状图排序" size="small" class="bar-order">
+        <el-option label="按数值降序" value="desc" />
+        <el-option label="按数值升序" value="asc" />
+        <el-option label="按名称排序" value="name" />
+      </el-select>
+      <span v-if="unit" class="bar-unit">单位：{{ unit }}</span>
+    </div>
     <div ref="element" class="bar-chart" role="img" :aria-label="title" />
     <BlacklakeChartAnalysis :chart="insight" :factory-id="factoryId" :metric="title"
       :basis="basis" :can-view-finance="cost" />
@@ -74,6 +86,8 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.bar-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
 .bar-order { width: 145px; }
+.bar-unit { color: var(--el-text-color-secondary); font-size: 13px; }
 .bar-chart { height: 268px; }
 </style>

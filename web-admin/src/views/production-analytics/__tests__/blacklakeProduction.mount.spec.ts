@@ -219,6 +219,34 @@ describe('黑湖生产分析页面', () => {
     page.unmount();
   });
 
+  it('产品成本图给滑块和坐标轴留出独立空间，并保留完整金额', async () => {
+    const amount = 1330000.25;
+    const products = Array.from({ length: 11 }, (_, index) => ({
+      ...costMetrics, productCode: `P${index}`, productName: `样例产品 ${index + 1}`,
+      totalCost: amount - index * 100000,
+    }));
+    const page = mount(BlacklakeCostAnalysis, {
+      ...mountOptions(),
+      props: { data: { ...costSnapshot, products }, factoryId: 'LIUSHANMEN', canViewPrice: true },
+    });
+    await flushPromises();
+    const zoomed = latestChart('产品工单总成本');
+    expect(page.get('.bar-unit').text()).toBe('单位：元');
+    expect(zoomed.xAxis.name).toBeUndefined();
+    expect(zoomed.grid).toMatchObject({ outerBoundsMode: 'same', outerBoundsContain: 'axisLabel' });
+    expect(zoomed.dataZoom).toEqual([expect.objectContaining({ type: 'slider', startValue: 0, endValue: 9 })]);
+    expect(zoomed.tooltip.trigger).toBe('axis');
+    expect(zoomed.series[0].data[0]).toBe(amount);
+
+    await page.setProps({ data: { ...costSnapshot, products: products.slice(0, 10) } });
+    const unzoomed = latestChart('产品工单总成本');
+    expect(unzoomed.dataZoom).toEqual([]);
+    const [{ width, right }] = zoomed.dataZoom;
+    expect(unzoomed.grid.right).toBeGreaterThan(0);
+    expect(zoomed.grid.right - unzoomed.grid.right).toBe(width + right);
+    page.unmount();
+  });
+
   it('两张柱图支持升序、降序和名称排序', async () => {
     const cost = mount(BlacklakeCostAnalysis, {
       ...mountOptions(),
@@ -232,6 +260,7 @@ describe('黑湖生产分析页面', () => {
     });
     const production = mount(ProductionAnalysis, mountOptions());
     await flushPromises();
+    expect(production.get('.bar-unit').text()).toBe('单位：KG');
     for (const [page, title, desc, asc] of [
       [cost, '产品工单总成本', [30, 20], [20, 30]],
       [production, '成品入库良品排行（KG）', [100.125, 30], [30, 100.125]],
