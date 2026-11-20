@@ -13,7 +13,6 @@ import com.cretas.aims.mapper.MaterialBatchMapper;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.datacenter.OperationLogRepository;
-import com.cretas.aims.repository.source.SourceIndividualRepository;
 import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.impl.MaterialBatchServiceImpl;
 import com.cretas.aims.service.lineage.LineageGraphAssembler;
@@ -57,14 +56,15 @@ import static org.springframework.test.web.servlet.setup.MockMvcBuilders.standal
 @ActiveProfiles("test")
 @EntityScan(basePackages = "com.cretas.aims.entity")
 @EnableJpaRepositories(basePackages = "com.cretas.aims.repository")
-@Import({SourceIndividualDetailService.class, LineageGraphAssembler.class})
+@Import({SourceIndividualService.class, SourceIndividualDetailService.class, LineageGraphAssembler.class})
 @EnabledIfEnvironmentVariable(named = "CRETAS_WORKFLOW_PG_VERIFY", matches = "true")
 class SourceIndividualRecallPostgresContractTest {
 
     private static final String FACTORY = "F-SI-RECALL";
     private static final String OTHER_FACTORY = "F-SI-RECALL-OTHER";
     private static final String BATCH_URL = "/api/mobile/{factoryId}/material-batches/{batchId}";
-    private static final String DETAIL_URL = "/api/mobile/{factoryId}/source-individuals/{id}/detail";
+    private static final String INDIVIDUAL_URL = "/api/mobile/{factoryId}/source-individuals/{id}";
+    private static final String DETAIL_URL = INDIVIDUAL_URL + "/detail";
 
     @DynamicPropertySource
     static void database(DynamicPropertyRegistry registry) {
@@ -76,7 +76,7 @@ class SourceIndividualRecallPostgresContractTest {
     @Autowired MaterialBatchRepository batchRepository;
     @Autowired MaterialConsumptionRepository consumptionRepository;
     @Autowired OperationLogRepository operationLogRepository;
-    @Autowired SourceIndividualRepository individualRepository;
+    @Autowired SourceIndividualService individualService;
     @Autowired SourceIndividualDetailService detailService;
 
     private MockMvc mvc;
@@ -89,7 +89,6 @@ class SourceIndividualRecallPostgresContractTest {
         var mobileService = mock(MobileService.class);
         when(mobileService.getUserFromToken("test-actor"))
                 .thenReturn(UserDTO.builder().id(operatorId).factoryId(FACTORY).build());
-        var individualService = new SourceIndividualService(individualRepository);
         var batchService = new MaterialBatchServiceImpl(
                 batchRepository, null, null, new MaterialBatchMapper(), consumptionRepository, null, null, null);
         ReflectionTestUtils.setField(batchService, "operationLogRepository", operationLogRepository);
@@ -116,15 +115,7 @@ class SourceIndividualRecallPostgresContractTest {
                 .andExpect(jsonPath("$.data.downstream.shipments", hasSize(2)))
                 .andExpect(jsonPath("$.data.previouslyLinkedBatches").isEmpty());
 
-        mvc.perform(post(BATCH_URL + "/source-individual/unlink", FACTORY, batchId)
-                        .header("Authorization", "Bearer test-actor")
-                        .requestAttr("role", "warehouse_manager")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {"reason":"核对耳标后解除"}
-                                """))
-                .andExpect(status().isOk());
-        flushAndClear();
+        unlinkBatch(batchId);
         assertThat(batchRepository.findById(batchId).orElseThrow().getSourceIndividualId()).isNull();
 
         mvc.perform(get(DETAIL_URL, FACTORY, individualId))
@@ -141,6 +132,54 @@ class SourceIndividualRecallPostgresContractTest {
                 .andExpect(jsonPath("$.data.previouslyLinkedBatches[0].operatorId").value(operatorId.intValue()))
                 .andExpect(jsonPath("$.data.previouslyLinkedDownstream.shipments", hasSize(1)))
                 .andExpect(jsonPath("$.data.previouslyLinkedDownstream.shipments[0].nodeId").value("SHIP-UNLINKED"));
+    }
+
+    @Test
+    void revokeAfterLastUnlinkConflictsAndPreservesHistoricalRecall() throws Exception {
+        String individualId = individual("CATTLE-A");
+        String batchId = batch("MB-UNLINKED", individualId);
+        shipmentClosure(batchId, "SHIP-UNLINKED");
+        flushAndClear();
+
+        unlinkBatch(batchId);
+        assertThat(batchRepository.findById(batchId).orElseThrow().getSourceIndividualId()).isNull();
+
+        mvc.perform(post(INDIVIDUAL_URL + "/revoke", FACTORY, individualId)
+                        .header("Authorization", "Bearer test-actor")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"reason":"档案录入错误"}
+                                """))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.errorCode").value("IN_USE_HISTORY"));
+        flushAndClear();
+
+        mvc.perform(get(DETAIL_URL, FACTORY, individualId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.batches").isEmpty())
+                .andExpect(jsonPath("$.data.previouslyLinkedBatches", hasSize(1)))
+                .andExpect(jsonPath("$.data.previouslyLinkedBatches[0].batchId").value(batchId))
+                .andExpect(jsonPath("$.data.previouslyLinkedDownstream.shipments", hasSize(1)))
+                .andExpect(jsonPath("$.data.previouslyLinkedDownstream.shipments[0].nodeId").value("SHIP-UNLINKED"));
+    }
+
+    @Test
+    void revokeStillSucceedsForAnUnusedIndividualWithOnlyAnotherFactorysAudit() throws Exception {
+        String individualId = individual("CATTLE-A");
+        Long otherOperatorId = SourceIndividualTestUsers.persistUser(em, OTHER_FACTORY);
+        legacyLog(OTHER_FACTORY, individualId, "FOREIGN-BATCH", "MB-FOREIGN", "他厂原因", otherOperatorId);
+        flushAndClear();
+
+        mvc.perform(post(INDIVIDUAL_URL + "/revoke", FACTORY, individualId)
+                        .header("Authorization", "Bearer test-actor")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"reason":"档案录入错误"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.revokeReason").value("档案录入错误"));
+        flushAndClear();
+        mvc.perform(get(DETAIL_URL, FACTORY, individualId)).andExpect(status().isNotFound());
     }
 
     @Test
@@ -203,6 +242,18 @@ class SourceIndividualRecallPostgresContractTest {
                 .andExpect(jsonPath("$.data.previouslyLinkedBatches", hasSize(1)))
                 .andExpect(jsonPath("$.data.previouslyLinkedBatches[0].batchId").value("HISTORICAL-BATCH"))
                 .andExpect(jsonPath("$.data.previouslyLinkedBatches[0].reason").value("最近解除"));
+    }
+
+    private void unlinkBatch(String batchId) throws Exception {
+        mvc.perform(post(BATCH_URL + "/source-individual/unlink", FACTORY, batchId)
+                        .header("Authorization", "Bearer test-actor")
+                        .requestAttr("role", "warehouse_manager")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"reason":"核对耳标后解除"}
+                                """))
+                .andExpect(status().isOk());
+        flushAndClear();
     }
 
     private String individual(String code) {

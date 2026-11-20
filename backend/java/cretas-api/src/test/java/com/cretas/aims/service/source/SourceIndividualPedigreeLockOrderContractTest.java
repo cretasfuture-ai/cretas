@@ -3,6 +3,7 @@ package com.cretas.aims.service.source;
 import com.cretas.aims.dto.source.UpdateSourceIndividualRequest;
 import com.cretas.aims.entity.source.SourceIndividual;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.datacenter.OperationLogRepository;
 import com.cretas.aims.repository.source.SourceIndividualRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -45,7 +46,7 @@ class SourceIndividualPedigreeLockOrderContractTest {
     @BeforeEach
     void setUp() {
         repo = mock(SourceIndividualRepository.class);
-        service = new SourceIndividualService(repo);
+        service = new SourceIndividualService(repo, mock(OperationLogRepository.class));
         for (String id : new String[]{"m", "p", "a", "z"}) {
             SourceIndividual si = SourceIndividual.builder().id(id).factoryId(F).individualCode("C-" + id).build();
             when(repo.lockByIdAndFactoryId(id, F)).thenAnswer(i -> {

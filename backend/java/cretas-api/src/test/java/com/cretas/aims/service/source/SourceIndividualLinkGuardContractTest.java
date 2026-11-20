@@ -14,6 +14,7 @@ import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.ProductionPlanBatchUsageRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
+import com.cretas.aims.repository.datacenter.OperationLogRepository;
 import com.cretas.aims.repository.source.SourceIndividualRepository;
 import com.cretas.aims.service.FuturePlanMatchingService;
 import com.cretas.aims.service.factory.WarehouseResolver;
@@ -80,7 +81,7 @@ class SourceIndividualLinkGuardContractTest {
 
     @BeforeEach
     void setUp() {
-        service = new SourceIndividualService(repository);
+        service = new SourceIndividualService(repository, mock(OperationLogRepository.class));
         ReflectionTestUtils.setField(service, "materialBatchRepository", materialBatchRepository);
 
         batchRepoMock = mock(MaterialBatchRepository.class);
