@@ -31,7 +31,7 @@ import static org.mockito.Mockito.when;
 
 /** Unit tests for {@link MaterialDisposalRecommendationTool} (Sprint 8 P4). */
 @ExtendWith(MockitoExtension.class)
-class MaterialDisposalRecommendationToolTest {
+class MaterialDisposalRecommendationToolContractTest {
 
     private static final String FACTORY_ID = "F006";
 

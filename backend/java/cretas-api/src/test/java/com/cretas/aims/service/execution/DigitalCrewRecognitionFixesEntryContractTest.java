@@ -2,30 +2,52 @@ package com.cretas.aims.service.execution;
 
 import com.cretas.aims.ai.capability.FactoryBusinessTypeResolver;
 import com.cretas.aims.ai.capability.FactoryCapabilityPackSelector;
+import com.cretas.aims.ai.client.DashScopeClient;
 import com.cretas.aims.ai.tool.ToolExecutor;
+import com.cretas.aims.ai.tool.WriteGuardService;
+import com.cretas.aims.ai.tool.impl.production.ProductionDemandQueryTool;
+import com.cretas.aims.ai.tool.impl.report.ReportCostQueryTool;
 import com.cretas.aims.config.IntentKnowledgeBase.QuestionType;
 import com.cretas.aims.controller.DigitalCrewController;
 import com.cretas.aims.dto.intent.IntentMatchResult;
+import com.cretas.aims.dto.skill.SkillDefinition;
+import com.cretas.aims.entity.ProductionLine;
+import com.cretas.aims.entity.ProductionLineCapacityConfig;
 import com.cretas.aims.entity.User;
+import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.config.AIIntentConfig;
 import com.cretas.aims.entity.crew.DigitalCrewDelegationLock;
 import com.cretas.aims.entity.crew.DigitalCrewWorkItem;
+import com.cretas.aims.entity.inventory.SalesOrder;
+import com.cretas.aims.entity.inventory.SalesOrderItem;
+import com.cretas.aims.repository.ProductionBatchRepository;
+import com.cretas.aims.repository.ProductionLineCapacityConfigRepository;
+import com.cretas.aims.repository.ProductionLineRepository;
 import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.crew.DigitalCrewDelegationLockRepository;
 import com.cretas.aims.repository.crew.DigitalCrewMemberSettingRepository;
 import com.cretas.aims.repository.crew.DigitalCrewRoleMappingRepository;
 import com.cretas.aims.repository.crew.DigitalCrewSettingLogRepository;
 import com.cretas.aims.repository.crew.DigitalCrewWorkItemRepository;
+import com.cretas.aims.repository.inventory.SalesOrderItemRepository;
+import com.cretas.aims.repository.inventory.SalesOrderRepository;
+import com.cretas.aims.repository.smartbi.SmartBiSkillRepository;
 import com.cretas.aims.security.AuthenticatedActor;
 import com.cretas.aims.security.AuthenticatedActorType;
 import com.cretas.aims.service.PermissionService;
 import com.cretas.aims.service.PreviewTokenService;
+import com.cretas.aims.service.ToolRouterService;
 import com.cretas.aims.service.crew.DigitalCrewService;
 import com.cretas.aims.service.impl.IntentExecutorServiceImpl;
 import com.cretas.aims.service.intent.LegacyIntentExitMetrics;
 import com.cretas.aims.service.intent.flywheel.FlywheelDecisionAnalysis;
 import com.cretas.aims.service.intent.flywheel.IntentFlywheelRecorder;
 import com.cretas.aims.service.intent.flywheel.IntentFlywheelTurnContext;
+import com.cretas.aims.service.skill.impl.SkillExecutorImpl;
+import com.cretas.aims.service.skill.impl.SkillRegistryImpl;
+import com.cretas.aims.service.skill.impl.SkillRouterServiceImpl;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -35,6 +57,7 @@ import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.PlatformTransactionManager;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -45,7 +68,6 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -191,6 +213,7 @@ class DigitalCrewRecognitionFixesEntryContractTest {
         org.mockito.Mockito.doReturn(QuestionType.GENERAL_QUESTION).when(h.knowledgeBase).detectQuestionType(input);
         h.chatReplies("需要先查一下真实数据，请您说明想查哪一项。");
         AIIntentConfig cost = h.intent("COST_QUERY", "成本查询", "report_cost_query", ToolExecutor.AccessMode.READ);
+        registerCostCatalog(h);
         h.recognizerAnswers(answer(input, cost));
 
         Run run = ask(h, "accountant", input);
@@ -229,10 +252,38 @@ class DigitalCrewRecognitionFixesEntryContractTest {
         String input = "酱卤牛肉成本怎么构成";
         assertThat(named.knowledgeBase.matchPhrase(input.toLowerCase(), "FACTORY")).as("前提: 句中短语会命中").contains("COST_QUERY");
         named.intent("COST_QUERY", "成本查询", "report_cost_query", ToolExecutor.AccessMode.READ);
+        registerCostCatalog(named);
         named.recognizerAnswers(answer(input, named.readIntent));
         ask(named, "accountant", input);
         assertThat(named.recognitionCalls()).as("整句定向查询直接走成本工具").isZero();
         assertThat(named.executedIntents).containsExactly("COST_QUERY");
+    }
+
+    @ParameterizedTest
+    @CsvSource({"什么产品的成本怎么算", "请帮我算人工成本怎么算", "乙厂牛肉成本怎么算", "酱卤牛肉11月的成本怎么算"})
+    void unconfirmedOrQualifiedCostQuestionsKeepTheDecisionPath(String input) throws Exception {
+        var h = harness();
+        h.intent("COST_QUERY", "成本查询", "report_cost_query", ToolExecutor.AccessMode.READ);
+        registerCostCatalog(h);
+        h.recognizerAnswers(answer(input, h.readIntent));
+
+        var response = h.sendThroughFacade(com.cretas.aims.dto.ai.IntentExecuteRequest.builder()
+                .userInput(input).mode("READ").build());
+
+        assertThat(h.recognitionCalls()).isEqualTo(1);
+        assertThat(h.executedIntents).containsExactly(MODEL_INTENT);
+        assertThat(response.getIntentCode()).isEqualTo(MODEL_INTENT);
+    }
+
+    private static void registerCostCatalog(StreamTurnCollectorEntryParityContractTest.Harness h) {
+        var catalog = mock(ProductTypeRepository.class);
+        var beef = new ProductType();
+        beef.setId("PT-BEEF");
+        beef.setName("演示·酱卤牛肉250g");
+        when(catalog.findByFactoryIdAndIsActiveTrue(FACTORY)).thenReturn(List.of(beef));
+        var cost = new ReportCostQueryTool();
+        ReflectionTestUtils.setField(cost, "productTypeRepository", catalog);
+        when(h.toolRegistry.getExecutor(cost.getToolName())).thenReturn(Optional.of(cost));
     }
 
     @ParameterizedTest(name = "{0} → {1}")
@@ -257,25 +308,112 @@ class DigitalCrewRecognitionFixesEntryContractTest {
     @Test
     void productionDemandQuestionUsesItsBoundSkillInsteadOfTheShiftKeyword() throws Exception {
         String input = "现在该排什么、排多少？这几个产品排产各要多少人、几个班？";
+        String otherInput = "查几个班";
         String code = "PRODUCTION_DEMAND_ANALYSIS";
-        String staffing = "酱卤牛肉待产 100kg，每班 3 人，约 2 个班";
         StreamTurnCollectorEntryParityContractTest.Harness h = harness();
         AIIntentConfig demand = h.intent(code, "订单缺产分析与排产建议", null, ToolExecutor.AccessMode.READ);
         demand.setIntentCategory("WORKDESK");
         h.recognizerAnswers(answer(input, h.readIntent));
-        when(h.dynamicTools.isSkillsEnabled()).thenReturn(true);
-        when(h.dynamicTools.tryExplicitSkillRouteForIntent(demand, input, FACTORY, USER, ROLE))
-                .thenReturn(com.cretas.aims.dto.ai.IntentExecuteResponse.builder().intentRecognized(true)
-                        .intentCode(code).status("SUCCESS").formattedText(staffing).build());
+        var mapper = new ObjectMapper();
+        var skills = new SkillRegistryImpl(mock(SmartBiSkillRepository.class), mapper);
+        ReflectionTestUtils.setField(skills, "loadDefaults", true);
+        ReflectionTestUtils.setField(skills, "skillsDirectory", "classpath:skills/");
+        skills.loadSkills();
+        assertThat(skills.getSkillForFactory(FACTORY, "production-demand-analysis").getTools())
+                .containsExactly("production_demand_query");
 
-        var response = h.sendThroughFacade(com.cretas.aims.dto.ai.IntentExecuteRequest.builder()
-                .userInput(input).mode("READ").build());
+        var orders = registerProductionDemandTool(h, mapper);
+        // A factory-configured competing keyword Skill exercises the real priority branch.
+        var shiftTool = mock(ToolExecutor.class);
+        when(shiftTool.getToolName()).thenReturn("shift_fixture_query");
+        when(shiftTool.getAccessMode()).thenReturn(ToolExecutor.AccessMode.READ);
+        when(shiftTool.getParametersSchema()).thenReturn(java.util.Map.of("required", List.of()));
+        when(shiftTool.execute(any(), any())).thenReturn("{\"success\":true,\"data\":{\"message\":\"排班日历\"}}");
+        when(h.toolRegistry.getExecutor("shift_fixture_query")).thenReturn(Optional.of(shiftTool));
+        when(h.toolRegistry.hasExecutor("shift_fixture_query")).thenReturn(true);
+        skills.register(SkillDefinition.builder().name("shift-fixture").displayName("排班日历").enabled(true)
+                .triggers(List.of(otherInput, input)).tools(List.of("shift_fixture_query")).build());
 
-        assertThat(h.recognitionCalls()).isZero();
-        verify(h.dynamicTools).tryExplicitSkillRouteForIntent(demand, input, FACTORY, USER, ROLE);
-        verify(h.dynamicTools, never()).trySkillRoute(any(), any(), any(), any());
-        assertThat(response.getIntentCode()).isEqualTo(code);
-        assertThat(response.getFormattedText()).contains("每班 3 人", "约 2 个班");
+        var toolRouter = mock(ToolRouterService.class);
+        var executor = new SkillExecutorImpl(h.toolRegistry, mock(DashScopeClient.class), mapper);
+        when(h.toolRegistry.isToolEnabledForFactory(anyString(), anyString())).thenReturn(true);
+        ReflectionTestUtils.setField(executor, "writeGuardService", new WriteGuardService());
+        ReflectionTestUtils.setField(executor, "toolPermissionChain", mock(ToolPermissionChain.class));
+        ReflectionTestUtils.setField(executor, "skillRegistry", skills);
+        ReflectionTestUtils.setField(executor, "intentConfigManagementService", h.configService);
+        try {
+            var router = new SkillRouterServiceImpl(skills, executor, h.recognizer, toolRouter);
+            ReflectionTestUtils.setField(router, "skillsEnabled", true);
+            ReflectionTestUtils.setField(router, "minSkillConfidence", 0.3);
+            var routing = new DynamicToolSelectionService(toolRouter, h.toolRegistry, mapper);
+            ReflectionTestUtils.setField(routing, "skillRouterService", router);
+            ReflectionTestUtils.setField(routing, "skillPreemptMinScore", 0.3);
+            ReflectionTestUtils.setField(routing, "configService", h.configService);
+            ReflectionTestUtils.setField(routing, "clarificationCandidateService", mock(ClarificationCandidateService.class));
+            h.build();
+            ReflectionTestUtils.setField(h.sse, "dynamicToolSelectionService", routing);
+
+            var response = h.sendThroughFacade(com.cretas.aims.dto.ai.IntentExecuteRequest.builder()
+                    .userInput(input).mode("READ").build());
+
+            assertThat(response.getFormattedText()).contains("酱卤牛肉", "待产 100 kg", "熟食线", "每班 3 人", "约 2 个班");
+            assertThat(response.getIntentCode()).isEqualTo(code);
+            assertThat(h.recognitionCalls()).isZero();
+            verify(orders).findByFactoryIdAndStatusInOrderByCreatedAtDesc(
+                    org.mockito.ArgumentMatchers.eq(FACTORY), any(), any());
+
+            h.recognizerAnswers(answer(otherInput, demand));
+            org.mockito.Mockito.doReturn(QuestionType.OPERATIONAL_COMMAND)
+                    .when(h.knowledgeBase).detectQuestionType(otherInput);
+            var other = h.sendThroughFacade(com.cretas.aims.dto.ai.IntentExecuteRequest.builder()
+                    .userInput(otherInput).mode("READ").build());
+            assertThat(h.recognitionCalls()).isEqualTo(1);
+            assertThat(other.getStatus()).isEqualTo("SUCCESS");
+            verify(shiftTool).execute(any(), any());
+            verify(orders).findByFactoryIdAndStatusInOrderByCreatedAtDesc(
+                    org.mockito.ArgumentMatchers.eq(FACTORY), any(), any());
+        } finally {
+            executor.shutdown();
+        }
+    }
+
+    private static SalesOrderRepository registerProductionDemandTool(
+            StreamTurnCollectorEntryParityContractTest.Harness h, ObjectMapper mapper) {
+        var orders = mock(SalesOrderRepository.class);
+        var items = mock(SalesOrderItemRepository.class);
+        var caps = mock(ProductionLineCapacityConfigRepository.class);
+        var lines = mock(ProductionLineRepository.class);
+        var order = new SalesOrder();
+        order.setId("SO-STAFFING");
+        var item = new SalesOrderItem();
+        item.setProductTypeId("PT-BEEF");
+        item.setProductName("酱卤牛肉");
+        item.setQuantity(new BigDecimal("100"));
+        item.setUnit("kg");
+        var capacity = new ProductionLineCapacityConfig();
+        capacity.setProductTypeId("PT-BEEF");
+        capacity.setProductionLineId("LINE-1");
+        capacity.setCapacityPerHour(BigDecimal.TEN);
+        capacity.setCapacityUnit(ProductionLineCapacityConfig.CapacityUnit.KG);
+        var line = new ProductionLine();
+        line.setName("熟食线");
+        line.setStandardWorkers(3);
+        when(orders.findByFactoryIdAndStatusInOrderByCreatedAtDesc(
+                org.mockito.ArgumentMatchers.eq(FACTORY), any(), any())).thenReturn(List.of(order));
+        when(items.findBySalesOrderId(order.getId())).thenReturn(List.of(item));
+        when(caps.findEffectiveForProduct(org.mockito.ArgumentMatchers.eq(FACTORY),
+                org.mockito.ArgumentMatchers.eq("PT-BEEF"), any())).thenReturn(List.of(capacity));
+        when(lines.findByIdAndFactoryIdAndDeletedAtIsNull("LINE-1", FACTORY)).thenReturn(Optional.of(line));
+        var tool = new ProductionDemandQueryTool();
+        ReflectionTestUtils.setField(tool, "salesOrderRepository", orders);
+        ReflectionTestUtils.setField(tool, "salesOrderItemRepository", items);
+        ReflectionTestUtils.setField(tool, "productionBatchRepository", mock(ProductionBatchRepository.class));
+        ReflectionTestUtils.setField(tool, "productionLineRepository", lines);
+        ReflectionTestUtils.setField(tool, "capacityConfigRepository", caps);
+        ReflectionTestUtils.setField(tool, "objectMapper", mapper);
+        when(h.toolRegistry.getExecutor(tool.getToolName())).thenReturn(Optional.of(tool));
+        when(h.toolRegistry.hasExecutor(tool.getToolName())).thenReturn(true);
+        return orders;
     }
 
     // ------------------------------------------------------------------ 对照: 现在好的两句不能变差

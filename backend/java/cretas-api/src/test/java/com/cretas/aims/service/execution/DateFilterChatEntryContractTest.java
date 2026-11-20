@@ -6,10 +6,12 @@ import com.cretas.aims.ai.tool.ToolRbacEnforcer;
 import com.cretas.aims.ai.tool.ToolRegistry;
 import com.cretas.aims.ai.tool.WriteGuardService;
 import com.cretas.aims.ai.tool.impl.crm.OrderListTool;
+import com.cretas.aims.ai.tool.impl.crm.OrderQueryTool;
 import com.cretas.aims.ai.tool.impl.material.MaterialExpiringAlertTool;
 import com.cretas.aims.ai.tool.impl.purchase.PurchaseOrderListTool;
 import com.cretas.aims.ai.tool.impl.quality.QualityCheckQueryTool;
 import com.cretas.aims.ai.tool.impl.shipment.ShipmentQueryTool;
+import com.cretas.aims.ai.tool.impl.workdesk.MaterialDisposalRecommendationTool;
 import com.cretas.aims.config.ColloquialMappings;
 import com.cretas.aims.config.TimeNormalizationRules;
 import com.cretas.aims.dto.ai.IntentExecuteRequest;
@@ -19,8 +21,18 @@ import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.intent.IntentMatchResult;
 import com.cretas.aims.dto.material.MaterialBatchDTO;
 import com.cretas.aims.entity.QualityInspection;
+import com.cretas.aims.entity.MaterialBatch;
+import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.config.AIIntentConfig;
+import com.cretas.aims.entity.enums.MaterialBatchStatus;
+import com.cretas.aims.entity.enums.SalesDeliveryStatus;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
+import com.cretas.aims.entity.inventory.SalesDeliveryRecord;
+import com.cretas.aims.entity.inventory.SalesOrder;
+import com.cretas.aims.exception.ResourceNotFoundException;
+import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.repository.inventory.SalesOrderRepository;
+import com.cretas.aims.repository.inventory.SalesDeliveryRecordRepository;
 import com.cretas.aims.service.ParameterExtractionLearningService;
 import com.cretas.aims.service.MaterialBatchService;
 import com.cretas.aims.service.QualityInspectionService;
@@ -39,6 +51,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -46,6 +59,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -209,9 +223,15 @@ class DateFilterChatEntryContractTest {
         verify(shipments).searchFiltered(eq(F), isNull(), isNull(), eq(lastMonthStart), eq(lastMonthEnd), anyInt(), anyInt());
     }
 
-    @ParameterizedTest(name = "{0} 天内到期")
-    @ValueSource(ints = {7, 3})
-    void expiryQuestionPassesFutureWindowFromOriginalTextThroughDispatch(int days) throws Exception {
+    @ParameterizedTest(name = "{0}")
+    @CsvSource(delimiter = '|', value = {
+            "需要，查一下 7 天内到期的批次|7|false",
+            "需要，查一下 3 天内到期的批次|3|false",
+            "查询7天内到期的原料|7|true",
+            "7天内到期的原料|7|true",
+            "查未来七天内到期的原料|7|true"})
+    void expiryQuestionPassesFutureWindowFromOriginalTextThroughDispatch(
+            String question, int days, boolean recognitionBranch) throws Exception {
         LocalDate today = LocalDate.now();
         LocalDate end = today.plusDays(days);
         MaterialBatchService service = mock(MaterialBatchService.class);
@@ -222,7 +242,7 @@ class DateFilterChatEntryContractTest {
         ReflectionTestUtils.setField(tool, "materialBatchService", service);
 
         IntentExecuteResponse response = run(tool, "MATERIAL_EXPIRING_ALERT", "MATERIAL",
-                "需要，查一下 " + days + " 天内到期的批次", false, "factory_super_admin");
+                question, recognitionBranch, "factory_super_admin");
 
         assertThat(response.getStatus()).as(response.getMessage()).isEqualTo("SUCCESS");
         verify(service).getExpiringBatches(F, days);
@@ -240,6 +260,99 @@ class DateFilterChatEntryContractTest {
         batch.setCurrentQuantity(new BigDecimal("8"));
         batch.setUnit("kg");
         return batch;
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"7 天内过期率是多少", "未来 7 天内的出货订单"})
+    void unrelatedDateDimensionsKeepLegacyWindowAtDispatch(String question) throws Exception {
+        LocalDate today = LocalDate.now();
+        ShipmentRecordService shipments = mock(ShipmentRecordService.class);
+        when(shipments.searchFiltered(anyString(), any(), any(), any(), any(), anyInt(), anyInt()))
+                .thenReturn(new PageImpl<>(List.of()));
+        ShipmentQueryTool tool = withMapper(new ShipmentQueryTool());
+        ReflectionTestUtils.setField(tool, "shipmentRecordService", shipments);
+
+        var response = run(tool, "SHIPMENT_QUERY", "SHIPMENT", question, true, "factory_super_admin");
+
+        assertThat(response.getStatus()).as(response.getMessage()).isEqualTo("SUCCESS");
+        verify(shipments).searchFiltered(eq(F), isNull(), isNull(),
+                eq(today.minusDays(7)), eq(today), anyInt(), anyInt());
+    }
+
+    @Test
+    void disposalQuestionShowsThisWeekQuantityDateAndAdviceThroughDispatch() throws Exception {
+        LocalDate today = LocalDate.now();
+        LocalDate weekEnd = today.with(java.time.DayOfWeek.SUNDAY);
+        MaterialBatchRepository batches = mock(MaterialBatchRepository.class);
+        when(batches.findExpiringBatches(F, weekEnd)).thenReturn(List.of(
+                disposalBatch("本周批次", today), disposalBatch("下周批次", weekEnd.plusDays(1))));
+        var tool = withMapper(new MaterialDisposalRecommendationTool());
+        ReflectionTestUtils.setField(tool, "materialBatchRepository", batches);
+
+        var response = run(tool, "MATERIAL_DISPOSAL_RECOMMENDATION", "MATERIAL",
+                "这周有哪些原料快过期了？该怎么处理？", false, "factory_super_admin");
+
+        assertThat(response.getStatus()).as(response.getMessage()).isEqualTo("SUCCESS");
+        verify(batches).findExpiringBatches(F, weekEnd);
+        assertThat(new ResultFormatterServiceImpl().format(response))
+                .contains("本周批次", "20kg", "到期日 " + today, "建议立即降价")
+                .doesNotContain("下周批次");
+    }
+
+    private static MaterialBatch disposalBatch(String name, LocalDate date) {
+        var batch = new MaterialBatch();
+        var type = new RawMaterialType();
+        type.setName(name);
+        batch.setMaterialType(type);
+        batch.setBatchNumber(name);
+        batch.setStatus(MaterialBatchStatus.AVAILABLE);
+        batch.setExpireDate(date);
+        batch.setQuantityUnit("kg");
+        batch.setReceiptQuantity(new BigDecimal("100"));
+        batch.setUsedQuantity(new BigDecimal("80"));
+        batch.setReservedQuantity(BigDecimal.ZERO);
+        return batch;
+    }
+
+    @Test
+    void spokenOrderProgressUsesOnlyTheCallersFactoryAndOrderAtDispatch() throws Exception {
+        var sales = mock(SalesService.class);
+        var orders = mock(SalesOrderRepository.class);
+        var deliveries = mock(SalesDeliveryRecordRepository.class);
+        String number = "DEMO-20261105-SO-001";
+        var own = new SalesOrder();
+        own.setFactoryId(F);
+        own.setId("own-order");
+        own.setOrderNumber(number);
+        own.setStatus(SalesOrderStatus.CANCELLED);
+        own.setTotalAmount(new BigDecimal("100"));
+        own.setPaidAmount(new BigDecimal("30"));
+        when(sales.getSalesOrderById(F, number)).thenThrow(new ResourceNotFoundException("未找到"));
+        when(sales.getSalesOrderById(F, own.getId())).thenReturn(own);
+        when(orders.findByFactoryIdAndOrderNumber(F, number)).thenReturn(Optional.of(own));
+        var other = new SalesOrder();
+        other.setFactoryId("F-OTHER");
+        other.setOrderNumber(number);
+        other.setId("foreign-order");
+        when(orders.findByFactoryIdAndOrderNumber("F-OTHER", number)).thenReturn(Optional.of(other));
+        var shipped = new SalesDeliveryRecord();
+        shipped.setStatus(SalesDeliveryStatus.SHIPPED);
+        when(deliveries.findInProgressBySalesOrderId(eq(F), eq(own.getId()), any())).thenReturn(List.of(shipped));
+        var foreignDelivered = new SalesDeliveryRecord();
+        foreignDelivered.setStatus(SalesDeliveryStatus.DELIVERED);
+        when(deliveries.findBySalesOrderId(own.getId())).thenReturn(List.of(shipped, foreignDelivered));
+        when(sales.getDeliveryRecordsByOrder(F, own.getId())).thenReturn(List.of(shipped, foreignDelivered));
+
+        var response = run(withMapper(new OrderQueryTool(sales, orders, deliveries)), "ORDER_STATUS", "CRM",
+                number + " 这单到哪了？", false, "factory_super_admin");
+
+        assertThat(response.getStatus()).as(response.getMessage()).isEqualTo("SUCCESS");
+        verify(orders).findByFactoryIdAndOrderNumber(F, number);
+        verify(orders, never()).findByFactoryIdAndOrderNumber("F-OTHER", number);
+        verify(deliveries).findInProgressBySalesOrderId(F, own.getId(), List.of(SalesDeliveryStatus.values()));
+        verify(deliveries, never()).findBySalesOrderId(anyString());
+        assertThat(new ResultFormatterServiceImpl().format(response)).contains(number, "当前节点：已取消",
+                "发货：已发货", "收款：已部分收款").doesNotContain("已签收", "foreign-order");
     }
 
     // ------------------------------------------------------------------ 不能按时间筛的工具: 说出来

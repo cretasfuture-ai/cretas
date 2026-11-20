@@ -20,10 +20,17 @@ public final class BusinessQueryPhrases {
             "([\\p{L}\\p{N}·・._（）()\\h-]{2,80}?)\\h*(?:的)?\\h*成本(?:是)?(?:怎么构成(?:的)?|构成是什么|怎么算(?:的)?)" + END);
     private static final Pattern NON_PRODUCT = Pattern.compile(
             "顺便|另外|然后|并且|同时|对比|比较|以及|操作|教程|功能|系统|修改|设置|调整|录入|更新|删除"
-                    + "|全厂|全部|所有|每个|各个|最近|过去|上周|本周|上月|本月|这个月|去年|今年|今天|昨天");
+                    + "|全厂|全部|所有|每个|各个|最近|过去|上周|本周|上月|本月|这个月|去年|今年|今天|昨天"
+                    + "|什么产品|哪些产品|哪个产品|帮我|请问|请帮|如何|怎么"
+                    + "|[0-9一二两三四五六七八九十](?:年|月|日|天)");
+    private static final String EXPIRY_WITHIN_DAYS =
+            "(\\d{1,4}|[一二两三四五六七八九十]{1,3})\\h*天\\h*内\\h*(?:到期|过期)的";
     private static final Pattern EXPIRY_LIST = Pattern.compile(
             "(?:需要[，,]\\h*)?(?:(?:请|帮我)?查(?:看|一下)?\\h*)?(?:未来\\h*)?"
-                    + "[0-9一二两三四五六七八九十]{1,4}\\h*天\\h*内\\h*(?:到期|过期)的(?:原料|物料|原材料)?批次(?:有哪些)?" + END);
+                    + EXPIRY_WITHIN_DAYS + "(?:原料|物料|原材料)?批次(?:有哪些)?" + END);
+    private static final Pattern EXPIRY_MATERIALS = Pattern.compile(
+            "(?:查(?:询|看|一下)?\\h*)?(?:未来\\h*)?"
+                    + EXPIRY_WITHIN_DAYS + "(?:原料|物料|原材料)" + END);
     private static final String WEEK_EXPIRY = "(?:这周|本周)\\h*(?:还?有)?哪些(?:原料|物料|原材料)\\h*(?:快|即将|要)(?:过期|到期)(?:了)?";
     private static final Pattern EXPIRY_WEEK = Pattern.compile(WEEK_EXPIRY + END);
     private static final Pattern EXPIRY_DISPOSAL = Pattern.compile(
@@ -35,8 +42,7 @@ public final class BusinessQueryPhrases {
     public static Optional<String> intentCode(String input) {
         String text = input.strip();
         if (salesOrderNumber(text).isPresent()) return Optional.of("ORDER_STATUS");
-        if (PRODUCTION_DEMAND.matcher(text).matches()) return Optional.of("PRODUCTION_DEMAND_ANALYSIS");
-        if (costProductName(text).isPresent()) return Optional.of("COST_QUERY");
+        if (productionDemandQuestion(text)) return Optional.of("PRODUCTION_DEMAND_ANALYSIS");
         if (EXPIRY_DISPOSAL.matcher(text).matches()) return Optional.of("MATERIAL_DISPOSAL_RECOMMENDATION");
         if (EXPIRY_LIST.matcher(text).matches() || EXPIRY_WEEK.matcher(text).matches()) {
             return Optional.of("MATERIAL_EXPIRING_ALERT");
@@ -46,6 +52,15 @@ public final class BusinessQueryPhrases {
 
     public static Optional<String> salesOrderNumber(String input) {
         return argument(ORDER_PROGRESS, input);
+    }
+
+    public static boolean productionDemandQuestion(String input) {
+        return input != null && PRODUCTION_DEMAND.matcher(input.strip()).matches();
+    }
+
+    public static Optional<Integer> futureExpiryDays(String input) {
+        return argument(EXPIRY_LIST, input).or(() -> argument(EXPIRY_MATERIALS, input))
+                .map(TimeNormalizationRules::parseCount);
     }
 
     public static Optional<String> costProductName(String input) {

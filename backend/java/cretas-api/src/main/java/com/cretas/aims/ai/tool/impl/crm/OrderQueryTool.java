@@ -4,9 +4,11 @@ import com.cretas.aims.ai.tool.FinanceReviewStatusGuard;
 import com.cretas.aims.ai.tool.StatusFilter;
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.dto.common.PageResponse;
+import com.cretas.aims.entity.enums.SalesDeliveryStatus;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.exception.ResourceNotFoundException;
+import com.cretas.aims.repository.inventory.SalesDeliveryRecordRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.service.inventory.SalesService;
 import lombok.RequiredArgsConstructor;
@@ -28,6 +30,7 @@ public class OrderQueryTool extends AbstractBusinessTool {
 
     private final SalesService salesService;
     private final SalesOrderRepository salesOrderRepository;
+    private final SalesDeliveryRecordRepository deliveryRecords;
 
     @Override
     public String getToolName() {
@@ -87,7 +90,7 @@ public class OrderQueryTool extends AbstractBusinessTool {
         if (orderId != null && !orderId.isBlank()) {
             SalesOrder order = resolveOrder(factoryId, orderId);
             result.put("order", OrderListTool.toSummary(order));
-            result.put("message", orderProgress(order));
+            result.put("message", orderProgress(factoryId, order));
             return result;
         }
 
@@ -136,13 +139,15 @@ public class OrderQueryTool extends AbstractBusinessTool {
         }
     }
 
-    private String orderProgress(SalesOrder order) {
+    private String orderProgress(String factoryId, SalesOrder order) {
         SalesOrderStatus status = order.getStatus();
         String shipping = status == null ? "状态未知" : switch (status) {
             case COMPLETED -> "已全部发货";
             case PARTIAL_DELIVERED -> "已部分发货";
             case SHORT_CLOSED -> "已部分发货，余量短交结案";
-            case CANCELLED -> salesService.getDeliveryRecordsByOrder(order.getFactoryId(), order.getId()).stream()
+            // The existing lookup takes the statuses as an argument and filters by both factory and order.
+            case CANCELLED -> deliveryRecords.findInProgressBySalesOrderId(
+                            factoryId, order.getId(), List.of(SalesDeliveryStatus.values())).stream()
                     .map(com.cretas.aims.entity.inventory.SalesDeliveryRecord::getStatus)
                     .filter(java.util.Objects::nonNull)
                     .map(com.cretas.aims.entity.enums.SalesDeliveryStatus::getDisplayName)

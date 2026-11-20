@@ -561,7 +561,8 @@ public class DynamicToolSelectionService {
                 response.setIntentName(intent.getIntentName());
                 response.setIntentCategory(intent.getIntentCategory());
                 response.setStatus("SUCCESS");
-                String skillFormattedText = formatSkillResult(skillResult);
+                String skillFormattedText = productionDemandReply(skillResult, userQuery)
+                        .orElseGet(() -> formatSkillResult(skillResult));
                 String skillMessage = skillResult.getMessage();
                 if (skillMessage == null || skillMessage.isEmpty()
                         || skillMessage.startsWith("DAG execution")) {
@@ -1054,6 +1055,19 @@ public class DynamicToolSelectionService {
      * 格式化 Skill 执行结果
      */
     @SuppressWarnings("unchecked")
+    private Optional<String> productionDemandReply(SkillResult result, String userQuery) {
+        if (!"production-demand-analysis".equals(result.getSkillName())
+                || !com.cretas.aims.config.BusinessQueryPhrases.productionDemandQuestion(userQuery)
+                || !(result.getData() instanceof Map<?, ?> data)
+                || !(data.get("production_demand_query") instanceof com.fasterxml.jackson.databind.JsonNode tool)) {
+            return Optional.empty();
+        }
+        // The deterministic Skill executor stores the Tool envelope as a JsonNode.
+        var message = tool.path("data").path("message");
+        return tool.path("success").asBoolean(false) && message.isTextual() && !message.asText().isBlank()
+                ? Optional.of(message.asText()) : Optional.empty();
+    }
+
     private String formatSkillResult(SkillResult skillResult) {
         if (skillResult.getData() == null) {
             return skillResult.getMessage();

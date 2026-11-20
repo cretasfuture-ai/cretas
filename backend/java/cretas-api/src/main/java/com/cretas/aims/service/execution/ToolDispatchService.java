@@ -657,6 +657,9 @@ public class ToolDispatchService {
                     : matchResult != null && matchResult.getPreprocessedQuery() != null
                     ? matchResult.getPreprocessedQuery()
                     : shortcutPreprocess(request, factoryId, userId);
+            var futureExpiryDays = !boundConfirmation && "material_expiring_alert".equals(tool.getToolName())
+                    ? com.cretas.aims.config.BusinessQueryPhrases.futureExpiryDays(request.getUserInput())
+                    : Optional.<Integer>empty();
             if (!boundConfirmation && preprocessed != null) {
                 PreprocessedQuery pq = preprocessed;
                 Map<String, PreprocessedQuery.ResolvedReference> refs = pq.getResolvedReferences();
@@ -701,7 +704,8 @@ public class ToolDispatchService {
 
                 // 2.6. 从预处理结果中提取时间范围
                 // 用户原话里根本没说时间 (预处理按上下文补出的日期不算「你说的」): 不带时间参数, 也不出「不能按时间筛选」提示
-                if (pq.hasTimeRange() && com.cretas.aims.ai.tool.TimeRangeFilter.mentionsTime(request.getUserInput())) {
+                if (futureExpiryDays.isEmpty() && pq.hasTimeRange()
+                        && com.cretas.aims.ai.tool.TimeRangeFilter.mentionsTime(request.getUserInput())) {
                     TimeNormalizationRules.TimeRange timeRange = pq.getPrimaryTimeRange();
                     if (timeRange != null && timeRange.isValid()) {
                         params.put("startDate", timeRange.getStart().toLocalDate().toString());
@@ -713,6 +717,13 @@ public class ToolDispatchService {
                     }
                 }
             }
+            futureExpiryDays.ifPresent(days -> {
+                var today = java.time.LocalDate.now();
+                params.put("startDate", today.toString());
+                params.put("endDate", today.plusDays(days).toString());
+                params.put(com.cretas.aims.ai.tool.TimeRangeFilter.SAID,
+                        params.get("startDate") + "~" + params.get("endDate"));
+            });
 
             // 2.65. INTENT-DISTILL D1: 只读查询的参数来源 (本轮 > 同一目标已确认 > 默认) 与程序绑定的分页
             boolean readTurn = !writeOperation && !boundConfirmation

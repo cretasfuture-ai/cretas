@@ -113,7 +113,7 @@ class ReportCostQueryToolContractTest {
         thisMonth.add(batch("酱鸭", "999", "0", "0", "0", "50", "盒", ProductionBatchStatus.COMPLETED, false));
 
         JsonNode result = run("""
-                {"originalUserInput":"酱卤牛肉成本怎么构成","productName":"酱鸭"}
+                {"originalUserInput":"酱卤牛肉成本怎么构成"}
                 """).get("data");
 
         assertTrue(result.get("message").asText().contains(fullName));
@@ -123,6 +123,13 @@ class ReportCostQueryToolContractTest {
         assertEquals(50, totals.get("equipmentCost").asInt());
         assertEquals(40, totals.get("otherCost").asInt());
         assertEquals(1, result.get("data").get("products").size());
+
+        for (String question : List.of("酱卤牛肉成本怎么构成", "请帮我算人工成本怎么算")) {
+            JsonNode selected = run(mapper.writeValueAsString(Map.of("originalUserInput", question,
+                    "productName", "酱鸭"))).path("data").path("data");
+            assertEquals("酱鸭", selected.path("products").path(0).path("productName").asText());
+            assertEquals(999, selected.path("totals").path("materialCost").asInt());
+        }
     }
 
     @Test

@@ -278,19 +278,7 @@ public class TimeNormalizationRules {
                 }
         );
         TIME_PATTERNS.put(
-                Pattern.compile("未来\\s*" + COUNT_TEXT + "\\s*天\\s*内"),
-                (now, m) -> {
-                    int days = parseCount(m.group(1));
-                    return TimeRange.of(now.with(LocalTime.MIN), now.plusDays(days).with(LocalTime.MAX));
-                }
-        );
-        TIME_PATTERNS.put(
-                Pattern.compile("(?<![0-9第])" + COUNT_TEXT + "\\s*天\\s*内(?=\\s*(?:到期|过期))"),
-                (now, m) -> TimeRange.of(now.with(LocalTime.MIN),
-                        now.plusDays(parseCount(m.group(1))).with(LocalTime.MAX))
-        );
-        TIME_PATTERNS.put(
-                Pattern.compile(BARE_COUNT_TEXT + "\\s*天\\s*内"),
+                Pattern.compile(BARE_COUNT_TEXT + "\\s*天内"),
                 (now, m) -> {
                     int days = countOf(m);
                     return TimeRange.of(now.minusDays(days).with(LocalTime.MIN), now);

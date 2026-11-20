@@ -767,10 +767,16 @@ public class SseStreamingService {
             if (dynamicToolSelectionService.isSkillsEnabled() && intentHasNoTool) {
                 try {
                     // 排产的「几个班」也是缺产分析的输入，按已定意图绑定 Skill，避免被排班关键词改道。
-                    boolean productionDemand = "PRODUCTION_DEMAND_ANALYSIS".equals(intent.getIntentCode());
-                    IntentExecuteResponse skillResponse = productionDemand ? null
+                    boolean preferBoundSkill = "PRODUCTION_DEMAND_ANALYSIS".equals(intent.getIntentCode())
+                            && com.cretas.aims.config.BusinessQueryPhrases.productionDemandQuestion(request.getUserInput());
+                    IntentExecuteResponse skillResponse = preferBoundSkill
+                            ? dynamicToolSelectionService.tryExplicitSkillRouteForIntent(
+                                    intent, request.getUserInput(), factoryId, userId, userRole)
                             : dynamicToolSelectionService.trySkillRoute(request.getUserInput(), factoryId, userId, userRole);
-                    if (skillResponse == null) {
+                    if (skillResponse == null && preferBoundSkill) {
+                        skillResponse = dynamicToolSelectionService.trySkillRoute(
+                                request.getUserInput(), factoryId, userId, userRole);
+                    } else if (skillResponse == null) {
                         skillResponse = dynamicToolSelectionService.tryExplicitSkillRouteForIntent(
                                 intent, request.getUserInput(), factoryId, userId, userRole);
                     }
@@ -870,7 +876,15 @@ public class SseStreamingService {
         try {
             // 否定说法 (别查库存了 / 不要报工) 由调用方 (管线 1.4) 按本轮唯一一次判定挡掉, 这里不再判第二遍
             Optional<String> completeQuery = com.cretas.aims.config.BusinessQueryPhrases.intentCode(userInput);
-            String normalized = userInput.toLowerCase(java.util.Locale.ROOT).trim();
+            if (completeQuery.isEmpty()
+                    && com.cretas.aims.config.BusinessQueryPhrases.costProductName(userInput).isPresent()) {
+                var costTool = toolRegistry.getExecutor("report_cost_query").orElse(null);
+                if (costTool instanceof com.cretas.aims.ai.tool.impl.report.ReportCostQueryTool cost
+                        && cost.matchesNamedCostQuestion(factoryId, userInput)) {
+                    completeQuery = Optional.of("COST_QUERY");
+                }
+            }
+            String normalized = userInput.toLowerCase().trim();
             Optional<String> phrase = completeQuery.or(() -> knowledgeBase.matchPhrase(normalized, "FACTORY"));
             if (phrase.isEmpty()) {
                 return null;

@@ -4,6 +4,7 @@ import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
+import com.cretas.aims.repository.inventory.SalesDeliveryRecordRepository;
 import com.cretas.aims.service.inventory.SalesService;
 import org.junit.jupiter.api.Test;
 
@@ -16,7 +17,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-class OrderQueryToolTest {
+class OrderQueryToolContractTest {
 
     @Test
     void queriesCanonicalSalesOrderById() {
@@ -27,7 +28,7 @@ class OrderQueryToolTest {
         order.setOrderNumber("SO-001");
         when(salesService.getSalesOrderById("F001", "SO-ID-1")).thenReturn(order);
 
-        Map<String, Object> result = new OrderQueryTool(salesService, repository)
+        Map<String, Object> result = new OrderQueryTool(salesService, repository, mock(SalesDeliveryRecordRepository.class))
                 .doExecute("F001", Map.of("orderId", "SO-ID-1"), Map.of());
 
         assertThat(result.get("source")).isEqualTo("sales_orders");
@@ -50,7 +51,7 @@ class OrderQueryToolTest {
         when(repository.findByFactoryIdAndOrderNumber("F006", order.getOrderNumber())).thenReturn(Optional.of(order));
         when(salesService.getSalesOrderById("F006", order.getId())).thenReturn(order);
 
-        Map<String, Object> result = new OrderQueryTool(salesService, repository)
+        Map<String, Object> result = new OrderQueryTool(salesService, repository, mock(SalesDeliveryRecordRepository.class))
                 .doExecute("F006", Map.of("originalUserInput", "DEMO-20261105-SO-001 这单到哪了？",
                         "orderId", "model-selected-order"), Map.of());
 
