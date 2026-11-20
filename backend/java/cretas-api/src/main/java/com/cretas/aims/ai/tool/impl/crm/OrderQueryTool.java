@@ -71,7 +71,10 @@ public class OrderQueryTool extends AbstractBusinessTool {
     @Override
     protected Map<String, Object> doExecute(
             String factoryId, Map<String, Object> params, Map<String, Object> context) {
-        String orderId = getString(params, "orderId");
+        String sentence = getString(params, "originalUserInput", getString(params, "userInput"));
+        String orderId = com.cretas.aims.config.BusinessQueryPhrases.salesOrderNumber(sentence)
+                .map(number -> number.toUpperCase(Locale.ROOT))
+                .orElseGet(() -> getString(params, "orderId"));
         String queryType = getString(params, "queryType", "ORDER_STATUS");
         String statusValue = getString(params, "status");
         int page = Math.max(1, getInteger(params, "page", 1));
@@ -84,7 +87,7 @@ public class OrderQueryTool extends AbstractBusinessTool {
         if (orderId != null && !orderId.isBlank()) {
             SalesOrder order = resolveOrder(factoryId, orderId);
             result.put("order", OrderListTool.toSummary(order));
-            result.put("message", "销售订单查询成功");
+            result.put("message", orderProgress(order));
             return result;
         }
 
@@ -128,8 +131,32 @@ public class OrderQueryTool extends AbstractBusinessTool {
             return salesService.getSalesOrderById(factoryId, idOrNumber);
         } catch (ResourceNotFoundException notFoundById) {
             return salesOrderRepository.findByFactoryIdAndOrderNumber(factoryId, idOrNumber)
+                    .map(order -> salesService.getSalesOrderById(factoryId, order.getId()))
                     .orElseThrow(() -> new ResourceNotFoundException("销售订单不存在: " + idOrNumber));
         }
+    }
+
+    private String orderProgress(SalesOrder order) {
+        SalesOrderStatus status = order.getStatus();
+        String shipping = status == null ? "状态未知" : switch (status) {
+            case COMPLETED -> "已全部发货";
+            case PARTIAL_DELIVERED -> "已部分发货";
+            case SHORT_CLOSED -> "已部分发货，余量短交结案";
+            case CANCELLED -> salesService.getDeliveryRecordsByOrder(order.getFactoryId(), order.getId()).stream()
+                    .map(com.cretas.aims.entity.inventory.SalesDeliveryRecord::getStatus)
+                    .filter(java.util.Objects::nonNull)
+                    .map(com.cretas.aims.entity.enums.SalesDeliveryStatus::getDisplayName)
+                    .distinct().collect(java.util.stream.Collectors.collectingAndThen(
+                            java.util.stream.Collectors.joining("、"), states -> states.isEmpty() ? "无发货记录" : states));
+            default -> "未发货";
+        };
+        String payment = switch (order.getPaymentStatus()) {
+            case "PAID" -> "已收清";
+            case "PARTIAL" -> "已部分收款";
+            default -> "未收款";
+        };
+        return "销售订单 " + order.getOrderNumber() + "\n当前节点："
+                + (status == null ? "未知" : status.getDisplayName()) + "\n发货：" + shipping + "\n收款：" + payment;
     }
 
     /** spec §8.2 只读查询, 无副作用 */

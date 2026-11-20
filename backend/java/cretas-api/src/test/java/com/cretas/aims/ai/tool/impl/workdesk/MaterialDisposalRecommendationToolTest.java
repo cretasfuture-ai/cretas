@@ -1,6 +1,10 @@
 package com.cretas.aims.ai.tool.impl.workdesk;
 
 import com.cretas.aims.entity.MaterialBatch;
+import com.cretas.aims.entity.RawMaterialType;
+import com.cretas.aims.ai.dto.ToolCall;
+import com.cretas.aims.ai.tool.TimeRangeFilter;
+import com.cretas.aims.config.TimeNormalizationRules;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -100,6 +104,35 @@ class MaterialDisposalRecommendationToolTest {
         Map<String, Object> data = (Map<String, Object>) result.get("data");
         List<Map<String, Object>> recs = (List<Map<String, Object>>) data.get("recommendations");
         assertEquals(0, recs.size());
+    }
+
+    @Test
+    void thisWeekDisposalFiltersExpiryAndShowsQuantitiesDatesAndAdvice() throws Exception {
+        String question = "这周有哪些原料快过期了？该怎么处理？";
+        LocalDate today = LocalDate.now();
+        var range = new TimeNormalizationRules().normalize(question, today.atTime(12, 0)).orElseThrow();
+        LocalDate from = range.getStart().toLocalDate();
+        LocalDate to = range.getEnd().toLocalDate();
+        MaterialBatch inside = batch("inside", today, new BigDecimal("100"), new BigDecimal("20"));
+        RawMaterialType material = new RawMaterialType();
+        material.setName("鸡腿肉");
+        inside.setMaterialType(material);
+        MaterialBatch after = batch("after", to.plusDays(1), BigDecimal.TEN, BigDecimal.TEN);
+        when(materialBatchRepository.findExpiringBatches(FACTORY_ID, to)).thenReturn(List.of(inside, after));
+        if (from.isBefore(today)) {
+            MaterialBatch before = batch("before", from.minusDays(1), BigDecimal.TEN, BigDecimal.TEN);
+            when(materialBatchRepository.findExpiredBatches(FACTORY_ID)).thenReturn(List.of(before));
+        }
+        String params = objectMapper.writeValueAsString(Map.of("startDate", from.toString(), "endDate", to.toString(),
+                TimeRangeFilter.SAID, from + "~" + to));
+        var response = objectMapper.readTree(tool.execute(ToolCall.of("disposal", tool.getToolName(), params), ctx())).get("data");
+
+        assertTrue(response.has(TimeRangeFilter.APPLIED));
+        assertFalse(response.has(TimeRangeFilter.NOT_APPLIED));
+        assertEquals(1, response.get("data").get("recommendations").size());
+        String reply = response.get("message").asText();
+        assertTrue(reply.contains("鸡腿肉（BN-inside）：20kg，到期日 " + today), reply);
+        assertTrue(reply.contains("立即降价"), reply);
     }
 
     // ── helpers ──

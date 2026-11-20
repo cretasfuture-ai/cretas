@@ -5,6 +5,7 @@ import com.cretas.aims.entity.ProductType;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
@@ -37,12 +38,20 @@ class AiBiDemoFiveFixesContractTest {
             "近期的批次, 13",
             "近二十五天, 24",
             "最近1天, 0",
-            "查询7天内到期的原料, 7",
-            "7天内到期的原料, 7"})
+            "查询7天内入库的原料, 7",
+            "7天内已出货的订单, 7"})
     void recentNDaysAllowsSpacesAndChineseNumerals(String text, long expectedDays) {
         TimeNormalizationRules.TimeRange r = new TimeNormalizationRules().normalize(text, NOW).orElseThrow();
         long days = ChronoUnit.DAYS.between(r.getStart().toLocalDate(), NOW.toLocalDate());
         assertEquals(expectedDays, days, text);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"查询7天内到期的原料", "7天内到期的原料", "查未来七天内到期的原料"})
+    void relativeExpiryDaysStartTodayAndEndInTheFuture(String text) {
+        TimeNormalizationRules.TimeRange range = new TimeNormalizationRules().normalize(text, NOW).orElseThrow();
+        assertEquals(NOW.toLocalDate(), range.getStart().toLocalDate(), text);
+        assertEquals(NOW.toLocalDate().plusDays(7), range.getEnd().toLocalDate(), text);
     }
 
     private static ProductType p(String name, String category) {

@@ -91,7 +91,10 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params,
                                             Map<String, Object> context) throws Exception {
         // 产品名本次请求解析一次; 回复开头写明按哪个产品 / 全厂统计 (「卤牛肉片」按卤牛肉回答时也看得出来)
-        ReportToolSchemas.ProductResolution product = ReportToolSchemas.resolveProduct(productTypeRepository, factoryId, getString(params, "productName"));
+        String sentence = getString(params, "originalUserInput", getString(params, "userInput"));
+        String productName = com.cretas.aims.config.BusinessQueryPhrases.costProductName(sentence)
+                .orElseGet(() -> getString(params, "productName"));
+        ReportToolSchemas.ProductResolution product = ReportToolSchemas.resolveProduct(productTypeRepository, factoryId, productName);
         return ReportToolSchemas.withNote(answer(factoryId, params, context, product), product.leadIn(true));
     }
 

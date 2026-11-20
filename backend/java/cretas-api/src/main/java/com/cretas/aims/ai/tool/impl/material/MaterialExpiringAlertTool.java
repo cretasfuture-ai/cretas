@@ -1,12 +1,15 @@
 package com.cretas.aims.ai.tool.impl.material;
 
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
+import com.cretas.aims.ai.tool.ExpiryDateWindow;
 import com.cretas.aims.dto.material.MaterialBatchDTO;
 import com.cretas.aims.service.MaterialBatchService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
+import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -63,6 +66,7 @@ public class MaterialExpiringAlertTool extends AbstractBusinessTool {
         warningDays.put("minimum", 1);
         warningDays.put("maximum", 365);
         properties.put("warningDays", warningDays);
+        ExpiryDateWindow.declareParameters(properties);
 
         schema.put("properties", properties);
 
@@ -81,23 +85,30 @@ public class MaterialExpiringAlertTool extends AbstractBusinessTool {
     @Override
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params, Map<String, Object> context) throws Exception {
         // 获取预警天数，默认7天
-        Integer warningDays = getInteger(params, "warningDays", DEFAULT_WARNING_DAYS);
+        int warningDays = getInteger(params, "warningDays", DEFAULT_WARNING_DAYS);
+        LocalDate today = LocalDate.now();
+        ExpiryDateWindow dates = ExpiryDateWindow.resolve(params, today, today.plusDays(warningDays));
+        int horizon = Math.toIntExact(ChronoUnit.DAYS.between(today, dates.to()));
 
         log.info("查询即将过期原材料预警: factoryId={}, warningDays={}", factoryId, warningDays);
 
         // 调用服务获取即将过期批次
-        List<MaterialBatchDTO> expiringBatches = materialBatchService.getExpiringBatches(factoryId, warningDays);
+        List<MaterialBatchDTO> expiringBatches = horizon < 0 ? List.of()
+                : materialBatchService.getExpiringBatches(factoryId, horizon).stream()
+                        .filter(batch -> dates.includes(batch.getExpireDate()))
+                        .collect(Collectors.toList());
 
         // 构建返回结果
         Map<String, Object> result = new HashMap<>();
         result.put("total", expiringBatches.size());
-        result.put("warningDays", warningDays);
+        result.put("warningDays", horizon);
+        String period = dates.from() + " 至 " + dates.to();
 
         if (expiringBatches.isEmpty()) {
-            result.put("message", String.format("未来 %d 天内没有即将过期的原材料批次", warningDays));
+            result.put("message", "到期日范围 " + period + " 内没有即将过期的原材料批次。");
             result.put("batches", Collections.emptyList());
         } else {
-            result.put("message", String.format("共有 %d 个批次将在 %d 天内过期", expiringBatches.size(), warningDays));
+            result.put("message", "到期日范围 " + period + " 内有 " + expiringBatches.size() + " 批即将到期。");
             // 转换为简洁格式，按剩余天数排序
             List<Map<String, Object>> batchList = expiringBatches.stream()
                     .sorted(Comparator.comparing(MaterialBatchDTO::getRemainingDays, Comparator.nullsLast(Comparator.naturalOrder())))

@@ -1,6 +1,7 @@
 package com.cretas.aims.ai.tool.impl.workdesk;
 
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
+import com.cretas.aims.ai.tool.ExpiryDateWindow;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.repository.MaterialBatchRepository;
@@ -74,11 +75,12 @@ public class MaterialDisposalRecommendationTool extends AbstractBusinessTool {
         Map<String, Object> daysToExpiry = new HashMap<>();
         daysToExpiry.put("type", "integer");
         daysToExpiry.put("description",
-                "查询多少天内将过期的批次 (默认 7, 上限 30). 已过期批次 (剩余 <0 天) 永远包含");
+                "没有指定到期日范围时，查询未来多少天将过期的批次，并包含历史已过期批次（默认 7 天，上限 30 天）");
         daysToExpiry.put("default", DEFAULT_DAYS_TO_EXPIRY);
         daysToExpiry.put("minimum", 1);
         daysToExpiry.put("maximum", MAX_DAYS_TO_EXPIRY);
         properties.put("daysToExpiry", daysToExpiry);
+        ExpiryDateWindow.declareParameters(properties);
 
         schema.put("properties", properties);
         schema.put("required", Collections.emptyList());
@@ -96,25 +98,23 @@ public class MaterialDisposalRecommendationTool extends AbstractBusinessTool {
         int daysToExpiry = clamp(getInteger(params, "daysToExpiry", DEFAULT_DAYS_TO_EXPIRY),
                 1, MAX_DAYS_TO_EXPIRY);
         LocalDate today = LocalDate.now();
-        LocalDate warning = today.plusDays(daysToExpiry);
+        ExpiryDateWindow dates = ExpiryDateWindow.resolve(params, null, today.plusDays(daysToExpiry));
 
         log.info("material_disposal_recommendation — factory={} daysToExpiry={}",
                 factoryId, daysToExpiry);
 
-        // 1. 临期 (today < expireDate <= warning)
-        List<MaterialBatch> expiring = materialBatchRepository.findExpiringBatches(
-                factoryId, warning);
-        // 2. 已过期 (expireDate < today, 状态非 EXPIRED — 防重复处理)
-        List<MaterialBatch> expired = materialBatchRepository.findExpiredBatches(factoryId);
+        List<MaterialBatch> expiring = dates.to().isBefore(today) ? List.of()
+                : materialBatchRepository.findExpiringBatches(factoryId, dates.to());
+        List<MaterialBatch> expired = dates.from() != null && !dates.from().isBefore(today) ? List.of()
+                : materialBatchRepository.findExpiredBatches(factoryId);
 
         List<Map<String, Object>> recommendations = new ArrayList<>();
         for (MaterialBatch b : expiring) {
-            // 排除已 SCRAPPED / USED_UP / DEPLETED
-            if (excludeStatus(b.getStatus())) continue;
+            if (excludeStatus(b.getStatus()) || !dates.includes(b.getExpireDate())) continue;
             recommendations.add(buildRow(b, today, false));
         }
         for (MaterialBatch b : expired) {
-            if (excludeStatus(b.getStatus())) continue;
+            if (excludeStatus(b.getStatus()) || !dates.includes(b.getExpireDate())) continue;
             recommendations.add(buildRow(b, today, true));
         }
 
@@ -138,23 +138,30 @@ public class MaterialDisposalRecommendationTool extends AbstractBusinessTool {
         Map<String, Object> data = new HashMap<>();
         data.put("today", today.toString());
         data.put("daysToExpiry", daysToExpiry);
-        data.put("expiringCount", expiring.size());
-        data.put("expiredCount", expired.size());
+        long expiredCount = recommendations.stream().filter(r -> Boolean.TRUE.equals(r.get("isExpired"))).count();
+        long expiringCount = recommendations.size() - expiredCount;
+        data.put("expiringCount", expiringCount);
+        data.put("expiredCount", expiredCount);
         data.put("recommendations", recommendations);
         data.put("actionSummary", actionCount);
 
-        String message;
-        if (recommendations.isEmpty()) {
-            message = String.format("近 %d 天内无临期 / 已过期物料, 库存健康", daysToExpiry);
-        } else {
-            int expiredN = (int) recommendations.stream()
-                    .filter(r -> Boolean.TRUE.equals(r.get("isExpired"))).count();
-            int expiringN = recommendations.size() - expiredN;
-            message = String.format(
-                    "%d 临期 + %d 已过期 = %d 批待处置. 建议优先处理已过期 (报废) + 0-2 天 (立即降价)",
-                    expiringN, expiredN, recommendations.size());
+        StringBuilder message = new StringBuilder();
+        if (dates.from() != null || params.get("endDate") != null) {
+            message.append(dates.from() == null ? "到期日截至 " + dates.to()
+                    : "到期日范围：" + dates.from() + " 至 " + dates.to()).append('\n');
         }
-        return buildSimpleResult(message, data);
+        message.append("待处置原料：").append(expiringCount).append(" 批临期，").append(expiredCount).append(" 批已过期。");
+        recommendations.stream().limit(5).forEach(row -> message.append("\n• ")
+                .append(java.util.Objects.toString(row.get("materialName"), "物料批次"))
+                .append("（").append(row.get("batchNumber")).append("）：")
+                .append(java.util.Objects.toString(row.get("currentQuantity"), "数量未知"))
+                .append(java.util.Objects.toString(row.get("unit"), ""))
+                .append("，到期日 ").append(row.get("expireDate"))
+                .append("，").append(row.get("recommendedReason")));
+        if (recommendations.size() > 5) {
+            message.append("\n以上为前 5 批，共 ").append(recommendations.size()).append(" 批。");
+        }
+        return buildSimpleResult(message.toString(), data);
     }
 
     private boolean excludeStatus(MaterialBatchStatus s) {
@@ -171,6 +178,7 @@ public class MaterialDisposalRecommendationTool extends AbstractBusinessTool {
         row.put("materialTypeId", b.getMaterialTypeId());
         row.put("materialName", b.getMaterialType() != null
                 ? b.getMaterialType().getName() : null);
+        row.put("unit", b.getQuantityUnit());
         row.put("expireDate", b.getExpireDate() != null ? b.getExpireDate().toString() : null);
 
         Long daysRemaining = null;

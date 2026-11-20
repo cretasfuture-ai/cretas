@@ -45,6 +45,8 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -215,8 +217,8 @@ class DigitalCrewRecognitionFixesEntryContractTest {
     }
 
     @Test
-    @DisplayName("整句就是「成本怎么构成」→ 短语快捷直达成本查询; 带产品名的句子剩余字超限, 交决策层")
-    void barePhraseShortcutsAndProductNamedSentenceIsLeftToTheDecisionLayer() throws Exception {
+    @DisplayName("成本构成短语和带产品名的完整问句均直达成本查询")
+    void barePhraseAndNamedCompositionShortcut() throws Exception {
         StreamTurnCollectorEntryParityContractTest.Harness bare = harness();
         bare.intent("COST_QUERY", "成本查询", "report_cost_query", ToolExecutor.AccessMode.READ);
         ask(bare, "accountant", "成本怎么构成");
@@ -226,11 +228,54 @@ class DigitalCrewRecognitionFixesEntryContractTest {
         StreamTurnCollectorEntryParityContractTest.Harness named = harness();
         String input = "酱卤牛肉成本怎么构成";
         assertThat(named.knowledgeBase.matchPhrase(input.toLowerCase(), "FACTORY")).as("前提: 句中短语会命中").contains("COST_QUERY");
-        AIIntentConfig cost = named.intent("COST_QUERY", "成本查询", "report_cost_query", ToolExecutor.AccessMode.READ);
-        named.recognizerAnswers(answer(input, cost));
+        named.intent("COST_QUERY", "成本查询", "report_cost_query", ToolExecutor.AccessMode.READ);
+        named.recognizerAnswers(answer(input, named.readIntent));
         ask(named, "accountant", input);
-        assertThat(named.recognitionCalls()).as("带产品名 → 决策层").isEqualTo(1);
+        assertThat(named.recognitionCalls()).as("整句定向查询直接走成本工具").isZero();
         assertThat(named.executedIntents).containsExactly("COST_QUERY");
+    }
+
+    @ParameterizedTest(name = "{0} → {1}")
+    @CsvSource(delimiter = '|', value = {
+            "DEMO-20261105-SO-001 这单到哪了？|ORDER_STATUS|order_query",
+            "需要，查一下 7 天内到期的批次|MATERIAL_EXPIRING_ALERT|material_expiring_alert",
+            "这周有哪些原料快过期了|MATERIAL_EXPIRING_ALERT|material_expiring_alert",
+            "这周有哪些原料快过期了？该怎么处理？|MATERIAL_DISPOSAL_RECOMMENDATION|material_disposal_recommendation"})
+    void completeBusinessQuestionsUseTheReadToolThroughExecute(String input, String intent, String tool) throws Exception {
+        StreamTurnCollectorEntryParityContractTest.Harness h = harness();
+        h.intent(intent, intent, tool, ToolExecutor.AccessMode.READ);
+        h.recognizerAnswers(answer(input, h.readIntent));
+
+        var response = h.sendThroughFacade(com.cretas.aims.dto.ai.IntentExecuteRequest.builder()
+                .userInput(input).mode("READ").build());
+
+        assertThat(h.recognitionCalls()).isZero();
+        assertThat(h.executedIntents).containsExactly(intent);
+        assertThat(response.getIntentCode()).isEqualTo(intent);
+    }
+
+    @Test
+    void productionDemandQuestionUsesItsBoundSkillInsteadOfTheShiftKeyword() throws Exception {
+        String input = "现在该排什么、排多少？这几个产品排产各要多少人、几个班？";
+        String code = "PRODUCTION_DEMAND_ANALYSIS";
+        String staffing = "酱卤牛肉待产 100kg，每班 3 人，约 2 个班";
+        StreamTurnCollectorEntryParityContractTest.Harness h = harness();
+        AIIntentConfig demand = h.intent(code, "订单缺产分析与排产建议", null, ToolExecutor.AccessMode.READ);
+        demand.setIntentCategory("WORKDESK");
+        h.recognizerAnswers(answer(input, h.readIntent));
+        when(h.dynamicTools.isSkillsEnabled()).thenReturn(true);
+        when(h.dynamicTools.tryExplicitSkillRouteForIntent(demand, input, FACTORY, USER, ROLE))
+                .thenReturn(com.cretas.aims.dto.ai.IntentExecuteResponse.builder().intentRecognized(true)
+                        .intentCode(code).status("SUCCESS").formattedText(staffing).build());
+
+        var response = h.sendThroughFacade(com.cretas.aims.dto.ai.IntentExecuteRequest.builder()
+                .userInput(input).mode("READ").build());
+
+        assertThat(h.recognitionCalls()).isZero();
+        verify(h.dynamicTools).tryExplicitSkillRouteForIntent(demand, input, FACTORY, USER, ROLE);
+        verify(h.dynamicTools, never()).trySkillRoute(any(), any(), any(), any());
+        assertThat(response.getIntentCode()).isEqualTo(code);
+        assertThat(response.getFormattedText()).contains("每班 3 人", "约 2 个班");
     }
 
     // ------------------------------------------------------------------ 对照: 现在好的两句不能变差

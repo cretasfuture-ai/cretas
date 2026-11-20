@@ -6,6 +6,7 @@ import com.cretas.aims.ai.tool.ToolRbacEnforcer;
 import com.cretas.aims.ai.tool.ToolRegistry;
 import com.cretas.aims.ai.tool.WriteGuardService;
 import com.cretas.aims.ai.tool.impl.crm.OrderListTool;
+import com.cretas.aims.ai.tool.impl.material.MaterialExpiringAlertTool;
 import com.cretas.aims.ai.tool.impl.purchase.PurchaseOrderListTool;
 import com.cretas.aims.ai.tool.impl.quality.QualityCheckQueryTool;
 import com.cretas.aims.ai.tool.impl.shipment.ShipmentQueryTool;
@@ -16,10 +17,12 @@ import com.cretas.aims.dto.ai.IntentExecuteResponse;
 import com.cretas.aims.dto.common.PageRequest;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.intent.IntentMatchResult;
+import com.cretas.aims.dto.material.MaterialBatchDTO;
 import com.cretas.aims.entity.QualityInspection;
 import com.cretas.aims.entity.config.AIIntentConfig;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
 import com.cretas.aims.service.ParameterExtractionLearningService;
+import com.cretas.aims.service.MaterialBatchService;
 import com.cretas.aims.service.QualityInspectionService;
 import com.cretas.aims.service.ShipmentRecordService;
 import com.cretas.aims.service.calibration.CorrectionAgentService;
@@ -40,6 +43,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 
@@ -203,6 +207,39 @@ class DateFilterChatEntryContractTest {
 
         assertThat(response.getStatus()).as(response.getMessage()).isEqualTo("SUCCESS");
         verify(shipments).searchFiltered(eq(F), isNull(), isNull(), eq(lastMonthStart), eq(lastMonthEnd), anyInt(), anyInt());
+    }
+
+    @ParameterizedTest(name = "{0} 天内到期")
+    @ValueSource(ints = {7, 3})
+    void expiryQuestionPassesFutureWindowFromOriginalTextThroughDispatch(int days) throws Exception {
+        LocalDate today = LocalDate.now();
+        LocalDate end = today.plusDays(days);
+        MaterialBatchService service = mock(MaterialBatchService.class);
+        when(service.getExpiringBatches(F, days)).thenReturn(List.of(
+                expiryBatch("今日到期", today), expiryBatch("末日到期", end),
+                expiryBatch("超出范围", end.plusDays(1)), expiryBatch("昨日到期", today.minusDays(1))));
+        MaterialExpiringAlertTool tool = withMapper(new MaterialExpiringAlertTool());
+        ReflectionTestUtils.setField(tool, "materialBatchService", service);
+
+        IntentExecuteResponse response = run(tool, "MATERIAL_EXPIRING_ALERT", "MATERIAL",
+                "需要，查一下 " + days + " 天内到期的批次", false, "factory_super_admin");
+
+        assertThat(response.getStatus()).as(response.getMessage()).isEqualTo("SUCCESS");
+        verify(service).getExpiringBatches(F, days);
+        String reply = new ResultFormatterServiceImpl().format(response);
+        assertThat(reply).contains(today + " 至 " + end, "今日到期", "末日到期", "8kg")
+                .doesNotContain("超出范围", "昨日到期", "不能按时间筛选");
+        assertThat(preprocessor.preprocessRulesOnly(days + " 天内已发货的订单").getPrimaryTimeRange()
+                .getEnd().toLocalDate()).isEqualTo(today);
+    }
+
+    private static MaterialBatchDTO expiryBatch(String name, LocalDate expiry) {
+        MaterialBatchDTO batch = new MaterialBatchDTO();
+        batch.setMaterialName(name);
+        batch.setExpireDate(expiry);
+        batch.setCurrentQuantity(new BigDecimal("8"));
+        batch.setUnit("kg");
+        return batch;
     }
 
     // ------------------------------------------------------------------ 不能按时间筛的工具: 说出来

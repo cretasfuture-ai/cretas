@@ -479,10 +479,14 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
         List<Map<String, Object>> batches = getList(data, "batches");
         if (batches == null) batches = getList(data, "content");
         if (batches == null || batches.isEmpty()) {
-            return "未来7天内没有即将过期的原材料批次，库存保质期状况良好。";
+            String message = getString(data, "message");
+            return message == null ? "没有即将过期的原材料批次。" : message;
         }
 
-        StringBuilder sb = new StringBuilder(String.format("发现 %d 批即将过期原料：\n\n", batches.size()));
+        String range = com.cretas.aims.ai.tool.TimeRangeFilter.appliedLabel(data);
+        StringBuilder sb = new StringBuilder();
+        if (range != null) sb.append("到期日范围：").append(range).append("\n");
+        sb.append(String.format("发现 %d 批即将过期原料：\n\n", batches.size()));
         int count = 0;
         for (Map<String, Object> batch : batches) {
             if (count >= 5) {
