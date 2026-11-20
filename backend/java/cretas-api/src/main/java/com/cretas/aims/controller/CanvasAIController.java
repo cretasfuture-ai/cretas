@@ -610,8 +610,8 @@ public class CanvasAIController {
         String tokens = terms.keySet().stream().sorted(Comparator.comparingInt(String::length).reversed())
                 .map(Pattern::quote).collect(Collectors.joining("|"));
         // 单次替换，保留工序名里的原始字符，且不误改其他英文单词的一部分。
-        Pattern internalTerms = Pattern.compile("(?<![A-Za-z0-9_:`])(`?)(" + tokens
-                + ")\\1(?![A-Za-z0-9_:`])");
+        Pattern internalTerms = Pattern.compile("(?<![A-Za-z0-9_`])(`?)(" + tokens
+                + ")\\1(?![A-Za-z0-9_`])");
         return internalTerms.matcher(conclusion).replaceAll(match -> Matcher.quoteReplacement(terms.get(match.group(2))));
     }
 

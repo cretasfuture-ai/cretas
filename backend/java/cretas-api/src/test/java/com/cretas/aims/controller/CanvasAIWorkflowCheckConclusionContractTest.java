@@ -43,7 +43,7 @@ class CanvasAIWorkflowCheckConclusionContractTest {
         when(client.chatLowTemp(anyString(), eq(question))).thenReturn("""
                 结论：发现 2 个问题。
                 1. `p:L3:pa` 的 `conversionRule` 为 `ACTUAL_WEIGHT`，请核对每盒净重。
-                2. p:L3:pc1 的 `processCategory` 为 null。
+                2. p:L3:pc1：processCategory:null。
                 """);
 
         CanvasAIController.AIResponse response = controller.chat("F006", null, request).getData();
@@ -51,7 +51,7 @@ class CanvasAIWorkflowCheckConclusionContractTest {
         assertEquals("""
                 结论：发现 2 个问题。
                 1. 拼装分装 的 换算规则 为 按实际重量，请核对每盒净重。
-                2. 清洗去毛 的 工艺类别 为 未填写。""", response.getReply());
+                2. 清洗去毛：工艺类别:未填写。""", response.getReply());
         assertTrue(response.getDiffs().isEmpty());
         assertFalse(response.isApplied());
     }
