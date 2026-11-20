@@ -180,30 +180,27 @@ public class ProductionDemandQueryTool extends AbstractBusinessTool {
 
         // 4b. 指定产品 (承接上一轮的「这几个产品」): 匹配不上就列出候选让用户选, 不猜
         List<String> wanted = requestedProductNames(params);
-        List<ProductDemand> nonEmpty;
-        if (wanted.isEmpty()) {
-            nonEmpty = shortage.stream().limit(maxRows).collect(Collectors.toList());
-        } else {
-            nonEmpty = shortage.stream()
-                    .filter(pd -> matchesAny(pd.getProductName(), wanted))
-                    .limit(maxRows)
-                    .collect(Collectors.toList());
-            if (nonEmpty.isEmpty()) {
-                String names = shortage.stream().limit(10)
-                        .map(pd -> pd.getProductName() != null ? pd.getProductName() : "(未命名)")
-                        .collect(Collectors.joining("、"));
-                Map<String, Object> data = buildEmptyEnvelope();
-                data.put("needProductChoice", true);
-                return buildSimpleResult("没有找到您指的产品。最近待排产的产品有：" + names
-                        + "。请告诉我是哪几个。", data);
-            }
+        List<ProductDemand> matching = wanted.isEmpty() ? shortage : shortage.stream()
+                .filter(pd -> matchesAny(pd.getProductName(), wanted)).toList();
+        if (matching.isEmpty()) {
+            String names = shortage.stream().limit(10)
+                    .map(pd -> pd.getProductName() != null ? pd.getProductName() : "(未命名)")
+                    .collect(Collectors.joining("、"));
+            Map<String, Object> data = buildEmptyEnvelope();
+            data.put("needProductChoice", true);
+            return buildSimpleResult("没有找到您指的产品。最近待排产的产品有：" + names
+                    + "。请告诉我是哪几个。", data);
         }
+        List<ProductDemand> nonEmpty = matching.subList(0, Math.min(matching.size(), maxRows));
 
         // 5. 构建结果 (人数/班次按产线配置折算)
         List<Map<String, Object>> rows = new ArrayList<>();
         StringBuilder text = new StringBuilder();
-        text.append("建议安排 ").append(nonEmpty.size()).append(" 个产品生产。\n\n")
-                .append("| 产品 | 排多少 | 几人几班 | 最早交期 |\n")
+        text.append("建议安排 ").append(matching.size()).append(" 个产品生产。");
+        if (nonEmpty.size() < matching.size()) {
+            text.append("本次列出 ").append(nonEmpty.size()).append(" 项。");
+        }
+        text.append("\n\n| 产品 | 排多少 | 几人几班 | 最早交期 |\n")
                 .append("| --- | --- | --- | --- |\n");
         StringBuilder details = new StringBuilder("\n客户与订单\n");
         for (ProductDemand pd : nonEmpty) {

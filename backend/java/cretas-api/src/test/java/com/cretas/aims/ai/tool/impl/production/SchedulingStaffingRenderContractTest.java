@@ -119,12 +119,26 @@ class SchedulingStaffingRenderContractTest {
         assertThat(pork.has("requiredShifts")).isFalse();
         assertThat(pork.path("staffingMissing").toString()).contains("小时产能");
 
-        String message = r.path("data").path("message").asText(text);
-        assertThat(text).contains("每班 6 人").contains("约 3 个班").contains("口径");
-        assertThat(text).contains("待产 2000 盒");
+        String message = r.path("data").path("message").asText();
+        assertThat(summaryRow(message, "香辣牛肉酱")).contains("2000 盒", "3 个班", "每班 6 人");
+        assertThat(summaryRow(message, "藤椒鸡丁")).contains("300 kg", "1 个班", "人数待定");
+        assertThat(summaryRow(message, "红烧肉")).contains("50 件", "班次待估", "人数待定");
+        assertThat(productDetail(message, "藤椒鸡丁")).contains("缺", "标准人数");
+        assertThat(productDetail(message, "红烧肉")).contains("缺", "小时产能");
+        assertThat(message).contains("扣除发货量和在产量", "人数按产线配置", "每班 8 小时");
         assertThat(text).doesNotContain("DEDICATED_LINE_A");
         Matcher m = INTERNAL_CODE.matcher(text);
         assertThat(m.find()).as("internal code leaked: " + (m.find(0) ? m.group() : "") + " in " + message).isFalse();
+    }
+
+    @Test
+    void reportsWhenOnlySomeMatchingProductsAreListed() throws Exception {
+        JsonNode limited = run(demandTool, "production_demand_query", "{\"maxRows\":1,\"productNames\":[\"香辣牛肉酱\",\"藤椒鸡丁\"]}");
+        assertThat(limited.path("data").path("message").asText())
+                .contains("2 个产品", "本次列出 1 项", "香辣牛肉酱").doesNotContain("藤椒鸡丁", "红烧肉");
+
+        JsonNode complete = run(demandTool, "production_demand_query", "{\"maxRows\":1,\"productNames\":[\"藤椒鸡丁\"]}");
+        assertThat(complete.path("data").path("message").asText()).contains("藤椒鸡丁").doesNotContain("本次列出");
     }
 
     @Test
@@ -173,6 +187,16 @@ class SchedulingStaffingRenderContractTest {
     }
 
     // ===== helpers =====
+
+    private String summaryRow(String message, String product) {
+        return message.lines().filter(line -> line.startsWith("| " + product + " |"))
+                .findFirst().orElseThrow(() -> new AssertionError("排产表缺少 " + product + "：" + message));
+    }
+
+    private String productDetail(String message, String product) {
+        return message.lines().filter(line -> line.startsWith(product + "："))
+                .findFirst().orElseThrow(() -> new AssertionError("排产明细缺少 " + product + "：" + message));
+    }
 
     private JsonNode run(com.cretas.aims.ai.tool.AbstractBusinessTool tool, String name, String args) throws Exception {
         ToolCall call = new ToolCall();

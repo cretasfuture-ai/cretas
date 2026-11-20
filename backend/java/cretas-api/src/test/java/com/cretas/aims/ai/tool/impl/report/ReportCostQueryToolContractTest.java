@@ -98,6 +98,25 @@ class ReportCostQueryToolContractTest {
     }
 
     @Test
+    void productCostExplainsPerBatchComparisonWhenPriorQuantityIsZero() throws Exception {
+        String fullName = "演示·酱卤牛肉250g";
+        ProductType beef = new ProductType();
+        beef.setName(fullName);
+        beef.setId("PT-" + fullName);
+        ProductTypeRepository catalog = mock(ProductTypeRepository.class);
+        when(catalog.findByFactoryIdAndIsActiveTrue("F1")).thenReturn(List.of(beef));
+        ReflectionTestUtils.setField(tool, "productTypeRepository", catalog);
+        thisMonth.add(batch(fullName, "600", "100", "50", "40", "80", "盒", ProductionBatchStatus.COMPLETED, false));
+        lastPeriod.add(batch(fullName, "580", "100", "50", "30", "0", "盒", ProductionBatchStatus.COMPLETED, false));
+
+        JsonNode result = run("{\"originalUserInput\":\"酱卤牛肉成本怎么构成\"}").path("data");
+        String message = result.path("message").asText();
+        assertTrue(message.startsWith(fullName + " 每盒成本 ¥9.88"), message);
+        assertTrue(message.contains("每批平均成本从 ¥760.00 到 ¥790.00"), message);
+        assertTrue(message.contains("上期有批次未记录产量") && message.contains("无法按每盒比较"), message);
+    }
+
+    @Test
     void shortProductNameFromOriginalQuestionKeepsAllFourCostsScoped() throws Exception {
         String fullName = "演示·酱卤牛肉250g";
         ProductType beef = new ProductType();

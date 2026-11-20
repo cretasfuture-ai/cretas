@@ -237,6 +237,9 @@ h2 { margin:0; font-size:20px; line-height:28px; }
 .conversation-messages { min-width:0; width:100%; }
 .assistant-body, .user-bubble { min-width:0; overflow-wrap:anywhere; font-size:16px; line-height:24px; }
 .assistant-body { width:100%; background:transparent; border:0; box-shadow:none; }
+.assistant-body :deep(p + p) { margin-top:12px; }
+.assistant-body :deep(table) { margin-block:12px; border-collapse:collapse; }
+.assistant-body :deep(th), .assistant-body :deep(td) { padding:8px 12px; border:1px solid var(--cs-border); text-align:start; vertical-align:top; }
 .user-bubble { width:100%; max-width:none; padding:0; background:transparent; }
 .user-bubble :deep(p) { margin:0; white-space:pre-wrap; word-break:normal; overflow-wrap:anywhere; }
 .conversation-messages :deep([data-role='user'] [data-slot='body']) { min-width:0; max-width:min(80%,560px); }

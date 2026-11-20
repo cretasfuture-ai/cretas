@@ -523,9 +523,10 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
                                        LocalDate prevStart, LocalDate prevEnd, String name, boolean monthOverMonth) {
         StringBuilder reply = new StringBuilder(name);
         BigDecimal quantity = cur.singleUnitQuantity();
-        if (quantity != null && quantity.signum() > 0 && cur.batchesWithoutQuantity == 0
-                && !cur.singleUnit().isBlank()) {
-            reply.append(" 每").append(cur.singleUnit()).append("成本 ¥")
+        String costUnit = quantity != null && quantity.signum() > 0 && cur.batchesWithoutQuantity == 0
+                ? cur.singleUnit() : "";
+        if (!costUnit.isBlank()) {
+            reply.append(" 每").append(costUnit).append("成本 ¥")
                     .append(money(cur.total.divide(quantity, 4, RoundingMode.HALF_UP)));
         } else {
             reply.append(" 总成本 ¥").append(money(cur.total));
@@ -543,6 +544,19 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
         } else {
             CompareBasis basis = compareBasis(cur, prev);
             Map<String, Object> total = changes.getLast();
+            if (!basis.perUnit()) {
+                if (prev.batchesWithoutQuantity > 0 && cur.batchesWithoutQuantity > 0) {
+                    reply.append("两期都有批次未记录产量");
+                } else if (prev.batchesWithoutQuantity > 0) {
+                    reply.append(prior).append("有批次未记录产量");
+                } else if (cur.batchesWithoutQuantity > 0) {
+                    reply.append("本期有批次未记录产量");
+                } else {
+                    reply.append("两期无法统一产出单位");
+                }
+                reply.append("，无法按").append(costUnit.isBlank() ? "产量" : "每" + costUnit)
+                        .append("比较，改按每批平均。");
+            }
             reply.append("和").append(prior).append("相比，")
                     .append(basis.perUnit() ? "每" + basis.unit() + "成本" : "每批平均成本")
                     .append("从 ¥").append(total.get("previous")).append(" 到 ¥").append(total.get("current"));
