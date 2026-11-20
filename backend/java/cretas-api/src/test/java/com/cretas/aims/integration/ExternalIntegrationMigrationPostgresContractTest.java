@@ -37,6 +37,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 class ExternalIntegrationMigrationPostgresContractTest {
 
     private static final String MIGRATION = "db/flyway/V20261115_51__factory_external_integrations.sql";
+    private static final String COST_MIGRATION = "db/flyway/V20261121_01__external_snapshot_cost_datasets.sql";
     private static final String HASH_A = "a".repeat(64);
 
     @Test
@@ -61,7 +62,6 @@ class ExternalIntegrationMigrationPostgresContractTest {
             List<String> datasets = Arrays.stream(ExternalDataset.values()).map(ExternalDataset::code).toList();
             assertCheckListsExactly(connection, schema, "ck_fei_system", systems);
             assertCheckListsExactly(connection, schema, "ck_ess_system", systems);
-            assertCheckListsExactly(connection, schema, "ck_ess_dataset", datasets);
 
             String auth = "INSERT INTO factory_external_integrations (factory_id, external_system, status, source_org_id,"
                     + " authorized_at, authorized_by, push_token_sha256, updated_by) VALUES ";
@@ -84,6 +84,16 @@ class ExternalIntegrationMigrationPostgresContractTest {
             String snap = "INSERT INTO external_source_snapshots (factory_id, external_system, dataset, collected_at,"
                     + " row_count, payload, payload_sha256) VALUES ";
             statement.execute(snap + "('F1', 'blacklake', 'report_output', '2026-11-15 00:01', 1, '[]', '" + HASH_A + "')");
+            assertCheckListsExactly(connection, schema, "ck_ess_dataset", List.of("report_output"));
+            assertThrows(SQLException.class, () -> statement.execute(snap
+                    + "('F1', 'blacklake', 'project_cost', '2026-11-15 00:01', 1, '[]', '" + HASH_A + "')"));
+            statement.execute(new String(new ClassPathResource(COST_MIGRATION).getInputStream().readAllBytes(),
+                    StandardCharsets.UTF_8));
+            assertCheckListsExactly(connection, schema, "ck_ess_dataset", datasets);
+            for (String dataset : List.of("project_cost", "production_issue")) {
+                assertDoesNotThrow(() -> statement.execute(snap + "('F1', 'blacklake', '" + dataset
+                        + "', '2026-11-15 00:01', 1, '[]', '" + HASH_A + "')"));
+            }
             assertThrows(SQLException.class, () -> statement.execute(snap
                     + "('F1', 'blacklake', 'report_output', '2026-11-15 00:01', 1, '[]', '" + HASH_A + "')"),
                     "同一采集时点只一行");
@@ -93,7 +103,8 @@ class ExternalIntegrationMigrationPostgresContractTest {
                     + "('F1', 'blacklake', 'report_output', '2026-11-15 00:03', -1, '[]', '" + HASH_A + "')"), "行数非负");
             assertThrows(SQLException.class, () -> statement.execute(
                     "UPDATE external_source_snapshots SET payload = '[1]'"), "快照只追加");
-            try (ResultSet rs = statement.executeQuery("SELECT payload FROM external_source_snapshots")) {
+            try (ResultSet rs = statement.executeQuery(
+                    "SELECT payload FROM external_source_snapshots WHERE dataset = 'report_output'")) {
                 assertThat(rs.next()).isTrue();
                 assertThat(rs.getString(1)).isEqualTo("[]");
             }

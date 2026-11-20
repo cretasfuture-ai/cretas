@@ -61,15 +61,15 @@ import type { UserPermissions } from '@/views/smart-bi/components/chartInsight';
 import ChartSortControl from '@/components/common/ChartSortControl.vue';
 import { sortChartRows, tableSortBy, TABLE_SORT_ORDERS, type ChartSortMode } from '@/utils/chartSort';
 import type { ProductCostItem } from '@/api/smartbi/factoryGold';
-import { useExternalProduction } from '@/composables/useProductionGold';
-import BlacklakeProductionSource from './BlacklakeProductionSource.vue';
+import { useExternalCost } from '@/composables/useProductionGold';
+import BlacklakeCostAnalysis from './BlacklakeCostAnalysis.vue';
 
 // ── Stores ────────────────────────────────────────────────────────────────────
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
-const external = useExternalProduction(factoryId, true);
+const external = useExternalCost(factoryId);
 const canViewPrice = computed(() => permissionStore.canViewPrice);
 
 // ── Date range ────────────────────────────────────────────────────────────────
@@ -448,6 +448,7 @@ async function loadData() {
       costTrendChart?.dispose();
       yieldTrendChart?.dispose();
       productBarChart?.dispose();
+      costPieChart = costTrendChart = yieldTrendChart = productBarChart = null;
       return;
     }
     const prev = previousRange(startDate, endDate);
@@ -637,7 +638,8 @@ onBeforeUnmount(() => {
       class="fca-error"
     />
     <el-alert v-if="external.error.value" :title="external.error.value" type="warning" :closable="false" class="fca-error" />
-    <BlacklakeProductionSource v-if="external.data.value" :data="external.data.value" />
+    <BlacklakeCostAnalysis v-if="external.data.value" v-loading="loading" :data="external.data.value"
+      :can-view-price="canViewPrice" />
 
     <!-- ── 全局空状态: 无任何 gold 数据 ────────────────────── -->
     <template v-else-if="!loading && !loadError && !hasAnyData">

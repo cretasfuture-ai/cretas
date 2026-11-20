@@ -20,9 +20,10 @@ import pytest
 from auth_middleware import JWTAuthMiddleware
 from smartbi import config
 from smartbi.api import factory_etl_admin, factory_production_gold, financial_dashboard
+from smartbi.gold.external_cost_etl import sync_external_cost
 from smartbi.gold.external_production_etl import sync_external_production
 from smartbi.gold import factory_production_etl
-from smartbi.services.factory_charts import conversation, conversation_store
+from smartbi.services.factory_charts import conversation, conversation_store, cost_scope
 
 DSN = os.environ.get("CBI_PG_TEST_DSN") or os.environ.get("SMARTBI_PG_DSN")
 pytestmark = pytest.mark.skipif(not DSN, reason="Require disposable local or Python Gate PostgreSQL")
@@ -34,6 +35,7 @@ DAY = "2026-11-18"
 COLLECTED = datetime(2026, 11, 18, 15, 9, tzinfo=timezone.utc)
 SECRET = uuid4().hex + uuid4().hex
 ROUTE = "/api/smartbi/factory/external-production"
+COST_ROUTE = "/api/smartbi/factory/external-cost"
 
 
 def _line(unit, good, defect, *, day=DAY, process="成品入库", code=CODE):
@@ -107,6 +109,7 @@ async def stores(monkeypatch):
                         "V20261003_01__agg_supplier_price_mb_dedup.sql",
                         "V20261004_01__fact_production_report.sql",
                         "V20261120_01__external_production_daily.sql",
+                        "V20261120_02__external_production_cost.sql",
                     ):
                         await silver_admin.execute((MIGRATIONS / filename).read_text(encoding="utf-8"))
                 finally:
@@ -293,6 +296,212 @@ async def test_nightly_module_exits_two_when_only_excluded_factories_exist(night
     assert result.returncode == 2
     assert "No eligible factories discovered" in result.stderr
     assert DEMO_FIXTURE not in result.stderr
+
+
+def _work_order(
+    code, *, day=DAY, unit="KG", qty="8.25", total="109.112345678", product=CODE, unit_cost="13.2257",
+    material="100.012345678", labor="9.10",
+):
+    return dict(workOrderCode=code, costDate=day, productCode=product, productName="产品 A", outputUnit=unit,
+                outputQty=qty, materialCost=material, laborCost=labor, otherCost="0.0",
+                totalCost=total, unitCost=unit_cost)
+
+
+def _issue(line, order, *, day="2026-11-17", unit="g", quantity="10000", price="0",
+           amount="0", moving="0.0025"):
+    return dict(lineId=line, issueDate=day, workOrderCode=order, materialCode="RM01", materialName="原料",
+                unit=unit, quantity=quantity, costUnitPrice=price, signedCostAmount=amount, movingAveragePrice=moving)
+
+
+@pytest.fixture
+def full_cost_access(monkeypatch):
+    async def scope(request, factory, product_ids):
+        assert request.state.factory_id == factory and product_ids == []
+        return cost_scope.CostScope(cost_scope.FULL)
+    monkeypatch.setattr(cost_scope, "resolve_cost_scope", scope)
+
+
+@pytest.mark.asyncio
+async def test_nightly_external_cost_reaches_http_including_decimal_yield_price_and_isolation(
+    nightly_stores, full_cost_access, monkeypatch,
+):
+    bronze, _, target = nightly_stores
+    for factory in (FACTORY, DEMO_FIXTURE, "NATIVE-OTHER"):
+        await bronze.execute("INSERT INTO factory_external_integrations VALUES ($1, 'blacklake', 'ACTIVE')", factory)
+    await _snapshot(bronze, FACTORY, COLLECTED - timedelta(days=1),
+                    [_work_order("OLD", total="99999")], dataset="project_cost")
+    await _snapshot(bronze, FACTORY, COLLECTED, [
+        _work_order("WO-kg"), _work_order("WO-box", unit="盒", qty="12", total="20.02", product="P2", unit_cost="0"),
+        _work_order("WO-empty", day="2026-11-16", total=None, product="P3", unit_cost=None),
+        _work_order("WO-components", day="2026-11-17", total="0", product="P4", unit_cost=None, material=None, labor=None),
+    ], dataset="project_cost")
+    await _snapshot(bronze, FACTORY, COLLECTED, [
+        _issue("1", "WO-kg"),
+        _issue("2", "WO-box", day=DAY, unit="个", quantity="14", moving="0"),
+        _issue("3", None, day=DAY, unit="KG", quantity="1.05", price="6.125", amount="-6.43125", moving="7.9"),
+        _issue("4", None, day=DAY, unit="KG", quantity="1", price="-6.125", amount="6.125"),
+        _issue("5", None, day=DAY, unit="KG", quantity="1", price="2", amount="0"),
+    ], dataset="production_issue")
+    await _snapshot(bronze, DEMO_FIXTURE, COLLECTED, [_work_order("DEMO")], dataset="project_cost")
+    await bronze.execute("""
+        INSERT INTO production_batches
+            (id, factory_id, batch_number, product_type_id, product_name,
+             status, end_time, actual_quantity, good_quantity, unit)
+        VALUES (13, 'NATIVE-OTHER', 'NATIVE-13', 'fixture', 'Native fixture',
+                'COMPLETED', '2026-11-18 14:00:00', 80, 75, 'KG'),
+               (14, $1, 'OLD-NATIVE-14', 'fixture', 'Old native fixture',
+                'COMPLETED', '2025-11-18 14:00:00', 80, 75, 'KG')
+    """, FACTORY)
+
+    result = await _run_nightly(nightly_stores)
+    assert result.returncode == 0, result.stderr
+    assert "external_cost factory=LIUSHANMEN completed" in result.stderr
+    assert DEMO_FIXTURE not in result.stderr
+    headers = _headers(role="factory_super_admin")
+    async with _client() as client:
+        response = await client.get(COST_ROUTE, params={"startDate": DAY, "endDate": DAY}, headers=headers)
+        assert response.status_code == 200
+        payload = json.loads(response.text, parse_float=Decimal)["data"]
+        assert payload["sourceLabel"] == "黑湖"
+        assert payload["costCollectedAt"] == payload["issueCollectedAt"] == COLLECTED.isoformat()
+        summary = payload["summary"]
+        assert summary is not None, "nightly ETL did not populate cost facts for the HTTP endpoint"
+        assert summary["totalCost"] == Decimal("129.132345678")
+        assert summary["materialCost"] == Decimal("200.024691356")
+        assert summary["laborCost"] == Decimal("18.20")
+        assert summary["issuedMaterialCost"] == Decimal("31.43125")
+        assert summary["unitCosts"] == [{"unit": "KG", "cost": Decimal("13.2257")},
+                                        {"unit": "盒", "cost": 0}]
+        assert summary["costMissingOrders"] == summary["unitCostMissingOrders"] == 0
+        assert summary["materialCostMissingOrders"] == summary["laborCostMissingOrders"] == 0
+        assert summary["priceMissingCount"] == summary["yieldComparableOrders"] == 1
+        assert summary["valuationIssueCount"] == 2
+        assert summary["overheadMissingCount"] == summary["workOrderCount"] == 2
+        assert summary["yieldRate"] == Decimal("82.5")
+        by_order = {row["workOrderCode"]: row for row in payload["workOrders"]}
+        assert set(by_order) == {"WO-kg", "WO-box"}
+        assert by_order["WO-kg"]["inputByUnit"] == [{"unit": "kg", "quantity": 10}]
+        assert by_order["WO-box"]["yieldUnavailableReason"] == "incompatible_units"
+        assert by_order["WO-box"]["yieldRate"] is None
+        details = {row["lineId"]: row for row in payload["materialIssues"]}
+        assert details["1"]["issueDate"] == "2026-11-17" and details["1"]["priceSource"] == "moving_avg"
+        assert details["2"]["issueCost"] is None and details["2"]["priceSource"] == "price_missing"
+        assert details["3"]["workOrderCode"] is None and details["3"]["priceSource"] == "reported"
+        for line_id in ("4", "5"):
+            assert details[line_id]["priceSource"] == "invalid_valuation" and details[line_id]["issueCost"] is None
+        assert payload["daily"][0]["totalCost"] == summary["totalCost"]
+        assert payload["products"][0]["totalCost"] == Decimal("109.112345678")
+        unfiltered = json.loads((await client.get(COST_ROUTE, headers=headers)).text, parse_float=Decimal)["data"]
+        assert unfiltered["summary"]["workOrderCount"] == 4
+        assert unfiltered["summary"]["costMissingOrders"] == 1
+        assert unfiltered["summary"]["unitCostMissingOrders"] == 2
+        assert unfiltered["summary"]["materialCostMissingOrders"] == unfiltered["summary"]["laborCostMissingOrders"] == 1
+        assert unfiltered["summary"]["totalCost"] == Decimal("129.132345678")
+        for group in (unfiltered["daily"][0], next(row for row in unfiltered["products"] if row["productCode"] == "P3")):
+            assert group["costMissingOrders"] == group["unitCostMissingOrders"] == 1
+            assert group["totalCost"] is None and group["unitCosts"] == []
+        for group in (unfiltered["daily"][1], next(row for row in unfiltered["products"] if row["productCode"] == "P4")):
+            assert group["totalCost"] == 0 and group["costMissingOrders"] == 0
+            assert group["materialCost"] is None and group["laborCost"] is None
+            assert group["materialCostMissingOrders"] == group["laborCostMissingOrders"] == 1
+        native_period = await client.get(COST_ROUTE, params={"endDate": "2025-12-01"}, headers=headers)
+        assert native_period.json()["data"] is None
+        assert (await client.get(COST_ROUTE, params={"factory_id": "F006"}, headers=headers)).status_code == 403
+        for factory in (DEMO_FIXTURE, "F006", "NATIVE-OTHER"):
+            assert (await client.get(COST_ROUTE, headers=_headers(factory))).json()["data"] is None
+        masked = (await client.get(COST_ROUTE, headers=_headers())).json()["data"]
+        assert masked["permissionMessage"] and masked["summary"] is None and masked["materialIssues"] == []
+        empty = (await client.get(COST_ROUTE, params={"startDate": "2027-01-01"}, headers=headers)).json()["data"]
+        assert empty["summary"] is None and empty["workOrders"] == [] and empty["costCollectedAt"]
+
+        async def scoped_access(*_):
+            return cost_scope.CostScope(cost_scope.SCOPED, frozenset({CODE}))
+
+        monkeypatch.setattr(cost_scope, "resolve_cost_scope", scoped_access)
+        scoped = (await client.get(COST_ROUTE, headers=headers)).json()["data"]
+        assert scoped["permissionMessage"] and scoped["summary"] is None
+        assert scoped["products"] == scoped["workOrders"] == scoped["materialIssues"] == []
+
+    async with _tenant(target, "NATIVE-OTHER") as conn:
+        assert await conn.fetchval("SELECT count(*) FROM fact_external_work_order_cost") == 0
+        assert await conn.fetchval("SELECT count(*) FROM fact_external_material_issue") == 0
+
+
+@pytest.mark.asyncio
+async def test_external_cost_upsert_retains_history_on_partial_empty_and_failed_snapshots(stores, full_cost_access):
+    bronze, source, target = stores
+    await bronze.execute("INSERT INTO factory_external_integrations VALUES ($1, 'blacklake', 'ACTIVE')", FACTORY)
+    first = await _snapshot(
+        bronze, FACTORY, COLLECTED, [_work_order("WO"), _work_order("WO-closed")], dataset="project_cost",
+    )
+    assert (await sync_external_cost(source, target, FACTORY))["snapshots"] == 1
+    async with _client() as client:
+        initial = (await client.get(COST_ROUTE, headers=_headers(role="factory_super_admin"))).json()["data"]
+        assert initial["issueCollectedAt"] is None and initial["summary"]["priceMissingCount"] is None
+        assert initial["workOrders"][0]["yieldUnavailableReason"] == "missing_issue"
+    await _snapshot(bronze, FACTORY, COLLECTED, [_issue("1", "WO"), _issue("3", "WO-closed")],
+                    dataset="production_issue")
+    assert (await sync_external_cost(source, target, FACTORY))["snapshots"] == 2
+    async with _tenant(target, FACTORY) as conn:
+        version = await conn.fetchval("SELECT xmin::text FROM fact_external_work_order_cost WHERE work_order_code = 'WO'")
+    await sync_external_cost(source, target, FACTORY)
+    async with _tenant(target, FACTORY) as conn:
+        assert await conn.fetchval(
+            "SELECT xmin::text FROM fact_external_work_order_cost WHERE work_order_code = 'WO'",
+        ) == version
+
+    later = COLLECTED + timedelta(hours=1)
+    await _snapshot(bronze, FACTORY, later, [_issue("2", "WO")], dataset="production_issue")
+    await _snapshot(bronze, FACTORY, later, [_work_order("WO", total="NaN")], dataset="project_cost")
+    with pytest.raises(ValueError, match="finite"):
+        await sync_external_cost(source, target, FACTORY)
+    async with _tenant(target, FACTORY) as conn:
+        assert await conn.fetchval("SELECT array_agg(line_id ORDER BY line_id) FROM fact_external_material_issue") == ["1", "3"]
+        assert await conn.fetchval("SELECT array_agg(DISTINCT snapshot_id) FROM fact_external_work_order_cost") == [first]
+
+    partial_at = later + timedelta(hours=1)
+    cost_update = await _snapshot(bronze, FACTORY, partial_at, [_work_order("WO", total="120")], dataset="project_cost")
+    issue_update = await _snapshot(bronze, FACTORY, partial_at, [_issue("1", "WO", quantity="11000")],
+                                   dataset="production_issue")
+    await sync_external_cost(source, target, FACTORY)
+    async with _client() as client:
+        headers = _headers(role="factory_super_admin")
+        partial = json.loads((await client.get(COST_ROUTE, headers=headers)).text, parse_float=Decimal)["data"]
+        orders = {row["workOrderCode"]: row for row in partial["workOrders"]}
+        assert set(orders) == {"WO", "WO-closed"}
+        assert orders["WO"]["totalCost"] == 120 and orders["WO"]["yieldRate"] == 75
+        assert orders["WO-closed"]["totalCost"] == Decimal("109.112345678")
+        assert orders["WO-closed"]["yieldRate"] == Decimal("82.5")
+        assert {row["lineId"]: row["quantity"] for row in partial["materialIssues"]} == {"1": 11000, "3": 10000}
+        async with _tenant(target, FACTORY) as conn:
+            assert await conn.fetchval(
+                "SELECT snapshot_id FROM fact_external_work_order_cost WHERE work_order_code = 'WO'",
+            ) == cost_update
+            assert await conn.fetchval(
+                "SELECT snapshot_id FROM fact_external_material_issue WHERE line_id = '1'",
+            ) == issue_update
+
+        await _snapshot(bronze, FACTORY, partial_at + timedelta(hours=1), [], dataset="project_cost")
+        await sync_external_cost(source, target, FACTORY)
+        after_empty_cost = json.loads((await client.get(COST_ROUTE, headers=headers)).text, parse_float=Decimal)["data"]
+        assert after_empty_cost["costCollectedAt"] != after_empty_cost["issueCollectedAt"]
+        await _snapshot(bronze, FACTORY, partial_at + timedelta(hours=2), [], dataset="production_issue")
+        await sync_external_cost(source, target, FACTORY)
+        after_empty_issue = json.loads((await client.get(COST_ROUTE, headers=headers)).text, parse_float=Decimal)["data"]
+        assert after_empty_issue["issueCollectedAt"] != partial["issueCollectedAt"]
+        for actual in (after_empty_cost, after_empty_issue):
+            for field in ("summary", "daily", "products", "workOrders", "materialIssues"):
+                assert actual[field] == partial[field]
+
+        await _snapshot(bronze, FACTORY, partial_at + timedelta(hours=3), [_issue("1", "WO", quantity="12000")],
+                        dataset="production_issue")
+        await sync_external_cost(source, target, FACTORY)
+        mixed = (await client.get(COST_ROUTE, headers=headers)).json()["data"]
+        orders = {row["workOrderCode"]: row for row in mixed["workOrders"]}
+        assert orders["WO"]["yieldUnavailableReason"] == "snapshot_mismatch"
+        assert orders["WO-closed"]["yieldRate"] == 82.5
+        await bronze.execute("UPDATE factory_external_integrations SET status = 'SUSPENDED' WHERE factory_id = $1", FACTORY)
+        assert (await client.get(COST_ROUTE, headers=headers)).json()["data"] is None
 
 
 @pytest.mark.asyncio

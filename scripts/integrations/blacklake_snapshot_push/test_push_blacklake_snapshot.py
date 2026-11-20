@@ -2,12 +2,16 @@
 
 python -I -m unittest discover -s scripts/integrations/blacklake_snapshot_push -p "test_*.py"
 """
+import io
 import json
 import sqlite3
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from decimal import Decimal
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import push_blacklake_snapshot as p  # noqa: E402
@@ -32,6 +36,104 @@ PAYLOAD = {
 
 
 class ProjectionTest(unittest.TestCase):
+    def test_push_skips_all_rows_with_duplicate_cost_keys_and_still_posts_reports(self):
+        payload = json.loads(json.dumps(PAYLOAD))
+        cost = {"productCode": "CP1", "createdAt": "2026-11-14", "totalActualCost": "12.25"}
+        payload["data"]["project_cost"] = [
+            {**cost, "projectCode": "WO-unique"},
+            {**cost, "projectCode": "WO-dupe"},
+            {**cost, "projectCode": " WO-dupe ", "totalActualCost": "different amount"},
+            {**cost, "projectCode": "WO-unique", "deleted": True},
+        ]
+        cycle = {"id": "fixture", "finished": "2026-11-15T00:01:00+00:00"}
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "config.json"
+            db = Path(directory) / "monitor.sqlite3"
+            db.touch()
+            config.write_text(json.dumps({"db": str(db), "source_factory_id": "local"}), encoding="utf-8")
+            output = io.StringIO()
+            with (
+                patch.object(p, "latest_success_cycle", return_value=(cycle, payload)),
+                patch.object(p, "load_token", return_value="cxs_fixture"),
+                patch.object(p, "post", return_value=(200, {"success": True})) as post,
+                self.assertLogs(p.logger, "WARNING") as logs,
+                redirect_stdout(output),
+            ):
+                self.assertEqual(p.main(["push", "--config", str(config), "--endpoint", "http://127.0.0.1"]), 0)
+
+        post.assert_called_once()
+        datasets = post.call_args.args[2]["datasets"]
+        self.assertEqual(datasets["report_output"], p.project_report_output(PAYLOAD))
+        self.assertEqual([row["workOrderCode"] for row in datasets["project_cost"]], ["WO-unique"])
+        self.assertEqual(datasets["project_cost"][0]["totalCost"], "12.25")
+        self.assertEqual(json.loads(output.getvalue())["datasetRows"], {"report_output": 2, "project_cost": 1})
+        self.assertIn("跳过 1 个重复工单键（共 2 行）", logs.output[0])
+        self.assertNotIn("WO-dupe", logs.output[0])
+
+    def test_cost_and_production_issue_project_only_business_fields_in_push_request(self):
+        private = {"workerName": "PERSON-PRIVATE", "wages": "WAGE-PRIVATE",
+                   "workerHours": "HOURS-PRIVATE", "actualLaborCostDetails": {"id": "W-1"}}
+        payload = {"data": {
+            "project": [{"id": 100, "projectCode": "WO1", "actualEndTime": "2026-11-18 14:00:00",
+                         "projectUnit": "KG", "numberofGoodProducts": Decimal("7.0123"), **private}],
+            "project_cost": [
+                {"projectId": 100, "projectCode": "WO1", "productCode": "CP1", "productName": "成品", "unitName": "KG",
+                 "createdAt": "2026-11-06T00:00:00+08:00", "realAmount": Decimal("6.3"),
+                 "actualMaterialCost": "31.123456", "actualLaborCost": "8.13", "actualOtherCost": 0,
+                 "actualOutsourceCost": 1, "totalActualCost": Decimal("40.253456"), "actualUnitCost": "5.740406",
+                 **private},
+            ],
+            "stock_order": [
+                {"id": 1000, "bizType": "32", "orderStatus": 1, "bizAt": "2026-11-17 12:11:00",
+                 "originCodeList": [{"code": "WO1"}],
+                 "orderDetails": [
+                     {"id": 123, "associatedBizOrderType": 10, "associatedBizOrderId": "100",
+                      "associatedBizOrderCode": "WO1",
+                      "productCode": "RM01", "productName": "原料", "unitName": "克", "qty": "8123",
+                      "costUnitPrice": "0", "changedCostAmountSigned": "0",
+                      "movingWeightedAverageCost": "0.0041234", **private},
+                     {"id": 124, "associatedBizOrderType": 10, "associatedBizOrderId": 101,
+                      "associatedBizOrderCode": "WO1",
+                      "productCode": "RM01", "qty": 1, **private},
+                 ], **private},
+                {"id": 1001, "bizType": 32, "orderStatus": 1, "bizAt": "2026-11-18 13:00:00",
+                 "orderDetails": [{"id": 123, "productCode": "RM01", "qty": 2, **private}]},
+                {"bizType": 31, "orderStatus": 1, "orderDetails": [{"id": "not-issue", **private}]},
+                {"bizType": 32, "orderStatus": 0, "orderDetails": [{"id": "pending", **private}]},
+                {"bizType": 32, "orderStatus": 2, "orderDetails": [{"id": "cancelled", **private}]},
+            ],
+            "project_cost_detail": [{**private}],
+        }}
+        body = p.build_request({"source_factory_id": "local"}, {
+            "id": "fixture", "finished": "2026-11-20T00:01:11+00:00",
+        }, payload)
+        serialized = p.encode_body(body).decode("utf-8")
+        for leaked in (*private, "PERSON-PRIVATE", "WAGE-PRIVATE", "HOURS-PRIVATE", "actualOutsourceCost",
+                       "project_cost_detail", "not-issue", "pending", "cancelled"):
+            self.assertNotIn(leaked, serialized)
+        self.assertEqual(body["datasets"]["project_cost"], [{
+            "workOrderCode": "WO1", "costDate": "2026-11-18", "productCode": "CP1", "productName": "成品",
+            "outputUnit": "KG", "outputQty": "7.0123", "materialCost": "31.123456", "laborCost": "8.13",
+            "otherCost": "0", "totalCost": "40.253456", "unitCost": "5.740406",
+        }])
+        self.assertEqual(body["datasets"]["production_issue"], [
+            {"lineId": "1000:123", "issueDate": "2026-11-17", "workOrderCode": "WO1", "materialCode": "RM01",
+             "materialName": "原料", "unit": "克", "quantity": "8123", "costUnitPrice": "0",
+             "signedCostAmount": "0", "movingAveragePrice": "0.0041234"},
+            {"lineId": "1000:124", "issueDate": "2026-11-17", "workOrderCode": None, "materialCode": "RM01",
+             "materialName": None, "unit": None, "quantity": "1", "costUnitPrice": None,
+             "signedCostAmount": None, "movingAveragePrice": None},
+            {"lineId": "1001:123", "issueDate": "2026-11-18", "workOrderCode": None, "materialCode": "RM01",
+             "materialName": None, "unit": None, "quantity": "2", "costUnitPrice": None,
+             "signedCostAmount": None, "movingAveragePrice": None},
+        ])
+
+        payload["data"]["project"].append({"projectCode": "WO1", "id": 101})
+        with self.assertRaisesRegex(ValueError, "工单编码或 ID 重复"):
+            p.build_request({"source_factory_id": "local"}, {
+                "id": "fixture", "finished": "2026-11-20T00:01:11+00:00",
+            }, payload)
+
     def test_aggregates_by_date_product_process_unit_and_drops_people_and_pay(self):
         rows = p.project_report_output(PAYLOAD)
         self.assertEqual(len(rows), 2)

@@ -1,7 +1,8 @@
 import { flushPromises, mount } from '@vue/test-utils';
 import ElementPlus, { ElSelect } from 'element-plus';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ExternalProductionData, ExternalProductionRow } from '@/api/smartbi/factoryGold';
+import type { ExternalCostData, ExternalCostMetrics, ExternalProductionData, ExternalProductionRow } from '@/api/smartbi/factoryGold';
+import BlacklakeCostAnalysis from '../BlacklakeCostAnalysis.vue';
 import BlacklakeProductionAnalysis from '../BlacklakeProductionAnalysis.vue';
 import FactoryCostAnalysis from '../FactoryCostAnalysis.vue';
 import ProductionAnalysis from '../ProductionAnalysis.vue';
@@ -45,20 +46,54 @@ const snapshot: ExternalProductionData = {
   ],
 };
 
+const costMetrics: ExternalCostMetrics = {
+  totalCost: 1234.56, materialCost: 1011.23, laborCost: 223.33, costMissingOrders: 0,
+  materialCostMissingOrders: 0, laborCostMissingOrders: 0,
+  unitCosts: [{ unit: '盒', cost: 12.3456 }], unitCostMissingOrders: 0,
+  inputByUnit: [{ unit: 'kg', quantity: 8.2 }], issuedMaterialCost: 37.72,
+  yieldRate: null, yieldComparableOrders: 0, workOrderCount: 1, priceMissingCount: 1, valuationIssueCount: 1,
+  overheadMissingCount: 1,
+};
+const costSnapshot: ExternalCostData = {
+  sourceSystem: 'blacklake', sourceLabel: '黑湖', costCollectedAt: snapshot.snapshotCollectedAt,
+  issueCollectedAt: snapshot.snapshotCollectedAt, stale: false, permissionMessage: null, summary: costMetrics,
+  daily: [{ costDate: '2026-11-18', ...costMetrics }],
+  products: [{ productCode: CODE, productName: '产品A', ...costMetrics }],
+  workOrders: [{
+    workOrderCode: 'WO-BLACKLAKE-1', costDate: '2026-11-18', productCode: CODE, productName: '产品A',
+    outputUnit: '盒', outputQty: 100, materialCost: 1011.23, laborCost: 223.33, totalCost: 1234.56,
+    unitCost: 12.3456, inputByUnit: costMetrics.inputByUnit, yieldRate: null, yieldUnavailableReason: 'incompatible_units',
+  }],
+  materialIssues: [{
+    lineId: '123', issueDate: '2026-11-18', workOrderCode: 'WO-BLACKLAKE-1', materialCode: 'RM-1',
+    materialName: '领料原料 A', unit: 'kg', quantity: 7.2, effectiveUnitPrice: 5.239, issueCost: 37.72,
+    priceSource: 'moving_avg',
+  }, {
+    lineId: '124', issueDate: '2026-11-18', workOrderCode: 'WO-BLACKLAKE-1', materialCode: 'RM-2',
+    materialName: '领料原料 B', unit: 'kg', quantity: 1, effectiveUnitPrice: null, issueCost: null,
+    priceSource: 'price_missing',
+  }],
+};
+
 function mountOptions() {
   return { global: { plugins: [ElementPlus], stubs: { ChartInsight: true, ChartInsightProvider: true } } };
 }
 
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
   session.factoryId = 'LIUSHANMEN';
   nativeDashboard.mockResolvedValue({ success: true, data: { kpis: [] } });
   pythonFetch.mockImplementation((path: string) => Promise.resolve({
     success: true,
-    data: path.includes('external-production') && session.factoryId === 'LIUSHANMEN' ? snapshot : null,
+    data: session.factoryId !== 'LIUSHANMEN' ? null
+      : path.includes('external-production') ? snapshot
+        : path.includes('external-cost') ? costSnapshot : null,
   }));
 });
 
 afterEach(() => {
+  vi.clearAllTimers();
+  vi.useRealTimers();
   vi.clearAllMocks();
 });
 
@@ -107,13 +142,103 @@ describe('黑湖生产分析页面', () => {
     page.unmount();
   });
 
-  it('成本页显示同一来源的不可计算说明，跳过成本端点', async () => {
+  it('成本页从外部成本端点渲染 KPI、趋势、产品、工单与领料', async () => {
     const page = mount(FactoryCostAnalysis, mountOptions());
     await flushPromises();
     expect(pythonFetch).toHaveBeenCalledTimes(1);
-    expect(pythonFetch.mock.calls[0][0]).toContain('summaryOnly=true');
-    expect(page.text()).toContain('黑湖数据不含投入量，无法计算');
-    expect(page.text()).not.toContain('总成本');
+    expect(pythonFetch).toHaveBeenCalledWith(expect.stringMatching(
+      /^\/api\/smartbi\/factory\/external-cost\?factory_id=LIUSHANMEN&startDate=.+&endDate=.+$/,
+    ));
+    const external = page.getComponent(BlacklakeCostAnalysis);
+    expect(external.get('time').attributes('datetime')).toBe(snapshot.snapshotCollectedAt);
+    expect(external.text()).not.toContain('成本缺失');
+    for (const text of ['黑湖', '1,234.56', '1,011.23', '223.33', '12.3456',
+      '每日成本趋势', '产品成本对比', '工单成本明细', 'WO-BLACKLAKE-1', '领料原料 A',
+      '单位不可比', '移动均价', '不含制费（黑湖未提供）', '缺价 1 行', '计价待核 1 行']) {
+      expect(external.text()).toContain(text);
+    }
+    expect(setOption).toHaveBeenLastCalledWith(expect.objectContaining({
+      series: [
+        expect.objectContaining({ data: [1234.56] }), expect.objectContaining({ data: [1011.23] }),
+        expect.objectContaining({ data: [223.33] }),
+      ],
+    }));
+    page.unmount();
+  });
+
+  it('在总成本和平均单位成本卡片旁标出未计入的缺失工单', async () => {
+    pythonFetch.mockResolvedValue({
+      success: true,
+      data: {
+        ...costSnapshot,
+        summary: { ...costMetrics, workOrderCount: 3, costMissingOrders: 1, unitCostMissingOrders: 2 },
+      },
+    });
+    const page = mount(FactoryCostAnalysis, mountOptions());
+    await flushPromises();
+    const cards = page.getComponent(BlacklakeCostAnalysis).get('.kpis').findAll('.el-card');
+    expect(cards[0].text()).toContain('1,234.56');
+    expect(cards[0].text()).toContain('成本缺失 1 单，未计入合计');
+    expect(cards[3].text()).toContain('12.3456');
+    expect(cards[3].text()).toContain('单位成本缺失 2 单，未计入平均');
+    page.unmount();
+  });
+
+  it('总成本齐全时仍单独提示材料和人工合计的缺失工单', async () => {
+    pythonFetch.mockResolvedValue({
+      success: true,
+      data: {
+        ...costSnapshot,
+        summary: { ...costMetrics, workOrderCount: 3, materialCostMissingOrders: 1, laborCostMissingOrders: 2 },
+        products: [{ ...costSnapshot.products[0], materialCostMissingOrders: 1, laborCostMissingOrders: 2 }],
+      },
+    });
+    const page = mount(FactoryCostAnalysis, mountOptions());
+    await flushPromises();
+    const analysis = page.getComponent(BlacklakeCostAnalysis);
+    const cards = analysis.get('.kpis').findAll('.el-card');
+    expect(cards[0].text()).toBe('总成本1,234.56');
+    expect(cards[1].text()).toContain('材料成本缺失 1 单，未计入合计');
+    expect(cards[2].text()).toContain('人工成本缺失 2 单，未计入合计');
+    const productTable = analysis.get('.el-table');
+    expect(productTable.text()).toContain('材料成本缺失 1 单');
+    expect(productTable.text()).toContain('人工成本缺失 2 单');
+    page.unmount();
+  });
+
+  it('成本页对 F006 保持原生成本端点与批次金额', async () => {
+    session.factoryId = 'F006';
+    pythonFetch.mockImplementation(async (path: string) => ({
+      success: true,
+      data: path.includes('cost-structure') ? {
+        rows: [{ statDate: '2026-11-18', totalCost: 456, totalMaterialCost: 400, totalLaborCost: 56 }],
+        summary: { totalCost: 456, totalMaterialCost: 400, totalLaborCost: 56, batchCount: 2 },
+      } : null,
+    }));
+    const page = mount(FactoryCostAnalysis, mountOptions());
+    await flushPromises();
+    const paths = pythonFetch.mock.calls.map(([path]) => path.split('?')[0]);
+    expect(paths).toEqual([
+      '/api/smartbi/factory/external-cost',
+      '/api/smartbi/factory/cost-structure', '/api/smartbi/factory/yield-trend', '/api/smartbi/factory/product-cost-compare',
+      '/api/smartbi/factory/cost-structure', '/api/smartbi/factory/yield-trend', '/api/smartbi/factory/product-cost-compare',
+    ]);
+    expect(page.findComponent(BlacklakeCostAnalysis).exists()).toBe(false);
+    expect(page.text()).toContain('生产批次');
+    expect(page.text()).toContain('¥456');
+    page.unmount();
+  });
+
+  it('成本页对黑湖空快照给出说明并且没有零金额', async () => {
+    pythonFetch.mockResolvedValue({
+      success: true,
+      data: { ...costSnapshot, summary: null, daily: [], products: [], workOrders: [], materialIssues: [] },
+    });
+    const page = mount(FactoryCostAnalysis, mountOptions());
+    await flushPromises();
+    expect(page.getComponent(BlacklakeCostAnalysis).text()).toContain('所选期间暂无黑湖工单成本和生产领料');
+    expect(page.text()).not.toContain('0.00');
+    expect(pythonFetch).toHaveBeenCalledTimes(1);
     page.unmount();
   });
 

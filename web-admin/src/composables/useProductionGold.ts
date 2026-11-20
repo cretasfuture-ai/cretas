@@ -14,6 +14,7 @@
  */
 import { ref, shallowRef, computed, onScopeDispose, type Ref, type ComputedRef } from 'vue';
 import {
+  getExternalCost,
   getExternalProduction,
   getFactoryCostStructure,
   getFactoryYieldTrend,
@@ -21,7 +22,7 @@ import {
   type CostStructureData,
   type YieldTrendData,
   type ProductCostCompareData,
-  type ExternalProductionData,
+  type FactoryDateQuery,
 } from '@/api/smartbi/factoryGold';
 import type { PythonServiceError } from '@/api/smartbi/common';
 
@@ -32,8 +33,19 @@ export interface ProductionGoldDateQuery {
 }
 
 export function useExternalProduction(factoryId: Ref<string>, summaryOnly = false) {
-  // The snapshot is replaced as a whole. Preserve its null-only yieldRate and cost fields.
-  const data = shallowRef<ExternalProductionData | null>(null);
+  return useExternalSnapshot(factoryId, args => getExternalProduction(args, summaryOnly), '黑湖生产数据读取失败，请重试');
+}
+
+export function useExternalCost(factoryId: Ref<string>) {
+  return useExternalSnapshot(factoryId, getExternalCost, '黑湖成本数据读取失败，请重试');
+}
+
+function useExternalSnapshot<T>(
+  factoryId: Ref<string>,
+  fetchSnapshot: (args: FactoryDateQuery) => Promise<{ success: boolean; data: T | null; message: string }>,
+  failureMessage: string,
+) {
+  const data = shallowRef<T | null>(null);
   const error = ref('');
   let revision = 0;
   let loadedFactory = '';
@@ -47,11 +59,11 @@ export function useExternalProduction(factoryId: Ref<string>, summaryOnly = fals
     error.value = '';
     if (!factory) return 'native';
     try {
-      const result = await getExternalProduction({ factoryId: factory, ...query }, summaryOnly);
+      const result = await fetchSnapshot({ factoryId: factory, ...query });
       if (!current()) return 'obsolete';
       if (!result.success) {
         data.value = null;
-        error.value = result.message || '黑湖生产数据读取失败，请重试';
+        error.value = result.message || failureMessage;
         return 'failed';
       }
       loadedFactory = factory;
@@ -63,7 +75,7 @@ export function useExternalProduction(factoryId: Ref<string>, summaryOnly = fals
       // The existing production pages can be available to roles outside the
       // external analytics permission. Their native reads keep their own gates.
       if ((cause as PythonServiceError)?.status !== 403) {
-        error.value = '黑湖生产数据读取失败，请重试';
+        error.value = failureMessage;
       }
       return 'failed';
     }
