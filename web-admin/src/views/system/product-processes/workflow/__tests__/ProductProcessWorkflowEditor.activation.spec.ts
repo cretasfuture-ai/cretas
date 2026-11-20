@@ -22,6 +22,8 @@ const apiMocks = vi.hoisted(() => ({
   getProductProcessWorkflow: vi.fn(),
   getProductProcessWorkflowActivation: vi.fn(),
   getWorkflowBomSyncPreflight: vi.fn(),
+  getProductConfigurationReadiness: vi.fn(),
+  checkProductProcessWorkflowCompleteness: vi.fn(),
   publishAndActivateProductProcessWorkflow: vi.fn(),
   saveProductProcessWorkflowDraft: vi.fn(),
   activateProductProcessWorkflow: vi.fn(),
@@ -40,6 +42,8 @@ vi.mock('../workflowApi', () => ({
   getProductProcessWorkflow: apiMocks.getProductProcessWorkflow,
   getProductProcessWorkflowActivation: apiMocks.getProductProcessWorkflowActivation,
   getWorkflowBomSyncPreflight: apiMocks.getWorkflowBomSyncPreflight,
+  getProductConfigurationReadiness: apiMocks.getProductConfigurationReadiness,
+  checkProductProcessWorkflowCompleteness: apiMocks.checkProductProcessWorkflowCompleteness,
   publishAndActivateProductProcessWorkflow: apiMocks.publishAndActivateProductProcessWorkflow,
   saveProductProcessWorkflowDraft: apiMocks.saveProductProcessWorkflowDraft,
   activateProductProcessWorkflow: apiMocks.activateProductProcessWorkflow,
@@ -96,6 +100,8 @@ describe('ProductProcessWorkflowEditor activation controls', () => {
           : [],
     }));
     apiMocks.post.mockResolvedValue({ success: true, data: null });
+    apiMocks.checkProductProcessWorkflowCompleteness.mockResolvedValue({ success: true, data: [] });
+    apiMocks.getProductConfigurationReadiness.mockResolvedValue({ success: true, data: { issues: [] } });
     apiMocks.getActiveWorkProcesses.mockResolvedValue({ success: true, data: [] });
     apiMocks.getWorkProcessCategories.mockResolvedValue({ success: true, data: [] });
     apiMocks.getProductWorkProcesses.mockResolvedValue({ success: true, data: [] });
@@ -118,6 +124,139 @@ describe('ProductProcessWorkflowEditor activation controls', () => {
         replayed: false,
       },
     });
+  });
+
+  const missingCategory = {
+    code: 'PROCESS_CATEGORY_REQUIRED', nodeId: 'process', portId: null,
+    message: '「Cut」还没选工序类型', action: '打开「编辑工序」，选择工序类别',
+  };
+
+  it('rechecks after an edit and locates the issue from the grouped canvas panel', async () => {
+    vi.useFakeTimers();
+    const wrapper = mountEditor();
+    try {
+      apiMocks.checkProductProcessWorkflowCompleteness.mockImplementation(
+        (_factory: string, _product: string, graph: ProductProcessWorkflowDefinition) => Promise.resolve({
+          success: true,
+          data: graph.nodes.find((node) => node.id === 'process')?.data.processCategory ? [] : [missingCategory],
+        }),
+      );
+      await flushPromises();
+      await vi.advanceTimersByTimeAsync(500);
+      const badge = wrapper.get('[data-testid="workflow-completeness-badge"]');
+      expect(badge.text()).toBe('1 个遗漏');
+      expect(badge.element.closest('.canvas-shell')).not.toBeNull();
+      expect(badge.element.closest('.toolbar-actions')).toBeNull();
+      await badge.trigger('click');
+      const panel = wrapper.get('[data-testid="workflow-completeness-panel"]');
+      expect(panel.get('h4').text()).toBe('Cut');
+      await panel.get('button').trigger('click');
+      const vm = wrapper.vm as unknown as {
+        selectedNodeId: string;
+        flowNodes: Array<{ id: string; class?: string }>;
+        updateProcessData: (id: string, patch: { processCategory: string }) => void;
+      };
+      expect(vm.selectedNodeId).toBe('process');
+      expect(vm.flowNodes.find((node) => node.id === 'process')?.class).toContain('wf-completeness-target');
+      vm.updateProcessData('process', { processCategory: '包装' });
+      await nextTick();
+      await vi.advanceTimersByTimeAsync(500);
+      expect(badge.text()).toBe('检查通过');
+      expect(apiMocks.checkProductProcessWorkflowCompleteness).toHaveBeenCalledTimes(2);
+    } finally {
+      wrapper.unmount();
+      vi.useRealTimers();
+    }
+  });
+
+  it('shows save warnings and submits acknowledgment only after 仍然保存', async () => {
+    const wrapper = mountEditor();
+    try {
+      await flushPromises();
+      (wrapper.vm as unknown as { dirty: boolean }).dirty = true;
+      apiMocks.checkProductProcessWorkflowCompleteness.mockResolvedValue({ success: true, data: [missingCategory] });
+      apiMocks.saveProductProcessWorkflowDraft.mockResolvedValue({
+        success: true, data: definition('PT-A', 'DRAFT', 1, 43),
+      });
+      let confirm!: () => void;
+      vi.mocked(ElMessageBox.confirm).mockImplementationOnce(() => new Promise((resolve) => {
+        confirm = () => resolve('confirm');
+      }));
+      await nextTick();
+      await wrapper.get('[data-testid="save-workflow"]').trigger('click');
+      await flushPromises();
+      expect(ElMessageBox.confirm).toHaveBeenCalledWith(expect.any(Object), '保存前检查',
+        expect.objectContaining({ confirmButtonText: '仍然保存', cancelButtonText: '去修改' }));
+      expect(apiMocks.saveProductProcessWorkflowDraft).not.toHaveBeenCalled();
+      confirm();
+      await flushPromises();
+      expect(apiMocks.saveProductProcessWorkflowDraft).toHaveBeenCalledWith('F006', 'PT-A',
+        expect.objectContaining({ completenessAcknowledged: true }));
+    } finally {
+      wrapper.unmount();
+    }
+  });
+
+  it('keeps the same draft unsaved when the user chooses 去修改', async () => {
+    vi.useFakeTimers();
+    const wrapper = mountEditor();
+    try {
+      await flushPromises();
+      (wrapper.vm as unknown as { dirty: boolean }).dirty = true;
+      apiMocks.checkProductProcessWorkflowCompleteness.mockResolvedValue({ success: true, data: [missingCategory] });
+      vi.mocked(ElMessageBox.confirm).mockRejectedValueOnce('cancel');
+      await nextTick();
+      await wrapper.get('[data-testid="save-workflow"]').trigger('click');
+      await flushPromises();
+      (wrapper.vm as unknown as {
+        onViewportChangeEnd: (value: { x: number; y: number; zoom: number }) => void;
+      }).onViewportChangeEnd({ x: 24, y: 18, zoom: 1 });
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(apiMocks.saveProductProcessWorkflowDraft).not.toHaveBeenCalled();
+      expect(wrapper.get('[data-testid="workflow-completeness-panel"]').text()).toContain(missingCategory.message);
+    } finally {
+      wrapper.unmount();
+      vi.useRealTimers();
+    }
+  });
+
+  it('checks again before applying and flags the exact publish command for audit', async () => {
+    const wrapper = mountEditor();
+    try {
+      await flushPromises();
+      apiMocks.checkProductProcessWorkflowCompleteness.mockResolvedValue({ success: true, data: [missingCategory] });
+      await (wrapper.vm as unknown as { publishWorkflow: () => Promise<void> }).publishWorkflow();
+      expect(ElMessageBox.confirm).toHaveBeenCalledWith(expect.any(Object), '应用前检查',
+        expect.objectContaining({ confirmButtonText: '仍然应用' }));
+      expect(apiMocks.publishAndActivateProductProcessWorkflow).toHaveBeenCalledWith('F006', 'PT-A',
+        expect.objectContaining({ completenessAcknowledged: true, revisionId: 71, revisionHash: 'revision-current' }));
+    } finally {
+      wrapper.unmount();
+    }
+  });
+
+  it('does not apply an edited graph using the previous completeness confirmation', async () => {
+    const readiness = deferred<{ success: boolean; data: { issues: unknown[] } }>();
+    apiMocks.getProductConfigurationReadiness.mockReturnValueOnce(readiness.promise);
+    apiMocks.checkProductProcessWorkflowCompleteness.mockResolvedValue({ success: true, data: [missingCategory] });
+    const wrapper = mountEditor();
+    try {
+      await flushPromises();
+      const vm = wrapper.vm as unknown as {
+        publishWorkflow: () => Promise<void>;
+        updateProcessData: (id: string, patch: { processCategory: string }) => void;
+      };
+      const publish = vm.publishWorkflow();
+      await flushPromises();
+      expect(ElMessageBox.confirm).toHaveBeenCalledWith(expect.any(Object), '应用前检查', expect.any(Object));
+      expect(apiMocks.getProductConfigurationReadiness).toHaveBeenCalledTimes(1);
+      vm.updateProcessData('process', { processCategory: '包装' });
+      readiness.resolve({ success: true, data: { issues: [] } });
+      await publish;
+      expect(apiMocks.publishAndActivateProductProcessWorkflow).not.toHaveBeenCalled();
+    } finally {
+      wrapper.unmount();
+    }
   });
 
   it('#12a: 发布即启用当前版本 (一步), 不再有单独的「启用版本」按钮', async () => {
@@ -562,6 +701,7 @@ describe('ProductProcessWorkflowEditor activation controls', () => {
 
 function mountEditor() {
   return shallowMount(ProductProcessWorkflowEditor, {
+    global: { stubs: { WorkflowCompletenessBadge: false, WorkflowCompletenessList: false } },
     props: {
       factoryId: 'F006',
       productTypeId: 'PT-A',

@@ -52,6 +52,7 @@ vi.mock('@/api/processProduction', () => ({
 }));
 
 vi.mock('../workflowApi', () => ({
+  checkProductProcessWorkflowCompleteness: vi.fn().mockResolvedValue({ success: true, data: [] }),
   getProductProcessWorkflow: apiMocks.getProductProcessWorkflow,
   getProductProcessWorkflowActivation: apiMocks.getProductProcessWorkflowActivation,
   getWorkflowBomSyncPreflight: apiMocks.getWorkflowBomSyncPreflight,

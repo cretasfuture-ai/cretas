@@ -7,6 +7,7 @@ import com.cretas.aims.dto.ProductProcessWorkflowDTO;
 import com.cretas.aims.dto.ProductProcessWorkflowVersionSummaryDTO;
 import com.cretas.aims.dto.workflow.ProductProcessWorkflowActivationDTO;
 import com.cretas.aims.dto.workflow.WorkflowBomSyncPreflightResponse;
+import com.cretas.aims.dto.workflow.WorkflowCompletenessIssue;
 import com.cretas.aims.dto.workflow.WorkflowPublishAndActivateResponse;
 import com.cretas.aims.entity.ProductProcessWorkflow;
 import com.cretas.aims.entity.ProductProcessWorkflowActivation;
@@ -25,6 +26,8 @@ import com.cretas.aims.service.ProductionPlanService;
 import com.cretas.aims.service.bom.BomWorkflowRevisionService;
 import com.cretas.aims.service.bom.WorkflowBomSynchronizationService;
 import com.cretas.aims.service.validation.ProductProcessWorkflowCatalogValidator;
+import com.cretas.aims.service.validation.ProductProcessWorkflowCompletenessChecker;
+import com.cretas.aims.service.datacenter.OperationLogService;
 import com.cretas.aims.service.validation.ProductProcessWorkflowValidator;
 import com.cretas.aims.service.validation.ProductProcessWorkflowUnitValidator;
 import com.cretas.aims.service.workflow.WorkflowRevisionSnapshotService;
@@ -137,6 +140,66 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.workflow.WorkflowProcessParamMaterializer processParamMaterializer;
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private ProductProcessWorkflowCompletenessChecker completenessChecker;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    private OperationLogService operationLogService;
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<WorkflowCompletenessIssue> checkCompleteness(
+            String factoryId, String productTypeId, ProductProcessWorkflowDTO definition) {
+        // The save-side owner check can create a raw-material anchor. Inspection must never create it.
+        if (productTypeRepository.findByIdAndFactoryId(productTypeId, factoryId).isEmpty()
+                && rawMaterialTypeRepository.findByIdAndFactoryId(productTypeId, factoryId).isEmpty()) {
+            throw new BusinessException(400, "工艺所属成品或原料不存在于当前工厂")
+                    .withHint("请重新选择当前工厂内的有效成品或原料");
+        }
+        requireEditableGraph(factoryId, productTypeId, definition);
+        return completenessChecker.check(factoryId, productTypeId, definition);
+    }
+
+    @Override
+    public void recordAcknowledgedCompleteness(
+            String factoryId, String productTypeId, ProductProcessWorkflowDTO saved, String action) {
+        if (saved == null || !factoryId.equals(saved.getFactoryId()) || !productTypeId.equals(saved.getProductTypeId())) {
+            return;
+        }
+        try {
+            requireEditableGraph(factoryId, productTypeId, saved);
+            List<WorkflowCompletenessIssue> issues = completenessChecker.check(factoryId, productTypeId, saved);
+            if (issues.isEmpty()) return;
+            // The factory's general operation log stores rule codes and positions, without recipe names or values.
+            Map<String, Integer> positionByNode = new java.util.HashMap<>();
+            for (int index = 0; index < saved.getNodes().size(); index++) {
+                positionByNode.put(saved.getNodes().get(index).getId(), index + 1);
+            }
+            var issueEntries = issues.stream().map(issue -> Map.of(
+                    "rule", issue.code(),
+                    "nodeNumber", issue.nodeId() == null ? 0 : positionByNode.getOrDefault(issue.nodeId(), 0)
+            )).toList();
+            operationLogService.recordDiff(factoryId, "WORKFLOW", "ProductProcessWorkflow",
+                    String.valueOf(saved.getId()), Map.of(), Map.of(
+                            "version", saved.getVersion(),
+                            "revisionId", saved.getRevisionId(),
+                            "issues", issueEntries), action + "（已确认 " + issues.size() + " 个遗漏）");
+        } catch (RuntimeException error) {
+            // The edit transaction already committed; an audit error cannot turn the response into a false write failure.
+            log.error("[Workflow] completeness audit failed: factoryId={}, workflowId={}, error={}",
+                    factoryId, saved.getId(), error.getClass().getSimpleName());
+        }
+    }
+
+    private void requireEditableGraph(String factoryId, String productTypeId, ProductProcessWorkflowDTO definition) {
+        if (processSecretGuard != null) {
+            processSecretGuard.requireProtectedAmong(factoryId,
+                    com.cretas.aims.service.processsecret.ProcessSecretWorkflowOutputs.productsInGraph(definition),
+                    com.cretas.aims.entity.processsecret.ProcessSecretAction.EDIT,
+                    "workflow graph " + productTypeId);
+        }
+    }
+
     @Override
     @Transactional(readOnly = true)
     public Optional<ProductProcessWorkflowDTO> getEditorDefinition(
@@ -156,12 +219,7 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
             String productTypeId,
             ProductProcessWorkflowDTO definition) {
         requireWorkflowOwner(factoryId, productTypeId);
-        if (processSecretGuard != null) {
-            processSecretGuard.requireProtectedAmong(factoryId,
-                    com.cretas.aims.service.processsecret.ProcessSecretWorkflowOutputs.productsInGraph(definition),
-                    com.cretas.aims.entity.processsecret.ProcessSecretAction.EDIT,
-                    "workflow draft save " + productTypeId);
-        }
+        requireEditableGraph(factoryId, productTypeId, definition);
         lockWorkflowOwner(factoryId, productTypeId);
         WorkflowActualIoSemantics.normalizeDraft(definition);
         validator.validateForDraft(definition);

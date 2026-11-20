@@ -80,7 +80,7 @@
         ⛔ 不是删掉: 这几段解释各自都在挡一个真实误解(以为这里要配比例/主副角色/数量),
         删了那些误解会回来。⇒ 换成按需查看。
       -->
-      <div v-for="port in inputPorts" :key="port.id" class="port-row">
+      <div v-for="port in inputPorts" :key="port.id" class="port-row" :class="{ 'is-check-target': checkPortId === port.id }">
         <el-input
           class="nodrag"
           :model-value="port.materialName || '由上游 Cell 自动带入'"
@@ -158,7 +158,7 @@
         </select>
       </div>
       <div v-for="port in outputPorts" :key="port.id" class="output-entry">
-        <div class="port-row output-row">
+        <div class="port-row output-row" :class="{ 'is-check-target': checkPortId === port.id }">
           <WorkflowSkuPicker
             class="nodrag"
             test-id="output-sku-select"
@@ -468,6 +468,7 @@ const props = withDefaults(defineProps<{
   activePairLabel?: string | null;
   data: ProcessNodeData;
   selected?: boolean;
+  checkPortId?: string | null;
   canWrite: boolean;
   /** #8: 拖拽连线中源 cell 的类型；用于给非法目标 cell 灰化 */
   connectingFromKind?: '' | 'MATERIAL' | 'PROCESS';
@@ -767,6 +768,7 @@ function handleStyle(index: number, count: number): Record<string, string> {
 .byproduct-add { color: #b54708; }
 .byproduct-add:hover { color: #93370d; }
 .port-row { display: grid; grid-template-columns: minmax(0, 1fr) 76px; gap: 6px; margin-top: 6px; }
+.port-row.is-check-target { outline: 2px solid #c96b16; outline-offset: 2px; border-radius: 4px; }
 .output-row { grid-template-columns: minmax(0, 1fr) 70px; }
 .output-entry { margin-top: 6px; }
 .output-entry .output-row { margin-top: 0; }

@@ -4,6 +4,7 @@ import type {
   ProductProcessWorkflowActivation,
   ProductProcessWorkflowDefinition,
   WorkflowBomSyncPreflight,
+  WorkflowCompletenessIssue,
   WorkflowPublishAndActivateRequest,
   WorkflowPublishAndActivateResponse,
 } from './types';
@@ -44,6 +45,19 @@ const workflowPublishConfig = {
 export function getProductProcessWorkflow(factoryId: string, productTypeId: string) {
   return get<ProductProcessWorkflowDefinition | null>(
     `/${factoryId}/product-process-workflows/${productTypeId}`,
+  );
+}
+
+export function checkProductProcessWorkflowCompleteness(
+  factoryId: string,
+  productTypeId: string,
+  definition: ProductProcessWorkflowDefinition,
+  signal: AbortSignal,
+) {
+  return post<WorkflowCompletenessIssue[]>(
+    `/${factoryId}/product-process-workflows/${productTypeId}/completeness-check`,
+    definition,
+    { _silent: true, signal },
   );
 }
 
