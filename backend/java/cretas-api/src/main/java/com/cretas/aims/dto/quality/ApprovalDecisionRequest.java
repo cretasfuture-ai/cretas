@@ -43,6 +43,20 @@ public class ApprovalDecisionRequest {
     private String followUpRequirements;
 
     /**
+     * 本人审批原因 (纪律排查 B3): 审批人就是申请人、且工厂开了「允许本人审批」时必填;
+     * 不填时取审批意见 (comment)。
+     */
+    private String selfApprovalReason;
+
+    /**
+     * 审批意见是调用方代填的占位词 (例如 AI 工具在模型没给原因时写「通过」/「拒绝」), 不是人写的。
+     * 为 true 时意见<b>不能</b>顶替本人审批原因 —— 否则「本人审批必须写原因」被一个占位词绕过
+     * (#1580 独立审查必修 2)。只由服务端代码设置, 不从请求 JSON 读。
+     */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private boolean commentIsPlaceholder;
+
+    /**
      * 审批决定枚举
      */
     public enum ApprovalDecision {

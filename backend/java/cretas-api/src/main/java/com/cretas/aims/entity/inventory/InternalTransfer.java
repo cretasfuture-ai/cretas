@@ -182,4 +182,18 @@ public class InternalTransfer extends BaseEntity {
 
     @Transient
     private String approvedByName;
+
+    /** 列表/详情按仓库 ID 回填的仓库名; 查不到时为 null, 不拿 ID 冒充。 */
+    @Transient
+    private String sourceWarehouseName;
+
+    @Transient
+    private String targetWarehouseName;
+
+    /** 状态中文名 (由 status 推导, 枚举全集见 TransferStatus)。 */
+    @Transient
+    @com.fasterxml.jackson.annotation.JsonProperty("statusLabel")
+    public String getStatusLabel() {
+        return getStatus() == null ? null : getStatus().getDisplayName();
+    }
 }

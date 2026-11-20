@@ -432,8 +432,8 @@ defineExpose({ setFocus, sendMessage, clearConversation });
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #409eff;
-  box-shadow: 0 0 6px #409eff;
+  background: var(--cs-primary);
+  box-shadow: 0 0 6px var(--cs-primary);
   flex-shrink: 0;
 }
 .acp-focus-row {
@@ -605,13 +605,13 @@ defineExpose({ setFocus, sendMessage, clearConversation });
 }
 :global(:root[data-theme='dark']) .acp-panel :deep(.el-radio-button__original-radio:checked + .el-radio-button__inner) {
   color: #fff;
-  background: var(--el-color-primary, #409eff);
-  border-color: var(--el-color-primary, #409eff);
+  background: var(--el-color-primary, var(--cs-primary));
+  border-color: var(--el-color-primary, var(--cs-primary));
 }
 :global(:root[data-theme='dark']) .acp-panel :deep(.el-radio-button.is-active .el-radio-button__inner) {
   color: #fff;
-  background: var(--el-color-primary, #409eff);
-  border-color: var(--el-color-primary, #409eff);
+  background: var(--el-color-primary, var(--cs-primary));
+  border-color: var(--el-color-primary, var(--cs-primary));
 }
 :global(:root[data-theme='dark']) .acp-panel :deep(.el-input__wrapper) {
   background: #262727;

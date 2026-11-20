@@ -14,9 +14,12 @@ from ..action_rec_formatter import (
     aggregation_for_measure,
     measure_unit,
 )
-from ..schema import DataSchema
+from ..schema import DataSchema, Domain
 from .base import AnalysisTemplate, TemplateResult
 from .registry import register
+
+# 图标题 / 文案里的频率中文名 (不再露出 D/W/M 代码)
+FREQ_TITLE_LABEL = {"D": "按日", "W": "按周", "M": "按月"}
 
 
 @register
@@ -62,6 +65,8 @@ class MonthlyTrend(AnalysisTemplate):
         agg = aggregation_for_measure(measure)
         is_avg = agg == "avg"
         unit = measure_unit(measure)
+        # 只有历史餐饮上传 (Domain.RESTAURANT) 才用餐饮口吻; 新上传与工厂数据一律工厂词
+        is_restaurant = schema.domain == Domain.RESTAURANT
 
         # Probe daily first; downsample if too many points
         daily = backend.time_series(time_col, measure, "D", agg=agg)
@@ -93,7 +98,7 @@ class MonthlyTrend(AnalysisTemplate):
 
         chart_config = {
             "type": "line",
-            "title": {"text": f"{measure} 时间趋势 ({freq_used})", "left": "center"},
+            "title": {"text": f"{measure} 时间趋势 ({FREQ_TITLE_LABEL.get(freq_used, freq_used)})", "left": "center"},
             "xAxis": {"type": "category", "data": [r["period"] for r in series]},
             "yAxis": {"type": "value", "name": measure},
             "series": [{
@@ -120,17 +125,30 @@ class MonthlyTrend(AnalysisTemplate):
                 timeline="数据积累后",
             )
         elif gap_pct >= 30:
+            if is_restaurant:
+                benefit = f"谷值时段定向促销 + 套餐 + 会员唤回可拉高谷值 {measure} 10-25%"
+                prereq = "复盘谷值时段成因 (淡季 / 节假日错峰 / 活动空窗) + 设计针对性方案"
+            else:
+                # 工厂数据不许出现餐饮口吻 (套餐 / 会员 / 门店): LSM-COSTBI 第 9 项
+                benefit = f"谷值期提前接单、均衡排产,可把谷值 {measure} 往上拉"
+                prereq = "复盘谷值期成因 (订单少 / 停线检修 / 原料没到) + 对照峰值期排产安排"
             action_rec = format_action_rec(
                 object_target=f"谷值周期 {trough['period']} (低于峰值 {gap_pct:.0f}%)",
-                benefit_range=f"谷值时段定向促销 + 套餐 + 会员唤回可拉高谷值 {measure} 10-25%",
-                prerequisite="复盘谷值时段成因 (淡季 / 节假日错峰 / 活动空窗) + 设计针对性方案",
+                benefit_range=benefit,
+                prerequisite=prereq,
                 timeline="本月内",
             )
         else:
+            if is_restaurant:
+                benefit = "复刻峰值期运营手段到平日,可缩小波动 10-15%"
+                prereq = "对标峰值时段促销 / 排班 / 物料 + 复盘可复用方案"
+            else:
+                benefit = "把峰值期的排产、排班做法用到平时,可缩小波动"
+                prereq = "对照峰值期的订单 / 排班 / 原料准备,找出能照搬的做法"
             action_rec = format_action_rec(
                 object_target=f"峰值 {peak['period']} ({peak['total']:,.0f}) 与谷值 {trough['period']}",
-                benefit_range="复刻峰值期运营手段到平日,可缩小波动 10-15%",
-                prerequisite="对标峰值时段促销 / 排班 / 物料 + 复盘可复用方案",
+                benefit_range=benefit,
+                prerequisite=prereq,
                 timeline="本月内",
             )
         freq_label = {'D': '日', 'W': '周', 'M': '月'}.get(freq_used, freq_used)

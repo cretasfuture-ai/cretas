@@ -22,8 +22,13 @@
     "/smart-bi/upload"
   ],
   "dashboard": [
+    "/crew",
+    "/crew/ledger",
     "/dashboard",
     "/dashboard/ai-value",
+    "/issues",
+    "/today",
+    "/todo",
     "/workflow/acted",
     "/workflow/copied",
     "/workflow/my-created",
@@ -81,19 +86,23 @@
   ],
   "production": [
     "/dashboard/production-progress",
+    "/external-software",
     "/production/analysis-query",
     "/production/approval",
     "/production/batches",
     "/production/bom/ecns",
+    "/production/bom/price-adjustments",
     "/production/cost-deviation-cases",
     "/production/cost-variance",
     "/production/delivery-risks",
     "/production/kanban",
     "/production/material-flow",
+    "/production/outsource",
     "/production/plans",
     "/production/process-hub",
     "/production/shortage-cases",
     "/production/traceability",
+    "/production/weigh",
     "/production/yield-standard",
     "/system/products",
     "/workdesk/production-manager"
@@ -104,6 +113,7 @@
     "/quality/defects",
     "/quality/disposals",
     "/quality/disposition",
+    "/quality/first-article",
     "/quality/inspections",
     "/quality/label-qc",
     "/quality/param-deviation",
@@ -148,6 +158,7 @@
   "system": [
     "/calibration/list",
     "/canvas-editor",
+    "/crew/settings",
     "/factory-onboarding",
     "/factory-readiness",
     "/factory-review",
@@ -194,6 +205,7 @@
     "/warehouse/storage-locations",
     "/warehouse/unordered-inbound-applications",
     "/warehouse/wastage-reports",
+    "/warehouse/wip-batches",
     "/workdesk/warehouse-keeper"
   ]
 }

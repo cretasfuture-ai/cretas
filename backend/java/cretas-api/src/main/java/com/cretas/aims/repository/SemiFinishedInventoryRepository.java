@@ -1,9 +1,7 @@
 package com.cretas.aims.repository;
 
 import com.cretas.aims.entity.SemiFinishedInventory;
-import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -22,7 +20,8 @@ import java.util.Optional;
  * {@code DeletedAtIsNull} 后缀 (实体未继承 BaseEntity 的 @Where 自动过滤)。
  */
 @Repository
-public interface SemiFinishedInventoryRepository extends JpaRepository<SemiFinishedInventory, Long> {
+public interface SemiFinishedInventoryRepository extends JpaRepository<SemiFinishedInventory, Long>,
+        SemiFinishedInventoryLockingRepository {
 
     /** 只读身份字段, 不带余额。 */
     interface SourceRef {
@@ -38,8 +37,10 @@ public interface SemiFinishedInventoryRepository extends JpaRepository<SemiFinis
     }
 
     /**
-     * 查身份用这个, ⛔ 不用 findById: 那会把实体放进持久化上下文, 表没有 @Version,
-     * 之后同一事务的悲观锁查询拿到的是这份旧余额, 改完写回就覆盖了别人的提交。
+     * 查身份用这个, ⛔ 不用 findById: 那会把实体放进持久化上下文。加锁读取 (见
+     * {@link SemiFinishedInventoryLockingRepository}) 现在锁到之后会从库里重读, 但只读身份时没有理由多装一份。
+     * (R6 核实: 表和实体都有 {@code @Version}; 旧版这里写「表没有 @Version」是错的 ——
+     * 旧对象写回不会静默覆盖, 而是在 flush 时撞乐观锁整单回滚。)
      */
     @Query("SELECT w.id AS id, w.factoryId AS factoryId, w.intermediateBatchNo AS intermediateBatchNo, "
             + "w.productTypeId AS productTypeId, w.unit AS unit "
@@ -55,17 +56,8 @@ public interface SemiFinishedInventoryRepository extends JpaRepository<SemiFinis
     Optional<SemiFinishedInventory> findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(
             String factoryId, String intermediateBatchNo);
 
-    @Lock(LockModeType.PESSIMISTIC_WRITE)
-    @Query("SELECT w FROM SemiFinishedInventory w WHERE w.intermediateBatchNo = :intermediateBatchNo AND w.deletedAt IS NULL")
-    Optional<SemiFinishedInventory> findForUpdateByIntermediateBatchNoAndDeletedAtIsNull(
-            @Param("intermediateBatchNo") String intermediateBatchNo);
-
-    @Lock(LockModeType.PESSIMISTIC_WRITE)
-    @Query("SELECT w FROM SemiFinishedInventory w WHERE w.factoryId = :factoryId "
-            + "AND w.intermediateBatchNo = :intermediateBatchNo AND w.deletedAt IS NULL")
-    Optional<SemiFinishedInventory> findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(
-            @Param("factoryId") String factoryId,
-            @Param("intermediateBatchNo") String intermediateBatchNo);
+    // 加锁读取 (findForUpdate… / findByIdForUpdate / findByIdAndFactoryIdForUpdate / lockForDeviationHold)
+    // 在 SemiFinishedInventoryLockingRepository: 锁到之后从库里重读 (R6), ⛔ 不要在这里再声明一份 @Lock 查询。
 
     /** 某生产批次的全部 WIP 行 (整批出成率在制量汇总用)。 */
     List<SemiFinishedInventory> findByFactoryIdAndBatchIdAndDeletedAtIsNull(String factoryId, Long batchId);
@@ -131,11 +123,6 @@ public interface SemiFinishedInventoryRepository extends JpaRepository<SemiFinis
            "ORDER BY w.processOrder ASC, w.createdAt ASC")
     List<SemiFinishedInventory> findAvailableByFactory(@Param("factoryId") String factoryId);
 
-    /** 按 ID 加悲观写锁 (SP2 二次加工计划创建时扣减 WIP 用)。 */
-    @Lock(LockModeType.PESSIMISTIC_WRITE)
-    @Query("SELECT w FROM SemiFinishedInventory w WHERE w.id = :id AND w.deletedAt IS NULL")
-    Optional<SemiFinishedInventory> findByIdForUpdate(@Param("id") Long id);
-
     /**
      * C3: 工厂级半成品重量库存视图 — 所有未软删 WIP 行，含全状态 (AVAILABLE/DEPLETED/RETURNED)。
      * 按工序序升序、创建时间降序排列。不过滤 status/availableQuantity，展示完整库存快照。
@@ -163,13 +150,6 @@ public interface SemiFinishedInventoryRepository extends JpaRepository<SemiFinis
     List<SemiFinishedInventory> findByFactoryIdAndInspectionStatusForRelease(
             @Param("factoryId") String factoryId,
             @Param("inspectionStatus") String inspectionStatus);
-
-    /** 放行决定时按 id + 工厂加写锁 (防两个质检员同时放行/判不合格同一行)。 */
-    @Lock(LockModeType.PESSIMISTIC_WRITE)
-    @Query("SELECT w FROM SemiFinishedInventory w WHERE w.id = :id AND w.factoryId = :factoryId " +
-           "AND w.deletedAt IS NULL")
-    Optional<SemiFinishedInventory> findByIdAndFactoryIdForUpdate(
-            @Param("id") Long id, @Param("factoryId") String factoryId);
 
     /** CCP 偏离扣留: 这些生产批次直接产出的半成品行。 */
     @Query("SELECT w FROM SemiFinishedInventory w WHERE w.factoryId = :factoryId " +
@@ -221,15 +201,4 @@ public interface SemiFinishedInventoryRepository extends JpaRepository<SemiFinis
             @Param("factoryId") String factoryId,
             @Param("semiId") Long semiId,
             @Param("since") java.time.LocalDateTime since);
-
-    /**
-     * CCP 偏离扣留 (审查中 8): 先对这些行加行锁 (SELECT … FOR UPDATE) 再改 —— 锁住之后没有别的事务能在
-     * 「读」和「写」之间扣减; 本事务早先读过而已过期的实体在 flush 时撞 @Version 失败回滚, 不会静默覆盖。
-     * (不用批量 UPDATE: 它要清空持久化上下文, 同一事务里随后的读取全部重载, 已持有的实体也会脱管。)
-     */
-    @Lock(LockModeType.PESSIMISTIC_WRITE)
-    @Query("SELECT w FROM SemiFinishedInventory w WHERE w.factoryId = :factoryId AND w.id IN :ids " +
-           "AND w.deletedAt IS NULL ORDER BY w.id")   // 固定加锁顺序, 防两个扣留事务交叉等锁死锁 (审查 L2)
-    List<SemiFinishedInventory> lockForDeviationHold(@Param("factoryId") String factoryId,
-                                                     @Param("ids") java.util.Collection<Long> ids);
 }

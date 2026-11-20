@@ -20,9 +20,8 @@
  * 合并成一个入口后, 路由级 meta 只能挂一份 —— 用 modulesAny:['production','analytics']
  * (路由级放宽为「二者居一」, 父级 /production 组本身已强制要求 production, 所以这不
  * 会让任何原本进不了 /production 组的人多得到访问权), 而**業态门控保留在组件里**:
- * 上述 3 个「analytics 系」tab 只在 factoryType 不是 RESTAURANT/FACTORY 时渲染
- * (与合并前 hideForFactoryTypes: ['RESTAURANT','FACTORY'] 逐字节等价), 见
- * views/production/analysis/index.vue 的 showAnalyticsTabs。
+ * 生产数据分析也向已确认有外部生产来源的工厂开放。其余两个 analytics tab
+ * 继续使用原有业态门控。
  */
 export type ProductionAnalysisTab =
   | 'workshop-report'
@@ -36,7 +35,7 @@ export const PRODUCTION_ANALYSIS_TABS: ProductionAnalysisTab[] = [
   'workshop-report', 'data-analysis', 'bom-achievement', 'process-io', 'labor-efficiency', 'yield-cost',
 ];
 
-/** 合并前的 3 个「analytics 系」tab —— 只在非 RESTAURANT/FACTORY 业态渲染 (业态门控原样保留)。 */
+/** 合并前的 3 个「analytics 系」tab。 */
 export const FACTORY_TYPE_GATED_TABS: ProductionAnalysisTab[] = ['workshop-report', 'data-analysis', 'yield-cost'];
 
 /**
@@ -48,9 +47,16 @@ export const FACTORY_TYPE_GATED_TABS: ProductionAnalysisTab[] = ['workshop-repor
  */
 export const DEFAULT_PRODUCTION_ANALYSIS_TAB: ProductionAnalysisTab = 'bom-achievement';
 
-/** 这个 factoryType 能不能看到 3 个 analytics 系 tab —— 与合并前 hideForFactoryTypes 逐字节等价。 */
+/** 原有 analytics 业态门控。 */
 export function canSeeFactoryTypeGatedTabs(factoryType: string | null | undefined): boolean {
   return factoryType !== 'RESTAURANT' && factoryType !== 'FACTORY';
+}
+
+export function canSeeProductionDataAnalysis(
+  factoryType: string | null | undefined,
+  hasExternalSource: boolean,
+): boolean {
+  return canSeeFactoryTypeGatedTabs(factoryType) || hasExternalSource;
 }
 
 /**
@@ -59,12 +65,16 @@ export function canSeeFactoryTypeGatedTabs(factoryType: string | null | undefine
 export function resolveProductionAnalysisTab(
   query: Record<string, unknown> | null | undefined,
   factoryType?: string | null,
+  hasExternalSource = false,
 ): ProductionAnalysisTab {
   const t = query?.tab;
   if (!PRODUCTION_ANALYSIS_TABS.includes(t as ProductionAnalysisTab)) {
     return DEFAULT_PRODUCTION_ANALYSIS_TAB;
   }
   const tab = t as ProductionAnalysisTab;
+  if (tab === 'data-analysis') {
+    return canSeeProductionDataAnalysis(factoryType, hasExternalSource) ? tab : DEFAULT_PRODUCTION_ANALYSIS_TAB;
+  }
   if (FACTORY_TYPE_GATED_TABS.includes(tab) && !canSeeFactoryTypeGatedTabs(factoryType)) {
     return DEFAULT_PRODUCTION_ANALYSIS_TAB;
   }

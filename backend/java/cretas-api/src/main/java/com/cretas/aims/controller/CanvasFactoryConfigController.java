@@ -70,6 +70,10 @@ public class CanvasFactoryConfigController {
     private final EncodingRuleRepository encodingRuleRepo;
     private final FactorySettingsRepository factorySettingsRepo;
 
+    /** 审批规则改动留痕 (#1580 审查低危 5)。可选注入只为兼容手工构造控制器的单测。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.workflow.ApprovalPolicyAudit approvalPolicyAudit;
+
     private static final List<String> ALLOWED_RESET_CYCLES =
             List.of("DAILY", "MONTHLY", "YEARLY", "NEVER");
     private static final List<String> ALLOWED_WAGE_MODES =
@@ -575,6 +579,7 @@ public class CanvasFactoryConfigController {
                             "skipProcessReportingDefault", false,
                             "requireRequisitionBeforeReport", false,
                             "blockStartOnOpenShortage", false,
+                            "allowSelfApproval", false,
                             "version", 0));
         }
         return ApiResponse.success("操作成功", serializeFactorySettings(opt.get()));
@@ -604,6 +609,8 @@ public class CanvasFactoryConfigController {
             }
         }
 
+        Map<String, Object> approvalPolicyBefore =
+                com.cretas.aims.service.workflow.ApprovalPolicyAudit.snapshot(settings);
         if (body.containsKey("factoryName")) settings.setFactoryName(stringField(body, "factoryName"));
         if (body.containsKey("factoryAddress")) settings.setFactoryAddress(stringField(body, "factoryAddress"));
         if (body.containsKey("contactPhone")) settings.setContactPhone(stringField(body, "contactPhone"));
@@ -642,6 +649,19 @@ public class CanvasFactoryConfigController {
         if (body.containsKey("blockStartOnOpenShortage")) {
             settings.setBlockStartOnOpenShortage(booleanField(body, "blockStartOnOpenShortage", false));
         }
+        // 纪律排查 B1–B3/B11/B15 允许本人审批 (默认关 = 四眼)
+        if (body.containsKey("allowSelfApproval")) {
+            settings.setAllowSelfApproval(booleanField(body, "allowSelfApproval", false));
+        }
+        // 纪律排查 B11 改价审批阈值 (默认 10% / 20%); 非法值 400, 不静默落成默认
+        if (body.containsKey("priceDecreaseApprovalPct")) {
+            settings.setPriceDecreaseApprovalPct(com.cretas.aims.service.inventory.PriceAdjustmentApprovalThresholds
+                    .validate(body.get("priceDecreaseApprovalPct"), "降价审批阈值"));
+        }
+        if (body.containsKey("priceIncreaseApprovalPct")) {
+            settings.setPriceIncreaseApprovalPct(com.cretas.aims.service.inventory.PriceAdjustmentApprovalThresholds
+                    .validate(body.get("priceIncreaseApprovalPct"), "涨价审批阈值"));
+        }
         if (body.containsKey("defaultUserRole")) {
             settings.setDefaultUserRole(stringField(body, "defaultUserRole"));
         }
@@ -650,6 +670,9 @@ public class CanvasFactoryConfigController {
 
         try {
             FactorySettings saved = factorySettingsRepo.saveAndFlush(settings);
+            if (approvalPolicyAudit != null) {
+                approvalPolicyAudit.recordIfChanged(factoryId, approvalPolicyBefore, saved);
+            }
             return ApiResponse.success("保存成功", serializeFactorySettings(saved));
         } catch (org.springframework.orm.ObjectOptimisticLockingFailureException ex) {
             return ApiResponse.errorWithCode(409, "VERSION_CONFLICT",
@@ -798,6 +821,9 @@ public class CanvasFactoryConfigController {
         m.put("skipProcessReportingDefault", s.getSkipProcessReportingDefault());
         m.put("requireRequisitionBeforeReport", s.getRequireRequisitionBeforeReport());
         m.put("blockStartOnOpenShortage", s.getBlockStartOnOpenShortage());
+        m.put("allowSelfApproval", s.getAllowSelfApproval());
+        m.put("priceDecreaseApprovalPct", s.getPriceDecreaseApprovalPct());
+        m.put("priceIncreaseApprovalPct", s.getPriceIncreaseApprovalPct());
         m.put("defaultUserRole", s.getDefaultUserRole());
         m.put("lastModifiedAt", s.getLastModifiedAt());
         m.put("version", s.getVersion());

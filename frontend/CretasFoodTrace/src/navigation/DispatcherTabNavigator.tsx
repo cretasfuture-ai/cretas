@@ -27,10 +27,13 @@ import SmartBIStackNavigator from './SmartBIStackNavigator';
 import DSPersonnelStackNavigator from './dispatcher/DSPersonnelStackNavigator';
 import DSProfileStackNavigator from './dispatcher/DSProfileStackNavigator';
 import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
+import { useMyTodoEntry } from '../hooks/useMyTodos';
+import { todoTabScreen } from './todoTab';
 
 const Tab = createBottomTabNavigator<DispatcherTabParamList>();
 
 export function DispatcherTabNavigator() {
+  const todoEntry = useMyTodoEntry();
   const { isScreenEnabled, loaded } = useFactoryFeatureStore();
 
   const schedulingOn = isScreenEnabled('ProductionPlanning');
@@ -75,6 +78,7 @@ export function DispatcherTabNavigator() {
           ),
         }}
       />
+      {todoTabScreen(Tab, todoEntry, 'dispatcher-tab-oa-todo')}
       <Tab.Screen
         name="ProfileTab"
         component={DSProfileStackNavigator}

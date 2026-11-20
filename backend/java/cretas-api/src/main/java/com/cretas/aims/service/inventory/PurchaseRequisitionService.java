@@ -43,6 +43,23 @@ public interface PurchaseRequisitionService {
     PurchaseRequisition submitRequisition(String factoryId, String requisitionId, Long currentUserId);
 
     /**
+     * 驳回后重开 (REJECTED → DRAFT), 仅请购人本人。重开后可改量再提交; 历史各轮保留。
+     */
+    PurchaseRequisition reopenRequisition(String factoryId, String requisitionId, Long currentUserId);
+
+    /**
+     * 修改草稿内容 (行项目 / 期望日期 / 原因 / 备注), 仅 DRAFT 且仅请购人本人。
+     */
+    PurchaseRequisition updateDraft(String factoryId, String requisitionId, Long currentUserId,
+                                    com.cretas.aims.dto.inventory.CreatePurchaseRequisitionRequest request);
+
+    /**
+     * 审批历史: 按发生顺序返回每一轮的提交 / 通过 / 驳回 / 重开, 同工厂内才可查。
+     */
+    java.util.List<com.cretas.aims.entity.inventory.PurchaseRequisitionApprovalRecord> getApprovalHistory(
+            String factoryId, String requisitionId);
+
+    /**
      * 审批通过 (PENDING_APPROVAL → APPROVED).
      *
      * @param approverId 审批人 userId (from JWT)

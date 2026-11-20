@@ -19,7 +19,7 @@
  * ## ⛔ 权限语义不复制一份（与 RN 侧同一条纪律）
  *
  * 分析器**不重写** `PERMISSION_MATRIX`、不重写 `canAccess` 的兜底规则、
- * 也不重写 `guards.ts` 里那七道闸（MOBILE_ONLY_ROLES / ROLE_PATH_WHITELIST /
+ * 也不重写 `guards.ts` 里那七道闸（网页准入 hasAnyWebBusinessModule / ROLE_PATH_WHITELIST /
  * module / modulesAll / hideForFactoryTypes / restaurantRoles / roles）。
  *
  *  · **可达性**：把 `setupRouterGuards` 挂到一个**假 router** 上，截获它注册的
@@ -527,6 +527,8 @@ type Binding =
 export interface FileEnv {
   file: string;
   bindings: Map<string, Binding>;
+  /** 唯一数字专员工作台路由的模块；多路由映射不猜。 */
+  digitalEmployeeModule?: string;
   /**
    * 名字 → 它（传递地）指向权限载体吗。
    *
@@ -539,6 +541,7 @@ export interface FileEnv {
 }
 
 const envCache = new Map<string, FileEnv>();
+const digitalEmployeeModuleByFile = new Map<string, string>();
 
 function unwrap(node: ts.Node): ts.Node {
   let n = node;
@@ -648,7 +651,12 @@ export function fileEnv(file: string): FileEnv {
     };
     visit(view.script);
   }
-  const env: FileEnv = { file, bindings, carriers: new Set<string>() };
+  const env: FileEnv = {
+    file,
+    bindings,
+    carriers: new Set<string>(),
+    digitalEmployeeModule: digitalEmployeeModuleByFile.get(file),
+  };
   computeCarriers(env);
   envCache.set(file, env);
   return env;
@@ -689,6 +697,27 @@ function touchesStoreMember(node: ts.Node, env: FileEnv): boolean {
   return false;
 }
 
+function touchesBooleanStoreMember(node: ts.Node, env: FileEnv): boolean {
+  const segs = pathSegments(node);
+  if (segs) {
+    const head = segs[0] as string;
+    const b = env.bindings.get(head);
+    const rest = stripValue(segs).slice(1);
+    return (b?.kind === 'permStore' || b?.kind === 'authStore') && rest.length === 1 &&
+      pick(BOOL_MEMBERS, rest[0]) !== undefined;
+  }
+  if (ts.isCallExpression(node)) {
+    const target = unwrap(node.expression);
+    if (!ts.isPropertyAccessExpression(target)) return false;
+    const recv = pathSegments(target.expression);
+    const head = recv && recv.length === 1 ? (recv[0] as string) : null;
+    const b = head ? env.bindings.get(head) : undefined;
+    return (b?.kind === 'permStore' || b?.kind === 'authStore') &&
+      pick(BOOL_MEMBERS, target.name.text) !== undefined;
+  }
+  return false;
+}
+
 /** 把「哪些名字（传递地）指向权限载体」一次算成不动点。 */
 function computeCarriers(env: FileEnv): void {
   /** name -> 它体内引用到的其它顶层名字 */
@@ -698,7 +727,12 @@ function computeCarriers(env: FileEnv): void {
     const referenced = new Set<string>();
     let direct = false;
     const visit = (n: ts.Node): void => {
-      if (touchesStoreMember(n, env)) {
+      // Data containers (request/config objects and template strings) are not
+      // boolean permission carriers. Their fields may contain a prop name,
+      // but that is not itself a decision; real boolean expressions are
+      // collected from their own declarations/use sites.
+      if (ts.isObjectLiteralExpression(n) || ts.isArrayLiteralExpression(n) || ts.isTemplateExpression(n)) return;
+      if (touchesBooleanStoreMember(n, env) || boolMemberAtom(n, env)) {
         direct = true;
         return; // 已经确定，⛔ 不必再往下走
       }
@@ -874,6 +908,11 @@ function stringReader(
 
   // store 上的取值方法：permissionStore.getPermissionLevel('finance')
   if (ts.isCallExpression(n)) {
+    // Role collections commonly normalize with String(role); the wrapper does
+    // not change the decision axis, so preserve the underlying reader.
+    if (calleeName(n) === 'String' && n.arguments.length === 1) {
+      return stringReader(n.arguments[0] as ts.Expression, env, depth + 1);
+    }
     const target = unwrap(n.expression);
     if (ts.isPropertyAccessExpression(target)) {
       const recv = pathSegments(target.expression);
@@ -960,6 +999,34 @@ function arrayOfStringLiterals(node: ts.Node, env: FileEnv, depth = 0): string[]
 /** store 上的布尔成员 → atom。 */
 function boolMemberAtom(node: ts.Node, env: FileEnv): Expr | null {
   const n = unwrap(node);
+
+  // `digitalEmployeeProps` supplies this prop from the unique workdesk route.
+  // Only that route-local mapping is modeled; ordinary/pending workdesks stay U.
+  const propPath = pathSegments(n);
+  let declarationType = false;
+  for (let parent = n.parent; parent; parent = parent.parent) {
+    if (ts.isCallExpression(parent) && calleeName(parent) === 'defineProps') {
+      declarationType = true;
+      break;
+    }
+    if (ts.isStatement(parent)) break;
+  }
+  if (
+    env.digitalEmployeeModule &&
+    !declarationType &&
+    propPath &&
+    ((propPath.length === 2 && propPath[0] === 'props' && propPath[1] === 'employeeCanWrite') ||
+      (propPath.length === 1 && propPath[0] === 'employeeCanWrite' &&
+        !(n.parent && ts.isTypeElement(n.parent)) &&
+        !(n.parent && ts.isPropertyAssignment(n.parent) && n.parent.name === n)))
+  ) {
+    const module = env.digitalEmployeeModule;
+    return {
+      k: 'atom',
+      canon: "perm.canWrite('" + module + "')",
+      run: (p) => p.perm.canWrite(module),
+    };
+  }
 
   // 属性形态：permissionStore.canViewPrice / authStore.isAuthenticated
   const segs = pathSegments(n);
@@ -1176,6 +1243,10 @@ function mentionsCarrier(node: ts.Node, env: FileEnv): boolean {
   let found = false;
   const visit = (n: ts.Node): void => {
     if (found) return;
+    if (boolMemberAtom(n, env)) {
+      found = true;
+      return;
+    }
     // 直接碰 store 的**权限成员**（含 `canAccess(item.module)` 这种参数动态、判不出来的）
     if (touchesStoreMember(n, env)) {
       found = true;
@@ -1205,6 +1276,72 @@ function mentionsCarrier(node: ts.Node, env: FileEnv): boolean {
   return found;
 }
 
+/** 角色字符串只有在真正参与权限决策时才是载体。裸 truthiness / fallback
+ * （`currentRole || ''`、身份一致性比较）不属于本闸的权限分支。 */
+function hasRoleDecision(node: ts.Node, env: FileEnv): boolean {
+  let found = false;
+  const visit = (n: ts.Node): void => {
+    if (found) return;
+    if (boolMemberAtom(n, env)) {
+      found = true;
+      return;
+    }
+    if (ts.isCallExpression(n)) {
+      const target = unwrap(n.expression);
+      if (ts.isPropertyAccessExpression(target)) {
+        const recv = pathSegments(target.expression);
+        const head = recv && recv.length === 1 ? (recv[0] as string) : null;
+        const b = head ? env.bindings.get(head) : undefined;
+        if ((b?.kind === 'permStore' || b?.kind === 'authStore') &&
+            pick(BOOL_MEMBERS, target.name.text)) {
+          found = true;
+          return;
+        }
+      }
+    }
+    if (ts.isBinaryExpression(n)) {
+      const op = n.operatorToken.kind;
+      const comparison =
+        op === ts.SyntaxKind.EqualsEqualsEqualsToken || op === ts.SyntaxKind.EqualsEqualsToken ||
+        op === ts.SyntaxKind.ExclamationEqualsEqualsToken || op === ts.SyntaxKind.ExclamationEqualsToken;
+      const leftLiteral = ts.isStringLiteral(unwrap(n.left)) || ts.isNoSubstitutionTemplateLiteral(unwrap(n.left));
+      const rightLiteral = ts.isStringLiteral(unwrap(n.right)) || ts.isNoSubstitutionTemplateLiteral(unwrap(n.right));
+      if (comparison && ((leftLiteral && stringReader(n.right, env, 0)) ||
+          (rightLiteral && stringReader(n.left, env, 0)))) {
+        found = true;
+        return;
+      }
+    }
+    if (ts.isCallExpression(n)) {
+      const c = calleeName(n);
+      const memberCall = c === 'includes' || c === 'has';
+      if (memberCall && n.arguments.length === 1 && stringReader(n.arguments[0] as ts.Expression, env, 0)) {
+        found = true;
+        return;
+      }
+      // Imported role helpers are opaque, but passing a role into one is a
+      // deliberate permission decision (unlike identity consistency checks).
+      if (!memberCall && c !== 'String' && c !== 'Boolean' &&
+          n.arguments.some((a) => stringReader(a as ts.Expression, env, 0))) {
+        found = true;
+        return;
+      }
+    }
+    const segs = pathSegments(n);
+    if (segs) {
+      const flat = stripValue(segs);
+      if (flat.length === 1 && env.carriers.has(flat[0] as string) && !isShadowed(n, flat[0] as string)) {
+        found = true;
+        return;
+      }
+      return;
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(node);
+  return found;
+}
+
 /**
  * 记不记这一条：**能解析出权限叶子**，或者**明明碰了权限成员却解析不出来**。
  *
@@ -1218,7 +1355,7 @@ function mentionsCarrier(node: ts.Node, env: FileEnv): boolean {
  *    一口气造出 ~300 条假的「判不了」（1545 条里 1333 条判不了，86%）。
  */
 function shouldRecord(node: ts.Node, env: FileEnv): boolean {
-  return mentionsCarrier(node, env);
+  return mentionsCarrier(node, env) && hasRoleDecision(node, env);
 }
 
 // ==================== 分支采集 ====================
@@ -1328,10 +1465,14 @@ export function branchesIn(file: string): Branch[] {
         const couldHideADecision =
           ts.isCallExpression(body) || ts.isArrowFunction(body) || ts.isFunctionExpression(body);
         const isPlainAlias = stringReader(body, env, 0) !== null;
-        if (
+        const callName = ts.isCallExpression(body) ? calleeName(body) : null;
+        const knownWorkdeskComposable = callName === 'useWorkdeskIntent' || callName === 'useWorkdeskRequest';
+        // `withDefaults(defineProps<...>)` is a declaration, never a gate.
+        if (callName !== 'withDefaults' && (
           isBooleanShaped(body, env) ||
-          (couldHideADecision && !isPlainAlias && mentionsCarrier(body, env))
-        ) {
+          (couldHideADecision && !isPlainAlias && mentionsCarrier(body, env) &&
+            (!ts.isCallExpression(body) || (!knownWorkdeskComposable && hasRoleDecision(body, env))))
+        )) {
           record(body, 'const', lineOfNode(n, base), n.getText());
         }
       } else if (ts.isReturnStatement(n) && n.expression) {
@@ -1478,6 +1619,29 @@ export function routeNameToFile(): { map: Map<string, string>; unresolved: strin
   return { map, unresolved };
 }
 
+function digitalEmployeeRouteNames(): Set<string> {
+  const names = new Set<string>();
+  for (const file of routerFiles()) {
+    const sf = ts.createSourceFile(file, fs.readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    const visit = (n: ts.Node): void => {
+      if (ts.isObjectLiteralExpression(n)) {
+        let name: string | null = null;
+        let isDigital = false;
+        for (const p of n.properties) {
+          if (!ts.isPropertyAssignment(p)) continue;
+          const key = ts.isIdentifier(p.name) || ts.isStringLiteral(p.name) ? p.name.text : null;
+          if (key === 'name' && ts.isStringLiteral(p.initializer)) name = p.initializer.text;
+          if (key === 'props' && ts.isIdentifier(p.initializer) && p.initializer.text === 'digitalEmployeeProps') isDigital = true;
+        }
+        if (name && isDigital) names.add(name);
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(sf);
+  }
+  return names;
+}
+
 // ==================== 守卫驱动 ====================
 
 type GuardFn = (
@@ -1588,7 +1752,7 @@ export function buildHarness(): Promise<Harness> {
 /** 跑一次**生产守卫**，回答「这个主体能不能进这条路由」。 */
 export async function guardAllows(h: Harness, p: Principal, route: RouteEntry): Promise<boolean> {
   setActivePinia(p.pinia);
-  // MOBILE_ONLY_ROLES 那一支会 clearAuth() —— 每次调用前把身份放回去，
+  // 网页准入那一支 (hasAnyWebBusinessModule) 会 clearAuth() —— 每次调用前把身份放回去，
   // 否则同一主体的后续路由会被「未登录」而不是「被闸拦下」解释。
   p.auth.user = syntheticUser(p.role, p.factoryType, p.isPlatform);
   let arg: unknown = '__NOT_CALLED__';
@@ -1727,6 +1891,25 @@ export function analyze(): Promise<AnalysisResult> {
   analysisPromise = (async (): Promise<AnalysisResult> => {
     const h = await buildHarness();
     const { unresolved } = routeNameToFile();
+    const digitalRoutes = digitalEmployeeRouteNames();
+
+    // Preserve the real route-to-module join used by digitalEmployeeProps.
+    // A view shared by multiple modules is deliberately left unknown.
+    digitalEmployeeModuleByFile.clear();
+    const modulesByFile = new Map<string, Set<string>>();
+    for (const route of h.routes) {
+      const module = typeof route.meta.module === 'string' ? route.meta.module : null;
+      const digitalRoute = digitalRoutes.has(route.name);
+      if (route.file && module && digitalRoute) {
+        const set = modulesByFile.get(route.file) ?? new Set<string>();
+        set.add(module);
+        modulesByFile.set(route.file, set);
+      }
+    }
+    for (const [file, modules] of modulesByFile) {
+      if (modules.size === 1) digitalEmployeeModuleByFile.set(file, [...modules][0] as string);
+    }
+    envCache.clear();
 
     const principalsByFile = new Map<string, Set<string>>();
     let guardCalls = 0;

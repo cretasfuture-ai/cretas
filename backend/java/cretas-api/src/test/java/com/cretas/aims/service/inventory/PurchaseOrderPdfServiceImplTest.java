@@ -14,6 +14,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -271,6 +273,21 @@ class PurchaseOrderPdfServiceImplTest {
         assertTrue(text.contains("9%"), "Internal PDF must show 9% tax rate; text=" + summarize(text));
     }
 
+    @ParameterizedTest
+    @CsvSource({"13, 13%", "1, 1%", "0, 0%", ", -", "0.13, 0.13%"})
+    void generatePdf_internalVersion_keepsStoredTaxRate(String rate, String expected) throws Exception {
+        PurchaseOrderItem item = makeItem("TaxRateSample", "81", "kg", "42.00", "17", rate);
+        when(purchaseService.getPurchaseOrderById(FACTORY_ID, ORDER_ID))
+                .thenReturn(makeOrder("PO-N4-TAX", List.of(item)));
+        when(supplierRepository.findByIdAndFactoryId(anyString(), anyString())).thenReturn(Optional.empty());
+        when(factoryRepository.findById(FACTORY_ID)).thenReturn(Optional.empty());
+
+        String text = extractPdfText(service.generatePurchaseOrderPdf(FACTORY_ID, ORDER_ID, false, false));
+        String row = text.lines().filter(line -> line.contains("TaxRateSample")).findFirst().orElseThrow();
+        assertTrue(List.of(row.split("\\s+")).contains(expected),
+                () -> "Expected " + expected + " in item row: " + row);
+    }
+
     @Test
     @DisplayName("N4 RBAC: maskPrice=true → tax rates are masked with other price-sensitive fields")
     void generatePdf_maskPriceTrue_taxRatesMasked() throws Exception {
@@ -415,7 +432,7 @@ class PurchaseOrderPdfServiceImplTest {
     /** 一行有价 (牛腩 100×5=500) + 一行没价 (青花椒, unitPrice=null)。 */
     private List<PurchaseOrderItem> buildItemsWithOneUnpriced() {
         List<PurchaseOrderItem> items = new ArrayList<>();
-        items.add(makeItem("牛腩", "100", "kg", "5.00", "10", "0.13"));
+        items.add(makeItem("牛腩", "100", "kg", "5.00", "10", "13"));
         PurchaseOrderItem unpriced = new PurchaseOrderItem();
         unpriced.setMaterialTypeId("MT-青花椒");
         unpriced.setMaterialName("青花椒");
@@ -483,8 +500,8 @@ class PurchaseOrderPdfServiceImplTest {
 
     private List<PurchaseOrderItem> buildItems() {
         List<PurchaseOrderItem> items = new ArrayList<>();
-        items.add(makeItem("牛腩", "100", "kg", "5.00", "10", "0.13"));
-        items.add(makeItem("酱油", "20", "瓶", "8.50", "1", "0.09"));
+        items.add(makeItem("牛腩", "100", "kg", "5.00", "10", "13"));
+        items.add(makeItem("酱油", "20", "瓶", "8.50", "1", "9"));
         return items;
     }
 
@@ -496,7 +513,7 @@ class PurchaseOrderPdfServiceImplTest {
         item.setUnit(unit);
         item.setUnitPrice(new BigDecimal(price));
         item.setBoxQuantity(new BigDecimal(box));
-        item.setTaxRate(new BigDecimal(taxRate));
+        item.setTaxRate(taxRate == null ? null : new BigDecimal(taxRate));
         item.setSpecification("规格-" + name);
         return item;
     }

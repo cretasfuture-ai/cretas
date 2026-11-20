@@ -17,6 +17,8 @@ import WSWorkersStackNavigator from "./workshop-supervisor/WSWorkersStackNavigat
 import WSEquipmentStackNavigator from "./workshop-supervisor/WSEquipmentStackNavigator";
 import WSProfileStackNavigator from "./workshop-supervisor/WSProfileStackNavigator";
 import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
+import { useMyTodoEntry } from '../hooks/useMyTodos';
+import { todoTabScreen } from './todoTab';
 
 const Tab = createBottomTabNavigator<WorkshopSupervisorTabParamList>();
 
@@ -27,6 +29,7 @@ const TAB_COLORS = {
 };
 
 export function WorkshopSupervisorTabNavigator() {
+  const todoEntry = useMyTodoEntry();
   const { isScreenEnabled } = useFactoryFeatureStore();
 
   return (
@@ -116,6 +119,7 @@ export function WorkshopSupervisorTabNavigator() {
       )}
 
       {/* 我的Tab - 永远显示 */}
+      {todoTabScreen(Tab, todoEntry, 'ws-tab-oa-todo')}
       <Tab.Screen
         name="WSProfileTab"
         component={WSProfileStackNavigator}

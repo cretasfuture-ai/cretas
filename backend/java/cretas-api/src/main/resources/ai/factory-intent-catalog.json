@@ -667,6 +667,18 @@
       "route_type": "TOOL"
     },
     {
+      "intent_code": "CUSTOMER_CREATE",
+      "intent_name": "新建客户",
+      "intent_category": "DATA_OP",
+      "description": "新建客户资料 (WRITE + Preview): 客户名称必填, 可带联系人/电话/收货地址/类型; 确认卡先说将建哪个客户、同名是否已存在, 确认后才创建。",
+      "tool_name": "customer_create",
+      "required_entities": null,
+      "is_active": true,
+      "business_type": "FACTORY",
+      "factory_id": null,
+      "route_type": "TOOL"
+    },
+    {
       "intent_code": "CUSTOMER_LIST",
       "intent_name": "客户列表",
       "intent_category": "CRM",
@@ -1218,6 +1230,30 @@
       "required_entities": null,
       "is_active": true,
       "business_type": "COMMON",
+      "factory_id": null,
+      "route_type": "TOOL"
+    },
+    {
+      "intent_code": "HR_EMPLOYEE_WORK_LOCATION_QUERY",
+      "intent_name": "查员工在哪个车间哪条线",
+      "intent_category": "DATA_QUERY",
+      "description": "只读: 按姓名查本厂员工的车间/部门、今天排班排在哪条产线 (没排班就说没排班); 只给工作信息不给手机号等个人信息, 同名、只给姓或对不上全名时先列候选按账号选。",
+      "tool_name": "employee_work_location_query",
+      "required_entities": null,
+      "is_active": true,
+      "business_type": "FACTORY",
+      "factory_id": null,
+      "route_type": "TOOL"
+    },
+    {
+      "intent_code": "HR_MY_WAGE_QUERY",
+      "intent_name": "我的工资",
+      "intent_category": "DATA_QUERY",
+      "description": "只读: 当前登录人本人的工资条 (某月报工件数工时、系统试算、工资单按待审/已审/已发分开); 只能看本人, 查别人拒绝; 不是全厂工资成本。",
+      "tool_name": "my_wage_query",
+      "required_entities": null,
+      "is_active": true,
+      "business_type": "FACTORY",
       "factory_id": null,
       "route_type": "TOOL"
     },
@@ -2249,6 +2285,54 @@
       "route_type": "TOOL"
     },
     {
+      "intent_code": "REPORT_BATCH_YIELD_RANK",
+      "intent_name": "批次出成率排行",
+      "intent_category": "REPORT",
+      "description": "只读查询批次出成率排行: 期间内已完成批次按出成率(良品数量÷实际产出数量)从低到高或从高到低排序并出柱图; 缺良品或实际数量的批次不进排行并说明个数。",
+      "tool_name": "report_batch_yield_rank",
+      "required_entities": null,
+      "is_active": true,
+      "business_type": "FACTORY",
+      "factory_id": null,
+      "route_type": "TOOL"
+    },
+    {
+      "intent_code": "REPORT_BOM_COST_RANK",
+      "intent_name": "BOM成本排行",
+      "intent_category": "REPORT",
+      "description": "只读查询BOM成本排行: 按产品现行BOM成本(每1个成品)排序并出柱图, 可按产品名筛选(自动解析产品ID); 当前BOM口径仅归集包材, 缺单价会标注。",
+      "tool_name": "report_bom_cost_rank",
+      "required_entities": null,
+      "is_active": true,
+      "business_type": "FACTORY",
+      "factory_id": null,
+      "route_type": "TOOL"
+    },
+    {
+      "intent_code": "REPORT_SALES_MARGIN_SUMMARY",
+      "intent_name": "销售额与毛利汇总",
+      "intent_category": "REPORT",
+      "description": "只读查询销售额与毛利汇总(默认本月): 折后未税销售额、毛利、毛利率、成本覆盖率并出柱图; 毛利只算已回填成本的明细, 口径同SKU毛利率。",
+      "tool_name": "report_sales_margin_summary",
+      "required_entities": null,
+      "is_active": true,
+      "business_type": "FACTORY",
+      "factory_id": null,
+      "route_type": "TOOL"
+    },
+    {
+      "intent_code": "REPORT_LABOR_COST_SHARE",
+      "intent_name": "人工成本占比",
+      "intent_category": "REPORT",
+      "description": "只读查询人工成本占比: 期间内已完成批次人工成本占总成本的比例, 按产品拆分并出柱图; 与成本分析页同口径, 只给金额汇总不含人员。",
+      "tool_name": "report_labor_cost_share",
+      "required_entities": null,
+      "is_active": true,
+      "business_type": "FACTORY",
+      "factory_id": null,
+      "route_type": "TOOL"
+    },
+    {
       "intent_code": "REPORT_COST_VARIANCE",
       "intent_name": "成本差异分析",
       "intent_category": "REPORT",
@@ -2586,6 +2670,18 @@
       "route_type": "TOOL"
     },
     {
+      "intent_code": "SCHEDULING_RUSH_ORDER_ANALYSIS",
+      "intent_name": "急单影响分析",
+      "intent_category": "ANALYSIS",
+      "description": "急单/插单影响分析 (只读): 给定产品、数量(按产品自带单位)和交期, 回答原料够不够缺多少、交期前产线和人手排不排得开、要挪哪几张原计划各晚多久, 并出一份待负责人确认的文字方案草案; 不建计划不占时段, 算不出来的项说缺什么。",
+      "tool_name": "scheduling_rush_order_impact",
+      "required_entities": null,
+      "is_active": true,
+      "business_type": "FACTORY",
+      "factory_id": null,
+      "route_type": "TOOL"
+    },
+    {
       "intent_code": "SCHEDULING_SET_AUTO",
       "intent_name": "排产全自动",
       "intent_category": "SYSTEM",
@@ -2803,6 +2899,18 @@
       "required_entities": null,
       "is_active": true,
       "business_type": "COMMON",
+      "factory_id": null,
+      "route_type": "TOOL"
+    },
+    {
+      "intent_code": "SSOP_SCHEDULE_PLAN_CREATE",
+      "intent_name": "排清洁计划",
+      "intent_category": "DATA_OPERATION",
+      "description": "排某天的 SSOP 清洁计划 (WRITE + Preview): 按启用的清洁标准模板生成那天的待执行清洁任务, 默认明天/早班/全部每日模板, 已排过的跳过; 确认后才生成。",
+      "tool_name": "ssop_schedule_plan",
+      "required_entities": null,
+      "is_active": true,
+      "business_type": "FACTORY",
       "factory_id": null,
       "route_type": "TOOL"
     },

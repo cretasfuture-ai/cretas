@@ -164,6 +164,13 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     @org.springframework.beans.factory.annotation.Autowired
     private com.cretas.aims.service.warehouse.WarehouseLocationCatalog locationCatalog;
 
+    /**
+     * 批次挂源头个体前的校验(本厂/未撤销 + 锁个体行)。必注入 —— null 时只要请求带了
+     * sourceIndividualId 就拒绝(fail closed), ⛔ 不当「不校验」放过去。
+     */
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.cretas.aims.service.source.SourceIndividualService sourceIndividualService;
+
     private final MaterialConsumptionRepository materialConsumptionRepository;
     private final ProductionPlanBatchUsageRepository productionPlanBatchUsageRepository;
     private final ExcelUtil excelUtil;
@@ -189,6 +196,17 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     @Autowired
     private com.cretas.aims.repository.material.MaterialBatchCostCorrectionRepository
             materialBatchCostCorrectionRepository;
+
+    /**
+     * 质检放行记录 (D-S411-04 M2): 改批次状态前查这批原料是否已被质检判定不合格。
+     * 必注入 —— null 不能当「没判过」放过去。
+     */
+    @Autowired
+    private com.cretas.aims.repository.quality.QcReleaseRecordRepository qcReleaseRecordRepository;
+
+    /** 工序超时复检判废 (缺口 14) 也是「判了不合格」: 与质检放行记录一起进 MaterialQcRejectionGuard。必注入。 */
+    @Autowired
+    private com.cretas.aims.repository.foodsafety.ProcessTimeLimitEventRepository processTimeLimitEventRepository;
 
     /** 更正原因落库列是 varchar(255) —— 与 material_batch_adjustments.reason 对齐。 */
     private static final int CORRECTION_REASON_MAX_LENGTH = 255;
@@ -222,6 +240,10 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
      */
     @Autowired(required = false)
     private org.springframework.context.ApplicationEventPublisher applicationEventPublisher;
+
+    /** 纪律排查 A3: 放行闸 + 放行台账。未装配时任何放行都拒绝 (fail-closed), 不构成放行的改状态不受影响。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.discipline.MaterialBatchReleaseGuard materialBatchReleaseGuard;
 
     /** D1 双仓流转 (2026-05-10 spec, PR #309 A1=A) — 入库默认 WH-LOG. */
     @Autowired
@@ -262,6 +284,10 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
 
     @Autowired
     private InventoryLowStockEventPublisher inventoryLowStockEventPublisher;
+
+    /** #1844 L-d: 解除来源个体挂载的留痕 (同事务写, 写不进去就回滚)。 */
+    @Autowired(required = false)
+    private com.cretas.aims.repository.datacenter.OperationLogRepository operationLogRepository;
 
     /**
      * 一物一码 (转录 6.9 行62/68/105): 批次号由编码规则原子序号系统生成, 不手填防重码。
@@ -493,7 +519,7 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         }
         // C-074/C-075/X-10: 补录时效锁 — 入库日期不得早于 T-maxDays (默认 T-2)
         if (backdateWindowValidator != null) {
-            backdateWindowValidator.assertWithinWindow(request.getReceiptDate(), "原料入库");
+            backdateWindowValidator.assertWithinWindow(factoryId, request.getReceiptDate(), "原料入库");
         }
         runConfiguredValidation(factoryId, "CREATE", java.util.Map.of(
             "quantity", request.getReceiptQuantity() != null ? request.getReceiptQuantity() : java.math.BigDecimal.ZERO,
@@ -516,8 +542,13 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         // T159-B R4: UoM dimension guard at 入库 (receipt) write time.
         checkInboundUnitCompatible(materialType, request.getQuantityUnit());
 
+        // 来源个体: 必须本厂、未撤销; 校验同时锁个体行到本事务提交(与撤销串行)。
+        String linkedSourceIndividualId =
+                requireLinkableSourceIndividual(factoryId, request.getSourceIndividualId());
+
         // 创建批次
         MaterialBatch batch = materialBatchMapper.toEntity(request, factoryId, userId.longValue());
+        batch.setSourceIndividualId(linkedSourceIndividualId);
         batch.setSourceEventKey(request.getSourceEventKey());
         // 生成UUID作为ID
         batch.setId(java.util.UUID.randomUUID().toString());
@@ -957,15 +988,50 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
                     .withHint("请刷新批次列表查看最新状态");
         }
 
+        // 来源个体: null = 不修改(partial); 非 null 必须本厂、未撤销, 并锁个体行(与撤销串行)。
+        String linkedSourceIndividualId = null;
+        if (request.getSourceIndividualId() != null) {
+            // #1968 M-2: 已挂个体时不许经编辑直接改挂到另一个个体 —— 那等于不留痕地把原个体从召回范围里摘掉;
+            // 必须先走「解除挂载」(原因必填、写日志、已消耗批次另需权限) 再挂新的。回显同一个 id 照常放行。
+            String requestedId = request.getSourceIndividualId().trim();
+            String currentId = batch.getSourceIndividualId();
+            if (!requestedId.isEmpty() && currentId != null && !currentId.isBlank()
+                    && !currentId.equals(requestedId)) {
+                throw new BusinessException(409, "该批次已挂来源个体, 请先解除挂载再改挂其它个体")
+                        .withCode("SOURCE_INDIVIDUAL_ALREADY_LINKED")
+                        .withHint("在批次编辑里点「解除挂载」并填写原因, 然后再挂新的个体")
+                        .withHintTarget("sourceIndividualId");
+            }
+            linkedSourceIndividualId = requireLinkableSourceIndividual(factoryId, request.getSourceIndividualId());
+            if (linkedSourceIndividualId == null) {
+                throw new BusinessException(400, "来源个体编号不能为空白")
+                        .withHintTarget("sourceIndividualId");
+            }
+        }
+
         // 更新批次信息
         BigDecimal previousCurrentQuantity = batch.getCurrentQuantity();
         materialBatchMapper.updateEntity(batch, request);
+        if (linkedSourceIndividualId != null) {
+            batch.setSourceIndividualId(linkedSourceIndividualId);
+        }
         batch = materialBatchRepository.save(batch);
         if (batch.getCurrentQuantity().compareTo(previousCurrentQuantity) < 0) {
             publishStockChangedEventIfApplicable(factoryId, batch, "ADJUST");
         }
         log.info("更新原材料批次成功: batchId={}, callerRole={}", batchId, callerRole);
         return materialBatchMapper.toDTO(batch);
+    }
+
+    /** 见字段 {@link #sourceIndividualService}: 空 = 不挂个体; 非空必须过 requireLinkable。 */
+    private String requireLinkableSourceIndividual(String factoryId, String rawId) {
+        if (rawId == null || rawId.isBlank()) {
+            return null;
+        }
+        if (sourceIndividualService == null) {
+            throw new IllegalStateException("SourceIndividualService 未注入, 不能校验来源个体");
+        }
+        return sourceIndividualService.requireLinkable(factoryId, rawId);
     }
 
     @Override
@@ -993,6 +1059,9 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
                     "仓管员无权删除批次 (无单据移除库存)")
                     .withHint("误录入批次请联系工厂管理员或仓储主管删除; 库存差异请走盘亏处理");
         }
+
+        // 委外厂手里的料: 刚发料的委外仓批次 current == receipt, 删掉会让委外结存凭空消失、没有损耗记录还能结单 (#1723 复审 低5)。
+        com.cretas.aims.service.quality.release.MaterialBatchHoldService.assertNotOutsourceQuantityEdit(batch);
 
         // 只能删除未使用的批次
         if (!batch.getCurrentQuantity().equals(batch.getReceiptQuantity())) {
@@ -1117,6 +1186,13 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         List<MaterialBatchDTO> batchDTOs = batchPage.getContent().stream()
                 .map(materialBatchMapper::toDTO)
                 .collect(Collectors.toList());
+        // 与分仓库存查询同一口径: 填未结单预扣, availableQuantity 由 DTO 据此推导。
+        Map<String, BigDecimal> unsettledByBatch = getUnsettledConsumptionByBatchIds(
+                factoryId, batchDTOs.stream().map(MaterialBatchDTO::getId).collect(Collectors.toList()));
+        for (MaterialBatchDTO dto : batchDTOs) {
+            // 已查询: 没有未结单预扣的批次预扣量就是 0(不是未知)。
+            dto.setUnsettledConsumption(unsettledByBatch.getOrDefault(dto.getId(), BigDecimal.ZERO));
+        }
 
         return PageResponse.of(
                 batchDTOs,
@@ -1290,6 +1366,7 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
                     .withHint("请联系管理员确认批次归属或切换工厂账号");
         }
         DataScopeResolver.requireRecordAccess(dataScopeResolver, factoryId, batch.getCreatedBy(), "material_batches");
+        com.cretas.aims.service.quality.release.MaterialBatchHoldService.assertNotOutsourceQuantityEdit(batch);
 
         // 计算新数量
         BigDecimal newQuantity = batch.getCurrentQuantity().add(adjustmentQuantity);
@@ -1318,7 +1395,8 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         batch.setReceiptQuantity(batch.getReceiptQuantity().add(qtyAdjustment));
 
         if (newQuantity.compareTo(BigDecimal.ZERO) == 0) {
-            batch.setStatus(MaterialBatchStatus.USED_UP);
+            // 交接单 11-11 二.1: 数量用尽不盖掉质量结论 (不良品/质检中/过期/报废保持原状态)
+            batch.setStatus(MaterialBatchStatus.whenExhausted(batch.getStatus(), MaterialBatchStatus.USED_UP));
         }
 
         batch = materialBatchRepository.save(batch);
@@ -1357,7 +1435,8 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         }
         DataScopeResolver.requireRecordAccess(dataScopeResolver, factoryId, batch.getCreatedBy(), "material_batches");
 
-        batch.setStatus(MaterialBatchStatus.USED_UP);
+        // 交接单 11-11 二.1: 数量用尽不盖掉质量结论 (不良品/质检中/过期/报废保持原状态)
+        batch.setStatus(MaterialBatchStatus.whenExhausted(batch.getStatus(), MaterialBatchStatus.USED_UP));
         // 注意: currentQuantity 是计算属性，不能直接设置
         // 标记为用完：设置 usedQuantity = receiptQuantity - reservedQuantity
         batch.setUsedQuantity(batch.getReceiptQuantity().subtract(batch.getReservedQuantity()));
@@ -1422,6 +1501,23 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     }
 
     @Override
+    public void assertToolRecordAccess(String factoryId, String batchId) {
+        MaterialBatch batch = materialBatchRepository.findByIdAndFactoryId(batchId, factoryId)
+                .orElseThrow(() -> new ResourceNotFoundException("原材料批次不存在"));
+        if (dataScopeResolver == null) {
+            throw new BusinessException(503, "数据范围组件未就绪，访问已停止");
+        }
+        if (org.springframework.web.context.request.RequestContextHolder.getRequestAttributes() != null) {
+            dataScopeResolver.assertCanAccess(factoryId, batch.getCreatedBy());
+            return;
+        }
+        com.cretas.aims.security.AuthenticatedActor actor =
+                com.cretas.aims.security.AuthenticatedActor.fromCurrentExecution().orElse(null);
+        // actor 为 null 时 assertActorCanAccess 抛 401: AI 工具都是用户发起的, 没有身份就不出库
+        dataScopeResolver.assertActorCanAccess(factoryId, batch.getCreatedBy(), actor);
+    }
+
+    @Override
     @Transactional
     public void useBatchQuantity(String factoryId, String batchId, BigDecimal quantity) {
         MaterialBatch batch = materialBatchRepository.findById(batchId)
@@ -1433,6 +1529,8 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
                     .withHint("请联系管理员确认批次归属或切换工厂账号");
         }
         DataScopeResolver.requireRecordAccess(dataScopeResolver, factoryId, batch.getCreatedBy(), "material_batches");
+        // #1590 遗留: 通用扣减原语也过状态闸 (调用方目前都先按「可用」筛过, 这里兜住以后直接按 id 调的路径)
+        assertMaterialBatchUsable(batch);
 
         // 检查可用数量是否充足
         if (batch.getCurrentQuantity().compareTo(quantity) < 0) {
@@ -1448,7 +1546,8 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         batch.assertConsumptionInvariant();
 
         if (batch.getCurrentQuantity().compareTo(BigDecimal.ZERO) == 0) {
-            batch.setStatus(MaterialBatchStatus.USED_UP);
+            // 交接单 11-11 二.1: 数量用尽不盖掉质量结论 (不良品/质检中/过期/报废保持原状态)
+            batch.setStatus(MaterialBatchStatus.whenExhausted(batch.getStatus(), MaterialBatchStatus.USED_UP));
         }
 
         materialBatchRepository.save(batch);
@@ -1901,12 +2000,29 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
      * 已排除 INSPECTING, 此处补防"显式传 INSPECTING batchId"的旁路 (use/consume 直接按 id 取批次)。</p>
      */
     private void assertMaterialBatchUsable(MaterialBatch batch) {
-        MaterialBatchStatus st = batch.getStatus();
-        if (st != null && st.blocksProduction()) {
-            throw new BusinessException(409, st.productionBlockedMessage())
-                    .withHint(st.productionBlockedHint())
-                    .withDiagnosis(com.cretas.aims.service.gate.MaterialBatchStateGate.diagnose(batch).orElseThrow());
+        com.cretas.aims.service.gate.MaterialBatchStateGate.assertUsable(batch);
+    }
+
+    /**
+     * 排查 2026-11-10 A4/A5: use / reserve / consume 三个兄弟端点 (及走它们的 AI 工具) 共用的归属判断 ——
+     * 带计划按计划判 ({@link com.cretas.aims.service.processentry.ProductionInventoryOwnershipGuard#assertMaterialBatchAllowed}),
+     * 不带计划时客户所有的料不许领。物料大类取本厂物料类型, 拿不到传 null (守卫按最严格口径)。
+     */
+    private void assertIssuable(String factoryId, MaterialBatch batch, String productionPlanId) {
+        boolean planClaimed = productionPlanId != null && !productionPlanId.isBlank();
+        if (planClaimed && productionPlanRepository == null) {
+            // ⛔ 拿不到计划就判不了归属 —— 不当「没关联计划」放过去
+            throw new IllegalStateException("生产计划仓储未注入, 无法核对领料归属 (排查 A4/A5)");
         }
+        com.cretas.aims.entity.ProductionPlan plan = !planClaimed ? null
+                : productionPlanRepository.findById(productionPlanId)
+                        .filter(p -> factoryId.equals(p.getFactoryId())).orElse(null);
+        String mainCategory = batch.getMaterialTypeId() == null || materialTypeRepository == null ? null
+                : materialTypeRepository.findById(batch.getMaterialTypeId())
+                        .filter(t -> factoryId.equals(t.getFactoryId()))
+                        .map(com.cretas.aims.entity.RawMaterialType::getMainCategory).orElse(null);
+        com.cretas.aims.service.processentry.ProductionInventoryOwnershipGuard.assertIssuable(
+                plan, planClaimed, batch, mainCategory, "batchId");
     }
 
     @Override
@@ -1939,6 +2055,10 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     @Transactional
     public MaterialBatchDTO useBatchMaterial(String factoryId, String batchId, BigDecimal quantity,
                                              String productionPlanId, Long operatorId, String notes) {
+        // AI 工具可能传空串: 当没关联计划, 否则 "" 会写进消耗行的计划外键 (独立审查 L7)
+        if (productionPlanId != null && productionPlanId.isBlank()) {
+            productionPlanId = null;
+        }
         validateProductionPlanRef(productionPlanId);
         MaterialBatch batch = materialBatchRepository.findByIdAndFactoryId(batchId, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("原材料批次不存在"));
@@ -1953,6 +2073,9 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
             throw new BusinessException(400, "领料数量必须大于0")
                     .withHint("请输入大于 0 的领料数量").withHintTarget("quantity");
         }
+        // 排查 2026-11-10 A5: 归属与计划级领料同一道守卫 (AI 出库工具也改走本方法)。
+        // 带计划按计划判; 不带计划时客户所有的料不许领 —— 领出去就认不出是给哪个客户订单用的。
+        assertIssuable(factoryId, batch, productionPlanId);
 
         if (batch.getRemainingQuantity().compareTo(quantity) < 0) {
             throw new BusinessException(409, "批次剩余数量不足")
@@ -2027,6 +2150,7 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
                     .withHint("请联系管理员确认批次归属或切换工厂账号");
         }
         DataScopeResolver.requireRecordAccess(dataScopeResolver, factoryId, batch.getCreatedBy(), "material_batches");
+        com.cretas.aims.service.quality.release.MaterialBatchHoldService.assertNotOutsourceQuantityEdit(batch);
 
         // W-03 defense (Round 7): reject negative newQuantity before it reaches the
         // receipt_quantity arithmetic — otherwise it propagated to a DB constraint
@@ -2174,6 +2298,111 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         return materialBatchMapper.toDTO(batch);
     }
 
+    /**
+     * 解除挂载口径里的「已有消耗」: 返回给用户看的事实描述; 没有消耗返回 null。
+     * 三个来源任一命中即算: used_quantity &gt; 0 / 终态或在制占用状态 / 有消耗记录(带 factory_id 查)。
+     * ⚠️ 只看 used_quantity 不够: adjustBatchQuantity 的扣减写回 receipt_quantity, 不动 used_quantity。
+     * 消耗记录仓储不在 = 不知道有没有消耗 ⇒ 按「已消耗」处理 (fail closed)。
+     */
+    private String consumptionEvidence(String factoryId, MaterialBatch batch) {
+        if (batch.getUsedQuantity() != null && batch.getUsedQuantity().signum() > 0) {
+            return "已领用 " + batch.getUsedQuantity().stripTrailingZeros().toPlainString()
+                    + (batch.getQuantityUnit() == null ? "" : " " + batch.getQuantityUnit());
+        }
+        MaterialBatchStatus s = batch.getStatus();
+        if (s == MaterialBatchStatus.DEPLETED || s == MaterialBatchStatus.USED_UP
+                || s == MaterialBatchStatus.PRODUCING_RESERVED || s == MaterialBatchStatus.SCRAPPED) {
+            return "状态为「" + s.getDisplayName() + "」";
+        }
+        if (materialConsumptionRepository == null) {
+            return "消耗记录无法核对";
+        }
+        long records = materialConsumptionRepository.findByFactoryIdAndBatchIdPaged(
+                factoryId, batch.getId(), org.springframework.data.domain.PageRequest.of(0, 1)).getTotalElements();
+        if (records > 0) {
+            return "已有 " + records + " 条消耗记录";
+        }
+        return null;
+    }
+
+    @Override
+    @Transactional
+    public MaterialBatchDTO unlinkSourceIndividual(String factoryId, String batchId, String reason,
+                                                   Long operatorId, String callerRole) {
+        // 入参校验排在读批次/写库之前: 被拒的请求一次写入都没发生过。
+        String trimmedReason = reason == null ? "" : reason.trim();
+        if (trimmedReason.isEmpty()) {
+            throw new BusinessException(400, "解除原因不能为空")
+                    .withHint("解除来源个体会改变这批原料的溯源源头, 必须说明为什么解除")
+                    .withHintTarget("reason");
+        }
+        if (trimmedReason.length() > CORRECTION_REASON_MAX_LENGTH) {
+            throw new BusinessException(400,
+                    "解除原因过长(" + trimmedReason.length() + "/" + CORRECTION_REASON_MAX_LENGTH + " 字)")
+                    .withHintTarget("reason");
+        }
+        MaterialBatch batch = materialBatchRepository.findById(batchId)
+                .orElseThrow(() -> new ResourceNotFoundException("原材料批次", "id", batchId));
+        if (!factoryId.equals(batch.getFactoryId())) {
+            throw new BusinessException(403, "无权操作该批次")
+                    .withHint("请联系管理员确认批次归属或切换工厂账号");
+        }
+        DataScopeResolver.requireRecordAccess(dataScopeResolver, factoryId, batch.getCreatedBy(), "material_batches");
+
+        String oldIndividualId = batch.getSourceIndividualId();
+        if (oldIndividualId == null || oldIndividualId.isBlank()) {
+            throw new BusinessException(409, "该批次没有挂来源个体, 无需解除")
+                    .withCode("SOURCE_INDIVIDUAL_NOT_LINKED")
+                    .withHint("刷新批次列表查看最新状态");
+        }
+        // #1968 M-2 (口径 a): 已有消耗的批次解除后, 它和下游会从按个体的谱系/召回里消失 ⇒ 另需权限,
+        // 按可配置权限码判 (默认仓储主管 + 厂长), ⛔ 不写死岗位, 提示里也不写岗位名; 权限服务缺失一律拒绝。
+        String consumption = consumptionEvidence(factoryId, batch);
+        if (consumption != null && (permissionService == null || !permissionService.roleHasConfiguredPermission(
+                factoryId, callerRole, PermissionService.SOURCE_INDIVIDUAL_UNLINK_CONSUMED_PERMISSION))) {
+            throw new BusinessException(409, "该批次" + consumption
+                    + ", 解除来源个体会让它和下游从按个体的召回/谱系里消失, 需要「解除已消耗批次挂载」权限")
+                    .withCode("SOURCE_INDIVIDUAL_LINK_CONSUMED")
+                    .withHint("请联系管理员在权限配置中开通「解除已消耗批次挂载」权限");
+        }
+        // ⛔ 留痕器不在就不许改 —— 静默不留痕比报错危险。
+        if (operationLogRepository == null) {
+            throw new BusinessException(500, "操作日志不可用, 本次解除未执行")
+                    .withHint("留痕写不进去就不允许改动, 请联系技术支持");
+        }
+
+        java.util.Map<String, Object> oldValue = new java.util.HashMap<>();
+        oldValue.put("sourceIndividualId", oldIndividualId);
+        java.util.Map<String, Object> newValue = new java.util.HashMap<>();
+        newValue.put("sourceIndividualId", null);
+        java.util.Map<String, Object> diffRow = new java.util.HashMap<>();
+        diffRow.put("field", "sourceIndividualId");
+        diffRow.put("from", oldIndividualId);
+        diffRow.put("to", null);
+        com.cretas.aims.entity.datacenter.OperationLog trace = com.cretas.aims.entity.datacenter.OperationLog.builder()
+                .factoryId(factoryId)
+                .userId(operatorId)
+                .module("MATERIAL_BATCH")
+                .action("UNLINK_SOURCE_INDIVIDUAL")
+                .entityType("MaterialBatch")
+                .entityId(batchId)
+                .oldValue(oldValue)
+                .newValue(newValue)
+                .diff(java.util.List.of(diffRow))
+                .summary("解除批次 " + batch.getBatchNumber() + " 的来源个体 " + oldIndividualId
+                        + "; 原因: " + trimmedReason + "; 角色: " + callerRole)
+                .success(Boolean.TRUE)
+                .build();
+        // 同一个 @Transactional: 日志写不进去, 批次的改动一起回滚。
+        operationLogRepository.save(trace);
+
+        batch.setSourceIndividualId(null);
+        batch = materialBatchRepository.save(batch);
+        log.info("解除批次来源个体: factoryId={}, batchId={}, oldSourceIndividualId={}, role={}, operatorId={}",
+                factoryId, batchId, oldIndividualId, callerRole, operatorId);
+        return materialBatchMapper.toDTO(batch);
+    }
+
     @Override
     @Transactional
     public MaterialBatchDTO correctUnitPrice(String factoryId, String batchId, BigDecimal newUnitPrice,
@@ -2225,7 +2454,8 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
 
     @Override
     @Transactional
-    public MaterialBatchDTO updateBatchStatus(String factoryId, String batchId, MaterialBatchStatus status) {
+    public MaterialBatchDTO updateBatchStatus(String factoryId, String batchId, MaterialBatchStatus status,
+                                              com.cretas.aims.service.discipline.MaterialBatchReleaseGuard.ManualChange change) {
         MaterialBatch batch = materialBatchRepository.findById(batchId)
                 .orElseThrow(() -> new ResourceNotFoundException("原材料批次", "id", batchId));
 
@@ -2235,12 +2465,36 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
                     .withHint("请联系管理员确认批次归属或切换工厂账号");
         }
         DataScopeResolver.requireRecordAccess(dataScopeResolver, factoryId, batch.getCreatedBy(), "material_batches");
+        com.cretas.aims.service.quality.release.MaterialBatchHoldService.assertOutsourceManualStatus(batch, status);
+
+        // D-S411-04 M2: 质检放行判了不合格的原料, 仓库页不能改回可用 (与处置放行 / 放行决策工具同一判定)
+        com.cretas.aims.service.quality.release.MaterialQcRejectionGuard.assertMayBecome(
+                qcReleaseRecordRepository, processTimeLimitEventRepository, batch, status);
 
         MaterialBatchStatus before = batch.getStatus();
-        batch.setStatus(status);
+        boolean release = com.cretas.aims.service.discipline.MaterialBatchReleaseGuard.isRelease(before, status);
+        if (release) {
+            if (materialBatchReleaseGuard == null) {
+                throw new IllegalStateException("批次放行闸未装配, 拒绝放行 (纪律排查 A3)");
+            }
+            materialBatchReleaseGuard.assertManualReleaseAllowed(factoryId, batch, status, change);
+        }
+        // #1590 遗留 M5: 改成「质检中」= 扣留, 记下原状态; 改成「可用」= 解除扣留, 还原扣留前状态。
+        // 与冻结工具 / 质检放行同一个实现 (MaterialBatchHoldService), ⛔ 不在这里直接 setStatus。
+        if (status == com.cretas.aims.service.quality.release.MaterialBatchHoldService.HOLD_STATUS) {
+            com.cretas.aims.service.quality.release.MaterialBatchHoldService.hold(batch);
+        } else {
+            batch.setStatus(com.cretas.aims.service.quality.release.MaterialBatchHoldService.releaseTarget(batch, status));
+        }
         batch = materialBatchRepository.save(batch);
-        // 仓库页把「质检中」改成「可用」也是一次放行: 缺料实例要跟着刷新, 否则按旧缺口下采购单
-        com.cretas.aims.event.MaterialBatchReleasedEvent.publishIfBecameAvailable(applicationEventPublisher, this, batch, before);
+        if (release) {
+            materialBatchReleaseGuard.recordIfRelease(factoryId, batch, before, batch.getStatus(), change.channel(),
+                    change.reason(), null, change.operatorId(), change.operatorRole());
+        }
+        // 仓库页把「质检中」改成「可用」是一次放行, 改成不合格 / 鲜品等是离开质检中: 缺料实例都要跟着刷新,
+        // 否则按旧缺口下采购单。与共用翻转同一个发布函数 (D-S411-04 复审 R1), ⛔ 不在这里手写事件。
+        com.cretas.aims.service.quality.QualityDispositionInventoryService.publishMaterialStatusChange(
+                applicationEventPublisher, this, batch, before);
         return materialBatchMapper.toDTO(batch);
     }
 
@@ -2275,6 +2529,12 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         // (releaseBatchReservation 是【查】已有 usage 行, 查不到只是静默跳过, 不会 500,
         //  在那里加校验属于另一种行为改变, 本次不动。)
         validateProductionPlanRef(productionPlanId);
+
+        // 交接单 11-11 二.1: 预留是为投产占料, 与 use / consume 同一道状态闸。不拦的话, 不良品 / 质检中 / 冻结扣住的
+        // 批次被预留满就变成 DEPLETED (结论被数量状态盖掉), 之后 consume 只看 DEPLETED 不挡投产 ⇒ 不合格料进了生产。
+        assertMaterialBatchUsable(batch);
+        // 排查 2026-11-10 A4: 归属与 use / consume 同一道 (原来预留不查归属, 客户来料能被占给别的计划)
+        assertIssuable(factoryId, batch, productionPlanId);
 
         if (batch.getRemainingQuantity().compareTo(quantity) < 0) {
             throw new BusinessException(409, "批次剩余数量不足以预留")
@@ -2342,7 +2602,9 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         // 注意: getRemainingQuantity() 现在是计算属性
         if (batch.getStatus() == MaterialBatchStatus.DEPLETED &&
             batch.getRemainingQuantity().compareTo(BigDecimal.ZERO) > 0) {
-            batch.setStatus(MaterialBatchStatus.AVAILABLE);
+            // 判过不合格的批次释放预留后仍是不良品 (交接单 11-11 二.1)
+            batch.setStatus(com.cretas.aims.service.quality.release.MaterialQcRejectionGuard.statusWhenRestored(
+                    qcReleaseRecordRepository, processTimeLimitEventRepository, batch));
         }
 
         materialBatchRepository.save(batch);
@@ -2400,6 +2662,8 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
             throw new BusinessException(400, "消耗数量必须大于0")
                     .withHint("请输入大于 0 的消耗数量").withHintTarget("quantity");
         }
+        // 排查 2026-11-10 A4: 归属与 use / reserve 同一道 (AI material_batch_consume 也走这里)
+        assertIssuable(factoryId, batch, productionPlanId);
 
         runConfiguredValidation(factoryId, "CONSUME",
                 java.util.Map.of("batchId", batchId, "quantity", quantity));

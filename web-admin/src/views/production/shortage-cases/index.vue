@@ -71,6 +71,7 @@ const REASON_LABEL: Record<string, string> = {
   SO_FINANCE_APPROVED: '订单财务审核通过',
   MATERIAL_RECEIVED: '物料入库',
   MATERIAL_BATCH_RELEASED: '质检放行',
+  MATERIAL_BATCH_QC_REJECTED: '质检判不合格',
   PURCHASE_ORDER_SUPPLY_CHANGED: '采购单状态变化',
   MANUAL_REFRESH: '手动核对',
   PURCHASE_DRAFT_CREATED: '生成采购草稿',

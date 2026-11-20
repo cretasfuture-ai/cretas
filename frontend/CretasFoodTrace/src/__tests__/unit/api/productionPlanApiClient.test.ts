@@ -179,21 +179,6 @@ describe('productionPlanApiClient', () => {
     });
   });
 
-  describe('completeProduction', () => {
-    it('should POST /{planId}/complete with actual quantity', async () => {
-      mock.onPost(`${BASE}/pp1/complete`).reply(200, {
-        success: true,
-        data: { id: 'pp1', status: 'COMPLETED', actualQuantity: 480 },
-        message: 'Production completed',
-      });
-
-      const result = await productionPlanApiClient.completeProduction('pp1', 480);
-      expect(result.success).toBe(true);
-      expect(result.data.status).toBe('COMPLETED');
-      expect(result.data.actualQuantity).toBe(480);
-    });
-  });
-
   describe('cancelProductionPlan', () => {
     it('should POST /{planId}/cancel with reason', async () => {
       mock.onPost(`${BASE}/pp1/cancel`).reply(200, {

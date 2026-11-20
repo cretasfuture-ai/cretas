@@ -41,6 +41,21 @@ public interface PurchaseService {
 
     PageResponse<PurchaseOrder> getPurchaseOrdersByStatus(String factoryId, PurchaseOrderStatus status, int page, int size);
 
+    /**
+     * 列表页服务端搜索: 关键词(订单号/供应商名) + 状态 + 订单日期, 每项可选, 在分页之前由数据库过滤, 总数随过滤变化。
+     * {@code owners} 非 null 时按该创建人名单收窄 (行范围, 空名单 = 空页); 为 null 时按 DataScope 收窄。
+     */
+    PageResponse<PurchaseOrder> searchPurchaseOrders(String factoryId, PurchaseOrderStatus status, String keyword,
+                                                     java.time.LocalDate orderDateFrom, java.time.LocalDate orderDateTo,
+                                                     List<Long> owners, int page, int size);
+
+    /**
+     * Same status list restricted to orders created by {@code owners} (the caller's visible
+     * creator chain). An empty owner list returns an empty page without querying.
+     */
+    PageResponse<PurchaseOrder> getPurchaseOrdersByStatusOwnedBy(String factoryId, PurchaseOrderStatus status,
+                                                                 List<Long> owners, int page, int size);
+
     /** W-12 fix: filter by linked sales order id (for SO detail "关联采购" tab). */
     PageResponse<PurchaseOrder> getPurchaseOrdersBySalesOrder(String factoryId, String salesOrderId, int page, int size);
 

@@ -31,7 +31,7 @@ public class QcReleaseController {
 
     private final QcReleaseService qcReleaseService;
 
-    @Operation(summary = "待检清单 (半成品 / 在制半成品 / 成品)")
+    @Operation(summary = "待检清单 (半成品 / 在制半成品 / 成品 / 质检中的原料收货批次)")
     @RequirePermission({"quality:read_write", "quality:read", "production:read", "production:read_write"})
     @GetMapping("/pending")
     public ApiResponse<List<QcReleaseService.PendingItem>> listPending(@PathVariable String factoryId) {

@@ -102,7 +102,7 @@ function cellTitle(c: MatrixCell | null): string {
   if (!c) return '';
   const parts: string[] = [];
   if (c.diff) parts.push(diffTooltip(c));
-  if (c.l2Disabled) parts.push('L2: 本工厂已关闭该模块');
+  if (c.l2Disabled) parts.push('本工厂已关闭该模块');
   if (c.l2Override !== null) parts.push(`L2 工厂覆盖: ${c.l2Override}`);
   return parts.join(' / ');
 }
@@ -197,15 +197,14 @@ onMounted(() => {
       <header class="pm-header">
         <h2>权限矩阵</h2>
         <p class="pm-sub">
-          L1 <code>platform_role_permissions</code> 是权威; 硬编码兜底矩阵只在 L1 没有那一行时生效。
+          每个角色在各功能模块上的访问权限。格子里是当前生效的设置; 标「兜底」的格子还没有单独设置, 按系统默认权限执行。
         </p>
         <p class="pm-sub pm-global-warning" data-testid="pm-global-warning">
-          ⚠️ <b>全平台生效</b>: 这里改的是 L1, 一次写入影响<b>所有工厂</b>的该角色; 每次改动写审计 (谁 / 何时 / 从哪个工厂 / 由什么改成什么)。
-          点一格进入编辑; 餐饮角色与餐饮模块的格<b>只读</b> (餐饮侧待定)。
+          ⚠️ <b>全平台生效</b>: 这里的修改会同时作用于<b>所有工厂</b>的该角色, 仅平台管理员可以修改;
+          每次修改都会记录操作人、时间和改动内容。点击格子即可修改; 餐饮类角色和模块暂不支持修改。
         </p>
         <p class="pm-sub">
-          模块轴 = <b>侧边栏实际渲染用的那份清单</b> (共 {{ axis.length }} 个, 从
-          <code>menuConfig</code> 现算)。全仓另有 6 份互不一致的模块清单, 见 PR 说明。
+          列出的是侧边栏中可见的功能模块, 共 {{ axis.length }} 个。
         </p>
       </header>
 
@@ -228,21 +227,21 @@ onMounted(() => {
 
         <p v-if="saveError" class="pm-error" data-testid="pm-save-error">写入失败: {{ saveError }}</p>
         <p v-if="lastWrite" class="pm-note pm-last-write" data-testid="pm-last-write">
-          已写入 (回读 L1): <code>{{ lastWrite.role }}</code> × <code>{{ lastWrite.module }}</code>
+          已保存: <code>{{ lastWrite.role }}</code> × <code>{{ lastWrite.module }}</code>
           {{ lastWrite.oldLevel ?? '(无行)' }} → <b>{{ lastWrite.level }}</b>, 审计 #{{ lastWrite.auditId }}
         </p>
 
         <p v-if="offAxis.length" class="pm-note" data-testid="pm-offaxis">
-          ⚠️ 有 L1/L2/兜底数据、但侧边栏<b>没有任何入口</b>的模块 (不在下表列里):
+          ⚠️ 以下模块配置了权限, 但侧边栏没有对应入口 (不在下表中):
           <code v-for="m in offAxis" :key="m" class="pm-chip-off">{{ m }}</code>
         </p>
         <p v-if="axisGaps.length" class="pm-note" data-testid="pm-axis-gaps">
-          🔴 侧边栏挂着入口、而三层权限数据里<b>一行都没有</b>的模块:
+          🔴 以下模块在侧边栏有入口, 但还没有任何权限设置:
           <code v-for="m in axisGaps" :key="m" class="pm-chip-off">{{ m }}</code>
-          —— DB 读不到时这些菜单项对所有角色消失。
+          —— 权限数据读取失败时, 这些菜单会对所有角色隐藏。
         </p>
         <p v-if="view.modulesWithoutL1.length" class="pm-note" data-testid="pm-no-l1">
-          L1 表里一行都没有的模块 (兜底/L2 独自说了算):
+          以下模块还没有单独设置, 按系统默认权限和工厂模块开关执行:
           <code v-for="m in view.modulesWithoutL1" :key="m" class="pm-chip-off">{{ m }}</code>
         </p>
 
@@ -255,7 +254,7 @@ onMounted(() => {
                   v-for="m in axis"
                   :key="m"
                   :class="['pm-module-col', { 'pm-module-col--off': ctx?.disabledModules.has(m) }]"
-                  :title="ctx?.disabledModules.has(m) ? 'L2: 本工厂已关闭该模块' : ''"
+                  :title="ctx?.disabledModules.has(m) ? '本工厂已关闭该模块' : ''"
                 >
                   {{ m }}
                 </th>
@@ -331,12 +330,12 @@ onMounted(() => {
 .pm-cell--fallback { outline: 1px dashed #e6a23c; }
 .pm-cell--override { background: #fef0f0; }
 .pm-cell--l2-off { color: #c0c4cc; }
-.pm-cell--l2-override { border-bottom: 2px solid #409eff; }
+.pm-cell--l2-override { border-bottom: 2px solid var(--el-color-primary); }
 .pm-fallback-mark { display: block; font-size: 9px; color: #e6a23c; }
 .pm-global-warning { color: #e6a23c; }
 .pm-last-write { color: #67c23a; }
 .pm-cell--editable { cursor: pointer; }
-.pm-cell--editable:hover { outline: 1px solid #409eff; }
+.pm-cell--editable:hover { outline: 1px solid var(--el-color-primary); }
 .pm-cell--readonly { cursor: not-allowed; color: #909399; background: #fafafa; }
 .pm-editor { display: flex; gap: 4px; align-items: center; }
 .pm-editor select, .pm-editor input, .pm-editor button { font-size: 12px; }

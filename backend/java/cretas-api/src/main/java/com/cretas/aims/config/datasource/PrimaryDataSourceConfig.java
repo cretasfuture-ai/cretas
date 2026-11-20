@@ -162,6 +162,9 @@ public class PrimaryDataSourceConfig {
     @Bean(name = "primaryTransactionManager")
     public PlatformTransactionManager primaryTransactionManager(
             @Qualifier("primaryEntityManagerFactory") EntityManagerFactory entityManagerFactory) {
-        return new JpaTransactionManager(entityManagerFactory);
+        JpaTransactionManager manager = new JpaTransactionManager(entityManagerFactory);
+        // 写工具据此分辨「出错前已经提交过」(结果不明) 与「什么都没写」(确定失败), 见 ToolWriteCommitObserver
+        manager.addListener(com.cretas.aims.ai.tool.ToolWriteCommitObserver.INSTANCE);
+        return manager;
     }
 }

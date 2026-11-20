@@ -74,4 +74,36 @@ class FinishedGoodsRestoreFeedStatusContractTest {
         assertThat(b.getProducedQuantity()).isEqualByComparingTo("100");
         assertThat(b.getStatus()).as("起始 " + before).isEqualTo(expected);
     }
+
+    /**
+     * 结单撤回还回成品投料 (#1550 审查 3): 与撤销小结只差一处 —— REVERSED 不复活
+     * (那是产出它的计划被整单撤回了), 量照样还回。
+     */
+    @ParameterizedTest(name = "结单撤回 {0} → {1}")
+    @CsvSource({
+            "DEPLETED, AVAILABLE",
+            "REVERSED, REVERSED",
+            "PENDING_INSPECTION, PENDING_INSPECTION",
+            "DEFECTIVE, DEFECTIVE",
+            "AVAILABLE, AVAILABLE",
+    })
+    void settlementReversalRestoreNeverRevivesAVoidedBatch(String before, String expected) {
+        FinishedGoodsBatch b = new FinishedGoodsBatch();
+        b.setId("fg-rf");
+        b.setFactoryId(FACTORY);
+        b.setBatchNumber(BATCH);
+        b.setProductTypeId("PT1");
+        b.setProducedQuantity(new BigDecimal("70"));
+        b.setShippedQuantity(BigDecimal.ZERO);
+        b.setReservedQuantity(BigDecimal.ZERO);
+        b.setUnit("kg");
+        b.setStatus(before);
+        when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumberForUpdate(FACTORY, BATCH))
+                .thenReturn(Optional.of(b));
+
+        service.restoreForSettlementReversal(FACTORY, BATCH, new BigDecimal("30"), 7L);
+
+        assertThat(b.getProducedQuantity()).isEqualByComparingTo("100");
+        assertThat(b.getStatus()).as("起始 " + before).isEqualTo(expected);
+    }
 }

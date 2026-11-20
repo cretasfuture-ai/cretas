@@ -2,6 +2,7 @@
 /**
  * S4 产线产能与设备: 每条产线 (可细到产品) 每小时能做多少、按什么单位; 每个产品要用哪些设备。
  * 紧急插单判断「产能够不够 / 设备在不在」只读这里的配置: 没配或单位对不上会显示「缺配置」, 不会套默认值。
+ * 人数配置: 最少人数 = 插单时比较当天排班人数, 不够只提示、不拦; 不填就不比较。最多人数 / 技能等级目前只保存。
  */
 import { ref, computed, onMounted } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
@@ -17,6 +18,7 @@ import {
   deleteLineCapacity,
   getProductEquipmentRequirements,
   setProductEquipment,
+  setProductionLineStaffing,
   type ProductionLine,
   type LineCapacityConfig,
   type ProductEquipmentRequirement,
@@ -35,8 +37,11 @@ const UNIT_OPTIONS: { value: CapacityUnit; label: string }[] = [
   { value: 'PIECE', label: '件' },
   { value: 'KG', label: '千克 (kg)' },
   { value: 'BATCH', label: '批' },
+  { value: 'PACKAGE', label: '本厂单位 (袋/盒…)' },
 ];
-const unitLabel = (u: CapacityUnit) => ({ PIECE: '件', KG: 'kg', BATCH: '批' }[u]);
+/** PACKAGE 行显示本厂自己的单位名 (袋 / 盒); 没有单位名时如实写「本厂单位」。 */
+const unitLabel = (u: CapacityUnit, packageUnit?: string | null) =>
+  u === 'PACKAGE' ? (packageUnit || '本厂单位') : ({ PIECE: '件', KG: 'kg', BATCH: '批' }[u]);
 const sourceLabel = (s: string) => (s === 'CONVERSATIONAL_BUILD' ? '对话建厂' : '工厂配置');
 
 const loading = ref(false);
@@ -114,14 +119,80 @@ async function saveLine() {
   }
 }
 
+// ---------------------------------------------------------------- 人数配置
+
+/** 表格里一行字说清这条线配了什么; 没配最少人数 = 插单不比较人数。 */
+function staffingSummary(l: ProductionLine): string {
+  const parts: string[] = [];
+  parts.push(l.standardWorkers != null && l.standardWorkers > 0 ? `插单最少 ${l.standardWorkers} 人` : '插单最少人数未填（不比较）');
+  if (l.maxWorkers != null) parts.push(`最多 ${l.maxWorkers} 人`);
+  if (l.requiredSkillLevel != null) parts.push(`技能 ${l.requiredSkillLevel} 级`);
+  return parts.join(' · ');
+}
+
+const staffingDialog = ref(false);
+const staffingLine = ref<ProductionLine | null>(null);
+const staffingForm = ref<{ minWorkers: number | undefined; maxWorkers: number | undefined; requiredSkillLevel: number | undefined }>({
+  minWorkers: undefined,
+  maxWorkers: undefined,
+  requiredSkillLevel: undefined,
+});
+const savingStaffing = ref(false);
+
+/** 前端先拦一遍 (后端同样校验): 非负、最少 ≤ 最多、技能 1-5。返回问题说明, 没问题返回空串。 */
+const staffingError = computed(() => {
+  const { minWorkers: min, maxWorkers: max, requiredSkillLevel: skill } = staffingForm.value;
+  if ((min != null && min < 0) || (max != null && max < 0)) return '人数不能是负数';
+  if (min != null && max != null && min > max) return `最少人数 ${min} 人不能多于最多人数 ${max} 人`;
+  if (skill != null && (skill < 1 || skill > 5)) return '所需技能等级只能是 1 到 5 级';
+  return '';
+});
+
+function openStaffingDialog(l: ProductionLine) {
+  staffingLine.value = l;
+  staffingForm.value = {
+    minWorkers: l.standardWorkers != null && l.standardWorkers > 0 ? l.standardWorkers : undefined,
+    maxWorkers: l.maxWorkers ?? undefined,
+    requiredSkillLevel: l.requiredSkillLevel ?? undefined,
+  };
+  staffingDialog.value = true;
+}
+
+/** el-input-number 清空后是 null/undefined; 统一成 null 发给后端 (= 清空 = 不比较)。 */
+const orNull = (v: number | null | undefined) => (v == null ? null : v);
+
+async function saveStaffing() {
+  const l = staffingLine.value;
+  if (!l || staffingError.value) return;
+  savingStaffing.value = true;
+  try {
+    const f = staffingForm.value;
+    const res = await setProductionLineStaffing(factoryId.value, l.id, {
+      insertMinWorkers: orNull(f.minWorkers),
+      maxWorkers: orNull(f.maxWorkers),
+      requiredSkillLevel: orNull(f.requiredSkillLevel),
+    });
+    if (!res.success) {
+      ElMessage.error(res.message || '保存失败');
+      return;
+    }
+    ElMessage.success(`已保存「${l.name}」人数配置：${res.data ? staffingSummary(res.data) : ''}`);
+    staffingDialog.value = false;
+    await loadAll();
+  } finally {
+    savingStaffing.value = false;
+  }
+}
+
 // ---------------------------------------------------------------- 设定产能
 
 const capacityDialog = ref(false);
-const capacityForm = ref<{ productionLineId: string; productTypeId: string | null; capacityPerHour: number | undefined; capacityUnit: CapacityUnit | '' }>({
+const capacityForm = ref<{ productionLineId: string; productTypeId: string | null; capacityPerHour: number | undefined; capacityUnit: CapacityUnit | ''; packageUnit: string }>({
   productionLineId: '',
   productTypeId: null,
   capacityPerHour: undefined,
   capacityUnit: '',
+  packageUnit: '',
 });
 const savingCapacity = ref(false);
 
@@ -135,13 +206,14 @@ const existingCapacity = computed(() =>
 const capacityValid = computed(() =>
   !!capacityForm.value.productionLineId
   && !!capacityForm.value.capacityUnit
+  && (capacityForm.value.capacityUnit !== 'PACKAGE' || !!capacityForm.value.packageUnit.trim())
   && (capacityForm.value.capacityPerHour ?? 0) > 0,
 );
 
 function openCapacityDialog(row?: LineCapacityConfig) {
   capacityForm.value = row
-    ? { productionLineId: row.productionLineId, productTypeId: row.productTypeId, capacityPerHour: row.capacityPerHour, capacityUnit: row.capacityUnit }
-    : { productionLineId: lines.value[0]?.id || '', productTypeId: null, capacityPerHour: undefined, capacityUnit: '' };
+    ? { productionLineId: row.productionLineId, productTypeId: row.productTypeId, capacityPerHour: row.capacityPerHour, capacityUnit: row.capacityUnit, packageUnit: row.packageUnit || '' }
+    : { productionLineId: lines.value[0]?.id || '', productTypeId: null, capacityPerHour: undefined, capacityUnit: '', packageUnit: '' };
   capacityDialog.value = true;
 }
 
@@ -154,13 +226,14 @@ async function saveCapacity() {
       productionLineId: f.productionLineId,
       productTypeId: f.productTypeId || null,
       capacityPerHour: f.capacityPerHour as number,
-      capacityUnit: f.capacityUnit as CapacityUnit,
+      // 本厂单位直接送单位名 (如「袋」); 后端按本厂开关决定收不收, 没开会说去哪里开
+      capacityUnit: f.capacityUnit === 'PACKAGE' ? f.packageUnit.trim() : (f.capacityUnit as CapacityUnit),
     });
     if (!res.success) {
       ElMessage.error(res.message || '保存失败');
       return;
     }
-    ElMessage.success(`已保存：${lineName(f.productionLineId)} · ${productName(f.productTypeId || null)} 每小时 ${f.capacityPerHour} ${unitLabel(f.capacityUnit as CapacityUnit)}`);
+    ElMessage.success(`已保存：${lineName(f.productionLineId)} · ${productName(f.productTypeId || null)} 每小时 ${f.capacityPerHour} ${unitLabel(f.capacityUnit as CapacityUnit, f.packageUnit.trim())}`);
     capacityDialog.value = false;
     await loadAll();
   } finally {
@@ -239,6 +312,7 @@ async function saveEquipment() {
     </div>
     <el-alert type="info" :closable="false" show-icon class="intro">
       紧急插单判断「产能够不够、设备在不在」只看这里的配置。某条线没配、或配的单位和订单不一样（比如订单按件、产线只配了 kg/小时），插单会显示「缺配置」，系统不会自己换算或套默认值。
+      每条产线「人数配置」里的插单最少人数，插单时用来和当天排班人数比，不够只提示、不拦；不填就不比较。
     </el-alert>
 
     <!-- 产线 -->
@@ -266,6 +340,16 @@ async function saveEquipment() {
             <span v-else>{{ capacityRows.filter(c => c.productionLineId === row.id).length }} 条</span>
           </template>
         </el-table-column>
+        <el-table-column label="人数配置" min-width="260">
+          <template #default="{ row }">
+            <span class="staffing-summary" :class="{ missing: !(row.standardWorkers > 0) }">{{ staffingSummary(row) }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column v-if="canWrite" label="操作" width="110" fixed="right">
+          <template #default="{ row }">
+            <el-button link type="primary" @click="openStaffingDialog(row)">人数配置</el-button>
+          </template>
+        </el-table-column>
       </el-table>
     </el-card>
 
@@ -286,7 +370,7 @@ async function saveEquipment() {
           <template #default="{ row }">{{ productName(row.productTypeId) }}</template>
         </el-table-column>
         <el-table-column label="每小时产能" width="160">
-          <template #default="{ row }">{{ row.capacityPerHour }} {{ unitLabel(row.capacityUnit) }}</template>
+          <template #default="{ row }">{{ row.capacityPerHour }} {{ unitLabel(row.capacityUnit, row.packageUnit) }}</template>
         </el-table-column>
         <el-table-column label="来源" width="100">
           <template #default="{ row }">{{ sourceLabel(row.source) }}</template>
@@ -374,6 +458,34 @@ async function saveEquipment() {
       </template>
     </el-dialog>
 
+    <!-- 人数配置 -->
+    <el-dialog v-model="staffingDialog" :title="`人数配置 — ${staffingLine?.name ?? ''}`" width="520px">
+      <el-alert type="info" :closable="false" show-icon class="staffing-intro">
+        <p>这些数用在<strong>紧急插单</strong>：插单时拿「插单最少人数」和这条线当天排班的人数比，<strong>不够只提示，不会拦住</strong>插单。</p>
+        <p>插单最少人数不填（或填 0）就不比较人数。最多人数、所需技能等级<strong>现在只保存，插单不用</strong>。</p>
+      </el-alert>
+      <el-form label-width="110px">
+        <el-form-item label="插单最少人数">
+          <el-input-number v-model="staffingForm.minWorkers" :min="0" :step="1" :precision="0" controls-position="right" placeholder="不填 = 不比较" />
+          <span class="unit-suffix">人（插单时和当天排班人数比）</span>
+        </el-form-item>
+        <el-form-item label="最多人数（只保存）">
+          <el-input-number v-model="staffingForm.maxWorkers" :min="0" :step="1" :precision="0" controls-position="right" placeholder="可不填" />
+          <span class="unit-suffix">人</span>
+        </el-form-item>
+        <el-form-item label="所需技能等级（只保存）">
+          <el-select v-model="staffingForm.requiredSkillLevel" clearable placeholder="不要求" style="width: 160px">
+            <el-option v-for="n in 5" :key="n" :label="`${n} 级`" :value="n" />
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <p v-if="staffingError" class="hint staffing-error">{{ staffingError }}</p>
+      <template #footer>
+        <el-button @click="staffingDialog = false">取消</el-button>
+        <el-button type="primary" :loading="savingStaffing" :disabled="!!staffingError" @click="saveStaffing">保存</el-button>
+      </template>
+    </el-dialog>
+
     <!-- 设定产能 -->
     <el-dialog
       v-model="capacityDialog"
@@ -396,9 +508,13 @@ async function saveEquipment() {
             <el-radio-button v-for="u in UNIT_OPTIONS" :key="u.value" :value="u.value">{{ u.label }}</el-radio-button>
           </el-radio-group>
         </el-form-item>
+        <el-form-item v-if="capacityForm.capacityUnit === 'PACKAGE'" label="本厂单位" required>
+          <el-input v-model="capacityForm.packageUnit" maxlength="20" placeholder="与下单用的单位一致，如：袋" style="width: 200px" />
+          <div class="unit-hint">本厂还没开启按「袋/盒」配产能，保存会被拒绝。请先到「业务阈值配置」页的「生产」分类，找到描述以「按「袋」「盒」等包装单位下单的计划」开头的那一项，把取值改为 FACTORY_UNIT 后再保存</div>
+        </el-form-item>
         <el-form-item label="每小时产能" required>
           <el-input-number v-model="capacityForm.capacityPerHour" :min="0.001" :precision="3" :step="10" controls-position="right" />
-          <span class="unit-suffix">{{ capacityForm.capacityUnit ? `${unitLabel(capacityForm.capacityUnit)}/小时` : '先选单位' }}</span>
+          <span class="unit-suffix">{{ capacityForm.capacityUnit ? `${unitLabel(capacityForm.capacityUnit, capacityForm.packageUnit.trim())}/小时` : '先选单位' }}</span>
         </el-form-item>
       </el-form>
       <el-alert
@@ -406,7 +522,7 @@ async function saveEquipment() {
         type="warning"
         :closable="false"
         show-icon
-        :title="`当前已配：每小时 ${existingCapacity.capacityPerHour} ${unitLabel(existingCapacity.capacityUnit)}（${sourceLabel(existingCapacity.source)}）。保存后用新值替换，旧值留在记录里。`"
+        :title="`当前已配：每小时 ${existingCapacity.capacityPerHour} ${unitLabel(existingCapacity.capacityUnit, existingCapacity.packageUnit)}（${sourceLabel(existingCapacity.source)}）。保存后用新值替换，旧值留在记录里。`"
       />
       <template #footer>
         <el-button @click="capacityDialog = false">取消</el-button>
@@ -428,4 +544,8 @@ async function saveEquipment() {
 .equipment-table { margin-top: 12px; }
 .hint { margin: 4px 0 0; font-size: 13px; }
 .unit-suffix { margin-left: 8px; color: var(--el-text-color-secondary); }
+.staffing-intro { margin-bottom: 16px; }
+.staffing-intro p { margin: 0; line-height: 1.6; }
+.staffing-error { color: var(--el-color-danger); }
+.unit-hint { width: 100%; font-size: 12px; color: var(--el-text-color-secondary); line-height: 1.5; }
 </style>

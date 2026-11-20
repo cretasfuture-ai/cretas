@@ -35,6 +35,8 @@ export const OA_ACTION_INVALIDATES: Record<string, readonly string[]> = {
   INVENTORY_ADJUSTMENT: ['dashboard', 'warehouse', 'finance'],
   // 报工修正批准后，当前有效报工结果和盘点重点核对提醒同时变化。
   PRODUCTION_REPORT_CORRECTION: ['dashboard', 'production', 'warehouse'],
+  // 1551-11: 强制插单批准 = 计划排入并顺延被挤计划 (生产计划 + 排程都变了); 驳回 = 计划作废、时段释放。
+  FORCE_INSERT: ['dashboard', 'production', 'scheduling'],
 };
 
 /**

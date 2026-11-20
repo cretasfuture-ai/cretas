@@ -22,7 +22,8 @@ import java.util.Map;
 @Slf4j
 @Component
 @RequiredArgsConstructor
-public class WorkProcessTaskCompleteTool extends AbstractBusinessTool {
+public class WorkProcessTaskCompleteTool extends AbstractBusinessTool
+        implements com.cretas.aims.ai.tool.ParameterChoiceResolver {
 
     private final WorkProcessTaskService workProcessTaskService;
 
@@ -103,13 +104,134 @@ public class WorkProcessTaskCompleteTool extends AbstractBusinessTool {
                 workProcessTaskService, factoryId,
                 getLong(params, "taskId"),
                 getBigDecimal(params, "actualQuantity"),
-                getString(params, "notes"));
+                getString(params, "notes"),
+                SecurityUtils.currentUserId());
+    }
+
+    // ==================== 先确定报哪一道, 再记这一轮的产量 (Steve 2026-11-14) ====================
+
+    /** 一次最多列几项; 再多一屏看不完, 提示说产品名缩小范围。 */
+    static final int MAX_LISTED = 5;
+
+    @Override
+    public String choiceParameter() {
+        return "taskId";
+    }
+
+    /**
+     * 缺 taskId 时查「这个人现在能报工的工序任务」: 本厂 IN_PROGRESS, 且是本人的或还没指派的。口径与
+     * {@link WorkProcessTaskService#list} (= RN 报工屏第一跳, 见 repository 注释「我的 + 未指派」) 同一份,
+     * 指派给别人的不出现 (越权); ⛔ 不新写查询。只读。
+     */
+    @Override
+    public String choiceLabel() {
+        return "哪一道工序";
+    }
+
+    @Override
+    public Resolution resolveChoices(String factoryId, Long userId, Map<String, Object> params, String userInput) {
+        if (userId == null) {
+            // 不知道是谁就不查: 传 null 会列全厂的 (口径是「我的 + 未指派」), 宁可按没有处理
+            return Resolution.none("您现在没有进行中的工序任务。要报工的话，请先对要做的那道工序说「开工」。");
+        }
+        // 列表口径 = 报完工的「本人可报」口径 (WorkProcessTaskService#assertCanComplete), 不列点了会被拒的:
+        //   主管 (ReportAuthGuard 认定) → 本厂全部进行中; 其他人 → 「我的 + 未指派」, 再按同一条判据筛
+        //   (未指派但多负责人表里没有他的那道会被筛掉)。
+        boolean supervisor = workProcessTaskService.isCompletionSupervisor(factoryId, userId);
+        List<WorkProcessTaskDTO> found = workProcessTaskService
+                .list(factoryId, com.cretas.aims.entity.workprocess.WorkProcessTask.Status.IN_PROGRESS,
+                        null, supervisor ? null : userId, org.springframework.data.domain.PageRequest.of(0, 50))
+                .getContent();
+        List<WorkProcessTaskDTO> mine = found == null ? List.of() : found.stream()
+                .filter(t -> canComplete(factoryId, t, userId))
+                .toList();
+        if (mine.isEmpty()) {
+            return Resolution.none("您现在没有进行中的工序任务。要报工的话，请先对要做的那道工序说「开工」。");
+        }
+        List<WorkProcessTaskDTO> candidates = narrowByUserInput(mine, userInput);
+        if (candidates.size() == 1) {
+            return Resolution.single(toChoice(candidates.get(0)));
+        }
+        List<Choice> listed = candidates.stream().limit(MAX_LISTED).map(WorkProcessTaskCompleteTool::toChoice).toList();
+        StringBuilder message = new StringBuilder();
+        BigDecimal quantity = params == null ? null : getBigDecimal(params, "actualQuantity");
+        if (quantity != null) {
+            message.append("产量 ").append(quantity.stripTrailingZeros().toPlainString()).append(" 我先记着。");
+        }
+        message.append("您要给哪一道工序报工？\n");
+        for (int i = 0; i < listed.size(); i++) {
+            message.append(i + 1).append(". ").append(listed.get(i).label()).append("\n");
+        }
+        if (candidates.size() > listed.size()) {
+            message.append("还有 ").append(candidates.size() - listed.size()).append(" 道没列出，说产品名或工序名可以缩小范围。\n");
+        }
+        return Resolution.many(listed, message.toString().stripTrailing(),
+                "回前面的数字，或者直接说产品名、工序名都行。",
+                "请重新说一遍，带上产品名或工序名，比如「红烧肉切块报工」。");
+    }
+
+    private boolean canComplete(String factoryId, WorkProcessTaskDTO task, Long userId) {
+        try {
+            workProcessTaskService.assertCanComplete(factoryId, task, userId);
+            return true;
+        } catch (com.cretas.aims.exception.BusinessException refused) {
+            return false;
+        }
+    }
+
+    /** 用户话里已经带了产品名 / 批次号 / 工序名: 先按它缩小候选 (一个都对不上就不缩, 照样让他选)。 */
+    private static List<WorkProcessTaskDTO> narrowByUserInput(List<WorkProcessTaskDTO> tasks, String userInput) {
+        if (userInput == null || userInput.isBlank()) {
+            return tasks;
+        }
+        String text = userInput.toLowerCase(java.util.Locale.ROOT);
+        List<WorkProcessTaskDTO> hits = tasks.stream()
+                .filter(t -> keywordsOf(t).stream().anyMatch(k -> text.contains(k.toLowerCase(java.util.Locale.ROOT))))
+                .toList();
+        return hits.isEmpty() ? tasks : hits;
+    }
+
+    private static List<String> keywordsOf(WorkProcessTaskDTO t) {
+        List<String> keywords = new java.util.ArrayList<>();
+        for (String k : new String[]{t.getProductTypeName(), t.getProcessName(), t.getBatchNumber()}) {
+            if (k != null && k.strip().length() >= 2) {
+                keywords.add(k.strip());
+            }
+        }
+        return keywords;
+    }
+
+    /** 一线看得懂的一行: 产品 · 批次 · 工序 · 计划量/已报量。没有的部分不写, ⛔ 不编。 */
+    static Choice toChoice(WorkProcessTaskDTO t) {
+        List<String> parts = new java.util.ArrayList<>();
+        if (t.getProductTypeName() != null && !t.getProductTypeName().isBlank()) {
+            parts.add(t.getProductTypeName().strip());
+        }
+        if (t.getBatchNumber() != null && !t.getBatchNumber().isBlank()) {
+            parts.add("批次 " + t.getBatchNumber().strip());
+        }
+        if (t.getProcessName() != null && !t.getProcessName().isBlank()) {
+            parts.add(t.getProcessName().strip());
+        }
+        String unit = t.getPlannedUnit() == null ? "" : t.getPlannedUnit().strip();
+        String reported = t.getActualQuantity() == null ? null : plain(t.getActualQuantity()) + unit;
+        if (t.getPlannedQuantity() != null) {
+            parts.add("计划 " + plain(t.getPlannedQuantity()) + unit + (reported != null ? "，已报 " + reported : "，还没报过"));
+        } else if (reported != null) {
+            parts.add("已报 " + reported);
+        }
+        String label = parts.isEmpty() ? "一道进行中的工序" : String.join(" · ", parts);
+        return new Choice(String.valueOf(t.getId()), label, keywordsOf(t));
+    }
+
+    private static String plain(BigDecimal value) {
+        return value.stripTrailingZeros().toPlainString();
     }
 
     @Override
     protected String getParameterQuestion(String paramName) {
         if ("taskId".equals(paramName)) {
-            return "请问要完成哪道工序任务？说任务编号就行。";
+            return "请问要给哪一道工序报工？说产品名或工序名就行。";
         }
         if ("actualQuantity".equals(paramName)) {
             return "这道工序实际做了多少？请告诉我实际产量。";

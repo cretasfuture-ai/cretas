@@ -109,6 +109,23 @@
           </el-text>
         </div>
       </el-form-item>
+      <el-form-item label="允许本人审批">
+        <div class="reporting-mode-setting">
+          <el-switch v-model="form.allowSelfApproval" data-testid="allow-self-approval-switch" />
+          <el-text type="info" size="small">
+            开启=报工撤回、盘点差异、不合格品处置/特批、改价、退款可以由提交人自己审批，但每次必须写原因，审批记录标注为本人审批。关闭（默认）=审批人不能是提交人（四眼）。只有一个人能审批的小厂才建议开启。
+          </el-text>
+        </div>
+      </el-form-item>
+      <el-form-item label="改价审批阈值">
+        <div class="reporting-mode-setting">
+          <span>降价超过</span>
+          <el-input-number v-model="form.priceDecreaseApprovalPct" :min="0.01" :max="999.99" :precision="2" :step="1" controls-position="right" style="width: 130px" />
+          <span>% 或 涨价超过</span>
+          <el-input-number v-model="form.priceIncreaseApprovalPct" :min="0.01" :max="999.99" :precision="2" :step="1" controls-position="right" style="width: 130px" />
+          <span>% 需要审批（默认 10% / 20%）</span>
+        </div>
+      </el-form-item>
 
       <el-form-item>
         <el-button type="primary" :loading="saving" @click="onSave">保存设置</el-button>
@@ -149,6 +166,9 @@ const form = reactive<FactorySettings>({
   skipProcessReportingDefault: false,
   requireRequisitionBeforeReport: false,
   blockStartOnOpenShortage: false,
+  allowSelfApproval: false,
+  priceDecreaseApprovalPct: 10,
+  priceIncreaseApprovalPct: 20,
   allowSelfRegistration: false,
   requireAdminApproval: true,
   defaultUserRole: 'viewer',

@@ -23,8 +23,8 @@ import PlatformStackNavigator from './PlatformStackNavigator';
 import AttendanceStackNavigator from './AttendanceStackNavigator';
 import ProfileStackNavigator from './ProfileStackNavigator'; // Phase 3 P2 - 使用导航器而非单页
 import LogisticsStackNavigator from './LogisticsStackNavigator';
-import OATodoStackNavigator from './OATodoStackNavigator';
-import { useMyTodoCount } from '../hooks/useMyTodos';
+import { useMyTodoEntry } from '../hooks/useMyTodos';
+import { todoTabScreen } from './todoTab';
 import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
 
 const Tab = createBottomTabNavigator<MainTabParamList>();
@@ -53,13 +53,8 @@ export function MainNavigator() {
     return checkUserPermission(user, perm);
   };
 
-  // OA 待办数量（finance_manager / cashier 角色用于 tab 徽标）
-  const isFinanceOrCashier =
-    userRole === 'finance_manager' || userRole === 'cashier';
-  const { count: todoCount } = useMyTodoCount(
-    undefined,
-    isFinanceOrCashier ? 30000 : 0,  // 非财务角色不轮询
-  );
+  // OA 待办入口：显不显示只认后端 /my-todos/types（B4 按权限，不按岗位名）
+  const todoEntry = useMyTodoEntry();
 
   // ⚠️ 自动导航功能已禁用
   // 原因: React Navigation警告 - 条件渲染 + 手动导航会产生冲突
@@ -267,21 +262,8 @@ export function MainNavigator() {
         />
       )}
 
-      {/* OA 待办中心 - 仅 finance_manager / cashier */}
-      {isFinanceOrCashier && (
-        <Tab.Screen
-          name="OATodoTab"
-          component={OATodoStackNavigator}
-          options={{
-            title: '待办',
-            tabBarButtonTestID: 'main-tab-oa-todo',
-            tabBarIcon: ({ color, size }) => (
-              <Icon source="clipboard-check-outline" size={size} color={color} />
-            ),
-            tabBarBadge: todoCount > 0 ? todoCount : undefined,
-          }}
-        />
-      )}
+      {/* OA 待办中心 - 有能办的待办类型才显示（后端判定） */}
+      {todoTabScreen(Tab, todoEntry, 'main-tab-oa-todo')}
 
       {/* 个人中心 - 所有用户可见 */}
       <Tab.Screen

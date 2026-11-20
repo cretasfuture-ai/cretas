@@ -119,4 +119,28 @@ public class IntentExecuteRequest {
      * null 视为 OPERATE (向后兼容, 老客户端零破坏)。
      */
     private String mode;
+
+    /**
+     * 服务端解析好的识别用最近对话 (INTENT-DISTILL-20261111 A 线)。由
+     * {@code RecognitionHistoryResolver} 在入口写入一次, 普通入口与 SSE 入口读同一份。
+     * 只在服务端内部用: HTTP 调用方不能写它 (不能伪造「我没有上下文」或塞进别人的历史)。
+     * null = 尚未解析 (裸构造的旧单测), 退回只读 {@code context.recentTurns}。
+     */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private java.util.List<Map<String, String>> recognitionHistory;
+
+    /**
+     * 服务端专用 (INTENT-DISTILL D1): 本次只读工具执行时每个参数的最终取值与来源
+     * (本轮 / 沿用 / 默认 / 服务端翻页), 由 ToolDispatchService 合并参数时写入、成功后放进
+     * 响应 {@code metadata.readQuery}。客户端传不进来。
+     */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private Map<String, Object> readTurnSnapshot;
+
+    /**
+     * 服务端专用 (Steve 2026-11-12 口径): 本次只读执行用了什么默认、替换了什么做不到的口径,
+     * 由 ToolDispatchService 写入, 成功后进响应 {@code metadata.readNotices} 并加在回复开头。客户端传不进来。
+     */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private java.util.List<Map<String, Object>> readTurnNotices;
 }

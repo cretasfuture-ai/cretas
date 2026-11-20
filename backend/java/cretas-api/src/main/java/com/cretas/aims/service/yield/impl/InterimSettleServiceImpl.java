@@ -108,6 +108,18 @@ public class InterimSettleServiceImpl implements InterimSettleService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.lineage.LineageEdgeRecorder lineageEdgeRecorder;
 
+    /**
+     * C2 审查 #1 (2026-11-10): 关单后撤销小结, 还回的料已退回原料仓, 消耗行却变回「未小结」, 仍指着已划平的生产仓批次。
+     * 再小结要先认出这种状态并拦下 (指向「撤回对应报工」), 而不是撞上「批次可用不足」。
+     * required=false 兼容既有构造单测; 缺失时不做这道判断 (旧行为: 撞可用不足)。prod Spring 恒注入。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.factory.FactoryMaterialRequisitionRepository requisitionRepository;
+
+    /** 小结过账前原料归属判断取物料大类 (#1606 审查 M4); required=false 理由同上, 未注入按最严格口径。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.RawMaterialTypeRepository rawMaterialTypeRepository;
+
     /** 小结 SFI 投料 (§② A) 的 WIP_CONSUME 写边点; required=false 理由同上。 */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.lineage.SemiFeedLineageRecorder semiFeedLineageRecorder;
@@ -209,11 +221,26 @@ public class InterimSettleServiceImpl implements InterimSettleService {
                         .findByFactoryIdAndProductionBatchIdInAndInterimSettledAtIsNull(factoryId, planBatchIds);
         BigDecimal deductedQuantity = BigDecimal.ZERO;
         int deductedCount = 0;
+        // 先按批次 id 排序把要扣的批次全部锁上, 与关单 / 撤回 / 撤销小结同一锁序 (审查 #3: 各按各的顺序锁同一张
+        // 领料单的几个生产仓批次会互相死锁)。之后循环里的 ForUpdate 都是已持有的锁。
+        for (String lockId : new java.util.TreeSet<>(unposted.stream()
+                .map(MaterialConsumption::getBatchId).filter(java.util.Objects::nonNull).toList())) {
+            materialBatchRepository.findByIdAndFactoryIdForUpdate(lockId, factoryId);
+        }
+        refuseConsumptionOnClosedRequisitionBatch(factoryId, unposted);
+        Map<String, String> mainCategoryCache = new HashMap<>();
         for (MaterialConsumption mc : unposted) {
             MaterialBatch src = materialBatchRepository
                     .findByIdAndFactoryIdForUpdate(mc.getBatchId(), factoryId)
                     .orElseThrow(() -> new BusinessException(404,
                             "消耗来源批次不存在或无权访问: " + mc.getBatchId()));
+            // #1606 审查 M4: 过账前按领料同一口径再判一次原料归属 —— 录入时已拦过, 这里兜住
+            // 录入闸上线前记下的行和其他写消耗行的入口 (客户料不许记进公司计划 / 别的客户的计划)。
+            com.cretas.aims.service.processentry.ProductionInventoryOwnershipGuard.assertRawSourceAllowed(
+                    plan, src, mainCategoryOf(factoryId, src, mainCategoryCache), "小结原料批次");
+            // #1590 遗留: 过账前再判一次批次状态 (报工录入同一口径 assertReportable: 拦质检中 / 不良品 / 报废, 不拦过期) ——
+            // 录入之后这批被冻结 / 判不合格, 小结不能照样从它扣料过账
+            com.cretas.aims.service.gate.MaterialBatchStateGate.assertPostable(src);
             // MES↔ERP Fix #6: 负库存守卫 (honest-fail). 延迟扣减设计下, 同一批次可被本计划多道
             //   报工累计投料 → 小结累加扣减时若 Σ投料 > 批次可用 (超投), 会把 currentQuantity 扣成负
             //   (幻库存: 半成品/成品凭空产出而原料不足)。此前仅事后置 USED_UP, 从不拦截负库存 → 静默腐蚀。
@@ -239,7 +266,8 @@ public class InterimSettleServiceImpl implements InterimSettleService {
             src.setUsedQuantity(newUsed);
             src.setLastUsedAt(now);
             if (src.getCurrentQuantity() != null && src.getCurrentQuantity().compareTo(BigDecimal.ZERO) <= 0) {
-                src.setStatus(MaterialBatchStatus.USED_UP);
+                // 交接单 11-11 二.1: 数量用尽不盖掉质量结论 (不良品/质检中/过期/报废保持原状态)
+                src.setStatus(MaterialBatchStatus.whenExhausted(src.getStatus(), MaterialBatchStatus.USED_UP));
             }
             materialBatchRepository.save(src);
             mc.setInterimSettledAt(now);
@@ -980,6 +1008,58 @@ public class InterimSettleServiceImpl implements InterimSettleService {
 
     private static BigDecimal nz(BigDecimal v) {
         return v == null ? BigDecimal.ZERO : v;
+    }
+
+    /** 物料大类 (原料/辅料/包材); 查不到为 null = 按最严格口径。 */
+    private String mainCategoryOf(String factoryId, MaterialBatch batch, Map<String, String> cache) {
+        String typeId = batch.getMaterialTypeId();
+        if (rawMaterialTypeRepository == null || typeId == null) {
+            return null;
+        }
+        return cache.computeIfAbsent(typeId, id -> rawMaterialTypeRepository.findByIdAndFactoryId(id, factoryId)
+                .map(com.cretas.aims.entity.RawMaterialType::getMainCategory).orElse(null));
+    }
+
+    /**
+     * C2 审查 #1: 未结消耗指着<b>已关单</b>领料单的生产仓批次 ⇒ 这批料关单时已退回原料仓 (关单后撤销小结的退料
+     * 也在那里), 生产仓批次已划平, 再小结只会撞「批次可用不足」, 而且就算扣得下也是对着空批次重复扣。
+     * 唯一的出路是撤回对应报工 (撤回会清掉这些未结消耗), 所以这里直接拦下并说清下一步。
+     *
+     * <p>领料单在生产仓批次加锁之后锁读 (与关单 / 撤回同一锁序), 读到的是并发关单提交后的状态。
+     */
+    private void refuseConsumptionOnClosedRequisitionBatch(String factoryId, List<MaterialConsumption> unposted) {
+        if (requisitionRepository == null || unposted.isEmpty()) {
+            return;
+        }
+        Map<String, Set<Long>> productionBatchesByWorkshopBatch = new java.util.TreeMap<>();
+        for (MaterialConsumption mc : unposted) {
+            if (mc.getBatchId() != null) {
+                productionBatchesByWorkshopBatch.computeIfAbsent(mc.getBatchId(), k -> new java.util.TreeSet<>())
+                        .add(mc.getProductionBatchId());
+            }
+        }
+        for (Map.Entry<String, Set<Long>> entry : productionBatchesByWorkshopBatch.entrySet()) {
+            MaterialBatch batch = materialBatchRepository.findByIdAndFactoryIdForUpdate(entry.getKey(), factoryId)
+                    .orElse(null);
+            if (batch == null || !"MATERIAL_REQUISITION".equals(batch.getSourceDocType())
+                    || batch.getSourceDocId() == null) {
+                continue;
+            }
+            com.cretas.aims.entity.factory.FactoryMaterialRequisition mr = requisitionRepository
+                    .findByIdAndFactoryIdForUpdate(batch.getSourceDocId(), factoryId).orElse(null);
+            if (mr == null || mr.getStatus() != com.cretas.aims.entity.factory.FactoryMaterialRequisition.Status.CLOSED) {
+                continue;
+            }
+            String batchRefs = entry.getValue().stream().filter(java.util.Objects::nonNull)
+                    .map(String::valueOf).collect(java.util.stream.Collectors.joining("、"));
+            throw new BusinessException(409, String.format(
+                    "小结失败: 有报工用量记在领料单 %s 的生产仓批次 %s 上, 而这张领料单已关单, 料已退回原料仓, 无法再按这些报工扣料",
+                    mr.getRequisitionNo(), batch.getBatchNumber()))
+                    .withCode("INTERIM_SETTLE_REQUISITION_CLOSED")
+                    .withHint("请先撤回对应报工 (生产批次 " + batchRefs + "), 需要的话新开领料单后重新报工再小结")
+                    .withHintTarget(batchRefs)
+                    .withSeverity("BLOCKING");
+        }
     }
 
     /** 撤销明细条目: {keyName: id, "qty": qty.toPlainString()} —— 量存字符串防 jsonb 数值精度漂移。 */

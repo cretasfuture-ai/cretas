@@ -38,17 +38,30 @@ describe('权限矩阵页门禁 = 后端权限码', () => {
     const item = findMenuItem(menuConfig, PAGE_PATH);
     expect(item, `menuConfig 里找不到 ${PAGE_PATH} —— 页面没有入口`).not.toBeNull();
     expect(item!.module).toBe('system');
-    // ⛔ 不许加 roles 白名单: 那会让菜单比接口更严/更松, 两个判据分叉
-    expect(item!.roles).toBeUndefined();
+    // 2026-11-18 (PROTO-DEMO-PERM): 全平台表 ⇒ 平台专属。roles 必须恰好等于后端 @RequireRole 的名单
+    // (见下一条读后端源文件的断言), 工厂角色一个都不许出现。
+    expect(item!.roles).toEqual(['platform_admin']);
   });
 
-  it('路由 meta.module 也是 system', () => {
+  it('路由 meta.module 是 system, meta.roles 与菜单同为平台专属', () => {
     const src = readFileSync(ROUTER_SRC, 'utf-8');
     const block = src.match(
       /name:\s*'SystemPermissionMatrix'[\s\S]{0,400}?meta:\s*\{[^}]*\}/,
     );
     expect(block, 'router/index.ts 里找不到 SystemPermissionMatrix —— 闸自己瞎了').not.toBeNull();
     expect(block![0]).toContain("module: 'system'");
+    expect(block![0]).toContain("roles: ['platform_admin']");
+  });
+
+  it('后端读写两个端点都叠了 @RequireRole({"platform_admin"}) —— 工厂账号看不到也改不了', () => {
+    const java = readFileSync(CONTROLLER_SRC, 'utf-8');
+    for (const mapping of ['@GetMapping("/matrix")', '@PutMapping("/matrix/{role}/{module}")']) {
+      const at = java.indexOf(mapping);
+      expect(at, `${mapping} 不在控制器里 —— 闸自己瞎了`).toBeGreaterThan(-1);
+      // 只看这个映射到方法签名之间的注解
+      const head = java.slice(at, java.indexOf('public ApiResponse', at));
+      expect(head, `${mapping} 缺平台角色闸`).toContain('@RequireRole({"platform_admin"})');
+    }
   });
 
   it('后端控制器的 @RequirePermission 用的正是 system:read / system:read_write', () => {

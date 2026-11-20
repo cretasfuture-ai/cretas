@@ -122,7 +122,7 @@ class CanvasAIApplyDiffsResultTest {
                 .header("X-Canvas-Result-Protocol", "3").contentType("application/json").content("[]"))
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.success").value(false))
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.message").value(org.hamcrest.Matchers.containsString("登录")));
-        verify(previewTokens, never()).claimToken(anyString(), anyString(), anyLong(), anyString());
+        verify(previewTokens, never()).claimTokenForSubject(anyString(), anyString(), anyLong(), anyString(), any(), any());
         verifyNoInteractions(registry);
     }
 
@@ -135,7 +135,7 @@ class CanvasAIApplyDiffsResultTest {
         assertEquals("FAILURE", response.getData().items().get(0).status());
         assertTrue(response.getData().items().get(0).message().contains("确认凭据"));
         assertEquals(0, tool.writes);
-        verify(previewTokens, never()).claimToken(anyString(), anyString(), anyLong(), anyString());
+        verify(previewTokens, never()).claimTokenForSubject(anyString(), anyString(), anyLong(), anyString(), any(), any());
         verify(registry, never()).getExecutor(anyString());
     }
 

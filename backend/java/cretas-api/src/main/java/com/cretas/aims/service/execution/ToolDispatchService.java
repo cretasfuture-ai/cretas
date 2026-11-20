@@ -4,12 +4,14 @@ import com.cretas.aims.ai.client.DashScopeClient;
 import com.cretas.aims.ai.dto.ChatCompletionResponse;
 import com.cretas.aims.ai.dto.Tool;
 import com.cretas.aims.ai.dto.ToolCall;
+import com.cretas.aims.ai.tool.ToolParameterGroups;
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.ToolRbacEnforcer;
 import com.cretas.aims.ai.tool.ToolRegistry;
 import com.cretas.aims.ai.tool.gateway.AuthenticatedToolPrincipalFactory;
 import com.cretas.aims.ai.tool.gateway.ExecutionPrincipal;
 import com.cretas.aims.ai.tool.gateway.LegacyToolMigrationRegistry;
+import com.cretas.aims.ai.tool.gateway.PreviewStateRecheck;
 import com.cretas.aims.ai.tool.gateway.ToolExecutionCommand;
 import com.cretas.aims.ai.tool.gateway.ToolExecutionGateway;
 import com.cretas.aims.ai.tool.gateway.ToolExecutionMode;
@@ -86,6 +88,16 @@ public class ToolDispatchService {
     @Autowired(required = false)
     private PreviewTokenService previewTokenService;
 
+    /** LLM 抽出的客户 / 产品 / 员工等名字到本厂主数据落地 (LlmParameterGrounding 规则 3); 没装配时不做这一条。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.entity.FactoryEntityResolver factoryEntityResolver;
+
+    /** 实体名落地范围: 工具的读写 (只读工具才可解析到停用对象) + 是否是新建该种实体的工具。 */
+    private LlmParameterGrounding.EntityScope entityScope(String factoryId, ToolExecutor tool) {
+        return LlmParameterGrounding.EntityScope.of(factoryEntityResolver, factoryId, tool.getToolName(),
+                tool.getAccessMode() == ToolExecutor.AccessMode.READ);
+    }
+
     /** 预览追问开参数收集会话用 (见 {@link #openPreviewQuestionSession}); 没有它时预览追问照旧、只是没人接答案。 */
     @Autowired(required = false)
     private ConversationService conversationService;
@@ -160,8 +172,321 @@ public class ToolDispatchService {
         // 深层外发 (抽参、纠错、选工具、消歧…) 不带工厂参数: 按本次路径上认定的工厂脱敏 —— 平台账号替某厂
         // 操作时也按那家工厂的保密产品名换代号 (Steve 2026-10-29, LlmEgressGuard.analysing)
         try (var egressFactory = com.cretas.aims.service.consent.LlmEgressGuard.analysing(factoryId)) {
-            return executeWithToolInScope(tool, factoryId, request, intent, userId, userRole, matchResult);
+            if (request != null) {
+                request.setReadTurnSnapshot(null);
+                request.setReadTurnNotices(null);
+            }
+            IntentExecuteResponse response = executeWithToolInScope(tool, factoryId, request, intent, userId, userRole, matchResult);
+            attachReadQuery(request, response);
+            attachReadNotices(request, response);
+            return response;
         }
+    }
+
+    // ==================== INTENT-DISTILL D1: 只读参数来源与分页 ====================
+
+    /**
+     * 本轮来源: 请求 context、本轮原话的状态 / 分页、(上一步已放好的) 本轮原话时间。原话要分页而工具不支持分页时,
+     * 直接返回明确的拒绝, 不执行。原话点名了工具不支持的口径时按支持的口径执行, 回复开头说明 (Steve 口径 6)。
+     */
+    private IntentExecuteResponse prepareReadTurn(ToolExecutor tool, AIIntentConfig intent,
+                                                  IntentExecuteRequest request, String userInputToUse,
+                                                  Map<String, Object> params,
+                                                  Map<String, ReadTurnParameters.Source> sources,
+                                                  java.util.Set<String> doNotInherit) {
+        Map<String, Object> schema = tool.getParametersSchema();
+        Map<?, ?> properties = ReadTurnParameters.properties(schema);
+        boolean replay = request.getContext() != null
+                && Boolean.TRUE.equals(request.getContext().get(ReadPaginationSupport.REPLAY_KEY));
+        if (replay) {
+            // 服务端翻页重放: 条件全部来自上一轮已执行的参数, 页码由服务端算出; 不再从旧原话里重新读页码
+            String pageKey = ReadTurnParameters.pageKey(properties);
+            properties.keySet().forEach(k -> {
+                if (k instanceof String key && params.get(key) != null) {
+                    sources.put(key, key.equals(pageKey) ? ReadTurnParameters.Source.SERVER_PAGE
+                            : ReadTurnParameters.Source.INHERITED);
+                }
+            });
+            return null;
+        }
+        if (com.cretas.aims.ai.tool.OwnFactoryDataOnlyGuard.refuses(tool.getToolName(), request.getUserInput())) {
+            return readTurnRefusal(intent, com.cretas.aims.ai.tool.OwnFactoryDataOnlyGuard.STATUS, com.cretas.aims.ai.tool.OwnFactoryDataOnlyGuard.MESSAGE);
+        }
+        if (request.getContext() != null) {
+            request.getContext().keySet().forEach(key -> {
+                if (properties.containsKey(key) && params.get(key) != null) {
+                    sources.put(key, ReadTurnParameters.Source.CURRENT_TURN);
+                }
+            });
+        }
+        if (params.get(com.cretas.aims.ai.tool.TimeRangeFilter.SAID) != null) {
+            for (String key : List.of("startDate", "endDate")) {
+                if (properties.containsKey(key) && params.get(key) != null) {
+                    sources.put(key, ReadTurnParameters.Source.CURRENT_TURN);
+                }
+            }
+        }
+
+        String capability = intent != null && intent.getIntentName() != null ? intent.getIntentName() : tool.getToolName();
+        Optional<com.cretas.aims.ai.tool.UnsupportedOptionGuard.Substitution> unsupported =
+                com.cretas.aims.ai.tool.UnsupportedOptionGuard.check(schema, request.getUserInput());
+        if (unsupported.isPresent()) {
+            // Steve 2026-11-12 口径 6: 说明「暂时只能按金额排」, 同时给出按金额的结果 (不再整轮拒绝)
+            com.cretas.aims.ai.tool.UnsupportedOptionGuard.Substitution sub = unsupported.get();
+            params.put(sub.parameter(), sub.appliedValue());
+            sources.put(sub.parameter(), ReadTurnParameters.Source.CURRENT_TURN);
+            Map<String, Object> fields = new java.util.LinkedHashMap<>();
+            fields.put("parameter", sub.parameter());
+            fields.put("requested", sub.requestedValue());
+            fields.put("requestedLabel", sub.requestedLabel());
+            fields.put("applied", sub.appliedValue());
+            fields.put("appliedLabel", sub.appliedLabel());
+            addReadNotice(request, com.cretas.aims.ai.tool.ReadReplyNotices.notice(
+                    com.cretas.aims.ai.tool.ReadReplyNotices.UNSUPPORTED_OPTION, sub.notice(capability), fields));
+        }
+
+        Map<String, Object> statusProperty = com.cretas.aims.ai.tool.StatusFilter.statusProperty(schema);
+        if (statusProperty != null && params.get("status") == null) {
+            try {
+                com.cretas.aims.ai.tool.StatusFilter.fromSentence(statusProperty, userInputToUse)
+                        .ifPresent(code -> {
+                            params.put("status", code);
+                            sources.put("status", ReadTurnParameters.Source.CURRENT_TURN);
+                        });
+            } catch (RuntimeException unrecognizedStatus) {
+                // 说了状态却认不出: 不拿上一轮的状态顶替, 交给工具按原话报同一个错
+                doNotInherit.add("status");
+            }
+        }
+
+        ReadTurnParameters.PageWords words = ReadTurnParameters.pageWords(request.getUserInput());
+        if (words.mentioned()) {
+            String pageKey = ReadTurnParameters.pageKey(properties);
+            String sizeKey = ReadTurnParameters.sizeKey(properties);
+            if ((words.page() != null && pageKey == null) || (words.size() != null && sizeKey == null)) {
+                return readTurnRefusal(intent, "PAGINATION_REFUSED", "「" + capability + "」不支持"
+                        + (words.page() != null ? "按页码查看" : "指定每页条数") + "；未执行查询。");
+            }
+            String outOfRange = words.page() == null ? null : boundViolation(properties.get(pageKey), words.page(), "页码");
+            if (outOfRange == null && words.size() != null) {
+                outOfRange = boundViolation(properties.get(sizeKey), words.size(), "每页条数");
+            }
+            if (outOfRange != null) return readTurnRefusal(intent, "PAGINATION_REFUSED", outOfRange + "；未执行查询。");
+            if (words.page() != null) {
+                params.put(pageKey, words.page());
+                sources.put(pageKey, ReadTurnParameters.Source.CURRENT_TURN);
+            }
+            if (words.size() != null) {
+                params.put(sizeKey, words.size());
+                sources.put(sizeKey, ReadTurnParameters.Source.CURRENT_TURN);
+            }
+        }
+        return null;
+    }
+
+    /** 模型 / 学习规则不写页码与每页条数 (程序按本轮原话或服务端翻页绑定); 其余抽到的键记为本轮来源。 */
+    private static Map<String, Object> withoutModelPaging(Map<String, Object> extracted,
+                                                          Map<String, ReadTurnParameters.Source> sources) {
+        if (extracted == null || extracted.isEmpty()) return extracted == null ? new HashMap<>() : extracted;
+        Map<String, Object> kept = new HashMap<>();
+        extracted.forEach((key, value) -> {
+            if (key == null || ReadTurnParameters.isPagingKey(key)) return;
+            kept.put(key, value);
+            sources.putIfAbsent(key, ReadTurnParameters.Source.CURRENT_TURN);
+        });
+        return kept;
+    }
+
+    private void completeReadTurn(ToolExecutor tool, AIIntentConfig intent, String factoryId, Long userId,
+                                  IntentExecuteRequest request, Map<String, Object> params,
+                                  Map<String, ReadTurnParameters.Source> sources, java.util.Set<String> doNotInherit) {
+        Map<?, ?> properties = ReadTurnParameters.properties(tool.getParametersSchema());
+        if (properties.isEmpty() || intent == null) return;
+        boolean replay = request.getContext() != null
+                && Boolean.TRUE.equals(request.getContext().get(ReadPaginationSupport.REPLAY_KEY));
+        if (!replay && conversationMemoryService != null && request.getSessionId() != null
+                && !request.getSessionId().isBlank() && userId != null) {
+            try {
+                Optional<ReadTurnParameters.Snapshot> previous = ReadTurnParameters.latest(
+                        conversationMemoryService.getContext(request.getSessionId()), factoryId, userId,
+                        LocalDateTime.now());
+                java.util.Set<String> inherited = ReadTurnParameters.inherit(params, sources, properties,
+                        previous.orElse(null), intent.getIntentCode(), tool.getToolName(), doNotInherit);
+                if (inherited.contains("startDate") && inherited.contains("endDate")) {
+                    params.put(com.cretas.aims.ai.tool.TimeRangeFilter.SAID,
+                            params.get("startDate") + "~" + params.get("endDate"));
+                }
+                if (!inherited.isEmpty()) {
+                    log.info("只读续句沿用同一目标的已确认条件: intent={}, keys={}", intent.getIntentCode(), inherited);
+                }
+            } catch (RuntimeException memoryUnavailable) {
+                // 读不到会话记忆 = 不沿用 (按本轮原话执行), 不阻断查询
+                log.warn("只读续句读取会话记忆失败, 不沿用旧条件: {}", memoryUnavailable.getClass().getSimpleName());
+            }
+        }
+        // 模型抽参不许把被替换的口径改回做不到的那个 (工具会直接报错, 用户拿不到最接近的结果)
+        if (request.getReadTurnNotices() != null) {
+            for (Map<String, Object> notice : request.getReadTurnNotices()) {
+                if (com.cretas.aims.ai.tool.ReadReplyNotices.UNSUPPORTED_OPTION.equals(notice.get("kind"))
+                        && notice.get("parameter") instanceof String key) {
+                    params.put(key, notice.get("applied"));
+                }
+            }
+        }
+        if (!replay) {
+            applyDefaultRecentDays(tool.getParametersSchema(), properties, request, params, sources);
+            applyDefaultPageSize(properties, params, sources);
+        }
+        ReadTurnParameters.markDefaults(params, sources, properties);
+        request.setReadTurnSnapshot(ReadTurnParameters.snapshot(
+                intent.getIntentCode(), tool.getToolName(), request.getUserInput(), params, sources, properties));
+    }
+
+    /** Steve 口径 7: 只读列表默认每页 20 条 (本轮没说、也没沿用时; 不超过工具声明的上限)。 */
+    static final int DEFAULT_READ_PAGE_SIZE = 20;
+
+    private static void applyDefaultPageSize(Map<?, ?> properties, Map<String, Object> params,
+                                             Map<String, ReadTurnParameters.Source> sources) {
+        String sizeKey = ReadTurnParameters.sizeKey(properties);
+        if (sizeKey == null || params.get(sizeKey) != null) return;
+        int size = DEFAULT_READ_PAGE_SIZE;
+        if (properties.get(sizeKey) instanceof Map<?, ?> field && field.get("maximum") instanceof Number max) {
+            size = (int) Math.min(size, max.longValue());
+        }
+        params.put(sizeKey, size);
+        sources.put(sizeKey, ReadTurnParameters.Source.DEFAULT);
+    }
+
+    /**
+     * Steve 口径 1: 没说时间 → 按工具声明的默认最近 N 天查 ({@link com.cretas.aims.ai.tool.TimeRangeFilter#DEFAULT_RECENT_DAYS}),
+     * 回复开头写明。只对声明了这个默认、且真的按 startDate/endDate 过滤的工具生效。
+     */
+    private static void applyDefaultRecentDays(Map<String, Object> schema, Map<?, ?> properties,
+                                               IntentExecuteRequest request, Map<String, Object> params,
+                                               Map<String, ReadTurnParameters.Source> sources) {
+        Integer days = com.cretas.aims.ai.tool.TimeRangeFilter.defaultRecentDays(schema);
+        if (days == null || !properties.containsKey("startDate") || !properties.containsKey("endDate")
+                || !blank(params.get("startDate")) || !blank(params.get("endDate"))) {
+            return;
+        }
+        java.time.LocalDate to = java.time.LocalDate.now();
+        java.time.LocalDate from = to.minusDays(days - 1L);
+        params.put("startDate", from.toString());
+        params.put("endDate", to.toString());
+        // 与原话时间同一个标记: 结果按这段时间标 APPLIED, 0 条时回复点名时间
+        params.put(com.cretas.aims.ai.tool.TimeRangeFilter.SAID, from + "~" + to);
+        sources.put("startDate", ReadTurnParameters.Source.DEFAULT);
+        sources.put("endDate", ReadTurnParameters.Source.DEFAULT);
+        // 工具据此在默认窗口 0 条时放宽到最近有数据的一段 (用户明确说的时间不放宽)
+        params.put(com.cretas.aims.ai.tool.TimeRangeFilter.DEFAULT_WINDOW, Boolean.TRUE);
+        addReadNotice(request, com.cretas.aims.ai.tool.ReadReplyNotices.notice(
+                com.cretas.aims.ai.tool.ReadReplyNotices.DEFAULT_TIME_RANGE,
+                "没说时间，按最近 " + days + " 天（" + from + " 至 " + to + "）查询。",
+                Map.of("days", days, "from", from.toString(), "to", to.toString())));
+    }
+
+    private static boolean blank(Object value) {
+        return value == null || (value instanceof String s && s.isBlank());
+    }
+
+    private static void addReadNotice(IntentExecuteRequest request, Map<String, Object> notice) {
+        if (request.getReadTurnNotices() == null) request.setReadTurnNotices(new java.util.ArrayList<>());
+        request.getReadTurnNotices().add(notice);
+    }
+
+    /**
+     * 成功的只读执行: 本轮用的默认 / 替换的口径 / 多于一页时的总条数, 进 metadata.readNotices 并加在回复开头。
+     */
+    private static void attachReadNotices(IntentExecuteRequest request, IntentExecuteResponse response) {
+        if (request == null || response == null || request.getReadTurnSnapshot() == null
+                || !("SUCCESS".equals(response.getStatus()) || "COMPLETED".equals(response.getStatus()))) {
+            return;
+        }
+        List<Map<String, Object>> notices = new java.util.ArrayList<>();
+        if (request.getReadTurnNotices() != null) notices.addAll(request.getReadTurnNotices());
+        Map<String, Object> paged = pagedNotice(request.getReadTurnSnapshot(), response.getResultData());
+        if (paged != null) notices.add(paged);
+        if (notices.isEmpty()) return;
+        Map<String, Object> metadata = response.getMetadata() == null
+                ? new HashMap<>() : new HashMap<>(response.getMetadata());
+        metadata.put(com.cretas.aims.ai.tool.ReadReplyNotices.METADATA_KEY, notices);
+        response.setMetadata(metadata);
+        List<String> texts = com.cretas.aims.ai.tool.ReadReplyNotices.texts(metadata);
+        response.setMessage(com.cretas.aims.ai.tool.ReadReplyNotices.prefix(response.getMessage(), texts));
+        response.setFormattedText(com.cretas.aims.ai.tool.ReadReplyNotices.prefix(response.getFormattedText(), texts));
+    }
+
+    /** Steve 口径 7: 结果多于一页时写明总条数与本页范围; 工具结果里拿不到总数时不写 (不猜)。 */
+    private static Map<String, Object> pagedNotice(Map<String, Object> snapshot, Object resultData) {
+        Object inner = com.cretas.aims.ai.tool.TimeRangeFilter.toolResultOf(resultData);
+        if (inner instanceof Map<?, ?> map && !hasTotal(map) && map.get("data") instanceof Map<?, ?> nested) {
+            inner = nested;
+        }
+        if (!(inner instanceof Map<?, ?> data) || !(snapshot.get("params") instanceof Map<?, ?> params)) return null;
+        Long total = null;
+        for (String key : List.of("total", "totalElements", "totalCount")) {
+            if (data.get(key) instanceof Number n) {
+                total = n.longValue();
+                break;
+            }
+        }
+        Integer size = null;
+        int page = 1;
+        for (Map.Entry<?, ?> e : params.entrySet()) {
+            if (!(e.getKey() instanceof String key) || !(e.getValue() instanceof Number n)) continue;
+            if (!ReadTurnParameters.isPagingKey(key)) continue;
+            if ("size".equals(key) || "pageSize".equals(key)) size = n.intValue();
+            else page = Math.max(1, n.intValue());
+        }
+        if (total == null || size == null || size <= 0 || total <= (long) page * size) return null;
+        long first = (long) (page - 1) * size + 1;
+        long last = Math.min(total, (long) page * size);
+        return com.cretas.aims.ai.tool.ReadReplyNotices.notice(
+                com.cretas.aims.ai.tool.ReadReplyNotices.PAGED_RESULT,
+                "共 " + total + " 条，这里是第 " + first + "–" + last + " 条（每页 " + size
+                        + " 条）；可以说「下一页」，或加上时间、状态缩小范围。",
+                Map.of("total", total, "page", page, "size", size));
+    }
+
+    private static boolean hasTotal(Map<?, ?> map) {
+        return map.containsKey("total") || map.containsKey("totalElements") || map.containsKey("totalCount");
+    }
+
+    private static String boundViolation(Object definition, int value, String label) {
+        if (!(definition instanceof Map<?, ?> field)) return null;
+        if (field.get("minimum") instanceof Number min && value < min.longValue()) {
+            return label + "不能小于 " + min.longValue();
+        }
+        if (field.get("maximum") instanceof Number max && value > max.longValue()) {
+            return label + "最多 " + max.longValue();
+        }
+        return null;
+    }
+
+    private static IntentExecuteResponse readTurnRefusal(AIIntentConfig intent, String status, String message) {
+        return IntentExecuteResponse.builder()
+                .intentRecognized(true)
+                .intentCode(intent != null ? intent.getIntentCode() : null)
+                .intentName(intent != null ? intent.getIntentName() : null)
+                .intentCategory(intent != null ? intent.getIntentCategory() : null)
+                .status(status)
+                .aiMode("READ")
+                .message(message)
+                .formattedText(message)
+                .executedAt(LocalDateTime.now())
+                .build();
+    }
+
+    /** 成功的只读执行: 每个最终参数的值与来源进响应 metadata.readQuery (两个入口据此写会话记忆)。 */
+    private static void attachReadQuery(IntentExecuteRequest request, IntentExecuteResponse response) {
+        if (request == null || response == null || request.getReadTurnSnapshot() == null
+                || !("SUCCESS".equals(response.getStatus()) || "COMPLETED".equals(response.getStatus()))) {
+            return;
+        }
+        Map<String, Object> metadata = response.getMetadata() == null
+                ? new HashMap<>() : new HashMap<>(response.getMetadata());
+        metadata.put(ReadTurnParameters.METADATA_KEY, request.getReadTurnSnapshot());
+        response.setMetadata(metadata);
     }
 
     private IntentExecuteResponse executeWithToolInScope(ToolExecutor tool, String factoryId,
@@ -172,46 +497,10 @@ public class ToolDispatchService {
         try {
             // Request identity must be checked before parameter extraction or cache lookup.
             // A cached supplier result is subject to the same boundary as a fresh Tool call.
-            if ((SupplierComparisonReadIntent.TOOL.equals(tool.getToolName())
-                    || (intent != null && SupplierComparisonReadIntent.CODE.equals(intent.getIntentCode())))
-                    && (!SupplierComparisonReadIntent.TOOL.equals(tool.getToolName())
-                    || intent == null || !SupplierComparisonReadIntent.CODE.equals(intent.getIntentCode())
-                    || com.cretas.aims.security.AuthenticatedActor.fromCurrentExecution()
-                    .filter(actor -> actor.type() == com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER)
-                    .filter(actor -> Objects.equals(actor.id(), userId))
-                    .filter(actor -> Objects.equals(actor.factoryId(), factoryId)).isEmpty())) {
-                return IntentExecuteResponse.builder()
-                        .intentRecognized(true)
-                        .intentCode(intent == null ? null : intent.getIntentCode())
-                        .status("FORBIDDEN").aiMode("READ")
-                        .message("供应商价格比较需要绑定的工厂用户身份及正式只读工具")
-                        .resultData(Map.of("code", "FORBIDDEN", "toolName", tool.getToolName()))
-                        .executedAt(LocalDateTime.now()).build();
-            }
-            // Round 8-β Fix: Canvas factory_tool_configs was a "write-only" table.
-            // Factory admins toggled tools on/off in Canvas UI (ToolSkillMatrix.vue) but
-            // ToolRegistry.isToolEnabledForFactory() was never called on the execution
-            // path — the switch was decorative. Now we check it here so a disabled tool
-            // returns a clear error instead of silently running.
-            if (toolRegistry != null && !toolRegistry.isToolEnabledForFactory(factoryId, tool.getToolName())) {
-                log.warn("Tool disabled for factory: tool={}, factoryId={}", tool.getToolName(), factoryId);
-                // Sprint 12: 4-element error UX (≥80-char). Covers both genuine admin-disable
-                // and cross-factory cases (e.g. F999 not configured → tool not enabled).
-                String disabledMsg = String.format(
-                        "「%s」功能当前在工厂 %s 不可用。可能原因: 1. 该功能已被工厂管理员在功能配置中关闭;"
-                        + " 2. 当前工厂 (%s) 未开通此模块或工厂编号不存在; 3. 您的角色暂无此功能权限。"
-                        + "建议: 联系工厂管理员在「功能配置」中开启, 或确认已切换到正确的工厂。",
-                        intent.getIntentName(), factoryId, factoryId);
-                return IntentExecuteResponse.builder()
-                        .intentRecognized(true)
-                        .intentCode(intent.getIntentCode())
-                        .intentName(intent.getIntentName())
-                        .intentCategory(intent.getIntentCategory())
-                        .status("TOOL_DISABLED")
-                        .message(disabledMsg)
-                        .formattedText(disabledMsg)
-                        .executedAt(LocalDateTime.now())
-                        .build();
+            // 身份门 + 功能开关与澄清候选共用一份判定 (ToolExecutionAdmission), 候选不许比这里放得宽。
+            IntentExecuteResponse admissionRefused = admissionRefusalResponse(tool, intent, factoryId, userId);
+            if (admissionRefused != null) {
+                return admissionRefused;
             }
 
             IntentExecuteResponse frontlineDenied = frontlineWriteDenied(tool, factoryId, intent, userRole);
@@ -289,20 +578,9 @@ public class ToolDispatchService {
             // 导致 3 个原料只读查询对所有角色全拒 (超管也拒), 4 个写工具的
             // confirm 终点被拦死。仅保留给只有 legacy 角色逻辑的旧工具。
             // 规则只有一份, 在 ToolPermissionChain —— Skill 路径也问它 (2026-10-06)。
-            if (ToolPermissionChain.legacyRoleDenied(tool, userRole)) {
-                log.warn("Tool 权限不足: tool={}, userRole={}", tool.getToolName(), userRole);
-                // Sprint 12: 4-element error UX (≥80-char) for permission-denied case.
-                String permDeniedMsg = ToolPermissionChain.legacyRoleDeniedMessage(userRole, intent.getIntentName());
-                return IntentExecuteResponse.builder()
-                        .intentRecognized(true)
-                        .intentCode(intent.getIntentCode())
-                        .intentName(intent.getIntentName())
-                        .intentCategory(intent.getIntentCategory())
-                        .status("PERMISSION_DENIED")
-                        .message(permDeniedMsg)
-                        .formattedText(permDeniedMsg)
-                        .executedAt(LocalDateTime.now())
-                        .build();
+            IntentExecuteResponse legacyRoleRefused = legacyRoleDeniedResponse(tool, intent, userRole);
+            if (legacyRoleRefused != null) {
+                return legacyRoleRefused;
             }
 
             // 1.4. W9 红线 (AI-RBAC) — SITE B: central enforce. Covers sensitive write tools that do NOT
@@ -337,7 +615,8 @@ public class ToolDispatchService {
             // 1.5. 预览模式（不支持预览的请求已在上方 fail closed）
             if (Boolean.TRUE.equals(request.getPreviewOnly())) {
                 log.info("Tool preview 模式: tool={}, intentCode={}", tool.getToolName(), intent.getIntentCode());
-                return executeToolPreview(tool, factoryId, request, intent, userId, userRole);
+                // 工具开关 / 供应商身份 / 一线 / 旧逐工具角色检查上面都已判过, 直接进预览本体
+                return executeToolPreviewBody(tool, factoryId, request, intent, userId, userRole);
             }
 
             // A claimed preview is already the approved command. Do not resolve references or
@@ -364,6 +643,10 @@ public class ToolDispatchService {
             }
             if (!boundConfirmation) {
                 params.put("userInput", userInputToUse);
+                // 预处理会把「上月」等换成日期区间; 工具要判「和上月比」这类说法时读原话
+                if (request.getUserInput() != null) {
+                    params.put("originalUserInput", request.getUserInput());
+                }
             }
             params.put("intentCode", intent.getIntentCode());
 
@@ -417,7 +700,8 @@ public class ToolDispatchService {
                 }
 
                 // 2.6. 从预处理结果中提取时间范围
-                if (pq.hasTimeRange()) {
+                // 用户原话里根本没说时间 (预处理按上下文补出的日期不算「你说的」): 不带时间参数, 也不出「不能按时间筛选」提示
+                if (pq.hasTimeRange() && com.cretas.aims.ai.tool.TimeRangeFilter.mentionsTime(request.getUserInput())) {
                     TimeNormalizationRules.TimeRange timeRange = pq.getPrimaryTimeRange();
                     if (timeRange != null && timeRange.isValid()) {
                         params.put("startDate", timeRange.getStart().toLocalDate().toString());
@@ -428,6 +712,17 @@ public class ToolDispatchService {
                         log.info("从预处理结果提取时间范围: {} ~ {}", timeRange.getStart(), timeRange.getEnd());
                     }
                 }
+            }
+
+            // 2.65. INTENT-DISTILL D1: 只读查询的参数来源 (本轮 > 同一目标已确认 > 默认) 与程序绑定的分页
+            boolean readTurn = !writeOperation && !boundConfirmation
+                    && tool.getAccessMode() == ToolExecutor.AccessMode.READ;
+            Map<String, ReadTurnParameters.Source> readSources = new java.util.LinkedHashMap<>();
+            java.util.Set<String> readDoNotInherit = new java.util.HashSet<>();
+            if (readTurn) {
+                IntentExecuteResponse refusal = prepareReadTurn(tool, intent, request, userInputToUse, params,
+                        readSources, readDoNotInherit);
+                if (refusal != null) return refusal;
             }
 
             // 2.7. 优先使用已学习的规则提取参数
@@ -447,6 +742,7 @@ public class ToolDispatchService {
                 if (!missingParams.isEmpty()) {
                     ruleExtractedParams = parameterExtractionLearningService.extractWithLearnedRules(
                             factoryId, intent.getIntentCode(), userInputToUse, missingParams);
+                    if (readTurn) ruleExtractedParams = withoutModelPaging(ruleExtractedParams, readSources);
 
                     if (!ruleExtractedParams.isEmpty()) {
                         params.putAll(ruleExtractedParams);
@@ -458,6 +754,7 @@ public class ToolDispatchService {
             // 2.8. LLM 提取剩余参数
             Map<String, Object> llmExtractedParams = boundConfirmation ? new HashMap<>()
                     : extractParametersWithLLM(factoryId, userInputToUse, tool, params);
+            if (readTurn) llmExtractedParams = withoutModelPaging(llmExtractedParams, readSources);
             if (!llmExtractedParams.isEmpty() && isFollowUpConfirmation(request)) {
                 // 追问确认按钮带来的参数是用户在按钮上看见并点了的 (「领用 30 公斤」);
                 // 补缺参时 LLM 从原话「再加十公斤」里读出的 10 不许把它改掉。
@@ -475,6 +772,12 @@ public class ToolDispatchService {
                 } catch (Exception e) {
                     log.warn("参数提取规则学习失败: {}", e.getMessage());
                 }
+            }
+
+            // 2.95. INTENT-DISTILL D1: 本轮来源都已就位, 再按同一目标补本轮没说的已确认条件; 默认值只记来源,
+            // 由工具在缺参时补 (合并之后补缺, 不会盖掉本轮或沿用的值)
+            if (readTurn) {
+                completeReadTurn(tool, intent, factoryId, userId, request, params, readSources, readDoNotInherit);
             }
 
             // Learned rules, LLM extraction and resolved references are all untrusted inputs.
@@ -585,6 +888,13 @@ public class ToolDispatchService {
                     long executionTime = System.currentTimeMillis() - startTime;
                     totalExecutionTime += executionTime;
                     boolean toolSucceeded = isToolResultSuccessful(resultJson);
+                    if (writeOperation && !toolSucceeded && isOutcomeUnknownResult(resultJson)) {
+                        // 工具把异常吞成了 {success:false}, 但出错前已经有写入提交 (AbstractBusinessTool 标的):
+                        // 不是失败, 是结果不明 —— 不重试、不进纠错、不报失败
+                        log.error("Write tool reported a possibly-committed failure; outcome unknown: tool={}",
+                                tool.getToolName());
+                        return writeOutcomeUnknownResponse(intent, tool, extractToolFailureMessage(resultJson));
+                    }
                     String toolFailureMessage = toolSucceeded ? null : extractToolFailureMessage(resultJson);
 
                     // 只有显式 Boolean true 才能审计为成功；无法确认的结果不得进入成功缓存。
@@ -714,12 +1024,7 @@ public class ToolDispatchService {
                         // The tool may already have committed. Read-side self correction must
                         // never replay a write or turn an uncertain outcome into a retry prompt.
                         log.error("Write tool outcome unknown; not retried: tool={}", tool.getToolName(), e);
-                        return IntentExecuteResponse.builder()
-                                .intentRecognized(true).intentCode(intent.getIntentCode())
-                                .status("OUTCOME_UNKNOWN").aiMode("WRITE")
-                                .message("操作结果暂时无法确认，请先在业务页面核对记录，勿重复提交。")
-                                .metadata(Map.of("toolName", tool.getToolName(), "retryable", false))
-                                .executedAt(LocalDateTime.now()).build();
+                        return writeOutcomeUnknownResponse(intent, tool);
                     }
 
                     String errorMsg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
@@ -904,9 +1209,79 @@ public class ToolDispatchService {
     }
 
     /**
+     * 身份门 + 功能开关 (与澄清候选共用一份判定 {@link ToolExecutionAdmission}) 的回复; null = 放行。
+     * 执行出口与预览出口都用这一份。
+     */
+    private IntentExecuteResponse admissionRefusalResponse(ToolExecutor tool, AIIntentConfig intent,
+                                                           String factoryId, Long userId) {
+        java.util.Optional<ToolExecutionAdmission.Refusal> refused =
+                ToolExecutionAdmission.refusal(toolRegistry, tool, intent, factoryId, userId);
+        if (refused.isEmpty()) {
+            return null;
+        }
+        // 任何拒绝都不往下执行: switch 表达式对枚举必须穷举 —— 以后新增一种 Refusal 而这里没写,
+        // 编译就过不去 (不会落空放行; 候选侧按 isPresent 一律不出) (#1769 终审第 2 条)。
+        ToolExecutionAdmission.Refusal admission = refused.get();
+        return switch (admission) {
+            case SUPPLIER_IDENTITY -> IntentExecuteResponse.builder()
+                .intentRecognized(true)
+                .intentCode(intent == null ? null : intent.getIntentCode())
+                .status("FORBIDDEN").aiMode("READ")
+                .message("供应商价格比较需要绑定的工厂用户身份及正式只读工具")
+                .resultData(Map.of("code", "FORBIDDEN", "toolName", tool.getToolName()))
+                .executedAt(LocalDateTime.now()).build();
+            // Round 8-β Fix: Canvas factory_tool_configs was a "write-only" table.
+            // Factory admins toggled tools on/off in Canvas UI (ToolSkillMatrix.vue) but
+            // the switch was never read on the execution path. Now a disabled tool
+            // returns a clear error instead of silently running.
+            case TOOL_DISABLED -> {
+                log.warn("Tool disabled for factory: tool={}, factoryId={}", tool.getToolName(), factoryId);
+                // Sprint 12: 4-element error UX (≥80-char). Covers both genuine admin-disable
+                // and cross-factory cases (e.g. F999 not configured → tool not enabled).
+                String disabledMsg = String.format(
+                        "「%s」功能当前在工厂 %s 不可用。可能原因: 1. 该功能已被工厂管理员在功能配置中关闭;"
+                        + " 2. 当前工厂 (%s) 未开通此模块或工厂编号不存在; 3. 您的角色暂无此功能权限。"
+                        + "建议: 联系工厂管理员在「功能配置」中开启, 或确认已切换到正确的工厂。",
+                        intent.getIntentName(), factoryId, factoryId);
+                yield IntentExecuteResponse.builder()
+                        .intentRecognized(true)
+                        .intentCode(intent.getIntentCode())
+                        .intentName(intent.getIntentName())
+                        .intentCategory(intent.getIntentCategory())
+                        .status("TOOL_DISABLED")
+                        .message(disabledMsg)
+                        .formattedText(disabledMsg)
+                        .executedAt(LocalDateTime.now())
+                        .build();
+            }
+        };
+    }
+
+    /** 旧逐工具角色串检查 ({@link ToolPermissionChain#legacyRoleDenied}) 的回复; null = 放行。执行与预览共用。 */
+    private IntentExecuteResponse legacyRoleDeniedResponse(ToolExecutor tool, AIIntentConfig intent, String userRole) {
+        if (!ToolPermissionChain.legacyRoleDenied(tool, userRole)) {
+            return null;
+        }
+        log.warn("Tool 权限不足: tool={}, userRole={}", tool.getToolName(), userRole);
+        // Sprint 12: 4-element error UX (≥80-char) for permission-denied case.
+        String permDeniedMsg = ToolPermissionChain.legacyRoleDeniedMessage(userRole,
+                intent == null ? null : intent.getIntentName());
+        return IntentExecuteResponse.builder()
+                .intentRecognized(true)
+                .intentCode(intent == null ? null : intent.getIntentCode())
+                .intentName(intent == null ? null : intent.getIntentName())
+                .intentCategory(intent == null ? null : intent.getIntentCategory())
+                .status("PERMISSION_DENIED")
+                .message(permDeniedMsg)
+                .formattedText(permDeniedMsg)
+                .executedAt(LocalDateTime.now())
+                .build();
+    }
+
+    /**
      * 一线角色 + 写操作 + 未开放 ⇒ 拒绝 (不出确认卡、不执行)。其它情况返回 null, 继续原有流程。
      */
-    private IntentExecuteResponse frontlineWriteDenied(ToolExecutor tool, String factoryId,
+    public IntentExecuteResponse frontlineWriteDenied(ToolExecutor tool, String factoryId,
                                                        AIIntentConfig intent, String userRole) {
         if (frontlineWriteGrants == null) {
             return null;
@@ -941,14 +1316,35 @@ public class ToolDispatchService {
         }
     }
 
+    /**
+     * 直接调预览 (显式意图码的预览分支, 两入口一份) 与执行出口里的预览同一套门: 工具开关 TOOL_DISABLED、
+     * 供应商身份 (ToolExecutionAdmission)、一线未开放、旧逐工具角色检查 (ToolPermissionChain)。
+     * 过不了的不跑预览、不铸确认令牌 (PR-3b 终审 M1)。W9 权限矩阵按原口径不管只读预览。
+     */
     private IntentExecuteResponse executeToolPreviewInScope(ToolExecutor tool, String factoryId,
                                                      IntentExecuteRequest request,
                                                      AIIntentConfig intent,
                                                      Long userId, String userRole) {
+        IntentExecuteResponse admissionRefused = admissionRefusalResponse(tool, intent, factoryId, userId);
+        if (admissionRefused != null) {
+            return admissionRefused;
+        }
         IntentExecuteResponse frontlineDenied = frontlineWriteDenied(tool, factoryId, intent, userRole);
         if (frontlineDenied != null) {
             return frontlineDenied;
         }
+        IntentExecuteResponse legacyRoleRefused = legacyRoleDeniedResponse(tool, intent, userRole);
+        if (legacyRoleRefused != null) {
+            return legacyRoleRefused;
+        }
+        return executeToolPreviewBody(tool, factoryId, request, intent, userId, userRole);
+    }
+
+    /** 预览本体 (门已在调用方判过)。 */
+    private IntentExecuteResponse executeToolPreviewBody(ToolExecutor tool, String factoryId,
+                                                     IntentExecuteRequest request,
+                                                     AIIntentConfig intent,
+                                                     Long userId, String userRole) {
         try {
             Map<String, Object> params = TrustedExecutionContext.merge(
                     request.getContext(), factoryId, userId, userRole);
@@ -975,18 +1371,17 @@ public class ToolDispatchService {
                 params = controlledPurchase.previewParameters(factoryId, params);
             }
 
-            String argumentsJson = objectMapper.writeValueAsString(params);
-            ToolCall toolCall = ToolCall.of(
-                    java.util.UUID.randomUUID().toString(),
-                    tool.getToolName(),
-                    argumentsJson
-            );
+            // 缺「要操作哪一个」(如报工缺工序任务): 不问内部编号, 工具查出本人可选的对象来选 (见 ParameterChoiceResolver)
+            if (tool instanceof com.cretas.aims.ai.tool.ParameterChoiceResolver resolver
+                    && isBlankParam(params.get(resolver.choiceParameter()))) {
+                IntentExecuteResponse asked = resolveChoiceOrAsk(resolver, tool, factoryId, userId, intent, params,
+                        request.getUserInput());
+                if (asked != null) {
+                    return asked;
+                }
+            }
 
-            Map<String, Object> context = TrustedExecutionContext.merge(
-                    null, factoryId, userId, userRole);
-            context.put("intentConfig", intent);
-
-            String resultJson = tool.preview(toolCall, context);
+            String resultJson = runReadOnlyPreview(tool, intent, params, factoryId, userId, userRole);
 
             IntentExecuteResponse previewResponse = IntentExecuteResponse.builder()
                     .intentRecognized(true)
@@ -1030,6 +1425,7 @@ public class ToolDispatchService {
                             previewData, "currentValues", "currentValue", "current");
                     Map<String, Object> tokenNewValues = extractPreviewSection(
                             previewData, "newValues", "newValue", "proposed");
+                    PreviewSubject subject = previewSubject(tool, params, previewData);
                     com.cretas.aims.entity.intent.IntentPreviewToken boundToken =
                             previewTokenService.createBoundToken(
                                     new PreviewTokenService.BoundTokenRequest(
@@ -1037,9 +1433,9 @@ public class ToolDispatchService {
                                             intent.getIntentCode(), intent.getIntentName(),
                                             tool.getToolName(), tool.getVersion(),
                                             ToolExecutionMode.EXECUTE,
-                                            null, null, null,
+                                            subject.entityType(), subject.entityId(), subject.operation(),
                                             params,
-                                            tokenCurrentValues != null ? tokenCurrentValues : java.util.Map.of(),
+                                            priorStateSnapshot(tool, previewData),
                                             tokenNewValues != null ? tokenNewValues : java.util.Map.of(),
                                             300));
                     if (com.cretas.aims.service.intent.PurchaseTaskGrantService.CANONICAL_TOOL.equals(tool.getToolName())) {
@@ -1094,8 +1490,335 @@ public class ToolDispatchService {
         }
     }
 
+    private static boolean isBlankParam(Object value) {
+        return value == null || (value instanceof String s && s.isBlank());
+    }
+
+    /**
+     * 真实入口在「通用缺参追问」(Slot Filling) 与「W0 写确认」<b>之前</b>先问「要操作哪一个」。
+     *
+     * <p>prod 2026-11-14 F006: #1706 的选项只挂在 {@link #executeToolPreview} 里, 而两个真实入口第一轮都到不了它 ——
+     * 流式先被 7b Slot Filling 截走 (「需要您提供以下信息：1. 请提供工序任务编号」, 回「1」被当成 taskId=1);
+     * 普通入口短语快捷通道 → 显式意图 → W0 直接出空确认卡。这里给两处共用同一个出口 ({@link #resolveChoiceOrAsk}),
+     * 口径与预览完全相同 (本人 + 未指派 + 主管)。
+     *
+     * <ul>
+     *   <li>工具不是 {@link com.cretas.aims.ai.tool.ParameterChoiceResolver} / 已经带了要选的参数 → null (原流程不变);</li>
+     *   <li>多个 → 返回「列出来选」的追问 (开参数收集会话挂选项, 已给的产量带着走); 一个都没有 → 如实说没有;</li>
+     *   <li>只有一个 → 把它和抽到的参数写回 {@code request.context}, 返回 null: 调用方照常往下走,
+     *       写操作仍停在 W0 写确认 (⛔ 这里不出、也不绕过写确认);</li>
+     *   <li>查询失败 → null, 退回原有追问 (不拿假候选顶替)。</li>
+     * </ul>
+     *
+     * @param extract true = 先用与预览同一个抽参方法补参 (普通入口: 还没抽过); 流式入口 7a.5 已抽过传 false
+     */
+    public IntentExecuteResponse askWhichOneBeforeWriteGuard(ToolExecutor tool, String factoryId,
+                                                             IntentExecuteRequest request, AIIntentConfig intent,
+                                                             Long userId, String userRole, boolean extract) {
+        if (!(tool instanceof com.cretas.aims.ai.tool.ParameterChoiceResolver resolver)
+                || request == null || intent == null || userId == null) {
+            return null;
+        }
+        Map<String, Object> context = request.getContext() == null
+                ? new HashMap<>() : new HashMap<>(request.getContext());
+        if (!isBlankParam(context.get(resolver.choiceParameter()))) {
+            return null;
+        }
+        // 一线没开放的写操作: 不查、不列, 交给原有的拒绝出口 (它们给的才是准确的话)
+        if (frontlineWriteDenied(tool, factoryId, intent, userRole) != null) {
+            return null;
+        }
+        try (var egressFactory = com.cretas.aims.service.consent.LlmEgressGuard.analysing(factoryId)) {
+            Map<String, Object> params = TrustedExecutionContext.merge(context, factoryId, userId, userRole);
+            if (extract) {
+                try {
+                    Map<String, Object> extracted =
+                            extractParametersWithLLM(factoryId, request.getUserInput(), tool, params);
+                    if (extracted != null) {
+                        extracted.forEach(params::putIfAbsent);
+                        extracted.forEach(context::putIfAbsent);
+                    }
+                } catch (Exception e) {
+                    log.warn("写确认前抽参失败 (继续用已有参数): tool={}, error={}", tool.getToolName(), e.getMessage());
+                }
+                if (!isBlankParam(params.get(resolver.choiceParameter()))) {
+                    // 话里本来就带了是哪一个 (「完成 1827 号工序」): 不列, 原流程照常
+                    request.setContext(com.cretas.aims.ai.tool.WriteGuardService.withoutCallerConfirmation(context));
+                    return null;
+                }
+            }
+            TrustedExecutionContext.enforcePrincipal(params, factoryId, userId, userRole);
+            IntentExecuteResponse asked = resolveChoiceOrAsk(resolver, tool, factoryId, userId, intent, params,
+                    request.getUserInput());
+            if (asked != null) {
+                return asked;
+            }
+            Object picked = params.get(resolver.choiceParameter());
+            if (!isBlankParam(picked)) {
+                // 只有一个: 带出来, 写进 context (W0 确认卡的 previewParams / Slot Filling 都从这里读)
+                context.put(resolver.choiceParameter(), picked);
+            }
+            request.setContext(com.cretas.aims.ai.tool.WriteGuardService.withoutCallerConfirmation(context));
+            return null;
+        }
+    }
+
+    /**
+     * 工具说「要操作哪一个」这个参数缺了: 查本人可选的对象。
+     * <ul>
+     *   <li>只有一个 → 直接填进 {@code params}, 返回 null 继续走原有预览 (仍出确认卡, 不自动提交);</li>
+     *   <li>多个 → 返回追问 (列成序号), 并开参数收集会话挂上选项: 已给的产量等参数带着走, 回「1」/ 说产品名即选中;</li>
+     *   <li>一个都没有 → 如实说没有 (不编造), 不出确认卡;</li>
+     *   <li>查询出错 → 返回 null, 退回原有的追问 (不拿假候选顶替)。</li>
+     * </ul>
+     */
+    private IntentExecuteResponse resolveChoiceOrAsk(com.cretas.aims.ai.tool.ParameterChoiceResolver resolver,
+                                                     ToolExecutor tool, String factoryId, Long userId,
+                                                     AIIntentConfig intent, Map<String, Object> params,
+                                                     String userInput) {
+        com.cretas.aims.ai.tool.ParameterChoiceResolver.Resolution resolution;
+        try {
+            resolution = resolver.resolveChoices(factoryId, userId, params, userInput);
+        } catch (Exception e) {
+            log.warn("查本人可选对象失败, 退回原有追问: tool={}, error={}", tool.getToolName(), e.getMessage());
+            return null;
+        }
+        if (resolution == null) {
+            return null;
+        }
+        String param = resolver.choiceParameter();
+        switch (resolution.kind()) {
+            case SINGLE: {
+                if (resolution.choices().size() != 1) {
+                    return null;
+                }
+                params.put(param, resolution.choices().get(0).value());
+                log.info("缺 {} 且本人只有一个可选, 直接带出: tool={}, value={}", param, tool.getToolName(),
+                        resolution.choices().get(0).value());
+                return null;
+            }
+            case NONE:
+                return IntentExecuteResponse.builder()
+                        .intentRecognized(true)
+                        .intentCode(intent.getIntentCode())
+                        .intentName(intent.getIntentName())
+                        .intentCategory(intent.getIntentCategory())
+                        .status(PREVIEW_BLOCKED)
+                        .message(resolution.message())
+                        .formattedText(resolution.message())
+                        .aiMode("WRITE")
+                        .executedAt(LocalDateTime.now())
+                        .build();
+            case MANY: {
+                if (resolution.choices().isEmpty()) {
+                    return null;
+                }
+                String body = resolution.message();
+                IntentExecuteResponse asked = IntentExecuteResponse.builder()
+                        .intentRecognized(true)
+                        .intentCode(intent.getIntentCode())
+                        .intentName(intent.getIntentName())
+                        .intentCategory(intent.getIntentCategory())
+                        .status("NEED_MORE_INFO")
+                        .aiMode("WRITE")
+                        .executedAt(LocalDateTime.now())
+                        .build();
+                Map<String, Object> missing = new HashMap<>();
+                missing.put("missingParameters", List.of(param));
+                openPreviewQuestionSession(tool, factoryId, userId, intent, params, missing, asked);
+                boolean attached = false;
+                if (asked.getSessionId() != null && conversationService != null) {
+                    List<ConversationService.CandidateInfo> options = new ArrayList<>();
+                    for (com.cretas.aims.ai.tool.ParameterChoiceResolver.Choice c : resolution.choices()) {
+                        options.add(ConversationService.CandidateInfo.builder()
+                                .intentCode(c.value()).intentName(c.label())
+                                .description(String.join(
+                                        com.cretas.aims.service.ClarificationChoiceMatcher.KEYWORD_SEPARATOR, c.keywords()))
+                                .build());
+                    }
+                    attached = conversationService.attachParameterChoices(
+                            factoryId, userId, asked.getSessionId(), param, resolver.choiceLabel(), options);
+                    if (!attached) {
+                        // 没挂上选项 = 回「1」会被当成别的话: 不带会话 (不留一个答不对的追问)
+                        log.warn("选项没挂上会话, 追问不带会话: tool={}, session={}", tool.getToolName(), asked.getSessionId());
+                        conversationService.cancelConversation(factoryId, userId, asked.getSessionId());
+                        asked.setSessionId(null);
+                    }
+                }
+                // 回复有人接才叫用户「回数字」; 没会话时只能请他重新说一遍
+                String hint = attached ? resolution.replyHint() : resolution.rephraseHint();
+                String text = hint == null || hint.isBlank() ? body : body + "\n" + hint;
+                asked.setMessage(text);
+                asked.setFormattedText(text);
+                asked.setClarificationQuestions(List.of(text));
+                return asked;
+            }
+            default:
+                return null;
+        }
+    }
+
     /** 预览被业务规则拦下 (canDo=false) 或预览本身失败 (success=false) 时的状态。 */
     static final String PREVIEW_BLOCKED = "PREVIEW_BLOCKED";
+
+    // ==================== 写入确认: 对象与状态绑定 (Fable 审阅 §8.2 / 建议 5) ====================
+
+    /**
+     * 本类唯一的工具预览调用点: 预览铸凭据 ({@link #executeToolPreview}) 与确认前重读状态
+     * ({@link #recheckPreviewState}) 都走这里 —— 直调 ToolExecutor 的位置受
+     * {@code ToolExecutionArchitectureTest} 棘轮约束, 只许收不许增。参数已由调用方按可信主体收口。
+     */
+    private String runReadOnlyPreview(ToolExecutor tool, AIIntentConfig intent, Map<String, Object> params,
+                                      String factoryId, Long userId, String userRole) throws Exception {
+        ToolCall toolCall = ToolCall.of(
+                java.util.UUID.randomUUID().toString(),
+                tool.getToolName(),
+                objectMapper.writeValueAsString(params));
+        Map<String, Object> context = TrustedExecutionContext.merge(null, factoryId, userId, userRole);
+        context.put("intentConfig", intent);
+        return tool.preview(toolCall, context);
+    }
+
+    static final String WRITE_OUTCOME_UNKNOWN_MESSAGE = "操作结果暂时无法确认，请先在业务页面核对记录，勿重复提交。";
+
+    /** 写操作结果不明 (可能已写入): 统一回执, 确认流程据此把凭据记 OUTCOME_UNKNOWN。 */
+    private static IntentExecuteResponse writeOutcomeUnknownResponse(AIIntentConfig intent, ToolExecutor tool) {
+        return writeOutcomeUnknownResponse(intent, tool, null);
+    }
+
+    /** 带上工具给的出错原因: 结果不明时用户仍要知道它为什么停下。 */
+    private static IntentExecuteResponse writeOutcomeUnknownResponse(AIIntentConfig intent, ToolExecutor tool,
+                                                                     String reason) {
+        String message = reason == null || reason.isBlank()
+                ? WRITE_OUTCOME_UNKNOWN_MESSAGE
+                : WRITE_OUTCOME_UNKNOWN_MESSAGE + "出错原因：" + reason;
+        return IntentExecuteResponse.builder()
+                .intentRecognized(true).intentCode(intent.getIntentCode())
+                .status("OUTCOME_UNKNOWN").aiMode("WRITE")
+                .message(message)
+                .formattedText(message)
+                .metadata(Map.of("toolName", tool.getToolName(), "retryable", false))
+                .executedAt(LocalDateTime.now()).build();
+    }
+
+    private boolean isOutcomeUnknownResult(String resultJson) {
+        if (resultJson == null) {
+            return false;
+        }
+        try {
+            return flaggedOutcomeUnknown(objectMapper.readTree(resultJson));
+        } catch (Exception unparsable) {
+            return false;
+        }
+    }
+
+    private static boolean flaggedOutcomeUnknown(com.fasterxml.jackson.databind.JsonNode payload) {
+        return payload != null && payload.isObject()
+                && payload.path(com.cretas.aims.ai.tool.AbstractBusinessTool.OUTCOME_UNKNOWN_FLAG).asBoolean(false);
+    }
+
+    /** 凭据上的对象: 类型、ID、操作。新建型工具没有已存在的对象, ID 记 {@link #NEW_RECORD_ENTITY_ID}。 */
+    record PreviewSubject(String entityType, String entityId, String operation) { }
+
+    static final String NEW_RECORD_ENTITY_ID = "NEW";
+
+    private static final java.util.Set<String> PRINCIPAL_PARAMETER_KEYS = java.util.Set.of(
+            "factoryId", "factory_id", "tenantId", "tenant_id", "userId", "user_id");
+
+    /**
+     * 铸凭据时把对象类型与对象 ID 填上 (以前三个都传 null, 对象只作为参数的一部分进了哈希)。
+     * 类型: 预览自报的 entityType, 否则就是工具名 (工具即对象种类); ID: 预览自报的 entityId,
+     * 否则按工具声明的必填参数顺序取第一个以 Id / No 结尾的值 (主体参数); 新建型工具取 NEW。
+     */
+    PreviewSubject previewSubject(ToolExecutor tool, Map<String, Object> params, Map<String, Object> previewData) {
+        String entityType = previewText(previewData, "entityType");
+        if (entityType == null) {
+            entityType = tool.getToolName();
+        }
+        String entityId = previewText(previewData, "entityId");
+        if (entityId == null && params != null) {
+            for (String key : requiredParameterNames(tool)) {
+                if (key == null || PRINCIPAL_PARAMETER_KEYS.contains(key)
+                        || !(key.endsWith("Id") || key.endsWith("No"))) {
+                    continue;
+                }
+                Object value = params.get(key);
+                if (value != null && !String.valueOf(value).isBlank()) {
+                    entityId = String.valueOf(value);
+                    break;
+                }
+            }
+        }
+        if (entityId == null && tool.previewCreatesNewRecordOnly()) {
+            entityId = NEW_RECORD_ENTITY_ID;
+        }
+        String operation = tool.getActionType() != null ? tool.getActionType().name() : null;
+        return new PreviewSubject(truncate(entityType, 50), truncate(entityId, 100), truncate(operation, 20));
+    }
+
+    private static List<String> requiredParameterNames(ToolExecutor tool) {
+        Map<String, Object> schema;
+        try {
+            schema = tool.getParametersSchema();
+        } catch (RuntimeException e) {
+            return List.of();
+        }
+        if (schema != null && schema.get("required") instanceof List<?> required) {
+            List<String> names = new ArrayList<>();
+            for (Object item : required) {
+                if (item instanceof String name) {
+                    names.add(name);
+                }
+            }
+            return names;
+        }
+        return List.of();
+    }
+
+    private static String previewText(Map<String, Object> previewData, String key) {
+        if (previewData == null) {
+            return null;
+        }
+        Object value = previewData.get(key);
+        if (value == null && previewData.get("data") instanceof Map<?, ?> nested) {
+            value = nested.get(key);
+        }
+        return value == null || String.valueOf(value).isBlank() ? null : String.valueOf(value);
+    }
+
+    private static String truncate(String value, int max) {
+        return value == null || value.length() <= max ? value : value.substring(0, max);
+    }
+
+    /**
+     * 预览给出的改前值快照: 铸凭据时存进凭据、确认时重算后比对。规则只有一份, 在
+     * {@link PreviewStateRecheck#priorStateSnapshot} —— 老确认入口与新执行网关共用。
+     */
+    Map<String, Object> priorStateSnapshot(ToolExecutor tool, Map<String, Object> previewData) {
+        return PreviewStateRecheck.priorStateSnapshot(tool, previewData);
+    }
+
+    static final String NOT_COMPARABLE_MESSAGE = PreviewStateRecheck.NOT_COMPARABLE_MESSAGE;
+
+    /**
+     * 确认时重读对象当前状态 (老确认入口): 用凭据里绑定的参数, 经本类唯一的预览调用点
+     * ({@link #runReadOnlyPreview}, 同样的可信上下文、同样的参数形状) 重跑一次只读预览, 判定规则见
+     * {@link PreviewStateRecheck#recheck} —— 与 {@code DefaultToolExecutionGateway} 执行前核对同一份。
+     */
+    PreviewStateRecheck.ConfirmStateCheck recheckPreviewState(ToolExecutor tool, AIIntentConfig intent,
+                                                              String storedCurrentValuesJson,
+                                                              Map<String, Object> claimedParameters,
+                                                              String factoryId, Long userId, String userRole) {
+        return PreviewStateRecheck.recheck(tool, storedCurrentValuesJson, claimedParameters, params -> {
+            TrustedExecutionContext.enforcePrincipal(params, factoryId, userId, userRole);
+            try {
+                return runReadOnlyPreview(tool, intent, params, factoryId, userId, userRole);
+            } catch (Exception e) {
+                log.warn("确认前重读状态失败, 拒绝执行: tool={}, error={}", tool.getToolName(), e.getMessage());
+                throw e;
+            }
+        }, objectMapper);
+    }
 
     /**
      * 预览没通过时给出的回执; 预览通过 (或判不了) 返回 {@code null}。
@@ -1124,14 +1847,11 @@ public class ToolDispatchService {
         if (previewData == null) {
             return null;
         }
-        String reason = null;
+        // 「预览说不行」的判据只有一份 (确认前核对的 PRECONDITION_CHANGED 用的也是它)
+        String reason = PreviewStateRecheck.blockedReason(previewData);
         String status = PREVIEW_BLOCKED;
         List<String> questions = null;
         if (Boolean.FALSE.equals(previewData.get("success"))) {
-            reason = firstText(previewData.get("message"), previewData.get("error"));
-            if (reason == null) {
-                reason = "预览没有通过，未执行任何操作。";
-            }
             if (Boolean.TRUE.equals(previewData.get("needMoreInfo"))
                     || "NEED_MORE_INFO".equals(previewData.get("status"))) {
                 status = "NEED_MORE_INFO";
@@ -1143,15 +1863,6 @@ public class ToolDispatchService {
                             questions.add((String) item);
                         }
                     }
-                }
-            }
-        } else {
-            Object nested = previewData.get("data");
-            Map<String, Object> data = nested instanceof Map ? (Map<String, Object>) nested : previewData;
-            if (Boolean.FALSE.equals(data.get("canDo"))) {
-                reason = firstText(data.get("message"));
-                if (reason == null) {
-                    reason = "当前条件下不能执行这个操作，未执行任何操作。";
                 }
             }
         }
@@ -1259,45 +1970,12 @@ public class ToolDispatchService {
         }
     }
 
-    private static String firstText(Object... candidates) {
-        for (Object c : candidates) {
-            if (c instanceof String && !((String) c).isBlank()) {
-                return (String) c;
-            }
-        }
-        return null;
-    }
-
     /**
-     * 写操作影响契约 (2026-07-24): 从 doPreview 结果里按既有约定字段提取
-     * 改前/改后小节。兼容三种形态: 顶层 map / data 嵌套 / 标量值 (包成
-     * {"值": v})。任一 key 命中即返回; 全miss 返回 null (前端回落参数网格)。
+     * 写操作影响契约 (2026-07-24): 从 doPreview 结果里提取改前/改后小节 —— 规则在
+     * {@link PreviewStateRecheck#previewSection} (改前值快照用的也是它, 只留一份)。
      */
-    @SuppressWarnings("unchecked")
     private Map<String, Object> extractPreviewSection(Map<String, Object> previewData, String... keys) {
-        if (previewData == null) {
-            return null;
-        }
-        Map<String, Object> data = previewData;
-        Object nested = previewData.get("data");
-        if (nested instanceof Map) {
-            data = (Map<String, Object>) nested;
-        }
-        for (String key : keys) {
-            Object v = data.get(key);
-            if (v == null) {
-                v = previewData.get(key);
-            }
-            if (v instanceof Map) {
-                return (Map<String, Object>) v;
-            }
-            if (v != null) {
-                Map<String, Object> wrapped = new HashMap<>();
-                wrapped.put("值", v);
-                return wrapped;
-            }
-        }
-        return null;
+        return PreviewStateRecheck.previewSection(previewData, keys);
     }
 
     /**
@@ -1334,6 +2012,62 @@ public class ToolDispatchService {
             }
         }
         return base;
+    }
+
+    private static final String[] EMPTY_RESULT_RANGE_KEYS = {
+            "dateRange", "period", "month", "startDate", "endDate", "date", "rangeStart", "rangeEnd"};
+
+    /**
+     * 「查询成功但没有数据」: data 是空集合/空 Map, 或非空 Map 但每个值都是 null/空集合/空 Map/空串/数值 0。
+     * data 为 null 不算(写操作成功也常常没有 data, 仍走「操作已完成。」)。
+     */
+    @SuppressWarnings("unchecked")
+    static boolean isEmptyQueryData(Object data) {
+        if (data == null) return false;
+        if (data instanceof java.util.Collection<?> c) return c.isEmpty();
+        if (!(data instanceof Map<?, ?> map)) return false;
+        if (map.isEmpty()) return true;
+        boolean sawEmptyContainer = false;
+        for (Map.Entry<?, ?> e : map.entrySet()) {
+            Object v = e.getValue();
+            if (v == null) continue;
+            // 查询范围回显(startDate 等)不算「有数据」
+            if (v instanceof String && java.util.Arrays.asList(EMPTY_RESULT_RANGE_KEYS).contains(String.valueOf(e.getKey()))) continue;
+            if (v instanceof java.util.Collection<?> c) {
+                if (!c.isEmpty()) return false;
+                sawEmptyContainer = true;
+            } else if (v instanceof Map<?, ?> m) {
+                if (!m.isEmpty() && !isEmptyQueryData(m)) return false;
+                sawEmptyContainer = true;
+            } else if (v instanceof String str) {
+                if (!str.isBlank()) return false;
+            } else if (v instanceof Number n) {
+                if (n.doubleValue() != 0d) return false;
+            } else {
+                return false;
+            }
+        }
+        return sawEmptyContainer;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static String buildEmptyResultMessage(AIIntentConfig intent, Object data) {
+        String subject = intent != null && intent.getIntentName() != null && !intent.getIntentName().isBlank()
+                ? "「" + intent.getIntentName() + "」" : "你查询的内容";
+        String range = null;
+        if (data instanceof Map<?, ?> map) {
+            StringBuilder sb = new StringBuilder();
+            for (String k : EMPTY_RESULT_RANGE_KEYS) {
+                Object v = map.get(k);
+                if (v instanceof String str && !str.isBlank()) {
+                    if (sb.length() > 0) sb.append(" ");
+                    sb.append(str);
+                }
+            }
+            if (sb.length() > 0) range = sb.toString();
+        }
+        return "查询已完成，" + (range != null ? "在 " + range + " 内" : "这段时间内")
+                + "没有找到" + subject + "相关记录。可以换个时间范围或条件再查。";
     }
 
     /**
@@ -1383,7 +2117,10 @@ public class ToolDispatchService {
             if (message == null) {
                 // Sprint 12: enriched fallback. Bare "执行失败" violates close-gate
                 // "≥80-char structured Chinese with concrete 数字/名称/日期, no placeholder".
-                if (success) {
+                if (success && isEmptyQueryData(data)) {
+                    // 查询成功但没有数据 ≠ 查询失败: 不能掉进下面「请补充…重试」的引导文案
+                    message = buildEmptyResultMessage(intent, data);
+                } else if (success) {
                     message = "操作已完成。";
                 } else {
                     message = "本次查询没有获得可展示的结果。请补充明确的业务对象、指标和时间范围后重试；"
@@ -1481,6 +2218,8 @@ public class ToolDispatchService {
             Long userId,
             String userRole) {
         String toolName = selectedTool.getToolName();
+        boolean writeTool = writeGuardService != null && writeGuardService.isWriteTool(selectedTool);
+        boolean gatewayInvoked = false;
         try {
             String expectedVersion = "material_stock_summary".equals(toolName)
                     || (toolRuntimeRegistry != null && toolRuntimeRegistry.isGoverned(toolName))
@@ -1505,7 +2244,13 @@ public class ToolDispatchService {
                     Optional.empty(),
                     Optional.empty(),
                     Instant.now().plusSeconds(30));
+            gatewayInvoked = true;
             ToolExecutionResult gatewayResult = toolExecutionGateway.execute(command);
+            if (writeTool && (gatewayResult.status() == com.cretas.aims.ai.tool.gateway.ToolExecutionStatus.OUTCOME_UNKNOWN
+                    || flaggedOutcomeUnknown(gatewayResult.payload()))) {
+                log.error("Gateway write outcome unknown: tool={}, status={}", toolName, gatewayResult.status());
+                return writeOutcomeUnknownResponse(intent, selectedTool);
+            }
 
             IntentExecuteResponse response;
             if (gatewayResult.payload().isObject()
@@ -1538,6 +2283,10 @@ public class ToolDispatchService {
             // A selected migration call never re-enters legacy cache/retry/correction paths.
             log.error("D11B Gateway migration execution failed: tool={}",
                     toolName, gatewayFailure);
+            if (writeTool && gatewayInvoked) {
+                // 网关已经开始执行写工具后才抛: 写入可能已落下, 不能报失败
+                return writeOutcomeUnknownResponse(intent, selectedTool);
+            }
             return IntentExecuteResponse.builder()
                     .intentRecognized(true)
                     .intentCode(intent.getIntentCode())
@@ -1600,7 +2349,8 @@ public class ToolDispatchService {
         }
         Object userInput = previous.get("userInput");
         LlmParameterGrounding.Result grounded = LlmParameterGrounding.ground(
-                changed, previous, userInput instanceof String s ? s : null, tool.getParametersSchema());
+                changed, previous, userInput instanceof String s ? s : null, tool.getParametersSchema(),
+                entityScope(factoryId, tool));
         params.clear();
         params.putAll(corrected);
         params.putAll(grounded.accepted());
@@ -1722,16 +2472,26 @@ public class ToolDispatchService {
             // ⛔ 只对显式声明 x-llm-extract-optional=true 的工具抽可选参数 (organizer 审 #967):
             // 这里每次工具执行都会进来, 不加开关等于给所有只有可选参数的读工具每次多一次大模型调用 (延迟 + 费用)。
             boolean optionalOnly = requiredParams == null || requiredParams.isEmpty();
-            if (optionalOnly && !Boolean.TRUE.equals(parametersSchema.get(EXTRACT_OPTIONAL_FLAG))) {
+            boolean extractOptional = Boolean.TRUE.equals(parametersSchema.get(EXTRACT_OPTIONAL_FLAG));
+            boolean hasAnyOfGroups = !ToolParameterGroups.groups(parametersSchema).isEmpty();
+            if (optionalOnly && !extractOptional && !hasAnyOfGroups) {
                 return extractedParams;
             }
-            Collection<String> candidates = optionalOnly ? properties.keySet() : requiredParams;
+            Collection<String> candidates = optionalOnly
+                    ? (extractOptional ? properties.keySet() : List.<String>of())
+                    : requiredParams;
+            java.util.function.Predicate<String> given = p -> existingParams.containsKey(p)
+                    && existingParams.get(p) != null
+                    && !(existingParams.get(p) instanceof String s && s.trim().isEmpty());
             List<String> missingParams = candidates.stream()
-                    .filter(p -> !existingParams.containsKey(p) ||
-                                 existingParams.get(p) == null ||
-                                 (existingParams.get(p) instanceof String &&
-                                  ((String) existingParams.get(p)).trim().isEmpty()))
+                    .filter(given.negate())
                     .collect(Collectors.toList());
+            // 「至少给一个」组 (见 ToolParameterGroups): 必填已齐也要抽, 否则问句里的客户名 / 销售单号到不了工具
+            for (String name : ToolParameterGroups.missingMembers(parametersSchema, given)) {
+                if (!missingParams.contains(name)) {
+                    missingParams.add(name);
+                }
+            }
 
             if (missingParams.isEmpty()) {
                 return extractedParams;
@@ -1787,7 +2547,8 @@ public class ToolDispatchService {
                             // LLM 给的数字 / 备注必须在用户原话或上下文里落得了地, 否则丢掉 (参数保持缺失,
                             // 必填的由工具走 NEED_MORE_INFO 追问)。规则只有一份, 见 LlmParameterGrounding。
                             LlmParameterGrounding.Result grounded = LlmParameterGrounding.ground(
-                                    raw, existingParams, userInput, parametersSchema);
+                                    raw, existingParams, userInput, parametersSchema,
+                                    entityScope(factoryId, tool));
                             extractedParams.putAll(grounded.accepted());
                             if (!grounded.dropped().isEmpty()) {
                                 log.info("LLM 参数未落地, 已丢弃: tool={}, dropped={}",

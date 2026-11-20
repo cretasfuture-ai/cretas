@@ -1,10 +1,16 @@
 import React from 'react';
 import { StyleSheet, View } from 'react-native';
-import { Button, Card, Text } from 'react-native-paper';
+import { Button, Card, Icon, Text } from 'react-native-paper';
+import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuthStore } from '../store/authStore';
+import { useMyTodoEntry } from '../hooks/useMyTodos';
+import { todoTabScreen } from './todoTab';
+import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
 
-export default function RestrictedRoleNavigator() {
+const Tab = createBottomTabNavigator<any>();
+
+function RestrictedRoleScreen() {
   const insets = useSafeAreaInsets();
   const logout = useAuthStore((state) => state.logout);
 
@@ -20,6 +26,29 @@ export default function RestrictedRoleNavigator() {
         </Card.Content>
       </Card>
     </View>
+  );
+}
+
+/**
+ * 兜底锁定页。B4: 若后端 /my-todos/types 说这个账号有能办的待办, 底栏多一格「待办」
+ * (只开放待办, 不开放别的业务入口); 没有待办时只剩锁定页, 底栏隐藏 —— 与改前一致。
+ */
+export default function RestrictedRoleNavigator() {
+  const todoEntry = useMyTodoEntry();
+  return (
+    <Tab.Navigator screenLayout={screenErrorBoundary}
+      screenOptions={{ headerShown: false, tabBarStyle: todoEntry.visible ? undefined : { display: 'none' } }}>
+      <Tab.Screen
+        name="RestrictedHomeTab"
+        component={RestrictedRoleScreen}
+        options={{
+          title: '首页',
+          tabBarButtonTestID: 'restricted-tab-home',
+          tabBarIcon: ({ color, size }) => <Icon source="lock-outline" size={size} color={color} />,
+        }}
+      />
+      {todoTabScreen(Tab, todoEntry, 'restricted-tab-oa-todo')}
+    </Tab.Navigator>
   );
 }
 

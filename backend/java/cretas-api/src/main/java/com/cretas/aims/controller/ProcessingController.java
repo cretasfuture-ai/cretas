@@ -78,6 +78,7 @@ public class ProcessingController {
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
             @Valid @RequestBody CreateProductionBatchRequest request) {
         log.info("创建生产批次: factoryId={}, batchNumber={}", factoryId, request.getBatchNumber());
+        assertPositiveBatchQuantity(request);
         ProductionBatch batch = toProductionBatch(request);
         ProductionBatch result = processingService.createBatch(factoryId, batch);
         return ApiResponse.success(result);
@@ -92,9 +93,11 @@ public class ProcessingController {
     public ApiResponse<ProductionBatch> startProduction(
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
             @PathVariable @Parameter(description = "批次ID", example = "123") String batchId,
-            @RequestParam @Parameter(description = "负责人ID", example = "1") Integer supervisorId) {
+            @RequestParam @Parameter(description = "负责人ID", example = "1") Integer supervisorId,
+            @RequestParam(required = false) @Parameter(description = "缺料未解决时强制开工的原因 (工厂开了缺料拦开工才需要)")
+            String forceStartReason) {
         log.info("开始生产: factoryId={}, batchId={}", factoryId, batchId);
-        ProductionBatch result = processingService.startProduction(factoryId, batchId, supervisorId);
+        ProductionBatch result = processingService.startProduction(factoryId, batchId, supervisorId, forceStartReason);
         return ApiResponse.success(result);
     }
 
@@ -138,10 +141,12 @@ public class ProcessingController {
             @PathVariable @Parameter(description = "批次ID", example = "123") String batchId,
             @RequestParam @Parameter(description = "实际产量", example = "100.5") BigDecimal actualQuantity,
             @RequestParam @Parameter(description = "良品数量", example = "98.0") BigDecimal goodQuantity,
-            @RequestParam @Parameter(description = "不良品数量", example = "2.5") BigDecimal defectQuantity) {
+            @RequestParam @Parameter(description = "不良品数量", example = "2.5") BigDecimal defectQuantity,
+            @RequestParam(required = false) @Parameter(description = "实际产量超过批次计划量时的超产原因")
+            String overPlanReason) {
         log.info("完成生产: factoryId={}, batchId={}, actualQuantity={}", factoryId, batchId, actualQuantity);
-        ProductionBatch result = processingService.completeProduction(
-                factoryId, batchId, actualQuantity, goodQuantity, defectQuantity);
+        ProductionBatch result = processingService.completeProductionWithReason(
+                factoryId, batchId, actualQuantity, goodQuantity, defectQuantity, overPlanReason);
         return ApiResponse.success(result);
     }
 
@@ -460,7 +465,13 @@ public class ProcessingController {
             @RequestParam(defaultValue = "20") @Parameter(description = "每页大小", example = "20") Integer size,
             @RequestParam(required = false)
             @Parameter(description = "检测结果过滤, 逗号分隔 (PASS / FAIL / CONDITIONAL / PENDING)", example = "FAIL,CONDITIONAL")
-            String result) {
+            String result,
+            @RequestParam(required = false) @Parameter(description = "关键词: 质检编号前缀或生产批次号包含") String keyword,
+            @RequestParam(required = false) @Parameter(description = "批量批次号, 逗号/空白分隔, 精确匹配, 最多 200 个") String batchNos,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
+            @Parameter(description = "检验日期起 yyyy-MM-dd (含)") java.time.LocalDate dateFrom,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
+            @Parameter(description = "检验日期止 yyyy-MM-dd (含)") java.time.LocalDate dateTo) {
         // 🔴 2026-08-28: `result` 此前**没有声明**, 而前端「不良品处置」屏一直在传它。
         //   Spring 静默忽略未声明的请求参数 ⇒ 那个屏的两次调用(FAIL / CONDITIONAL)完全相同,
         //   拿到同一份全量列表并拼接 ⇒ 每条渲染两遍, 且 PASS 的行也混了进来。
@@ -473,7 +484,26 @@ public class ProcessingController {
         PageRequest pageRequest = new PageRequest();
         pageRequest.setPage(page);
         pageRequest.setSize(size);
-        PageResponse<Map<String, Object>> body = processingService.getInspections(factoryId, batchId, results, pageRequest);
+        java.util.List<String> nos = (batchNos == null || batchNos.isBlank()) ? null
+                : java.util.Arrays.stream(batchNos.split("[,，\\s]+")).toList();
+        PageResponse<Map<String, Object>> body = processingService.searchInspections(
+                factoryId, batchId, results, dateFrom, dateTo, keyword, nos, pageRequest);
+        return ApiResponse.success(body);
+    }
+
+    /**
+     * 批量批次号查询: 哪些批次号在本厂有质检记录 (找到), 哪些没有 (未找到)。只读。
+     */
+    @GetMapping("/quality/inspections/batch-no-check")
+    @Operation(summary = "批量批次号核对", description = "返回 found / missing 两个批次号列表")
+    public ApiResponse<Map<String, Object>> checkInspectionBatchNos(
+            @PathVariable String factoryId, @RequestParam String batchNos) {
+        java.util.List<String> nos = java.util.Arrays.stream(batchNos.split("[,，\\s]+"))
+                .map(String::trim).filter(s -> !s.isEmpty()).distinct().toList();
+        java.util.Set<String> found = new java.util.HashSet<>(processingService.findInspectedBatchNumbers(factoryId, nos));
+        Map<String, Object> body = new java.util.LinkedHashMap<>();
+        body.put("found", nos.stream().filter(found::contains).toList());
+        body.put("missing", nos.stream().filter(n -> !found.contains(n)).toList());
         return ApiResponse.success(body);
     }
 
@@ -727,7 +757,8 @@ public class ProcessingController {
     /**
      * 处理审批决策
      */
-    @RequirePermission({"quality:read_write"})
+    // 与 /quality-disposition/{id}/approve 同一个审批权限码 (纪律排查 B3, 几处一致有测试钉住)
+    @RequirePermission({"approval_quality_disposition:approve"})
     @PostMapping("/quality/approvals/{approvalId}/decision")
     @Operation(summary = "处理审批", description = "审批或拒绝特批申请")
     public ApiResponse<SpecialApprovalDTO> processApprovalDecision(
@@ -758,8 +789,14 @@ public class ProcessingController {
             throw new IllegalArgumentException("无法获取审批人信息");
         }
 
+        // 审批身份校验 (角色 / 申请人不能自批) 用 JWT 拦截器写入的已认证身份, 不用请求体里的 approverId
+        Object tokenUserId = httpRequest.getAttribute("userId");
+        Long actingUserId = tokenUserId instanceof Number n ? n.longValue() : null;
+        Object tokenRole = httpRequest.getAttribute("role");
+        String actingRole = tokenRole == null ? null : String.valueOf(tokenRole);
+
         SpecialApprovalDTO result = specialApprovalService.processDecision(
-                factoryId, approvalId, decision, approverId);
+                factoryId, approvalId, decision, approverId, actingUserId, actingRole);
 
         return ApiResponse.success(result);
     }
@@ -1035,6 +1072,24 @@ public class ProcessingController {
      * {@code totalCost}, {@code unitCost}, {@code yieldRate},
      * {@code efficiency}, {@code workDurationMinutes}.
      */
+    /**
+     * 建批次的数量必须大于 0 (Steve 2026-11-15 裁决: 后端也拒绝 0, 不再静默记 0)。
+     *
+     * <p>实际数量取 quantity, 缺省回退 plannedQuantity; 两者都没填也算 0。填了 plannedQuantity 就必须大于 0。
+     * 没有计划量、按实际报工的持续生产, 走存货生产类型的生产计划, 不走手工建批次。
+     * 只管 HTTP 入口; AI 建批工具走 service, 不受此限 (本次裁决范围外)。
+     */
+    static void assertPositiveBatchQuantity(CreateProductionBatchRequest r) {
+        java.math.BigDecimal planned = r.getPlannedQuantity();
+        java.math.BigDecimal effective = r.getQuantity() != null ? r.getQuantity() : planned;
+        if ((planned != null && planned.signum() <= 0) || effective == null || effective.signum() <= 0) {
+            throw new com.cretas.aims.exception.BusinessException(400, "批次数量必须大于 0")
+                    .withCode("BATCH_QUANTITY_MUST_BE_POSITIVE")
+                    .withHint("请填写大于 0 的计划数量; 没有固定产量的持续生产, 请改建「存货生产」类型的生产计划")
+                    .withHintTarget("plannedQuantity");
+        }
+    }
+
     private static ProductionBatch toProductionBatch(CreateProductionBatchRequest r) {
         ProductionBatch b = new ProductionBatch();
         b.setBatchNumber(r.getBatchNumber());

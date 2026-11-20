@@ -21,11 +21,24 @@ MODEL = "qwen3.8:27b"
 PROVIDER = "mac-mini"
 OLLAMA_URL = "http://127.0.0.1:11435/api/chat"
 TOTAL_TIMEOUT_S = 55
+# Aurora 网关 (scripts/ops/f006_aurora_runtime.py REQUEST_SECONDS) 的整次请求墙钟上限。
+GATEWAY_WALL_S = 50
+# 网关先回 200 头, 之后要等模型处理完提问才出第一行 (Aurora 实测 285 token 约 18s、388 token 约 24s,
+# 按次冷启动)。读超时须长于网关墙钟, 让网关自己的超时错误帧先到; 又须短于总期限 55s。原 28s 会在
+# 网关仍在期限内时先把连接掐断 (2026-11-19)。
+READ_TIMEOUT_S = 52
 _inflight = asyncio.Lock()
+# 与 Java ChatBusinessFactGuard.PERSONA / NO_DATA_RULES 同一口径 (Java 侧另有输出闸兜底):
+# 「白垩纪」是公司名不是古生物; 这条通道没有任何工厂数据, 不得给业务数字或业务事实。
 _SYSTEM = (
-    "你是白垩纪食品工厂助手。仅回答食品安全、生产和质量管理的通用咨询。"
-    "用中文给出简洁实用的建议，不超过300字。不能声称读取了工厂实时数据，"
-    "不能代用户执行业务操作。具体库存、订单或金额应引导使用系统查询。"
+    "你是「白垩纪」食品工厂管理系统里的工厂助手。「白垩纪」只是本系统的品牌名，"
+    "与古生物学、恐龙、地质年代没有任何关系，不要介绍或谈论这些。"
+    "仅回答食品安全、生产和质量管理的通用咨询，用中文给出简洁实用的建议，不超过300字。"
+    "你看不到本工厂的任何实时业务数据：不得给出任何业务数字或业务事实"
+    "（销售额、销量、营收、利润、成本、产量、出货量、库存、订单数、合格率、同比、环比、排名等），"
+    "也不得说某项业务在增长、下降、良好或不佳；不能代用户执行业务操作。"
+    "用户问到这类情况时，只回答需要先查一下真实数据，并请用户说明想查哪一项"
+    "（例如本月销售概况、出货记录、库存、生产报表）。"
 )
 
 
@@ -72,11 +85,13 @@ async def stream_question(question: str, enable_thinking: bool) -> AsyncIterator
             async with asyncio.timeout(TOTAL_TIMEOUT_S):
                 async with httpx.AsyncClient(
                     trust_env=False, follow_redirects=False,
-                    timeout=httpx.Timeout(28, connect=3, pool=1),
+                    timeout=httpx.Timeout(READ_TIMEOUT_S, connect=3, pool=1),
                     limits=httpx.Limits(max_connections=1, max_keepalive_connections=1),
                 ) as client:
                     attempted = True
                     async with client.stream("POST", OLLAMA_URL, json=payload) as response:
+                        if response.is_error:
+                            await response.aread()  # 先读完错误体, 流关闭后 except 里才取得到
                         response.raise_for_status()
                         yield {"type": "meta", "provider": PROVIDER, "model": MODEL,
                                "thinking": enable_thinking, "correlationId": correlation}
@@ -127,8 +142,22 @@ async def stream_question(question: str, enable_thinking: bool) -> AsyncIterator
     except (TimeoutError, httpx.TimeoutException):
         status = 504
         yield {"type": "error", "code": "MINI_TIMEOUT", "message": "本地 AI 响应超时，请重试"}
-    except (httpx.HTTPError, ValueError, TypeError):
-        yield {"type": "error", "code": "MINI_UNAVAILABLE", "message": "本地 AI 未能完成回答，请稍后重试"}
+    except (httpx.HTTPError, ValueError, TypeError) as exc:
+        # 2026-11-19: 上游 4xx/5xx 只记状态码和响应体前 200 字 (网关错误体不含提问/回答原文)
+        upstream = ""
+        if isinstance(exc, httpx.HTTPStatusError):
+            try:
+                body = exc.response.text[:200]
+            except Exception:
+                body = "<unreadable>"
+            upstream = " upstream_status=%s upstream_body=%r" % (exc.response.status_code, body)
+        # 2026-11-17: 原因只记异常类型 (不记内容, 可能含回答原文), 便于从日志区分「连不上」与「回答格式不对」
+        try:
+            logger.warning("f006_boss_question failed correlation=%s reason=%s%s", correlation, type(exc).__name__, upstream)
+        except Exception:
+            pass
+        yield {"type": "error", "code": "MINI_UNAVAILABLE",
+               "message": "本地 AI 没能回答：本地模型服务连不上或返回了无法使用的内容，请稍后重试"}
     finally:
         try:
             elapsed = int((time.monotonic() - started) * 1000)

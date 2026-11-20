@@ -1,6 +1,7 @@
 import type { Component } from 'vue';
 import dayjs from 'dayjs';
 import { Box, Goods, Operation, QuestionFilled, Van } from '@element-plus/icons-vue';
+import { isRawWorkflowOwnerAnchorName } from '@/constants/rawWorkflowOwnerAnchor';
 
 /**
  * 溯源页与个体抽屉共用的**显示**映射 —— 文案与 el-tag 色型的唯一出处。
@@ -97,6 +98,60 @@ export function qualityStatusTag(status?: string | null): TagType {
     default:
       return 'info';
   }
+}
+
+/** 表格单元格用: 认识的码给中文, 认不出来按全站约定写「未知状态（原码）」, 空值返回空串。 */
+export function qualityStatusCellText(status?: string | null): string {
+  if (status == null || `${status}`.trim() === '') return '';
+  const label = qualityStatusLabel(status);
+  return label !== status ? (label ?? '') : `未知状态（${status}）`;
+}
+
+// ── 产品名 ──────────────────────────────────────────────────────────────────
+
+/** 批次挂在「多产出计划」的内部锚点产品上时的说法: 不暴露 __RAW_WORKFLOW_OWNER__ 内部常量。 */
+export const UNLINKED_PRODUCT_TEXT = '未关联产品';
+
+export function traceProductName(name?: string | null): string {
+  if (name == null || `${name}`.trim() === '') return '';
+  return isRawWorkflowOwnerAnchorName(name) ? UNLINKED_PRODUCT_TEXT : name;
+}
+
+// ── 召回箱数缺口 ────────────────────────────────────────────────────────────
+
+const BOX_GAP_LABEL: Record<string, string> = {
+  BOX_PACKAGING_SNAPSHOT_UNKNOWN: '箱数未记录（缺少按箱的包装规格）',
+  BOX_UNIT_CONVERSION_UNKNOWN: '箱数无法折算（单位换算不上）',
+  PHYSICAL_QUANTITY_UNKNOWN: '在库数量未记录',
+  RESERVED_QUANTITY_UNKNOWN: '预留数量未记录',
+  SHIPMENT_DEDUCTION_UNKNOWN: '发货扣减数量未记录',
+  SHIPMENT_LINE_FACT_MISSING: '发货明细未记录',
+  FINISHED_BATCH_FACT_MISSING: '成品批次信息缺失',
+  SHIPMENT_EDGE_FACT_MISSING: '部分发货单没有成品扣减记录',
+  SHIPMENT_DEDUCTION_INCOMPLETE: '部分成品批次的发货扣减与已发数量不一致',
+};
+
+const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+
+/**
+ * 召回箱数缺口给人看的一行。认识的缺口码用中文; 认不出来的才退回后端 message,
+ * 且把里面的 UUID 抹掉 (内部主键不展示)。⛔ 不显示 `BOX_..._UNKNOWN` 这类内部码。
+ */
+export function boxGapText(gap: { code?: string | null; message?: string | null }): string {
+  const code = gap.code ?? '';
+  if (Object.prototype.hasOwnProperty.call(BOX_GAP_LABEL, code)) return BOX_GAP_LABEL[code];
+  const message = (gap.message ?? '').replace(UUID_RE, '').replace(/\s{2,}/g, ' ').trim();
+  return message;
+}
+
+/** 去重后的缺口文案: 多个来源同一种缺口只列一行。 */
+export function boxGapLines(gaps: ReadonlyArray<{ code?: string | null; message?: string | null }>): string[] {
+  const seen = new Set<string>();
+  for (const g of gaps) {
+    const text = boxGapText(g);
+    if (text) seen.add(text);
+  }
+  return [...seen];
 }
 
 // ── 出货状态 ────────────────────────────────────────────────────────────────
@@ -209,6 +264,28 @@ export function formatTimeRange(start?: string | null, end?: string | null): str
   return `${s} ~ ${sameDay ? e.slice(11) : e}`;
 }
 
+// ── 损耗率 ──────────────────────────────────────────────────────────────────
+
+/**
+ * 工序「损耗率」显示: 只由投入/产出重量现算, ⛔ 不读后端 lossRate 字段
+ * (历史工序记录该字段是百分数 0-100, 工艺单路径是比例 0-1, 口径不一, 乘 100 会得到 10000.0% 这类数)。
+ * 投入 5% 损耗: 217.5 → 206.625 显示「5.0%」; 产出大于投入显示「增重 x%」; 投入为 0/缺失/单位不一致显示「—」。
+ */
+export function formatStageLossRate(
+  input?: number | null,
+  output?: number | null,
+  unitsComparable = true,
+): { text: string; reason: string } {
+  if (input == null || output == null || !Number.isFinite(input) || !Number.isFinite(output)) {
+    return { text: '—', reason: '投入或产出未记录, 无法计算' };
+  }
+  if (!unitsComparable) return { text: '—', reason: '投入与产出单位不一致, 无法计算' };
+  if (input <= 0) return { text: '—', reason: '投入为 0, 无法计算' };
+  const pct = ((input - output) / input) * 100;
+  if (pct < 0) return { text: `增重 ${(-pct).toFixed(1)}%`, reason: '产出大于投入(如加料), 按增重显示' };
+  return { text: `${pct.toFixed(1)}%`, reason: '(投入 - 产出) / 投入' };
+}
+
 // ── 小工具 ──────────────────────────────────────────────────────────────────
 
 export function isBlank(value: unknown): boolean {
@@ -222,4 +299,12 @@ export function isBlank(value: unknown): boolean {
 export function joinPresent(parts: Array<string | null | undefined>): string | null {
   const present = parts.filter((p): p is string => !!p && `${p}`.trim().length > 0);
   return present.length === 0 ? null : present.join(' · ');
+}
+
+/**
+ * 质检节点/行的显示名: 「质检 + 结论」。后端只有内部 inspectionId (UUID), 没有业务编号,
+ * ⛔ 不拿它的片段(如 #823d7330)当编号显示给用户。
+ */
+export function inspectionNodeTitle(result?: string | null): string {
+  return `质检 ${qualityStatusLabel(result) || '待定'}`;
 }

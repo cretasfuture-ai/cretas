@@ -1,0 +1,297 @@
+#!/usr/bin/env node
+/**
+ * session-health.js — UserPromptSubmit hook: 只提醒、不拦截。
+ *
+ * 目的: 替用户判断「什么时候该换 session」。读当前会话 transcript, 算出
+ *   1) 当前上下文体积(最近一次 assistant usage 的 input + cache 三项)
+ *   2) 本会话已压缩次数(system/compact_boundary 行数)
+ * 越过阈值时, 通过 additionalContext 让 Claude 在下一个自然节点主动写交接并建议换会话。
+ *
+ * 阈值依据(2026-11-13 Steve 拍板 300K 软 / 400K 硬): 用 11-09~11-12 共 67 个会话的真实「每轮上下文增长」回放,
+ *   新会话起步约 150K(起步中位数 126K + 读交接), 只算读缓存:
+ *   250K 省 44% / 换 208 次, 300K 省 39% / 换 130 次, 400K 省 30% / 换 74 次, 600K 省 10% / 换 33 次;
+ *   300→250 只多省 5 个点却多换 78 次, 所以软线 300K(到任务边界再换)、硬线 400K(到安全停止点就换)。
+ *   更早的依据: 131 个会话(07-29~09-21)压缩几乎都在 ~1M, 成本中位数 0 次压缩 $126 / 1 次 $400 / 2 次 $570。
+ *
+ * 安静: 同一级别每个会话只提醒一次; L2 之后每再涨 100K 提醒一次。
+ * 失败策略: 全程 fail-silent, 任何异常都输出空, 不影响会话。
+ * organizer (标题以「Organizer｜」开头): 首次运行时注入 organizer SKILL.md「交班流程」原文, 过线提醒也带上。
+ * 接线: 项目 settings 的 UserPromptSubmit (原有) + 用户级 ~/.claude/settings.json 的 SessionStart / PostToolUse(*),
+ *   用户级 command 指向主目录副本。organizer 多数回合被消息叫醒, 不一定经过 UserPromptSubmit; worktree 里新加的
+ *   项目级 PostToolUse 2026-11-13 实测在新会话不触发, 所以挂用户级。状态文件去重, 多处挂载不会重复提醒。
+ * 卸载: 删 settings.json 里 hooks.UserPromptSubmit 中指向本文件的那一项, 以及用户级 SessionStart/PostToolUse 那两项。
+ * 调阈值: 改下面 CONFIG, 或设环境变量 SESSION_HEALTH_SOFT_K / SESSION_HEALTH_HARD_K / SESSION_HEALTH_MAX_COMPACT。
+ */
+'use strict';
+
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+const CONFIG = {
+  softTokens: (Number(process.env.SESSION_HEALTH_SOFT_K) || 300) * 1000,   // L1
+  hardTokens: (Number(process.env.SESSION_HEALTH_HARD_K) || 400) * 1000,   // L2
+  maxCompactions: Number(process.env.SESSION_HEALTH_MAX_COMPACT) || 2,     // 压缩 >= 此数即 L2
+  reRemindStep: 100 * 1000,
+  handoffNagStep: 30 * 1000, // 过硬线后再涨这么多还没交接文件, 回读提醒一次
+};
+
+// hardAt 之后 handoff/ 下有没有新写的交接 (任何名字的 .md, mtime >= hardAt)。返回 mtime(ms) 或 0
+function handoffWrittenSince(since) {
+  let names;
+  try { names = fs.readdirSync(HANDOFF_DIR); } catch (_) { return 0; }
+  for (const n of names) {
+    if (!n.endsWith('.md')) continue;
+    try { const m = fs.statSync(path.join(HANDOFF_DIR, n)).mtimeMs; if (m >= since) return m; } catch (_) { /* 刚删 */ }
+  }
+  return 0;
+}
+
+// organizer 识别: 读桌面应用本机会话记录, 按 cliSessionId 找标题 (与 archive-guard 同一数据源)
+function sessionStoreRoot() {
+  if (process.env.CRETAS_CCD_SESSION_STORE) return process.env.CRETAS_CCD_SESSION_STORE;
+  const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+  return path.join(appData, 'Claude', 'claude-code-sessions');
+}
+function sessionTitle(cliId) {
+  const root = sessionStoreRoot();
+  if (!fs.existsSync(root)) return null;
+  for (const a of fs.readdirSync(root)) {
+    const da = path.join(root, a);
+    if (!fs.statSync(da).isDirectory()) continue;
+    for (const b of fs.readdirSync(da)) {
+      const db = path.join(da, b);
+      if (!fs.statSync(db).isDirectory()) continue;
+      for (const f of fs.readdirSync(db)) {
+        if (!/^local_.*\.json$/.test(f)) continue;
+        const p = path.join(db, f);
+        let s;
+        try { s = fs.readFileSync(p, 'utf8'); } catch (_) { continue; }
+        if (!s.includes(cliId)) continue;
+        try { const r = JSON.parse(s); if (r.cliSessionId === cliId) return r.title || ''; } catch (_) { /* 半截文件 */ }
+      }
+    }
+  }
+  return null;
+}
+const isOrganizerTitle = (t) => typeof t === 'string' && /^Organizer[｜|]/.test(t);
+
+// 交班遗留: 已被接手却没归档的会话 (2026-11-18: BP 协调会话「产品与传统软件对比研究」把协调交给
+// 「Organizer｜BP 对比 deck｜第 2 任」后一直置顶没归档; 它标题不是 Organizer｜, 交班流程第 5 步没人认领)。
+// 两类: A 标题已改成「[已交班…」但没归档; B 是某个现任 Organizer 会话的 spawnedFrom 前任、标题已不是 Organizer｜、没归档。
+// 前任标题仍是 Organizer｜ = 交班还在进行, 不报。都要求空闲 >= 30 分钟, 避开交班当轮。
+// 返回 null = 没量到 (读不到会话记录)。
+function loadRecords() {
+  const root = sessionStoreRoot();
+  if (!fs.existsSync(root)) return null;
+  const out = [];
+  for (const a of fs.readdirSync(root)) {
+    const da = path.join(root, a);
+    if (!fs.statSync(da).isDirectory()) continue;
+    for (const b of fs.readdirSync(da)) {
+      const db = path.join(da, b);
+      if (!fs.statSync(db).isDirectory()) continue;
+      for (const f of fs.readdirSync(db)) {
+        if (!/^local_.*\.json$/.test(f)) continue;
+        try { out.push(JSON.parse(fs.readFileSync(path.join(db, f), 'utf8'))); } catch (_) { /* 半截文件 */ }
+      }
+    }
+  }
+  return out;
+}
+function handoverLeftovers(recs, now, idleMs = 30 * 60 * 1000) {
+  const byId = new Map(recs.map((r) => [r.sessionId, r]));
+  const live = (r) => r && r.isArchived !== true;
+  const idle = (r) => now - (Number(r.lastActivityAt) || 0) >= idleMs;
+  const out = new Map();
+  for (const r of recs) {
+    if (!live(r)) continue;
+    const t = r.title || '';
+    if (/^\[已交班/.test(t) && idle(r)) out.set(r.sessionId, `${t}（已改名交班, 没归档）`);
+    if (isOrganizerTitle(t)) {
+      const pid = r.spawnedFrom && r.spawnedFrom.sessionId;
+      const p = pid && byId.get(pid);
+      if (live(p) && !isOrganizerTitle(p.title) && idle(p) && !out.has(pid)) {
+        out.set(pid, `${p.title || '(无标题)'}（现任「${t}」的前任, 没归档）`);
+      }
+    }
+  }
+  return [...out].map(([id, why]) => ({ id, why })).sort((x, y) => (x.id < y.id ? -1 : 1));
+}
+function leftoverBlock(list) {
+  return [
+    `[organizer] 交班遗留: ${list.length} 个会话已被接手或已交班, 还没归档 (id 来自本机会话记录):`,
+    ...list.map((x) => `  - ${x.why} = ${x.id}`),
+    '  处理: get_session 核对它名下没有未 detach 的在飞线、worktree 干净无未推提交 -> set_pinned false -> archive_session。不是你批次的, 发给对应现任 organizer 处理; 故意保留的写进交接并说明原因。',
+  ].join('\n');
+}
+
+// 交班流程原文: 运行时从 organizer SKILL.md 截取, 不另抄一份 (形态 D)
+function handoverSection() {
+  const p = process.env.CRETAS_ORGANIZER_SKILL || path.join(__dirname, '..', 'skills', 'organizer', 'SKILL.md');
+  let s;
+  try { s = fs.readFileSync(p, 'utf8'); } catch (_) { return null; }
+  const start = s.indexOf('🔴 **交班流程**');
+  if (start < 0) return null;
+  const end = s.indexOf('\n- **', start + 10);
+  return s.slice(start, end > start ? end : undefined).trim();
+}
+function organizerBlock(why) {
+  const sec = handoverSection();
+  if (!sec) return `[organizer] ${why}。⚠️ 没量到: 从 .claude/skills/organizer/SKILL.md 截不到「交班流程」一节, 请手动读 origin/main 上的这一节。`;
+  return `[organizer] ${why}。交班流程原文 (organizer SKILL.md, 每一步都要做, 会话 id 只用系统给的):\n${sec}`;
+}
+
+const ROOT = path.join(os.homedir(), '.claude', 'context-handoff');
+const STATE_DIR = path.join(ROOT, 'health');
+const HANDOFF_DIR = path.join(ROOT, 'handoff');
+
+function main(input) {
+  const sid = String(input.session_id || '');
+  const tp = input.transcript_path;
+  if (!sid || !tp || !fs.existsSync(tp)) return null;
+
+  fs.mkdirSync(STATE_DIR, { recursive: true });
+  const sp = path.join(STATE_DIR, sid.replace(/[^A-Za-z0-9_-]/g, '_') + '.json');
+  let st = { offset: 0, compactions: 0, ctx: null, level: 0, remindedAt: 0 };
+  try { st = Object.assign(st, JSON.parse(fs.readFileSync(sp, 'utf8'))); } catch (_) { /* 首次 */ }
+
+  const size = fs.statSync(tp).size;
+  if (size < st.offset) { st.offset = 0; st.compactions = 0; st.ctx = null; } // 文件被换过, 重扫
+
+  // 增量读取: 只读上次之后新增的字节
+  const fd = fs.openSync(tp, 'r');
+  let chunk = '';
+  try {
+    const len = size - st.offset;
+    if (len > 0) {
+      const b = Buffer.alloc(len);
+      fs.readSync(fd, b, 0, len, st.offset);
+      chunk = b.toString('utf8');
+    }
+  } finally { fs.closeSync(fd); }
+
+  // 末尾可能是写了一半的行: 只处理到最后一个换行, offset 只推进到那里
+  const cut = chunk.lastIndexOf('\n');
+  const complete = cut >= 0 ? chunk.slice(0, cut + 1) : '';
+  const consumed = Buffer.byteLength(complete, 'utf8');
+
+  for (const line of complete.split('\n')) {
+    if (!line) continue;
+    if (line.includes('"subtype":"compact_boundary"')) {
+      st.compactions += 1;
+      st.ctx = null; // 压缩后体积重新取
+      continue;
+    }
+    if (line.includes('"type":"assistant"') && line.includes('"usage"') && !line.includes('"isSidechain":true')) {
+      try {
+        const r = JSON.parse(line);
+        const u = r && r.message && r.message.usage;
+        if (u) {
+          const t = (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
+          if (t > 0) st.ctx = t;
+        }
+      } catch (_) { /* 跳过坏行 */ }
+    }
+  }
+  st.offset += consumed;
+
+  const ctx = st.ctx || 0;
+  let level = 0;
+  if (ctx >= CONFIG.softTokens || st.compactions >= 1) level = 1;
+  if (ctx >= CONFIG.hardTokens || st.compactions >= CONFIG.maxCompactions) level = 2;
+
+  let speak = false;
+  if (level > st.level) speak = true;
+  else if (level === 2 && ctx >= st.remindedAt + CONFIG.reRemindStep && st.remindedAt > 0) speak = true;
+
+  if (speak) {
+    st.level = level; st.remindedAt = ctx;
+    if (level === 2) { st.hardAt = st.hardAt || Date.now(); st.handoffNagged = false; }
+  }
+
+  // 过硬线后回读一次: 上下文又涨了 handoffNagStep 还没看到交接文件就再提醒一次 (11-13 8 小时检查: 硬线提醒后的会话无从核对交接写没写)。
+  // 交接不一定按 <sid8>.md 命名 (organizer 常按批次名写), 所以 hardAt 之后 handoff/ 下任何新写的 .md 都算写了。
+  let nag = null;
+  if (!speak && level === 2 && st.hardAt && !st.handoffSeenAt && !st.handoffNagged && ctx >= st.remindedAt + CONFIG.handoffNagStep) {
+    const seen = handoffWrittenSince(st.hardAt);
+    if (seen) st.handoffSeenAt = seen;
+    else {
+      st.handoffNagged = true;
+      const hp = path.join(HANDOFF_DIR, sid.slice(0, 8) + '.md').replace(/\\/g, '/');
+      nag = `[session-health] 过硬线提醒后上下文又涨了 ${Math.round((ctx - st.remindedAt) / 1000)}K（现约 ${Math.round(ctx / 1000)}K），还没看到交接文件（${hp}，或硬线提醒之后 handoff/ 下新写的任何 .md）。做完手上这一步就写交接，然后换会话；已写在别处就把它挪到这个目录。`;
+    }
+  }
+
+  // organizer: 第一次识别出来时注入一次交班流程; 过线提醒时也带上
+  const now = Date.now();
+  if (st.org !== true && now - (st.orgCheckedAt || 0) > 10 * 60 * 1000) {
+    st.orgCheckedAt = now;
+    const title = sessionTitle(sid);
+    if (title !== null) st.org = isOrganizerTitle(title);
+  }
+  let brief = null;
+  if (st.org === true && !st.briefed) {
+    st.briefed = true;
+    brief = organizerBlock('本会话是 organizer: 交班 (含被交班) 时照下面做');
+  }
+  // organizer: 每 10 分钟扫一次交班遗留; 名单变了就说, 没变则 6 小时再说一次
+  let leftover = null;
+  const scanEvery = process.env.CRETAS_LEFTOVER_SCAN_MS !== undefined ? Number(process.env.CRETAS_LEFTOVER_SCAN_MS) : 10 * 60 * 1000;
+  if (st.org === true && now - (st.leftoverAt || 0) > scanEvery) {
+    st.leftoverAt = now;
+    const recs = loadRecords();
+    if (recs !== null) {
+      const list = handoverLeftovers(recs, now);
+      const key = list.map((x) => x.id).join(',');
+      if (list.length && (key !== st.leftoverKey || now - (st.leftoverSaidAt || 0) > 6 * 3600 * 1000)) {
+        leftover = leftoverBlock(list);
+        st.leftoverSaidAt = now;
+      }
+      st.leftoverKey = key;
+    }
+  }
+  if (leftover) brief = brief ? brief + '\n' + leftover : leftover;
+  fs.writeFileSync(sp + '.tmp', JSON.stringify(st), 'utf8');
+  fs.renameSync(sp + '.tmp', sp);
+  if (!speak) return [brief, nag].filter(Boolean).join('\n') || null;
+
+  const k = (n) => Math.round(n / 1000) + 'K';
+  const handoff = path.join(HANDOFF_DIR, sid.slice(0, 8) + '.md').replace(/\\/g, '/');
+  const head = `[session-health] 当前上下文约 ${ctx ? k(ctx) : '未知'}，本会话已压缩 ${st.compactions} 次。`;
+  const how = [
+    `交接写到 ${handoff}（不进仓库），≤ 15 行：目标与完成条件 / 已定的决定和原因 / 已做完 vs 没做完 / 试过但放弃的路 / 分支、HEAD、PR 与 CI 监视 / 下一步第一个动作。`,
+    '然后：organizer 会话直接用 start_session 开新会话接手（不问用户，开完用 get_session 核对模型）；执行会话写完交接后告诉用户/organizer「已收口，交接在上面这个路径」。',
+    '新会话的模型按 organizer 技能里的风险分档选（缓存本来就要重建，换会话时换模型最划算）。',
+  ];
+  const soft = [
+    head + '（软线 300K）',
+    '不要打断手上的步骤。到下一个任务边界（PR 合并 / 一件事做完 / 一个切片验收完）就收口换会话，不要再开新的一件事。',
+    ...how,
+  ];
+  const hard = [
+    head + '（硬线 400K）',
+    '到下一个安全停止点就收口，即使这件事还没做完：先把正在跑的一步做完（不在半截停下，不留未提交的半成品），再写交接换会话。',
+    ...how,
+  ];
+  const text = (level === 2 ? hard : soft).join('\n');
+  if (st.org === true) return text + '\n' + organizerBlock('organizer 到线了, 交班按下面的流程走 (上面「交接 ≤ 15 行」同样适用)') + (leftover ? '\n' + leftover : '');
+  return brief ? brief + '\n' + text : text;
+}
+
+let buf = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (d) => { buf += d; });
+process.stdin.on('end', () => {
+  try {
+    const input = JSON.parse(buf || '{}');
+    const text = main(input);
+    if (text) {
+      // 同时挂在 UserPromptSubmit / PostToolUse / SessionStart: organizer 多数回合是被消息/通知叫醒的, 不一定经过 UserPromptSubmit
+      const ev = ['UserPromptSubmit', 'PostToolUse', 'SessionStart'].includes(input.hook_event_name) ? input.hook_event_name : 'UserPromptSubmit';
+      process.stdout.write(JSON.stringify({
+        hookSpecificOutput: { hookEventName: ev, additionalContext: text },
+      }));
+    }
+  } catch (_) { /* fail-silent */ }
+});

@@ -38,6 +38,14 @@ public class PriceListServiceImpl implements PriceListService {
                                                         String customerId,
                                                         String productId,
                                                         LocalDate asOf) {
+        return resolveForOrder(factoryId, customerId, productId, asOf).map(PriceResolution::price);
+    }
+
+    @Override
+    public Optional<PriceResolution> resolveForOrder(String factoryId,
+                                                     String customerId,
+                                                     String productId,
+                                                     LocalDate asOf) {
         if (factoryId == null || factoryId.isBlank()) {
             return Optional.empty();
         }
@@ -46,17 +54,14 @@ public class PriceListServiceImpl implements PriceListService {
         }
         LocalDate effectiveDate = asOf != null ? asOf : LocalDate.now();
 
-        // 1) Customer-specific selling price first (协议价).
+        // 1) Customer-specific selling price first (协议价 / 专属价).
         if (customerId != null && !customerId.isBlank()) {
             List<PriceList> customerLists = priceListRepository.findEffectiveForCustomer(
                     factoryId, customerId, SELLING_PRICE, effectiveDate);
             for (PriceList pl : customerLists) {
                 BigDecimal price = findItemPrice(pl.getId(), productId);
                 if (price != null) {
-                    log.debug("Issue #793: applied customer 协议价 — factoryId={}, customerId={}, " +
-                            "productId={}, priceList={}, price={}",
-                            factoryId, customerId, productId, pl.getName(), price);
-                    return Optional.of(price);
+                    return Optional.of(new PriceResolution(price, "CUSTOMER", pl.getName()));
                 }
             }
         }
@@ -67,13 +72,9 @@ public class PriceListServiceImpl implements PriceListService {
         for (PriceList pl : globalLists) {
             BigDecimal price = findItemPrice(pl.getId(), productId);
             if (price != null) {
-                log.debug("Issue #793: applied global selling price — factoryId={}, productId={}, " +
-                        "priceList={}, price={}",
-                        factoryId, productId, pl.getName(), price);
-                return Optional.of(price);
+                return Optional.of(new PriceResolution(price, "GLOBAL", pl.getName()));
             }
         }
-
         return Optional.empty();
     }
 

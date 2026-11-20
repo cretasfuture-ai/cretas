@@ -75,7 +75,6 @@ class BareUnitEqualityRatchetContractTest {
      * 失败信息里会打出可直接粘贴的新基线。
      */
     private static final String[] FROZEN_BASELINE = {
-            "com/cretas/aims/entity/ProductionBatch.java|plannedUnit|unit",
             "com/cretas/aims/service/bom/BomWorkflowRevisionService.java|canonicalUnit(left)|canonicalUnit(right)",
             "com/cretas/aims/service/bom/impl/BomItemSubstituteServiceImpl.java|parentUnit|substituteUnit",
             "com/cretas/aims/service/factory/impl/FactoryMaterialRequisitionServiceImpl.java|bomUnit.trim()|stockUnit.trim()",
@@ -146,7 +145,6 @@ class BareUnitEqualityRatchetContractTest {
             "com/cretas/aims/service/yield/CostReconcileService.java|unit|baseUnit",
             "com/cretas/aims/service/yield/OrderCostBreakdownService.java|normalizeUnit(left)|normalizeUnit(right)",
             "com/cretas/aims/service/yield/impl/InterimSettleServiceImpl.java|agg.unit|unit",
-            "com/cretas/aims/service/yield/impl/YieldAnalysisServiceImpl.java|inUnit|outUnit",
             "com/cretas/aims/service/yield/impl/YieldCalculationServiceImpl.java|first.getInputUnit()|last.getOutputUnit()",
             "com/cretas/aims/service/yield/impl/YieldCalculationServiceImpl.java|firstInputUnit|stepOutUnit",
             "com/cretas/aims/service/yield/impl/YieldCalculationServiceImpl.java|inUnit|outUnit",

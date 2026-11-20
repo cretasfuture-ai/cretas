@@ -1,5 +1,6 @@
 package com.cretas.aims.service.shortage;
 
+import com.cretas.aims.event.MaterialBatchInspectionClosedEvent;
 import com.cretas.aims.event.MaterialBatchReleasedEvent;
 import com.cretas.aims.event.MaterialReceivedEvent;
 import com.cretas.aims.event.PurchaseOrderSupplyChangedEvent;
@@ -13,7 +14,7 @@ import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
 /**
- * 让缺料实例跟着业务事实走: 财务审核通过建 / 刷新, 入库、质检放行和采购单进出在途刷新含该物料的实例。
+ * 让缺料实例跟着业务事实走: 财务审核通过建 / 刷新, 入库、质检放行 / 判不合格和采购单进出在途刷新含该物料的实例。
  *
  * <p>⛔ 这里的失败只记日志, 不能把审批 / 收货 / 放行本身弄失败 —— 实例下次事件或手动刷新时会追上。
  * 所以监听方法自己<b>不开事务</b>: 刷新在服务里的 REQUIRES_NEW 事务里跑, 失败只回滚那一个事务、在这里被吞掉;
@@ -27,6 +28,7 @@ public class ShortageCaseListener {
     public static final String REASON_FINANCE_APPROVED = "SO_FINANCE_APPROVED";
     public static final String REASON_MATERIAL_RECEIVED = "MATERIAL_RECEIVED";
     public static final String REASON_BATCH_RELEASED = "MATERIAL_BATCH_RELEASED";
+    public static final String REASON_BATCH_QC_REJECTED = "MATERIAL_BATCH_QC_REJECTED";
     public static final String REASON_PURCHASE_SUPPLY_CHANGED = "PURCHASE_ORDER_SUPPLY_CHANGED";
 
     private final ShortageCaseService caseService;
@@ -50,6 +52,12 @@ public class ShortageCaseListener {
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onMaterialBatchReleased(MaterialBatchReleasedEvent event) {
         refreshMaterial(event.getFactoryId(), event.getMaterialTypeId(), REASON_BATCH_RELEASED);
+    }
+
+    /** 原料批次离开质检中却没放行 (判不合格 / 报废): 「质检中数量」要跟着清掉, 否则缺口被低估 (D-S411-04 M1)。 */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+    public void onMaterialBatchInspectionClosed(MaterialBatchInspectionClosedEvent event) {
+        refreshMaterial(event.getFactoryId(), event.getMaterialTypeId(), REASON_BATCH_QC_REJECTED);
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)

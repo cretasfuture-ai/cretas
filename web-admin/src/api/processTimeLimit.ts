@@ -69,6 +69,11 @@ export interface ProcessTimeLimitStatus {
   perLot: boolean;
   /** 进行中的暂停登记 id。 */
   pauseMarkId?: number | null;
+  /**
+   * 本厂超时拦不拦 (PROTO-Q41, 工厂开关 production.time_limit.block_on_exceed): false = 只警告 (默认),
+   * 超时 / 没登记解冻也能投料; 旧后端没有这个字段时按拦截理解。
+   */
+  blockOnExceed?: boolean;
 }
 
 export interface ProcessTimeMark {
@@ -103,6 +108,11 @@ export interface ProcessTimeLimitEvent {
   decidedByName: string | null;
   decidedAt: string | null;
   validUntil: string | null;
+  /**
+   * 这条记录怎么来的 (PROTO-Q41): BLOCKED = 超时被拦 (判不合格自动转出); WARN_EXCEEDED / WARN_START_MISSING =
+   * 只警告档的复盘记录 (判不合格只记结论, 不动库存, 报损走报损流程)。旧后端不带字段 = BLOCKED。
+   */
+  recordKind?: 'BLOCKED' | 'WARN_EXCEEDED' | 'WARN_START_MISSING';
 }
 
 const base = (factoryId: string) => `/${factoryId}/process-time-limits`;
@@ -111,9 +121,26 @@ const base = (factoryId: string) => `/${factoryId}/process-time-limits`;
 export const getPlanTimeLimits = (factoryId: string, planId: string, processOrder: number) =>
   get<ProcessTimeLimitStatus[]>(`${base(factoryId)}/plans/${planId}`, { params: { processOrder }, _silent: true });
 
+/**
+ * 缺口 16: 领用计划的归属判不出 (旧代工计划缺客户 id) 时, 后端仍返回列表 (原料照常, 在制品/半成品不列),
+ * 原因放在 message, severity = 'WARNING'。没有这种情况返回 null。
+ */
+export function timeLimitOwnershipNotice(res: { message?: string | null; severity?: string | null }): string | null {
+  return res.severity === 'WARNING' && res.message ? res.message : null;
+}
+
 export const startProcessTimeMark = (
   factoryId: string,
-  body: { targetType: string; targetId: string; kind: 'START' | 'PAUSE'; code: 'THAW' | 'COLD_STORAGE' },
+  body: {
+    targetType: string;
+    targetId: string;
+    kind: 'START' | 'PAUSE';
+    code: 'THAW' | 'COLD_STORAGE';
+    /** 纪律排查 A13: 只对开始解冻有效 —— 补登实际开始时间 (本地时间 YYYY-MM-DDTHH:mm:ss); 不传 = 现在。 */
+    startedAt?: string;
+    /** 补登原因 (startedAt 早于现在时必填)。 */
+    backfillReason?: string;
+  },
 ) => post<ProcessTimeMark>(`${base(factoryId)}/marks`, body);
 
 export const endProcessTimeMark = (factoryId: string, markId: number) =>

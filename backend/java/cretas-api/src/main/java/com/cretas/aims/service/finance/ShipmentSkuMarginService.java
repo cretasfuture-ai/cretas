@@ -1,6 +1,7 @@
 package com.cretas.aims.service.finance;
 
 import com.cretas.aims.dto.finance.report.ShipmentSkuMarginDTO;
+import com.cretas.aims.dto.finance.report.ShippedGrossProfitDTO;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.inventory.SalesDeliveryItemRepository;
 import jakarta.persistence.EntityManager;
@@ -36,16 +37,85 @@ public class ShipmentSkuMarginService {
 
     @Transactional(readOnly = true)
     public ShipmentSkuMarginDTO generate(String factoryId, LocalDate start, LocalDate end) {
+        validatePeriod(factoryId, start, end);
+        // Serialize against shipment, cost correction and closing, as the existing cost/indicator queries do.
+        ProductionCostConsistency.lockFactory(entityManager, factoryId);
+        Core core = margin(factoryId, start, end, shippedLines(factoryId, start, end));
+        ShipmentSkuMarginDTO result = core.result();
+        if (start.getDayOfMonth() == 1 && end.getDayOfMonth() == end.lengthOfMonth()) {
+            reconcile(result, factoryId, start, end, core.revenue(), core.rawCost());
+        }
+        return result;
+    }
+
+    /**
+     * 经营分析「财务」区块的系统毛利 (Steve 2026-11-18 口径): 收入 = 已确认发货的发运单实发不含税金额
+     * (与应收挂账同一批发运单), 成本 = 这些发运单实际出库批次成本。与 {@link #generate} 同一份收入行、
+     * 同一份成本来源、同一个取整, 只是不要求完整会计月, 且算不全时按缺什么如实降级而不是整体报错:
+     * <ul>
+     *   <li>没有已发货明细 → {@code NO_SHIPMENT}, 收入/毛利都为 null (⛔ 不回退到订单金额);</li>
+     *   <li>有明细缺售价 → {@code PRICE_MISSING}, 收入为 null;</li>
+     *   <li>收入可算但出库批次/成本不完整 → {@code COST_INCOMPLETE}, 给收入, 成本/毛利为 null
+     *       (⛔ 不用计划成本或 0 凑)。</li>
+     * </ul>
+     */
+    @Transactional(readOnly = true)
+    public ShippedGrossProfitDTO summarize(String factoryId, LocalDate start, LocalDate end) {
+        validatePeriod(factoryId, start, end);
+        ProductionCostConsistency.lockFactory(entityManager, factoryId);
+        List<Line> lines = shippedLines(factoryId, start, end);
+        ShippedGrossProfitDTO.ShippedGrossProfitDTOBuilder out = ShippedGrossProfitDTO.builder()
+                .periodStart(start).periodEnd(end).shipmentLineCount(lines.size())
+                .revenueBasis(ShippedGrossProfitDTO.REVENUE_BASIS).costBasis(ShippedGrossProfitDTO.COST_BASIS);
+        if (lines.isEmpty()) {
+            return out.status(ShippedGrossProfitDTO.NO_SHIPMENT)
+                    .unavailableReason("缺少发货确认数据：所选期间没有已确认发货（已发货 / 已签收）的发运单，毛利无法计算；未发货的订单金额不计入收入")
+                    .build();
+        }
+        long missingPrice = lines.stream().filter(l -> l.price == null).count();
+        if (missingPrice > 0) {
+            return out.status(ShippedGrossProfitDTO.PRICE_MISSING)
+                    .unavailableReason("有 " + missingPrice + " 行已发货明细缺少售价，发货收入无法计算；请在发运单补齐售价")
+                    .build();
+        }
+        BigDecimal revenue = lines.stream().map(ShipmentSkuMarginService::lineRevenue)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        out.revenue(money(revenue));
+        Core core;
+        try {
+            core = margin(factoryId, start, end, lines);
+        } catch (BusinessException e) {
+            return out.status(ShippedGrossProfitDTO.COST_INCOMPLETE)
+                    .unavailableReason("发货收入已算出，但出库批次成本不完整，毛利无法计算：" + e.getMessage())
+                    .build();
+        }
+        ShipmentSkuMarginDTO m = core.result();
+        return out.status(ShippedGrossProfitDTO.OK).revenue(m.getTotalRevenue()).cost(m.getTotalCost())
+                .grossProfit(m.getGrossProfit()).marginRate(m.getMarginRate()).build();
+    }
+
+    private static void validatePeriod(String factoryId, LocalDate start, LocalDate end) {
         if (factoryId == null || factoryId.isBlank() || start == null || end == null || start.isAfter(end)) {
             throw new IllegalArgumentException("请选择正确的工厂和统计期间");
         }
-        // Serialize against shipment, cost correction and closing, as the existing cost/indicator queries do.
-        ProductionCostConsistency.lockFactory(entityManager, factoryId);
-        List<Object[]> movements = shipments.findShippedMovementsForLedger(factoryId, start, end);
-        List<Line> lines = jdbc.query(LINES_SQL, (rs, n) -> new Line(rs.getLong("id"),
+    }
+
+    private List<Line> shippedLines(String factoryId, LocalDate start, LocalDate end) {
+        return jdbc.query(LINES_SQL, (rs, n) -> new Line(rs.getLong("id"),
                 rs.getString("product_type_id"), rs.getString("product_name"), rs.getString("unit"),
                 rs.getBigDecimal("delivered_quantity"), rs.getBigDecimal("unit_price")),
                 factoryId, java.sql.Date.valueOf(start), java.sql.Date.valueOf(end));
+    }
+
+    /** 一行发货收入 = 实发数量 × 发货不含税单价, 分位取整。generate 与 summarize 共用这一处。 */
+    private static BigDecimal lineRevenue(Line line) {
+        return money(line.quantity.multiply(line.price));
+    }
+
+    private record Core(ShipmentSkuMarginDTO result, BigDecimal revenue, BigDecimal rawCost) {}
+
+    private Core margin(String factoryId, LocalDate start, LocalDate end, List<Line> lines) {
+        List<Object[]> movements = shipments.findShippedMovementsForLedger(factoryId, start, end);
         Map<Long, BigDecimal> costByLine = new HashMap<>();
         Map<Long, Set<String>> batchesByLine = new HashMap<>();
         Map<Long, String> productByLine = new HashMap<>();
@@ -77,13 +147,13 @@ public class ShipmentSkuMarginService {
             Group g = groups.computeIfAbsent(new Key(line.product, line.unit),
                     k -> new Group(line.product, line.name, line.unit));
             g.quantity = g.quantity.add(line.quantity);
-            g.revenue = g.revenue.add(money(line.quantity.multiply(line.price)));
+            g.revenue = g.revenue.add(lineRevenue(line));
             g.rawCost = g.rawCost.add(costByLine.get(line.id));
             g.lines++;
             g.batches.addAll(batchesByLine.get(line.id));
             g.sources.add(ShipmentSkuMarginDTO.SourceLine.builder().shipmentLineId(line.id)
                     .deliveryNumber(numberByLine.get(line.id)).deliveryDate(dateByLine.get(line.id))
-                    .quantity(line.quantity).unit(line.unit).revenue(money(line.quantity.multiply(line.price)))
+                    .quantity(line.quantity).unit(line.unit).revenue(lineRevenue(line))
                     .rawCost(costByLine.get(line.id)).cost(money(costByLine.get(line.id)))
                     .batches(sourcesByLine.get(line.id)).build());
         }
@@ -107,13 +177,18 @@ public class ShipmentSkuMarginService {
                 .marginRate(rate(profit, revenue)).roundingAdjustment(cost.subtract(displayedCost))
                 .reconciliationStatus("PARTIAL_PERIOD")
                 .reconciliationMessage("当前不是完整会计月，仅展示实际出货；选择完整会计月后可与已过账利润表核对。").build();
-        if (start.getDayOfMonth() == 1 && end.getDayOfMonth() == end.lengthOfMonth()) {
+        return new Core(result, revenue, rawCost);
+    }
+
+    private void reconcile(ShipmentSkuMarginDTO result, String factoryId, LocalDate start, LocalDate end,
+                           BigDecimal revenue, BigDecimal rawCost) {
+        {
             var financial = incomeStatements.generate(factoryId, start.getYear(), start.getMonthValue(), end.getYear(), end.getMonthValue());
             result.setFinancialStatement(financial);
             if (financial.getPendingDraftVoucherCount() > 0) {
                 result.setReconciliationStatus("PENDING_VOUCHERS");
                 result.setReconciliationMessage("仍有凭证待过账，请完成过账后核对。");
-                return result;
+                return;
             }
             BigDecimal returnedRevenue = salesReturnCosts.returnedRevenue(factoryId, start, end);
             BigDecimal returnedCost = salesReturnCosts.returnedCost(factoryId, start, end);
@@ -132,7 +207,6 @@ public class ShipmentSkuMarginService {
             result.setReconciliationMessage(equal ? "实际出货扣除本期退货后，净收入、净销售成本和毛利与同期间已过账利润表一致。"
                     : "与同期间已过账利润表存在差异，请核对未过账业务、退货折让及结转记录。");
         }
-        return result;
     }
 
     private static BigDecimal decimal(Object v) { return v instanceof BigDecimal d ? d : new BigDecimal(v.toString()); }

@@ -65,6 +65,8 @@ public class CostVarianceReportDTO {
     private BigDecimal usageVariance;
     /** 替代料差: 用替代料顶主料, 按开计划时两者的价差计。 */
     private BigDecimal substituteVariance;
+    /** 可比计划的实际成本合计 (与 totalBomCost 同一批计划, 两者才能相减); totalActualCost 是期间全部批次, 口径不同。 */
+    private BigDecimal comparedActualCost;
     /** 有可比部分的计划数。 */
     private Integer comparedPlanCount;
     /** 完全无法比较的计划数 (无快照 / 缺单价 / 未产出等, 原因见 planVariances)。 */
@@ -148,9 +150,25 @@ public class CostVarianceReportDTO {
     private BigDecimal overheadCostRatio;
 
     /**
-     * 材料成本差异
+     * 材料成本差异 (价格差 + 用量差 + 替代料差 + 回料差)
      */
     private BigDecimal materialVariance;
+
+    /**
+     * 回料差 (可比计划的回投回料金额 − 标准回料金额); null = 没有任何可比计划有可比的回料项, ⛔ 不是 0
+     */
+    private BigDecimal reworkVariance;
+
+    /**
+     * 期间回料状态 (PlanCostVarianceDTO.REWORK_*): 有可比回料 COMPARABLE / 只有无法比较 INCOMPARABLE /
+     * 只有内部转移 INTERNAL_ONLY / 没有回料 NONE —— 回料差为 null 时靠它说清是哪一种
+     */
+    private String reworkStatus;
+
+    /**
+     * 期间回料摘要 (给人看的话): 几个计划有回料、几个已计入、几个无法比较
+     */
+    private String reworkSummary;
 
     /**
      * 人工成本差异
@@ -259,9 +277,14 @@ public class CostVarianceReportDTO {
         private String comparabilityReason;
 
         /**
-         * 材料成本差异
+         * 材料成本差异 (价格差 + 用量差 + 替代料差 + 回料差)
          */
         private BigDecimal materialVariance;
+
+        /**
+         * 回料差; null = 本产品可比计划都没有可比的回料项
+         */
+        private BigDecimal reworkVariance;
 
         /**
          * 人工成本差异

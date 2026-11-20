@@ -370,6 +370,15 @@ public class FactoryRecallService {
         }
     }
 
+    /**
+     * 这个生产批次有没有发起过召回 (进行中或已完成都算)。召回发起时把该批成品冻结成 DEFECTIVE, 召回结束后那批货
+     * 仍是召回货; 质检处置的计划级放行据此把它留在隔离 (Q4, 2026-11-09), 不能只看「本批是否在召回中」。
+     */
+    @Transactional(readOnly = true)
+    public boolean hasRecallRecord(String factoryId, Long batchId) {
+        return !eventsForBatch(factoryId, batchId).isEmpty();
+    }
+
     private FactoryRecallDTO.RecallView previewView(String factoryId, ProductionBatch batch,
                                                      List<ShipmentEvidence> evidence) {
         return FactoryRecallDTO.RecallView.builder()

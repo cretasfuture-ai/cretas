@@ -9,6 +9,54 @@
     "superpowers@claude-plugins-official": false
   },
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/tools/worktree-touch.sh",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/tools/sync-main-claude.sh",
+            "timeout": 40
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/tools/worktree-hygiene.sh --auto",
+            "timeout": 20
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/tools/worktree-touch.sh",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "node .claude/hooks/session-health.js",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/tools/worktree-touch.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "Edit|Write",
@@ -16,6 +64,21 @@
           {
             "type": "command",
             "command": "node .claude/hooks/ux-advisory.js"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/tools/worktree-after-merge.sh",
+            "timeout": 20
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/tools/exec-bit-after-commit.sh",
+            "timeout": 15
           }
         ]
       }

@@ -99,6 +99,19 @@ export interface DailyAllocations {
   reportedQuantity?: number | null;
   remainingQuantity?: number | null;
   days: DailyAllocationDay[];
+  /** 缺口 18: 为什么比开始日晚开工 / 中途跳过哪几天 (设备被占、原料到货、等半成品、保养、产线排满)。旧排程没有。 */
+  delays?: DailyAllocationDelay[];
+  /** 缺口 18: 缺数据没核对的约束 (没配设备、原料用量算不出、采购没填到货日 等), 照排并提示。旧排程没有。 */
+  constraintNotes?: string[];
+}
+
+export interface DailyAllocationDelay {
+  code: 'MATERIAL_ARRIVAL' | 'PREDECESSOR' | 'EQUIPMENT_BUSY' | 'MAINTENANCE' | 'LINE_FULL' | string;
+  /** yyyy-MM-dd, 含 */
+  from: string;
+  /** yyyy-MM-dd, 含 */
+  to: string;
+  text: string;
 }
 
 /** 自动排程 (按工艺图) 每道工序的排程时间; start / end 为本地时间 ISO 字符串。 */
@@ -137,7 +150,13 @@ export interface LineSchedule {
   planNumber?: string | null;
   taskTimeline?: ScheduleTaskTimelineEntry[] | null;
   dailyAllocations?: DailyAllocations | null;
+  /** 乐观锁版本号: 改排程时原样回传, 别人先改过就返回 409。 */
+  version?: number;
+  /** SCHEDULE = 调度排程行; WORKFLOW_BATCH = 工作流直接开出的在产批次 (仅调度 Dashboard, 无计划时间/数量) */
+  source?: LineScheduleSource;
 }
+
+export type LineScheduleSource = 'SCHEDULE' | 'WORKFLOW_BATCH';
 
 export interface WorkerAssignment {
   id: string;
@@ -162,12 +181,28 @@ export interface ProductionLine {
   departmentId?: number;
   name: string;
   lineType: string;
+  lineCode?: string;
   minWorkers: number;
-  maxWorkers: number;
-  requiredSkillLevel: number;
+  /** 最多人数; 网页人数配置可清空 */
+  maxWorkers: number | null;
+  /** 插单比较用的「最少人数」(网页人数配置写这一列); 空 = 不比较 */
+  standardWorkers?: number | null;
+  /** 所需技能等级 1-5; 网页人数配置可清空 */
+  requiredSkillLevel: number | null;
   hourlyCapacity: number;
   status: 'active' | 'maintenance' | 'inactive';
   createdAt: string;
+}
+
+/**
+ * 产线人数配置: 整体替换, null = 清空。
+ * insertMinWorkers = 紧急插单比较当天排班用的最少人数 (存 standard_workers, 不够只提示、不拦)。
+ * ⚠️ 不是 ProductionLine.minWorkers (min_workers 列, APS 内部特征, 建表默认 1)。
+ */
+export interface ProductionLineStaffing {
+  insertMinWorkers: number | null;
+  maxWorkers: number | null;
+  requiredSkillLevel: number | null;
 }
 
 export interface SchedulingAlert {
@@ -212,15 +247,26 @@ export interface SchedulingDashboard {
     totalAssigned: number;
     checkedIn: number;
     temporaryWorkers: number;
-    averagePerformance: number;
+    /** 今日派工还没有任何绩效打分 → null (原因见 unavailableReasons) */
+    averagePerformance: number | null;
   };
   lineStats: {
     activeLines: number;
-    utilizationRate: number;
-    averageEfficiency: number;
+    /** 今日有任务的启用产线数 */
+    occupiedLines?: number;
+    /** 今日排程里没有产线归属的批次数 (未计入利用率) */
+    unattributedBatches?: number;
+    /** 有任务的启用产线 ÷ 启用产线 (0~1); 没有启用产线或今日任务全都没有产线 → null */
+    utilizationRate: number | null;
+    /** 后端暂不汇总 → null (原因见 unavailableReasons) */
+    averageEfficiency: number | null;
   };
   alerts: SchedulingAlert[];
   todaySchedules: LineSchedule[];
+  /** 跨日在产且今日无活动的批次数 (不进今日排程与利用率); 只在看今天时有值, 否则 null */
+  carryOverIdleBatches?: number | null;
+  /** 取值为 null 的指标 → 原因, 键如 "lineStats.utilizationRate" */
+  unavailableReasons?: Record<string, string>;
 }
 
 interface SchedulingWireWorkerAssignment {
@@ -262,6 +308,9 @@ interface SchedulingWireLineSchedule {
   planNumber?: string | null;
   taskTimeline?: ScheduleTaskTimelineEntry[] | null;
   dailyAllocations?: DailyAllocations | null;
+  /** 乐观锁版本号: 改排程时原样回传, 别人先改过就返回 409。 */
+  version?: number;
+  source?: LineScheduleSource;
 }
 
 function mapWorkerAssignment(wire: SchedulingWireWorkerAssignment): WorkerAssignment {
@@ -306,6 +355,8 @@ export function mapSchedulingLineSchedule(wire: SchedulingWireLineSchedule): Lin
     planNumber: wire.planNumber ?? null,
     taskTimeline: wire.taskTimeline ?? null,
     dailyAllocations: wire.dailyAllocations ?? null,
+    version: wire.version,
+    source: wire.source,
   };
 }
 
@@ -757,6 +808,8 @@ export function updateSchedule(
     plannedStartTime?: string;
     plannedEndTime?: string;
     sequenceOrder?: number;
+    /** 读到的排程版本号; 别人在这之后改过, 后端返回 409「排程已被别人修改，请刷新后再改」。 */
+    version?: number;
   }
 ) {
   return put<SchedulingWireLineSchedule>(`/${factoryId}/scheduling/schedules/${scheduleId}`, data)
@@ -1062,6 +1115,13 @@ export function updateProductionLine(factoryId: string, lineId: string, data: Pa
 }
 
 /**
+ * 设置产线人数配置 (最少/最多人数、所需技能等级)
+ */
+export function setProductionLineStaffing(factoryId: string, lineId: string, data: ProductionLineStaffing) {
+  return put<ProductionLine>(`/${factoryId}/scheduling/production-lines/${lineId}/staffing`, data);
+}
+
+/**
  * 更新产线状态
  */
 export function updateProductionLineStatus(factoryId: string, lineId: string, status: string) {
@@ -1133,8 +1193,12 @@ export function updateSchedulingSettings(factoryId: string, settings: Partial<Sc
 
 // ==================== S4 产线产能与产品所需设备 ====================
 
-/** 产能单位: 件 / 千克 / 批。插单只认与订单同单位的配置, 不换算。 */
-export type CapacityUnit = 'PIECE' | 'KG' | 'BATCH';
+/**
+ * 产能单位: 件 / 千克 / 批。插单只认与订单同单位的配置, 不换算。
+ * PACKAGE = 本厂自己的包装单位 (袋 / 盒 …), 单位名在 packageUnit; 只有工厂把
+ * production.capacity.package_unit_mode 设成 FACTORY_UNIT 时后端才接受 (2026-11-11)。
+ */
+export type CapacityUnit = 'PIECE' | 'KG' | 'BATCH' | 'PACKAGE';
 
 export interface LineCapacityConfig {
   id: number;
@@ -1143,6 +1207,8 @@ export interface LineCapacityConfig {
   productTypeId: string | null;
   capacityPerHour: number;
   capacityUnit: CapacityUnit;
+  /** 仅 PACKAGE 行有值: 本厂自己的单位名 */
+  packageUnit: string | null;
   source: 'CONVERSATIONAL_BUILD' | 'FACTORY_CONFIG';
   /** 谁配的: 工厂用户或平台管理员 (对话建厂) */
   actorType: 'FACTORY_USER' | 'PLATFORM_ADMIN';
@@ -1168,7 +1234,8 @@ export function setLineCapacity(factoryId: string, data: {
   productionLineId: string;
   productTypeId?: string | null;
   capacityPerHour: number;
-  capacityUnit: CapacityUnit;
+  /** PIECE / KG / BATCH, 或本厂包装单位名 (如「袋」, 须开 FACTORY_UNIT) */
+  capacityUnit: string;
 }) {
   return put<LineCapacityConfig>(`/${factoryId}/scheduling/line-capacity/capacity`, data);
 }

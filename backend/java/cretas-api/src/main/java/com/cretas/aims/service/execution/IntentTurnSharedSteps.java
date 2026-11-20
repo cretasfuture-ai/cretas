@@ -1,0 +1,308 @@
+package com.cretas.aims.service.execution;
+
+import com.cretas.aims.ai.tool.ToolRegistry;
+import com.cretas.aims.ai.tool.WriteGuardService;
+import com.cretas.aims.config.IntentKnowledgeBase.QuestionType;
+import com.cretas.aims.dto.ai.IntentExecuteRequest;
+import com.cretas.aims.dto.ai.IntentExecuteResponse;
+import com.cretas.aims.dto.intent.IntentMatchResult;
+import com.cretas.aims.entity.config.AIIntentConfig;
+import com.cretas.aims.security.PriceFieldResponseAdvice;
+import com.cretas.aims.service.intent.IntentAccessModeFilter;
+import lombok.extern.slf4j.Slf4j;
+
+import java.time.LocalDateTime;
+import java.util.Set;
+import java.util.regex.Pattern;
+
+/**
+ * 普通入口 ({@link IntentExecutionOrchestrator}) 与流式入口 ({@link SseStreamingService}) 共用的每轮步骤
+ * (意图蒸馏第③步 PR-2a)。
+ *
+ * <p>此前这些步骤只在普通入口有, 流式入口缺或写了另一份口径 —— 同一句话两条入口判定不同。这里每个方法是
+ * 唯一实现, 两个入口都调它; 判定口径改这里, 两边一起变。
+ *
+ * <ul>
+ *   <li>{@link #answersGeneralQuestionDirectly}: 识别不出 + 通用咨询/闲聊 + 非业务问法 → 直接回答, 不追问澄清</li>
+ *   <li>{@link #readModeWriteBlocked}: 咨询 tab (mode=READ) 命中写意图 → 跳转提示卡, 不进审批/追问/执行</li>
+ *   <li>{@link #stopsForApproval} / {@link #approvalResponse}: 审批谓词与回复 (一份)</li>
+ *   <li>{@link #applyCallerPriceView}: 格式化之前把结果换成这个人看得到的那一份</li>
+ *   <li>{@link #sanitizeInternalReasoningLeak}: 模型内部推理 (意图列表 + 意图码) 不当回答下发</li>
+ *   <li>{@link #applyAiModeStamp}: 响应补 aiMode (READ|WRITE)</li>
+ *   <li>{@link #recognitionPermissionFilter}: 识别时按权限收窄候选 (仅操作 tab)</li>
+ *   <li>{@link #applyTextFallback}: 文字兜底 (两个方向 + workdesk 摘要) —— PR-3 起两入口一份</li>
+ * </ul>
+ */
+@Slf4j
+public final class IntentTurnSharedSteps {
+
+    private IntentTurnSharedSteps() {
+    }
+
+    // ==================== 通用问法直答 ====================
+
+    /**
+     * 识别之后是否直接回答 (通用咨询 / 闲聊), 而不是走澄清候选。
+     *
+     * <p>口径 (两入口一致): 只在<b>识别不出意图</b>时直答 —— 识别到了就照常执行 (Steve 偏执行少追问,
+     * 执行期还有权限 / 写确认 / 审批闸); 业务问法 (「这个月卖得怎么样」) 不直答, 由澄清候选接住 (不编数);
+     * 否定否决 (REJECTED, 「别给我看订单」) 不直答, 那是用户在取消, 澄清优先。
+     */
+    public static boolean answersGeneralQuestionDirectly(IntentMatchResult matchResult, String userInput) {
+        if (matchResult == null || matchResult.hasMatch()) {
+            return false;
+        }
+        if (matchResult.getMatchMethod() == IntentMatchResult.MatchMethod.REJECTED) {
+            return false;
+        }
+        QuestionType type = matchResult.getQuestionType();
+        if (type != QuestionType.GENERAL_QUESTION && type != QuestionType.CONVERSATIONAL) {
+            return false;
+        }
+        return userInput != null && !userInput.isBlank()
+                && !com.cretas.aims.ai.grounding.ChatBusinessFactGuard.isBusinessQuestion(userInput);
+    }
+
+    // ==================== 否定说法 ====================
+
+    /** 否定说法 (VETO_READ, 「别给我看订单」) 的澄清回复: 不执行、不追问参数 (两入口一份)。 */
+    public static IntentExecuteResponse negationVetoClarification() {
+        final String msg = "您是要取消这次操作吗?需要我帮您查询或处理什么?";
+        return IntentExecuteResponse.builder()
+                .intentRecognized(false)
+                .status("NEED_CLARIFICATION")
+                .message(msg)
+                .formattedText(msg)
+                .executedAt(LocalDateTime.now())
+                .build();
+    }
+
+    // ==================== 咨询 tab 拦写 ====================
+
+    /**
+     * P1 读写分块 §4.4: 咨询 tab (mode=READ) 命中写意图 → 返回跳转提示卡; 否则 null。
+     * 写判定 = 声明优先 + 启发式兜底 ({@link IntentExecutionOrchestrator#isWriteIntentDeclarationAware})。
+     */
+    public static IntentExecuteResponse readModeWriteBlocked(IntentExecuteRequest request, AIIntentConfig intent,
+                                                             IntentAccessModeFilter accessModeFilter,
+                                                             WriteGuardService writeGuard) {
+        if (request == null || intent == null || !"READ".equalsIgnoreCase(request.getMode())) {
+            return null;
+        }
+        if (accessModeFilter == null && writeGuard == null) {
+            // 判定器都没装配: 判不了写不写, 按写拦 (fail closed)
+            return readModeWriteBlockedResponse(intent);
+        }
+        boolean write = accessModeFilter != null
+                ? IntentExecutionOrchestrator.isWriteIntentDeclarationAware(intent, accessModeFilter, writeGuard)
+                : writeGuard.isWriteIntent(intent);
+        return write ? readModeWriteBlockedResponse(intent) : null;
+    }
+
+    static IntentExecuteResponse readModeWriteBlockedResponse(AIIntentConfig intent) {
+        String msg = "这是操作类请求，请切换到【操作】页处理。";
+        return IntentExecuteResponse.builder()
+                .intentRecognized(true).intentCode(intent.getIntentCode())
+                .intentName(intent.getIntentName()).intentCategory(intent.getIntentCategory())
+                .sensitivityLevel(intent.getSensitivityLevel())
+                .status("READ_MODE_WRITE_BLOCKED").message(msg).formattedText(msg)
+                .aiMode("WRITE")
+                .executedAt(LocalDateTime.now()).build();
+    }
+
+    // ==================== 审批 ====================
+
+    /**
+     * 审批谓词 (两入口一份): 意图声明了需要审批。
+     * 不看敏感级别 (声明了就要审批); 不看 forceExecute (那是客户端带来的字段, 不能替审批放行);
+     * 也不看 previewOnly (PR-3b 终审 M2, 已定口径「要审批的写不出确认卡」): 预览会铸确认令牌、出确认按钮,
+     * 要审批的操作在预览时一样停在 PENDING_APPROVAL, 不调预览、不铸令牌。
+     *
+     * @param request 保留参数 (调用方不变); 结论不取决于它
+     */
+    public static boolean stopsForApproval(AIIntentConfig intent, IntentExecuteRequest request) {
+        return intent != null && Boolean.TRUE.equals(intent.getRequiresApproval());
+    }
+
+    /** 审批回复: AI 入口不提交、不核验审批, 如实说没执行。 */
+    public static IntentExecuteResponse approvalResponse(AIIntentConfig intent, WriteGuardService writeGuard,
+                                                         ToolRegistry toolRegistry) {
+        String msg = "此操作需要审批，当前 AI 入口尚不支持提交和核验审批。未提交审批、未执行操作，请通过业务页面完成审批。";
+        IntentExecuteResponse response = IntentExecuteResponse.builder()
+                .intentRecognized(true).intentCode(intent.getIntentCode())
+                .intentName(intent.getIntentName()).intentCategory(intent.getIntentCategory())
+                .sensitivityLevel(intent.getSensitivityLevel())
+                .status("PENDING_APPROVAL").message(msg).formattedText(msg)
+                .requiresApproval(true).approvalChainId(intent.getApprovalChainId())
+                .executedAt(LocalDateTime.now()).build();
+        applyAiModeStamp(response, intent, intent.getToolName(), writeGuard, toolRegistry);
+        return response;
+    }
+
+    // ==================== 遮价 ====================
+
+    /**
+     * 把 resultData 换成这个人看得到的那一份 (ERP-S6-LLM-PROMPT-PRICE-LEAK)。必须在格式化 / 摘要之前调:
+     * 格式化按 resultData 写 formattedText, 没遮过的数会写进文字, 下发时再遮 resultData 也遮不掉文字。
+     *
+     * @return true = 已按这个人遮过 (或本来就没有数据); false = 判定组件没装配, 调用方不许把数据交给模型
+     */
+    public static boolean applyCallerPriceView(PriceFieldResponseAdvice priceView, IntentExecuteResponse response,
+                                               Long userId) {
+        if (response == null || response.getResultData() == null) {
+            return true;
+        }
+        if (priceView == null) {
+            log.warn("价格可见性组件未装配: 结果数据不交给摘要模型 (fail closed)");
+            return false;
+        }
+        response.setResultData(priceView.maskedViewFor(response.getResultData(), userId));
+        return true;
+    }
+
+    // ==================== 内部推理泄漏消毒 ====================
+
+    private static final Pattern INTERNAL_CODE_TOKEN = Pattern.compile("[A-Z]{2,}_[A-Z0-9_]{2,}");
+
+    static final String INTERNAL_REASONING_SAFE_REPLY = "这个问题我还没有把握直接回答。请换一种问法，"
+            + "或说明想看的指标（如营收/销量/毛利）和时间范围，我再帮您查。";
+
+    /**
+     * 客户可见文本内部泄漏消毒 (Sheet 7/22 V7): LLM 意图分类/rerank 的推理文本
+     * (「在提供的可用意图列表中, 只有 PRODUCT_XXX…」) 偶发被当回答返回。
+     * 同时含意图元讨论词与 CODE 形状 token 的消息不可能是合法业务答案。
+     *
+     * @return true = 替换了
+     */
+    public static boolean sanitizeInternalReasoningLeak(IntentExecuteResponse response) {
+        if (response == null) {
+            return false;
+        }
+        boolean replaced = false;
+        for (String text : new String[]{response.getMessage(), response.getFormattedText()}) {
+            if (text != null && isInternalReasoning(text)) {
+                replaced = true;
+                log.warn("[sanitize] internal intent reasoning leaked to customer text, replaced. head={}",
+                        text.substring(0, Math.min(80, text.length())));
+                break;
+            }
+        }
+        if (replaced) {
+            response.setMessage(INTERNAL_REASONING_SAFE_REPLY);
+            response.setFormattedText(INTERNAL_REASONING_SAFE_REPLY);
+        }
+        return replaced;
+    }
+
+    private static boolean isInternalReasoning(String text) {
+        boolean metaTalk = text.contains("意图列表") || text.contains("可用意图")
+                || text.contains("候选意图") || text.contains("intent_code")
+                || text.contains("该意图覆盖");
+        return metaTalk && INTERNAL_CODE_TOKEN.matcher(text).find();
+    }
+
+    // ==================== 文字兜底 (PR-3: 两入口一份) ====================
+
+    /** 工具 / Skill 给的「占位」回复: 盖住 formattedText 里真答案的那几句。 */
+    static final Set<String> GENERIC_SHORT_REPLIES = Set.of(
+            "查询完成，暂无数据", "操作完成", "查询完成", "查询成功", "执行成功",
+            "查询完成,暂无数据", "处理完成", "请求成功",
+            // 2026-07-23 工厂 AI 复盘: ToolDispatchService 对无 message 的工具
+            // 结果默认填 "操作已完成。" — 该占位符掩盖 formattedText 里的真答案
+            // (前端显示 message || formattedText, 占位符非空则真答案永不露出)。
+            "操作已完成", "操作已完成。"
+    );
+
+    /**
+     * 执行结果下发前的文字兜底 (两入口同一份, 意图蒸馏③ PR-3; 此前流式只有 formattedText ← message 一个方向):
+     * 内部推理消毒 → formattedText ← message → 反向兜底 message ← formattedText (占位符盖住真答案时) →
+     * workdesk / Skill 编排输出的摘要 ({@link WorkdeskOutputSummarizer}, 只在数据已按查看人遮过时交给模型)。
+     *
+     * @param priceMasked {@link #applyCallerPriceView} 的返回值: false 时不把结果交给摘要模型
+     */
+    public static void applyTextFallback(IntentExecuteResponse response, WorkdeskOutputSummarizer summarizer,
+                                         String factoryId, boolean priceMasked) {
+        if (response == null) {
+            return;
+        }
+        sanitizeInternalReasoningLeak(response);
+        String currentFT = response.getFormattedText();
+        String msg = response.getMessage();
+        boolean ftMissing = currentFT == null;
+        boolean ftGeneric = currentFT != null && GENERIC_SHORT_REPLIES.contains(currentFT.trim());
+        boolean ftShort = currentFT != null && currentFT.length() < 15;
+        if ((ftMissing || ftGeneric || ftShort) && msg != null && msg.length() >= 20
+                && msg.length() > (currentFT != null ? currentFT.length() : 0)) {
+            response.setFormattedText(msg);
+        } else if (ftMissing && msg != null && msg.length() >= 5) {
+            response.setFormattedText(msg);
+        }
+        if (response.getFormattedText() == null && response.getMessage() != null && !response.getMessage().isEmpty()) {
+            response.setFormattedText(response.getMessage());
+        }
+        // 反向兜底 (2026-07-23 工厂 AI 复盘): message 是占位符/空 而 formattedText 有实质答案时, 用 formattedText 覆盖
+        String finalMsg = response.getMessage();
+        String finalFT = response.getFormattedText();
+        boolean msgMissing = finalMsg == null || finalMsg.isBlank();
+        boolean msgGeneric = finalMsg != null && GENERIC_SHORT_REPLIES.contains(finalMsg.trim());
+        if ((msgMissing || msgGeneric) && finalFT != null && finalFT.length() >= 20
+                && !GENERIC_SHORT_REPLIES.contains(finalFT.trim())) {
+            response.setMessage(finalFT);
+        }
+        // Sprint 9 P0.2: Workdesk / Skill 编排输出 (下划线元数据、原始 JSON、裸模板) 交模型写成中文摘要
+        if (summarizer != null && priceMasked) {
+            try {
+                summarizer.apply(response, factoryId);
+            } catch (Exception e) {
+                log.warn("WorkdeskOutputSummarizer 应用失败 (non-blocking): {}", e.getMessage());
+            }
+        }
+    }
+
+    // ==================== aiMode ====================
+
+    /**
+     * P1 读写分块: 补 aiMode (READ|WRITE), 前端据此选卡片形态。已显式设置的保持不变;
+     * 其余按意图判写, 意图未判写时以已匹配工具兜底。展示元数据, 判定失败不阻断响应。
+     */
+    public static void applyAiModeStamp(IntentExecuteResponse response, AIIntentConfig intent, String matchedToolName,
+                                        WriteGuardService writeGuard, ToolRegistry toolRegistry) {
+        if (response == null || response.getAiMode() != null) {
+            return;
+        }
+        boolean write = intent != null && writeGuard != null && writeGuard.isWriteIntent(intent);
+        if (!write && writeGuard != null && toolRegistry != null
+                && matchedToolName != null && !matchedToolName.isEmpty()) {
+            try {
+                write = toolRegistry.getExecutor(matchedToolName)
+                        .map(writeGuard::isWriteTool)
+                        .orElse(false);
+            } catch (Exception e) {
+                // aiMode 是展示元数据, 判定失败不阻断响应
+            }
+        }
+        response.setAiMode(write ? "WRITE" : "READ");
+    }
+
+    // ==================== 识别候选按权限收窄 ====================
+
+    /**
+     * spec §8.2: 只在操作 tab (mode=OPERATE) 解析权限全集给识别层收窄候选 —— 咨询 tab 的规则是「写意图一律剔除」,
+     * 与权限无关; mode 为空同样不查。
+     *
+     * @return 权限码集合; null = 不按权限过滤 (真正的鉴权仍在执行期的意图权限门 / ToolRbacEnforcer)
+     */
+    public static Set<String> recognitionPermissionFilter(String mode, Long userId, String factoryId,
+                                                          IntentPermissionGate permissionGate) {
+        if (userId == null || permissionGate == null
+                || !IntentAccessModeFilter.MODE_OPERATE.equalsIgnoreCase(mode)) {
+            return null;
+        }
+        try {
+            return permissionGate.resolveUserPermissions(userId, factoryId);
+        } catch (Exception e) {
+            log.warn("候选过滤权限集解析失败, 跳过权限过滤: userId={}, err={}", userId, e.getMessage());
+            return null;
+        }
+    }
+}

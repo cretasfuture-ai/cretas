@@ -119,6 +119,10 @@ public class YieldReportServiceImpl implements YieldReportService {
     @Autowired
     private WorkflowTaskPortRepository workflowTaskPortRepository;
 
+    /** 工艺参数产品标准: 取本任务所属运行时实例(=计划锁定的工艺版本快照)里的画布参数; 未注入 = 旧行为。 */
+    @Autowired(required = false)
+    private com.cretas.aims.repository.workflow.ProductionWorkflowInstanceRepository workflowInstanceRepo;
+
     @Autowired
     private com.cretas.aims.service.production.TaskMaterialBatchPickerService taskMaterialBatchPickerService;
 
@@ -136,6 +140,11 @@ public class YieldReportServiceImpl implements YieldReportService {
 
     @Autowired(required = false)
     private BackdateWindowValidator backdateWindowValidator;
+
+    /** 迁移 P5 R36 的「现在」; 测试可替换。 */
+    private java.time.Clock clock = java.time.Clock.systemUTC();
+
+    void setClock(java.time.Clock clock) { this.clock = clock; }
 
     /** Process-parameter deviation case hook; optional for old constructor-based unit fixtures. */
     @Autowired(required = false)
@@ -163,6 +172,10 @@ public class YieldReportServiceImpl implements YieldReportService {
     /** 按工艺图解锁 (缺口 04)。字段注入 (required=false) 不改构造器, 见 WorkflowStepUnlockWiringContractTest。 */
     @Autowired(required = false)
     private com.cretas.aims.service.workprocess.WorkflowStepUnlockGuard unlockGuard;
+
+    /** 工序首检闸 (V20261115_62), 与工序任务完工同一判据。required=false 不改构造器; 没注入 = 不查首检。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.quality.firstarticle.FirstArticleGate firstArticleGate;
 
     /** 返工计划的来源半成品: 报工时算占用、超量, 投料下拉里给出来 (D-S315-01)。 */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -299,8 +312,20 @@ public class YieldReportServiceImpl implements YieldReportService {
 
         // C-074/C-075/X-10: 补录时效锁 — 报工业务日期不得早于 T-maxDays (默认 T-2)
         if (backdateWindowValidator != null) {
-            backdateWindowValidator.assertWithinWindow(req.getBusinessDate(), "报工");
+            backdateWindowValidator.assertWithinWindow(factoryId, req.getBusinessDate(), "报工");
         }
+        // 迁移 P5: 皮重 ≥ 0 且净重不为负; R36 称重起止时间不晚于现在 5 分钟以上 (前端字段旁也提示, 这里兜底)
+        com.cretas.aims.service.yield.WeighingEntryRules.assertTare(req.getTareWeight(), req.getOutputQuantity(),
+                req.getTareWeight() == null || com.cretas.aims.service.unit.impl.UnitContractServiceImpl
+                        .describeBuiltIn(req.getOutputUnit())
+                        .map(u -> u.dimension() == com.cretas.aims.service.unit.UnitDimension.MASS)
+                        .orElse(false));
+        com.cretas.aims.service.yield.WeighingEntryRules.assertNotLaterThanNow(
+                req.getBusinessDate(), req.getLaborSegments(), clock);
+        com.cretas.aims.service.yield.WeighingEntryRules.assertSegmentsStartBeforeEnd(req.getLaborSegments());
+        // 复审 M4: 不良总量跟产出单位走; 分摊行单位一致才比合计, 不一致不比并标出 (UNIT_MISMATCH)
+        String defectBreakdownCheck = com.cretas.aims.service.yield.WeighingEntryRules.assertDefectBreakdown(
+                req.getDefectQuantity(), req.getOutputUnit(), req.getDefectBreakdown());
         if (req.getWorkProcessTaskId() == null) {
             throw new BusinessException(400, "缺少必填字段: workProcessTaskId")
                     .withHint("请选择工序任务").withHintTarget("workProcessTaskId");
@@ -329,6 +354,11 @@ public class YieldReportServiceImpl implements YieldReportService {
         // 写在任何落库之前; 幂等重放已在上面提前返回, 不受影响。
         if (unlockGuard != null) {
             unlockGuard.assertUnlocked(factoryId, t);
+        }
+        // 工序首检 (工厂开关 = 拦截): 这次报工会把任务记成完成 (产出 / 旧式整合报工 且没选「续报」) 而首检没合格 → 409。
+        // 写在任何落库之前; 部分产出续报 (markComplete=false)、领料、工时段不拦。开关关 / 提示时只问一次开关。
+        if (firstArticleGate != null && (isOutput || isLegacy) && !Boolean.FALSE.equals(req.getMarkComplete())) {
+            firstArticleGate.assertCanComplete(factoryId, t);
         }
 
         // 工序成本配置继承: 报工未传成本字段时, 从工序定义(ProductWorkProcess)继承默认值
@@ -420,6 +450,9 @@ public class YieldReportServiceImpl implements YieldReportService {
         List<ProductionReport> existingTaskReports = reportRepo.findYieldReportsByTask(factoryId, t.getId());
         boolean isFirstReportForTask = existingTaskReports.isEmpty();
 
+        // 副产品限产品目录 (服务端兜底, 不只靠前端)
+        assertByproductsInCatalog(factoryId, effByproducts);
+
         // 包装模板继承: 仅首条报工继承 (packagingDetail 跨报工拼接累加, 多阶段/多次报工各自继承会重复计成本)。
         // req 显式传值优先; 仅当本次未传且为该 task 首条报工时, 从工序定义继承一次。
         if (effPackagingDetail == null && isFirstReportForTask && pwpConfig != null) {
@@ -461,7 +494,7 @@ public class YieldReportServiceImpl implements YieldReportService {
         // 工艺参数 (App 产出报工录入): 与 web 工序表同口径 —— 未配置的键 400, 超标不拦, 服务端按当时标准留快照。
         Map<String, Object> processParams = processParamsForReport(req, reportKind, costWp);
         List<Map<String, Object>> paramChecks = processParams == null ? null
-                : ProcessParamCheck.evaluate(costWp.getCustomFieldSchema(), processParams);
+                : ProcessParamCheck.evaluate(standardsSchema(factoryId, costWp, t), processParams);
 
         ProductionReport r = ProductionReport.builder()
                 .factoryId(factoryId).batchId(batchId).reportType(YIELD)
@@ -477,6 +510,8 @@ public class YieldReportServiceImpl implements YieldReportService {
                 .outputQuantity(effOutput).outputUnit(effOutputUnit)
                 // 不良品数 (质量账)。null 原样传 null —— ⛔ 不兜底成 0。
                 .defectQuantity(req.getDefectQuantity())
+                // 迁移 P5: 皮重单独留痕; 产出阶段才有良品, INPUT/SEGMENT 不收
+                .tareWeight((isInput || isSegment) ? null : req.getTareWeight())
                 // 良品数只有在<b>有人清点过不良品</b>时才是真读数。没清点就是不知道 —— ⛔ 不许用产出量顶替。
                 //
                 // 见 V20260826_05/06 与 GoodQuantityIsNotFabricatedContractTest:
@@ -575,12 +610,32 @@ public class YieldReportServiceImpl implements YieldReportService {
                                     .withHint(actionHint)
                                     .withSeverity("BLOCKING");
                         }
-                        // forceSubmit=true: 记录告警, 正常保存
-                        log.warn("[A4-超收] factory={} batch={} task={} target={} cumulative={} maxAllowed={} force=true",
-                                factoryId, batchId, t.getId(), target, cumulative, maxAllowed);
+                        // 纪律排查 A10: 强制提交必须写原因并留痕 (同配比偏离 / 回料超限), 只有一个布尔值不算数
+                        Map<String, Object> fields = r.getCustomFields() == null
+                                ? new LinkedHashMap<>() : new LinkedHashMap<>(r.getCustomFields());
+                        fields.put("overReceipt", com.cretas.aims.service.yield.OverReceiptForceReason.auditOrRefuse(
+                                req.getForceSubmitReason(), target, maxAllowed, cumulative, projection.outputUnit()));
+                        r.setCustomFields(fields);
+                        String forceReason = req.getForceSubmitReason().strip();
+                        log.warn("[A4-超收] factory={} batch={} task={} target={} cumulative={} maxAllowed={} force=true reason={}",
+                                factoryId, batchId, t.getId(), target, cumulative, maxAllowed, forceReason);
                     }
                 }
             }
+        }
+
+        if (req.getDefectBreakdown() != null && !req.getDefectBreakdown().isEmpty() && !isInput && !isSegment) {
+            Map<String, Object> fields = r.getCustomFields() == null
+                    ? new LinkedHashMap<>() : new LinkedHashMap<>(r.getCustomFields());
+            fields.put("defectBreakdown", req.getDefectBreakdown().stream().map(d -> {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("defectId", d.getDefectId().trim());
+                m.put("quantity", d.effectiveQuantity());
+                m.put("unit", d.effectiveUnit());
+                return m;
+            }).collect(Collectors.toList()));
+            fields.put("defectBreakdownCheck", defectBreakdownCheck);
+            r.setCustomFields(fields);
         }
 
         // 缺口 06: 多主料按份额汇合时, 偏差 >±2pp 必须带原因; 快照并入 customFields.blendRatio。
@@ -721,6 +776,37 @@ public class YieldReportServiceImpl implements YieldReportService {
                     factoryId, sumInput, effOutput, sumInputUnit, effOutputUnit,
                     effByproducts, effWaste, effSampleRetain);
             if (balanceWarning != null) out.put("balanceWarning", balanceWarning);
+        }
+
+        // 产出(良品+不良+副产品)大于投入: 已定「不硬拦, 只提示」(加调味料/加水的工序产出本就可以大于投入),
+        // 照常保存, 回给前端一个明确字段; 不改数。
+        // 复审 M6: 投入 / 产出都按本道累计、同一口径 (良品 + 不良 + 全部副产品, 此前各笔与本笔一样算);
+        // 任何一项单位与投入不同 ⇒ 不比不提示, 回 outputInputCheck=UNIT_MISMATCH。
+        if (isLegacy || isOutput) {
+            List<com.cretas.aims.service.yield.WeighingEntryRules.Qty> hintInputs = new ArrayList<>();
+            List<com.cretas.aims.service.yield.WeighingEntryRules.Qty> hintProduced = new ArrayList<>();
+            if (isLegacy) {
+                hintInputs.add(new com.cretas.aims.service.yield.WeighingEntryRules.Qty(effInput, effInputUnit));
+            } else {
+                for (ProductionReport pr : existingTaskReports) {
+                    if (pr.getReportKind() == null || "INPUT".equals(pr.getReportKind())) {
+                        hintInputs.add(new com.cretas.aims.service.yield.WeighingEntryRules.Qty(
+                                pr.getInputQuantity(), pr.getInputUnit()));
+                    }
+                    if (pr.getReportKind() == null || "OUTPUT".equals(pr.getReportKind())) {
+                        hintProduced.addAll(producedQuantities(pr.getOutputQuantity(), pr.getOutputUnit(),
+                                pr.getDefectQuantity(), pr.getByproducts()));
+                    }
+                }
+            }
+            hintProduced.addAll(producedQuantities(effOutput, effOutputUnit, req.getDefectQuantity(),
+                    toByproductMaps(effByproducts)));
+            Map<String, Object> exceeds = com.cretas.aims.service.yield.WeighingEntryRules.outputExceedsInputHint(
+                    hintInputs, hintProduced);
+            if (exceeds != null) out.putAll(exceeds);
+        }
+        if (defectBreakdownCheck != null && !isInput && !isSegment) {
+            out.put("defectBreakdownCheck", defectBreakdownCheck);
         }
 
         // 2026-08-17: 未配「半成品产出编号」时必须出声, ⛔ 不许静默。
@@ -1310,6 +1396,25 @@ public class YieldReportServiceImpl implements YieldReportService {
     }
 
     /**
+     * 判超标用的 schema: 工序 customFieldSchema + 本任务所属运行时实例(计划锁定的产品工艺版本)里该工序节点的
+     * 画布参数标准覆盖; 画布没配、找不到实例/节点 → 原 schema(旧行为)。
+     */
+    private List<Map<String, Object>> standardsSchema(String factoryId, WorkProcess wp, WorkProcessTask task) {
+        List<Map<String, Object>> schema = wp == null ? null : wp.getCustomFieldSchema();
+        if (schema == null || workflowInstanceRepo == null
+                || task == null || task.getWorkflowInstanceId() == null) {
+            return schema;
+        }
+        // 带 factory_id 且按本任务所属批次查, 再核对就是任务指向的那个实例: 不信一个裸 id
+        return workflowInstanceRepo.findByFactoryIdAndProductionBatchId(factoryId, task.getProductionBatchId())
+                .filter(inst -> task.getWorkflowInstanceId().equals(inst.getId()))
+                .map(inst -> com.cretas.aims.entity.workprocess.ProcessParamStandards.overlay(schema,
+                        com.cretas.aims.entity.workprocess.ProcessParamStandards.paramsOf(
+                                inst.getNodesJson(), task.getWorkflowNodeId(), task.getWorkProcessId())))
+                .orElse(schema);
+    }
+
+    /**
      * 本次报工带的工艺参数; 没带返回 null。只在产出报工 (OUTPUT / 旧式整合) 上收 —— 参数描述的是「这一锅」,
      * 领料 / 工时段报工上没有对应的那一锅。键必须是本道工序配置过的字段 (没配置过任何字段也算未配置)。
      */
@@ -1391,6 +1496,9 @@ public class YieldReportServiceImpl implements YieldReportService {
         if (bps == null || bps.isEmpty()) return null;
         return bps.stream().map(b -> {
             Map<String, Object> m = new LinkedHashMap<>();
+            if (b.getProductTypeId() != null && !b.getProductTypeId().isBlank()) {
+                m.put("productTypeId", b.getProductTypeId().trim());
+            }
             m.put("name", b.getName());
             m.put("quantity", b.getQuantity());
             if (b.getUnit() != null) m.put("unit", b.getUnit());
@@ -1590,7 +1698,7 @@ public class YieldReportServiceImpl implements YieldReportService {
     public Map<String, Object> recordMaterialInput(String factoryId, Long batchId, Long workerId, MaterialInputRequest req) {
         // F4 补录时效锁 — 领料业务日期不得早于 T-maxDays (对称 submitReport 的同一校验)
         if (backdateWindowValidator != null) {
-            backdateWindowValidator.assertWithinWindow(req.getBusinessDate(), "领料");
+            backdateWindowValidator.assertWithinWindow(factoryId, req.getBusinessDate(), "领料");
         }
         if (req.getWorkProcessTaskId() == null) {
             throw new BusinessException(400, "缺少必填字段: workProcessTaskId")
@@ -2751,6 +2859,48 @@ public class YieldReportServiceImpl implements YieldReportService {
                     }
                 }
             });
+        }
+    }
+
+    /** 一笔报工的产出构成: 良品、不良 (同产出单位)、每一行副产品 (各自单位)。 */
+    private static List<com.cretas.aims.service.yield.WeighingEntryRules.Qty> producedQuantities(
+            BigDecimal output, String outputUnit, BigDecimal defect, List<Map<String, Object>> byproducts) {
+        List<com.cretas.aims.service.yield.WeighingEntryRules.Qty> out = new ArrayList<>();
+        out.add(new com.cretas.aims.service.yield.WeighingEntryRules.Qty(output, outputUnit));
+        out.add(new com.cretas.aims.service.yield.WeighingEntryRules.Qty(defect, outputUnit));
+        if (byproducts != null) {
+            for (Map<String, Object> b : byproducts) {
+                if (b == null || b.get("quantity") == null) continue;
+                Object u = b.get("unit");
+                out.add(new com.cretas.aims.service.yield.WeighingEntryRules.Qty(
+                        new BigDecimal(b.get("quantity").toString()), u == null ? null : u.toString()));
+            }
+        }
+        return out;
+    }
+
+    /** 副产品行带 productTypeId 时必须是本厂启用中的产品 (限产品目录)。 */
+    private void assertByproductsInCatalog(String factoryId, List<YieldReportRequest.Byproduct> byproducts) {
+        if (byproducts == null || byproducts.isEmpty()) return;
+        java.util.Set<String> ids = new java.util.LinkedHashSet<>();
+        for (YieldReportRequest.Byproduct b : byproducts) {
+            if (b != null && b.getProductTypeId() != null && !b.getProductTypeId().isBlank()) {
+                ids.add(b.getProductTypeId().trim());
+            }
+        }
+        if (ids.isEmpty()) return;
+        Map<String, com.cretas.aims.entity.ProductType> found = new HashMap<>();
+        for (com.cretas.aims.entity.ProductType pt : productTypeRepository.findByFactoryIdAndIdIn(factoryId, ids)) {
+            found.put(pt.getId(), pt);
+        }
+        for (String id : ids) {
+            com.cretas.aims.entity.ProductType pt = found.get(id);
+            if (pt == null || Boolean.FALSE.equals(pt.getIsActive())) {
+                throw new BusinessException(400, "副产品不在产品目录里: " + id)
+                        .withCode("BYPRODUCT_NOT_IN_CATALOG")
+                        .withHint("副产品只能从本厂启用中的产品目录里选；目录里没有请先到产品管理新增")
+                        .withHintTarget("byproducts");
+            }
         }
     }
 

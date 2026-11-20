@@ -183,6 +183,8 @@ class CostVarianceChatRestParityContractTest {
         assertThat(rest).as("REST 过了门槛就看得到 (role=%s)", role).isEqualByComparingTo("3442.39");
         assertThat(chatField).as("对话字段 == REST (role=%s)", role).isEqualByComparingTo("3442.39");
         assertThat(chat.getMessage()).as("回复文字 == 字段 (role=%s)", role).contains("实际总成本 ¥3442.39");
+        // 批次口径写明是按创建日 (与成本查询按完工日不同, 演示题 Q14 两个批次数对不上却不说, #1810)
+        assertThat(chat.getMessage()).as("口径说明 (role=%s)", role).contains("按批次创建日期统计");
     }
 
     /** 缺陷本体 + 阴阳性锚点: 部门管理员 (finance r, 不是 rw) 过门槛、对话看得到; 至少一个角色两边都拿不到。 */

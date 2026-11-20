@@ -16,6 +16,8 @@ import { ProcessingStackParamList } from '../types/navigation';
 import { getFactoryId, getUserRole } from '../types/auth';
 import { useAuthStore } from '../store/authStore';
 import { hasModulePermission } from '../utils/permissionHelper';
+import { useMyTodoEntry } from '../hooks/useMyTodos';
+import { todoTabScreen } from './todoTab';
 
 const Tab = createBottomTabNavigator();
 const EquipmentStack = createNativeStackNavigator<ProcessingStackParamList>();
@@ -54,6 +56,7 @@ function EquipmentAdminModuleScreen() {
 
 /** 设备管理员：设备工作台、考勤和账号，业务入口均复用现有页面。 */
 export default function EquipmentAdminNavigator() {
+  const todoEntry = useMyTodoEntry();
   const insets = useSafeAreaInsets();
   const user = useAuthStore((state) => state.user);
   const actorRef = useRef({ user, generation: 0 });
@@ -92,6 +95,7 @@ export default function EquipmentAdminNavigator() {
           tabBarIcon: ({ color, size }) => <Icon source="clock-outline" color={color} size={size} />,
         }}
       />
+      {todoTabScreen(Tab, todoEntry, 'equipment-admin-tab-oa-todo')}
       <Tab.Screen
         name="EquipmentAdminProfileTab"
         component={MobileAccountScreen}

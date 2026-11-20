@@ -298,13 +298,13 @@
       控制点的待确认是**结构判据**: 限值/单位/危害类型填上, 红框就自己消失, 没有第二个开关。
     -->
     <section
-      v-if="ccpList.length > 0 || pendingList.length > 0"
+      v-if="ccpList.length > 0 || paramList.length > 0 || pendingList.length > 0"
       class="pending-section nodrag"
       :class="{ 'has-pending': pendingTotal > 0 }"
       data-testid="pending-section"
     >
       <div class="section-title">
-        <span class="section-label">控制点（CCP）与待确认</span>
+        <span class="section-label">控制点（CCP）、工艺参数与待确认</span>
         <span v-if="pendingTotal > 0" class="pending-badge" data-testid="pending-badge">待确认 {{ pendingTotal }}</span>
         <span v-else class="pending-ok" data-testid="pending-ok">已齐全</span>
       </div>
@@ -359,6 +359,56 @@
         />
         <div v-if="ccpLimitsContradict(point)" class="ccp-error" data-testid="ccp-contradict">下限不能大于上限</div>
       </div>
+      <div v-for="(param, index) in paramList" :key="param.id || index" class="ccp-row" data-testid="param-row">
+        <div class="ccp-name">{{ param.label }}</div>
+        <input
+          class="ccp-field ccp-num"
+          :class="{ 'is-missing': processParamMissing(param).includes('range') }"
+          type="text"
+          inputmode="decimal"
+          :value="param.min ?? ''"
+          :disabled="!canWrite"
+          placeholder="下限 待确认"
+          data-testid="param-min"
+          aria-label="下限"
+          @change="onParamNumber(index, 'min', $event)"
+        />
+        <input
+          class="ccp-field ccp-num"
+          :class="{ 'is-missing': processParamMissing(param).includes('range') }"
+          type="text"
+          inputmode="decimal"
+          :value="param.max ?? ''"
+          :disabled="!canWrite"
+          placeholder="上限 待确认"
+          data-testid="param-max"
+          aria-label="上限"
+          @change="onParamNumber(index, 'max', $event)"
+        />
+        <input
+          class="ccp-field ccp-num"
+          type="text"
+          inputmode="decimal"
+          :value="param.standardValue ?? ''"
+          :disabled="!canWrite"
+          placeholder="标准值（可选）"
+          data-testid="param-standard"
+          aria-label="标准值"
+          @change="onParamNumber(index, 'standardValue', $event)"
+        />
+        <input
+          class="ccp-field ccp-unit"
+          :class="{ 'is-missing': processParamMissing(param).includes('unit') }"
+          type="text"
+          :value="param.unit ?? ''"
+          :disabled="!canWrite"
+          placeholder="单位 待确认"
+          data-testid="param-unit"
+          aria-label="单位"
+          @change="onParamUnit(index, $event)"
+        />
+        <div v-if="processParamContradiction(param)" class="ccp-error" data-testid="param-contradict">{{ processParamContradiction(param) }}</div>
+      </div>
       <div v-for="item in pendingList" :key="item.code" class="pending-row" data-testid="pending-row">
         <span class="pending-text">{{ item.label }}</span>
         <button
@@ -402,7 +452,11 @@ import {
   ccpPointsOf,
   pendingConfirmationsOf,
   pendingCountOfProcess,
+  processParamContradiction,
+  processParamMissing,
+  processParamsOf,
   type CcpHazardType,
+  type WorkflowProcessParam,
   type WorkflowCcpPoint,
 } from './workflowPendingConfirmations';
 import type { ProcessNodeData } from './types';
@@ -507,6 +561,21 @@ function onCcpNumber(index: number, key: 'criticalLimitMin' | 'criticalLimitMax'
   // 空或非数 = 回到「待确认」(⛔ 不夹逼成 0: 0 ℃ 是个真实限值, 会让一个没填的限值悄悄变成"已填")
   patchCcp(index, { [key]: Number.isFinite(parsed) ? parsed : null });
 }
+const paramList = computed(() => processParamsOf(props.data as unknown as Record<string, unknown>));
+function patchParam(index: number, patch: Partial<WorkflowProcessParam>): void {
+  const next = paramList.value.map((param, i) => (i === index ? { ...param, ...patch } : param));
+  emit('update', { processParams: next } as Partial<ProcessNodeData>);
+}
+function onParamNumber(index: number, key: 'min' | 'max' | 'standardValue', event: Event): void {
+  const raw = String((event.target as HTMLInputElement | null)?.value ?? '').trim();
+  const parsed = raw === '' ? Number.NaN : Number(raw);
+  // 空或非数 = 回到「待确认」(⛔ 不夹逼成 0)
+  patchParam(index, { [key]: Number.isFinite(parsed) ? parsed : null });
+}
+function onParamUnit(index: number, event: Event): void {
+  const raw = String((event.target as HTMLInputElement | null)?.value ?? '').trim();
+  patchParam(index, { unit: raw && raw.length <= 20 ? raw : null });
+}
 function onCcpUnit(index: number, event: Event): void {
   const raw = String((event.target as HTMLInputElement | null)?.value ?? '').trim();
   patchCcp(index, { unit: raw || null });
@@ -598,7 +667,7 @@ function handleStyle(index: number, count: number): Record<string, string> {
   width: 58px; margin-left: 4px; padding: 2px 6px; font-size: 11px;
   border: 1px solid #dcdfe6; border-radius: 4px; text-align: right; background: #fff;
 }
-.share-input:focus { outline: none; border-color: #409eff; }
+.share-input:focus { outline: none; border-color: var(--el-color-primary); }
 .share-warning { margin: 2px 0 4px; color: #b7791f; font-size: 11px; }
 .time-limit-badge {
   grid-column: 1 / -1; justify-self: start; padding: 0 6px; border-radius: 4px;
@@ -609,7 +678,7 @@ function handleStyle(index: number, count: number): Record<string, string> {
   padding: 1px 8px; border: 1px solid #b9d8f4; border-radius: 4px;
   background: #fff; color: #1b65a8; font-size: 12px; cursor: pointer;
 }
-.time-limit-config:hover { border-color: #409eff; background: #eef6ff; }
+.time-limit-config:hover { border-color: var(--el-color-primary); background: #eef6ff; }
 .pending-section { margin: 6px 0; padding: 6px 8px; border: 1px solid #dfe6ee; border-radius: 6px; background: #fbfcfe; }
 .pending-section.has-pending { border-color: #e6a23c; background: #fffaf0; }
 .pending-badge { color: #b7791f; font-size: 12px; font-weight: 600; }
@@ -671,7 +740,7 @@ function handleStyle(index: number, count: number): Record<string, string> {
 
 .process-node {
   position: relative;
-  width: 440px; padding: 14px; border: 1px solid #b9d8f4; border-left: 4px solid #409eff;
+  width: 440px; padding: 14px; border: 1px solid #b9d8f4; border-left: 4px solid var(--el-color-primary);
   border-radius: 10px; background: #fff; box-shadow: 0 2px 12px rgba(27, 101, 168, 0.09);
 }
 .process-node.selected { box-shadow: 0 0 0 2px rgba(64, 158, 255, 0.3); }
@@ -682,7 +751,7 @@ function handleStyle(index: number, count: number): Record<string, string> {
   padding: 0 10px; border: 1px solid #b9d8f4; border-radius: 6px; background: #fff;
   color: #1b65a8; cursor: pointer; font-size: 12px; font-weight: 600;
 }
-.quick-edit-process:hover { border-color: #409eff; background: #eef6ff; }
+.quick-edit-process:hover { border-color: var(--el-color-primary); background: #eef6ff; }
 .step-mark { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 7px; color: #1b65a8; background: #eaf4ff; font-weight: 700; }
 .eyebrow { color: #7a8599; font-size: 11px; }
 .process-name { color: #1a2332; font-size: 15px; font-weight: 700; }
@@ -764,7 +833,7 @@ function handleStyle(index: number, count: number): Record<string, string> {
   cursor: pointer; transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
 }
 .port-remove:hover { color: #f56c6c; border-color: #f56c6c; background: #fef0f0; }
-.port-remove:focus-visible { outline: 2px solid #409eff; outline-offset: 1px; }
+.port-remove:focus-visible { outline: 2px solid var(--el-color-primary); outline-offset: 1px; }
 .unit-chip {
   display: flex;
   align-items: center;

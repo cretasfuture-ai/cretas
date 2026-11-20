@@ -119,6 +119,16 @@ public class DecisionAuditLog {
     @Column(name = "approval_comment", columnDefinition = "TEXT")
     private String approvalComment;
 
+    /** 本人审批留痕: 提交人=审批人, 工厂开了 allow_self_approval (V20261110_47)。 */
+    @Column(name = "self_approved", nullable = false)
+    @Builder.Default
+    private boolean selfApproved = false;
+
+    /** 本人审批原因 (开关开时必填)。 */
+    @Column(name = "self_approval_reason", columnDefinition = "TEXT")
+    private String selfApprovalReason;
+
+
     // 回放支持
     @Column(name = "is_replayable")
     @Builder.Default

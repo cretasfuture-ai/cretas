@@ -121,6 +121,15 @@ public class FreeGiftInboundTool extends AbstractBusinessTool {
 
     @Override public AccessMode getAccessMode() { return AccessMode.WRITE; }
     @Override public ActionType getActionType() { return ActionType.WRITE; }
+
+    /**
+     * 只新建记录 (确认前状态核对按新建型处理, 见 ToolExecutor#previewCreatesNewRecordOnly)。
+     * 新建赠品批次 (按来源行幂等); 物料移动平均价是执行时按当时库存重算的派生值, 不依赖预览时的值。
+     */
+    @Override
+    public boolean previewCreatesNewRecordOnly() {
+        return true;
+    }
     @Override public boolean requiresPermission() { return true; }
     @Override public java.util.Set<String> getRequiredPermissions() {
         return java.util.Set.of("warehouse:read_write");

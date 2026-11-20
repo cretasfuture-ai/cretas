@@ -49,19 +49,39 @@ class YieldAnalysisServiceImplTest {
                         processSecretAccessService, planRepository, recipeRepository));
     }
 
-    /** Build a result row matching the native query projection keys. */
-    private static Map<String, Object> row(String processName,
-                                           String totalInput, String totalOutput,
-                                           String inputUnit, String outputUnit,
-                                           Long batchCount) {
+    /**
+     * Build a result row matching the native query projection keys —
+     * 每侧给「这道工序所有报工里出现过的单位」(SQL 已剔除空串/unitless、已退回工序标准);
+     * null 元素 = 那条报工没有单位。
+     */
+    private static Map<String, Object> rowUnits(String processName, String totalInput, String totalOutput,
+                                                String[] inputUnits, String[] outputUnits, Long batchCount) {
         Map<String, Object> m = new HashMap<>();
         m.put("process_name", processName);
         m.put("total_input",  new BigDecimal(totalInput));
         m.put("total_output", new BigDecimal(totalOutput));
-        m.put("input_unit",   inputUnit);
-        m.put("output_unit",  outputUnit);
+        putSide(m, "input", inputUnits);
+        putSide(m, "output", outputUnits);
+        m.put("report_count", (long) inputUnits.length);
         m.put("batch_count",  batchCount);
         return m;
+    }
+
+    private static void putSide(Map<String, Object> m, String prefix, String[] units) {
+        java.util.List<String> known = java.util.Arrays.stream(units).filter(java.util.Objects::nonNull).sorted().toList();
+        m.put(prefix + "_unit_min", known.isEmpty() ? null : known.get(0));
+        m.put(prefix + "_unit_max", known.isEmpty() ? null : known.get(known.size() - 1));
+        m.put(prefix + "_unit_kinds", known.stream().distinct().count());
+        m.put(prefix + "_unit_known", (long) known.size());
+    }
+
+    /** 单条报工, 投入/产出各一个单位 (null = 没有单位)。 */
+    private static Map<String, Object> row(String processName,
+                                           String totalInput, String totalOutput,
+                                           String inputUnit, String outputUnit,
+                                           Long batchCount) {
+        return rowUnits(processName, totalInput, totalOutput,
+                new String[]{inputUnit}, new String[]{outputUnit}, batchCount);
     }
 
     @Test
@@ -105,18 +125,82 @@ class YieldAnalysisServiceImplTest {
     }
 
     @Test
-    void aggregate_nullOutputUnit_treatedAsSameUnit() {
-        // 工序未配置 output_unit (绝大多数情况) → 视为与投入同单位 → 出成率应正常计算, 不显 "—"
+    void aggregate_crossUnit_reasonIsUnitMismatchAndQuantitiesKept() {
         when(reportRepo.aggregateYieldByProcess(anyString(), any(), any(), anyString(), anyCollection(), anyCollection()))
-                .thenReturn(List.of(row("演示工序1", "998", "935.5", "kg", null, 1L)));
+                .thenReturn(List.of(row("装盒", "998", "3184", "袋", "盒", 1L)));
 
-        List<ProcessYieldAggDTO> result = service.aggregateByProcess("F001", null, null, null);
+        ProcessYieldAggDTO dto = service.aggregateByProcess("F006", null, null, null).get(0);
+        assertThat(dto.getIncomparableReason()).isEqualTo(ProcessYieldAggDTO.IncomparableReason.UNIT_MISMATCH);
+        assertThat(dto.getConversionRate()).isNull();
+        assertThat(dto.getInputQuantity()).isEqualByComparingTo("998");
+        assertThat(dto.getInputUnit()).isEqualTo("袋");
+        assertThat(dto.getOutputUnit()).isEqualTo("盒");
+    }
 
-        assertThat(result).hasSize(1);
-        ProcessYieldAggDTO dto = result.get(0);
+    @Test
+    void aggregate_massUnitsConvertBeforeDividing() {
+        // kg 投入 → g 产出: 有可靠的科学换算, 换算后再除 (800 g / 1 kg = 80%)
+        when(reportRepo.aggregateYieldByProcess(anyString(), any(), any(), anyString(), anyCollection(), anyCollection()))
+                .thenReturn(List.of(row("切丁", "1", "800", "kg", "g", 1L)));
+
+        ProcessYieldAggDTO dto = service.aggregateByProcess("F006", null, null, null).get(0);
         assertThat(dto.getUnitComparable()).isTrue();
-        assertThat(dto.getConversionRate()).isEqualByComparingTo("93.7"); // 935.5/998*100=93.73→93.7
-        assertThat(dto.getWastageRate()).isEqualByComparingTo("6.3");      // 62.5/998*100=6.26→6.3
+        assertThat(dto.getConversionRate()).isEqualByComparingTo("80.0");
+        assertThat(dto.getWastageRate()).isEqualByComparingTo("20.0");
+    }
+
+    @Test
+    void aggregate_mixedUnitsWithinOneSide_noRateAndNoFakeSum() {
+        // 2026-11-12 网页验收原形: 定量包装 投入 kg/袋、产出 袋/盒, 旧口径按工序标准判同单位出 333%~500%
+        when(reportRepo.aggregateYieldByProcess(anyString(), any(), any(), anyString(), anyCollection(), anyCollection()))
+                .thenReturn(List.of(rowUnits("定量包装", "12", "50",
+                        new String[]{"kg", "袋"}, new String[]{"袋", "盒"}, 2L)));
+
+        ProcessYieldAggDTO dto = service.aggregateByProcess("F006", null, null, null).get(0);
+        assertThat(dto.getUnitComparable()).isFalse();
+        assertThat(dto.getIncomparableReason()).isEqualTo(ProcessYieldAggDTO.IncomparableReason.MIXED_UNITS);
+        assertThat(dto.getConversionRate()).isNull();
+        assertThat(dto.getWastageRate()).isNull();
+        assertThat(dto.getInputQuantity()).isNull();   // 12 = kg + 袋 混加, 不给
+        assertThat(dto.getOutputQuantity()).isNull();
+        assertThat(dto.getInputUnit()).isNull();
+    }
+
+    @Test
+    void aggregate_aliasSpellingsOfOneUnitAreNotMixed() {
+        when(reportRepo.aggregateYieldByProcess(anyString(), any(), any(), anyString(), anyCollection(), anyCollection()))
+                .thenReturn(List.of(rowUnits("清洗", "200", "180",
+                        new String[]{"kg", "千克"}, new String[]{"kg", "kg"}, 2L)));
+
+        ProcessYieldAggDTO dto = service.aggregateByProcess("F006", null, null, null).get(0);
+        assertThat(dto.getUnitComparable()).isTrue();
+        assertThat(dto.getConversionRate()).isEqualByComparingTo("90.0");
+    }
+
+    @Test
+    void aggregate_someReportsWithoutUnit_isMixed() {
+        when(reportRepo.aggregateYieldByProcess(anyString(), any(), any(), anyString(), anyCollection(), anyCollection()))
+                .thenReturn(List.of(rowUnits("腌制", "200", "180",
+                        new String[]{"kg", null}, new String[]{"kg", null}, 2L)));
+
+        ProcessYieldAggDTO dto = service.aggregateByProcess("F006", null, null, null).get(0);
+        assertThat(dto.getIncomparableReason()).isEqualTo(ProcessYieldAggDTO.IncomparableReason.MIXED_UNITS);
+        assertThat(dto.getInputQuantity()).isNull();
+    }
+
+    @Test
+    void aggregate_noUnitAtAll_quantitiesShownButNotDivided() {
+        // 2026-11-12 网页验收原形: QA-S3-1104-腌制 投入「0.2 unitless」产出「0.1 unitless」
+        when(reportRepo.aggregateYieldByProcess(anyString(), any(), any(), anyString(), anyCollection(), anyCollection()))
+                .thenReturn(List.of(row("QA-S3-1104-腌制", "0.2", "0.1", null, null, 1L)));
+
+        ProcessYieldAggDTO dto = service.aggregateByProcess("F006", null, null, null).get(0);
+        assertThat(dto.getIncomparableReason()).isEqualTo(ProcessYieldAggDTO.IncomparableReason.NO_UNIT);
+        assertThat(dto.getConversionRate()).isNull();
+        assertThat(dto.getInputQuantity()).isEqualByComparingTo("0.2");
+        assertThat(dto.getInputUnit()).isNull();
+        assertThat(dto.getUnit()).isNull();
+        assertThat(dto.getOutputUnit()).isNull();
     }
 
     @Test

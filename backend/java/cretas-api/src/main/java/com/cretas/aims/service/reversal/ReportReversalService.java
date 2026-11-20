@@ -53,6 +53,14 @@ public interface ReportReversalService {
     void approveReversal(String factoryId, Long logId, Long approvedBy);
 
     /**
+     * 同上, 带本人审批原因: 审批人就是提交人时, 只有工厂开了「允许本人审批」且原因非空才放行,
+     * 撤回记录上标 {@code selfApproved} 并保存原因 (纪律排查 B1)。
+     */
+    default void approveReversal(String factoryId, Long logId, Long approvedBy, String selfApprovalReason) {
+        approveReversal(factoryId, logId, approvedBy);
+    }
+
+    /**
      * 审批拒绝。仅 PENDING 状态可拒绝。
      *
      * @param factoryId  工厂 ID (跨租户校验: 撤回日志须属于此工厂)

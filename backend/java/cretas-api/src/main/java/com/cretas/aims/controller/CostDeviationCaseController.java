@@ -37,6 +37,10 @@ import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import com.cretas.aims.entity.shortage.DailyReconcileRun;
+import com.cretas.aims.repository.shortage.DailyReconcileRunRepository;
+import com.cretas.aims.service.shortage.CostDeviationExplanation;
+import com.cretas.aims.service.shortage.CostDeviationOwnerResolver;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
@@ -69,6 +73,8 @@ public class CostDeviationCaseController {
     private final PriceMaskResolver priceMaskResolver;
     private final ProcessSecretLlmCostScope costScope;
     private final UnitContractService unitContractService;
+    private final CostDeviationOwnerResolver ownerResolver;
+    private final DailyReconcileRunRepository runRepository;
 
     public record CaseView(String id, String sourceType, String sourceLabel, String planId, String planNumber,
                            String productName, String stage, String stageLabel, String ownerRole, Long ownerUserId,
@@ -95,6 +101,18 @@ public class CostDeviationCaseController {
     public record AssignRequest(Long ownerUserId) {
     }
 
+    public record OwnerConfigView(String varianceRole, Long varianceUserId, String balanceRole, Long balanceUserId,
+                                  String varianceDefaultRole, String balanceDefaultRole) {
+    }
+
+    public record OwnerConfigRequest(String varianceRole, Long varianceUserId, String balanceRole, Long balanceUserId) {
+    }
+
+    private static OwnerConfigView ownerView(CostDeviationOwnerResolver.OwnerConfig c) {
+        return new OwnerConfigView(c.varianceRole(), c.varianceUserId(), c.balanceRole(), c.balanceUserId(),
+                CostDeviationOwnerResolver.DEFAULT_VARIANCE_ROLE, CostDeviationOwnerResolver.DEFAULT_BALANCE_ROLE);
+    }
+
     public record ResolveRequest(CostDeviationCaseDetail.Resolution resolution, String note) {
     }
 
@@ -112,6 +130,29 @@ public class CostDeviationCaseController {
     public ApiResponse<ThresholdView> putThresholds(@PathVariable String factoryId, @RequestBody ThresholdRequest body) {
         var t = scanService.saveThresholds(factoryId, body.variancePct(), body.balancePct());
         return ApiResponse.success(new ThresholdView(t.variancePct(), t.balancePct()));
+    }
+
+    @RequirePermission({"finance:read", "finance:read_write", "procurement:price:view", "production:read", "production:read_write"})
+    @GetMapping("/owners")
+    @Operation(summary = "异常负责人配置", description = "null = 未配置, 回退默认岗位 (成本→财务经理, 平衡→生产经理)")
+    public ApiResponse<OwnerConfigView> getOwners(@PathVariable String factoryId) {
+        return ApiResponse.success(ownerView(ownerResolver.config(factoryId)));
+    }
+
+    @RequireRole({"factory_super_admin", "permission_admin", "finance_manager"})
+    @PutMapping("/owners")
+    @Operation(summary = "设置异常负责人", description = "指定到人 (须属于本厂) 或只指定岗位; 传 null 清除")
+    public ApiResponse<OwnerConfigView> putOwners(@PathVariable String factoryId, @RequestBody OwnerConfigRequest body) {
+        var c = ownerResolver.saveConfig(factoryId, new CostDeviationOwnerResolver.OwnerConfig(
+                body.varianceRole(), body.varianceUserId(), body.balanceRole(), body.balanceUserId()));
+        return ApiResponse.success(ownerView(c));
+    }
+
+    @RequirePermission({"finance:read", "finance:read_write", "procurement:price:view", "production:read", "production:read_write"})
+    @GetMapping("/daily-runs")
+    @Operation(summary = "每日核对运行记录", description = "最近 30 次, 含「没量到」及原因")
+    public ApiResponse<List<DailyReconcileRun>> dailyRuns(@PathVariable String factoryId) {
+        return ApiResponse.success("获取成功", runRepository.findByFactoryIdOrderByStartedAtDesc(factoryId, PageRequest.of(0, 30)));
     }
 
     @RequirePermission({"finance:read_write", "production:read_write"})
@@ -181,6 +222,7 @@ public class CostDeviationCaseController {
         }
         body.put("varianceEvidence", variance);
         body.put("balanceEvidence", balance);
+        body.put("explanation", CostDeviationExplanation.build(c.getSourceType(), d, variance, balance, mask));
         body.put("impact", impact(factoryId, d, variance, balance, batches.size(), mask));
         body.put("verifyPath", verifyPath(c.getSourceType(), factoryId, d.getPlanId(), balance));
         body.put("events", eventRepository.findByCaseIdOrderByIdAsc(c.getId()).stream()
@@ -219,11 +261,22 @@ public class CostDeviationCaseController {
         return new BatchView(b.getBatchNumber(), b.getStatus() == null ? null : b.getStatus().name());
     }
 
+    /** 金额为空时写真实原因 (评估器写进摘要的「差异金额算不出: …」); 物料平衡的金额是估算, 标明。 */
+    public static String amountNote(CostDeviationCaseDetail d, BigDecimal amount) {
+        String summary = d.getSummary() == null ? "" : d.getSummary();
+        if (amount != null) {
+            return summary.contains("差异金额按绝对值合计") ? "估算: 超阈值工序未解释差额 × 开计划时主料单价, 损耗与多出按绝对值合计" : null;
+        }
+        String marker = "差异金额算不出: ";
+        int i = summary.indexOf(marker);
+        if (i >= 0) return "金额未知: " + summary.substring(i + marker.length());
+        return "金额未知: 没有可比较的单价, 不估算";
+    }
+
     private Impact impact(String factoryId, CostDeviationCaseDetail d, PlanCostVarianceDTO v, MaterialBalanceTableDTO.PlanBlock b,
                           int batchCount, boolean mask) {
         BigDecimal amount = mask ? null : d.getAmountVariance();
-        String note = mask ? "无采购价查看权限, 金额已隐藏"
-                : amount == null ? "金额未知: 物料平衡只有数量, 没有单价口径" : null;
+        String note = mask ? "无采购价查看权限, 金额已隐藏" : amountNote(d, amount);
         BigDecimal unit = null;
         if (amount != null && v != null && v.getOutputQuantity() != null && v.getOutputQuantity().signum() > 0) {
             unit = amount.divide(v.getOutputQuantity(), 4, RoundingMode.HALF_UP);
@@ -269,6 +322,7 @@ public class CostDeviationCaseController {
         if (nonZero(v.getUsageVariance())) steps.add("用量差: 核对领料记录和实际产出, 看是否多领、错领或产出少报");
         if (nonZero(v.getSubstituteVariance())) steps.add("替代料差: 确认替代料是否经过批准");
         if (nonZero(v.getLaborVariance())) steps.add("人工差: 核对工时和计件记录");
+        if (nonZero(v.getReworkVariance())) steps.add("回料差: 核对回投的回料量和来源批次, 看回料比例是否超出产品上限");
         if (v.getIncomparableItemCount() > 0) {
             steps.add("有 " + v.getIncomparableItemCount() + " 项无法比较: 到「成本差异」看原因 (缺单价、缺标准用量或配方没有出成率)");
         }
@@ -290,6 +344,40 @@ public class CostDeviationCaseController {
                 .orElseThrow(() -> new BusinessException(404, "异常不存在或不属于本厂"));
     }
 
+    /** 计划的产品在档案里真查不到 (已删除或不存在) 时的如实说法, 不显示空白或内部占位。 */
+    static final String PRODUCT_MISSING_LABEL = "产品已删除或不存在";
+    /** 产品档案在, 但只有内部占位名 (挂原料的工艺图且原料档案也查不到) 时的如实说法。 */
+    static final String PRODUCT_UNNAMED_LABEL = "产品档案没有可显示的名称";
+
+    /**
+     * BP 问题 44: 明细里 product_name 为空不等于产品被删了 —— 挂原料的工艺图计划 (产品名是
+     * {@code __RAW_WORKFLOW_OWNER__…} 占位) 写入时名字被置空, 列表原先一律说「产品已删除或不存在」, 是假话。
+     * 出口按计划的 productTypeId 回查真实名称 (原料挂靠的显示原料名, 与排程页同一份规则);
+     * 只有产品档案真查不到才说「已删除或不存在」。
+     */
+    private String productLabel(String factoryId, CostDeviationCaseDetail d) {
+        String stored = d.getProductName();
+        boolean storedPresent = stored != null && !stored.isBlank();
+        // 已存名字也要清洗: 存成内部占位 (RMT_… / __…) 的不直接露给人看
+        if (storedPresent && !isInternalName(stored)) return stored;
+        String productTypeId = d.getPlanId() == null ? null
+                : planRepository.findByIdAndFactoryId(d.getPlanId(), factoryId)
+                        .map(ProductionPlan::getProductTypeId).orElse(null);
+        String label = productLabel(productTypeId == null ? null : varianceService.productName(factoryId, productTypeId));
+        // 存过占位名 ⇒ 写入时产品是在的; 回查不到真名也不能说成「已删除」
+        return storedPresent && PRODUCT_MISSING_LABEL.equals(label) ? PRODUCT_UNNAMED_LABEL : label;
+    }
+
+    private static boolean isInternalName(String name) {
+        return name.startsWith("__") || name.startsWith("RMT_");
+    }
+
+    static String productLabel(String resolvedName) {
+        if (resolvedName == null || resolvedName.isBlank()) return PRODUCT_MISSING_LABEL;
+        if (isInternalName(resolvedName)) return PRODUCT_UNNAMED_LABEL;
+        return resolvedName;
+    }
+
     private CaseView view(ShortageCase c, CostDeviationCaseDetail d, boolean mask) {
         String owner = c.getOwnerUserId() == null ? null
                 : userRepository.findByIdAndFactoryId(c.getOwnerUserId(), c.getFactoryId())
@@ -301,7 +389,7 @@ public class CostDeviationCaseController {
             default -> c.getStage().label();
         };
         return new CaseView(c.getId(), c.getSourceType().name(), cost ? "成本差异" : "物料损耗", d.getPlanId(),
-                d.getPlanNumber(), d.getProductName(), c.getStage().name(), stageLabel, c.getOwnerRole(),
+                d.getPlanNumber(), productLabel(c.getFactoryId(), d), c.getStage().name(), stageLabel, c.getOwnerRole(),
                 c.getOwnerUserId(), owner, d.getMetricPct(), d.getThresholdPct(),
                 mask ? null : d.getAmountVariance(), mask, d.getUnknownItemCount(), d.getSummary(),
                 d.getBelowThresholdAt(), d.getResolutionCode() == null ? null : d.getResolutionCode().name(),

@@ -25,6 +25,7 @@ import logging
 import time
 from typing import Any, Dict, List, Optional
 
+from ai import legacy_exit_metrics as exit_metrics
 from ai import registry as registry_module
 from ai.config import default_config
 from ai.db import row_to_dto
@@ -40,10 +41,22 @@ from ai.dto import (
 from ai.matcher import fusion as fusion_module
 from ai.matcher import semantic as semantic_module
 from ai.matcher.candidates import BlendRetriever
-from ai.matcher.decision import CLARIFY_KEY, NONE_KEY, RequestPurpose, intent_text
+from ai.matcher.decision import domain_scope, intent_domain_of, with_task_state
+
+
+def _option_set_hash(rows) -> str:
+    from ai.api import option_set_hash  # 函数内导入: ai.api 导入本模块
+    return option_set_hash(rows)
+from ai.db import _is_write_row
+from ai.matcher.decision import (ASK_KEY, CLARIFY_KEY, DIALOGUE_ACTS, NONE_KEY, NON_INTENT_KEYS, RequestPurpose,
+                                 intent_text)
+from ai.matcher.fallback_combo import HOPS, FallbackDecision, FallbackThresholds, run_fallback
+from ai.ask_policy import AskTier, resolve as resolve_ask_tier
 
 # 判「以上都不是」时给用户的话: 不执行, 并告诉他怎么继续 (说「帮助」走 SYSTEM_HELP)。
 NONE_REPLY = "这句话我没对上系统里的功能，所以先不做任何操作。可以换个说法，或者说「帮助」看看我能做什么。"
+# 合并理解判为取消 (CANCEL): 不执行, 也不追问。
+CANCEL_REPLY = "好的，这件事先不办了。需要时再告诉我。"
 
 logger = logging.getLogger(__name__)
 
@@ -87,29 +100,75 @@ class Orchestrator:
         history: List[Dict[str, Any]],
         min_confidence: float,
         enable_llm: bool = True,
+        task_state: Optional[Dict[str, Any]] = None,
+        ask_policy: Optional[str] = None,
+        catalog_version: Optional[str] = None,
     ) -> IntentMatchResultDto:
-        """三层识别对开启的业态生效; 其余业态 (以及三层拿不到结果时) 走旧的 5-8 级。"""
+        """三层识别对开启的业态生效; 其余业态 (以及三层拿不到结果时) 走旧的 5-8 级。
+
+        ``task_state``: 服务端任务状态摘要 (Java TaskStateSummary 白名单), 只给决策层提示词; 旧 5-8 级不用。
+        ``ask_policy``: 本厂先问档位 (Java 读 factory_thresholds ai.intent.ask_policy), 见 ai/ask_policy.py。
+        ``catalog_version``: Java 业务域表的版本 (PR-4)。与本进程的表版本相同才按业务域缩小决策层候选;
+        没带 / 不同 ⇒ 不收窄 (Java 与 Python 分开发布, 版本对不上时宁可放宽)。旧 5-8 级不用。
+        """
         # Matchers/classifiers may return historical head IDs; final matching
         # must still obey the reviewed retirement policy while preserving
         # tenant-owned non-restaurant custom rows.
         visible_intents = filter_runtime_rows(visible_intents)
         if (self.decision_matcher is not None and enable_llm
                 and self.config.decision_enabled_for(businessType)):
+            # 旧出口计数 (INTENT-DISTILL-20261111): 只计数、只打日志, 不改结果
+            exit_metrics.record_decision_site_request()
+            exit_metrics.set_decision_none_reason(None)
+            exit_metrics.set_luna_failure_reason(None)
+            fallback_reason = None
+            scope_state: Dict[str, Any] = {}
             try:
                 result = await self._match_decision(query, factoryId, businessType, role, visible_intents,
-                                                    history)
-            except Exception:
+                                                    history, task_state=task_state, ask_policy=ask_policy,
+                                                    catalog_version=catalog_version, scope_state=scope_state)
+                if scope_state.get("used") and self._wants_wide_retry(result):
+                    # 业务域收窄后判成「以上都不是 / 先问清楚 / 没答出来」: 可能是域判错把对的意图挤掉了。
+                    # 不许静默答「没有这个功能」(不降级原则) ⇒ 用全部可见意图再判一次 (宁可放宽)。
+                    result = await self._match_decision(query, factoryId, businessType, role, visible_intents,
+                                                        history, task_state=task_state, ask_policy=ask_policy,
+                                                        catalog_version=catalog_version, scope_state=scope_state,
+                                                        widen=True)
+                    if result is not None:
+                        result.timingMs = {**(result.timingMs or {}), "domainRetryWide": 1}
+            except Exception as ex:
                 logger.exception("decision layer failed, falling back to legacy stages")
+                fallback_reason = "decision_" + exit_metrics.classify_exception(ex)
                 result = None
             if result is not None:
+                exit_metrics.observe_decision_answered()
+                # 决策层输出业务域 (飞轮按域分组): 选中意图的主域 / 次域, 表外意图为 None (只对带表版本的请求)
+                if catalog_version is not None:
+                    chosen = result.bestMatch.intentCode if result.bestMatch is not None else None
+                    for key, value in intent_domain_of(chosen).items():
+                        exit_metrics.note_trace(key, value)
                 return result
+            if scope_state.get("used") and not scope_state.get("widened"):
+                # 决策层没答出来、旧路径答 ⇒ 这次的候选集合不是缩小后的那份 (L1)
+                exit_metrics.note_trace("domainScope", "narrowed_legacy_fallback")
+                exit_metrics.note_trace("optionSetHash", _option_set_hash(visible_intents))
             legacy = await self._match_legacy(query, factoryId, businessType, userId, role, visible_intents,
                                               history, min_confidence, enable_llm)
             # 回落要留痕: 「三层答的」与「三层没答出来、旧路径答的」在结果上必须分得开
             legacy.timingMs = {**(legacy.timingMs or {}), "decisionFallback": 1}
+            exit_metrics.record_legacy_exit(
+                legacy, factoryId,
+                fallback_reason or exit_metrics.get_decision_none_reason() or "decision_returned_none",
+                visible_intents)
             return legacy
-        return await self._match_legacy(query, factoryId, businessType, userId, role, visible_intents,
-                                        history, min_confidence, enable_llm)
+        legacy = await self._match_legacy(query, factoryId, businessType, userId, role, visible_intents,
+                                          history, min_confidence, enable_llm)
+        # 决策层没对这个业态 / 这次请求开 ⇒ 旧四级就是主路径 (配置使然, 不进告警分子)
+        exit_metrics.record_legacy_exit(
+            legacy, factoryId,
+            "llm_disabled" if (self.decision_matcher is not None and not enable_llm) else "decision_not_enabled",
+            visible_intents, observe_alarm=False)
+        return legacy
 
     async def _match_decision(
         self,
@@ -119,6 +178,11 @@ class Orchestrator:
         role: str,
         visible_intents: List[Dict[str, Any]],
         history: Optional[List[Dict[str, Any]]] = None,
+        task_state: Optional[Dict[str, Any]] = None,
+        ask_policy: Optional[str] = None,
+        catalog_version: Optional[str] = None,
+        scope_state: Optional[Dict[str, Any]] = None,
+        widen: bool = False,
     ) -> Optional[IntentMatchResultDto]:
         """① 已审核精确表 → ② 读概率决策 → ③ 置信不够则 requiresConfirmation (Java 出按钮)。
 
@@ -128,8 +192,14 @@ class Orchestrator:
         """
         t0 = time.time()
         timing: Dict[str, int] = {"decisionLayer": 1, "historyTurns": len(history or [])}
+        # 最近对话只看真实轮次 (计数、是否跳过重排); 提示词里用接上了任务状态的那份 (白名单清洗在 with_task_state)
+        turns = history
+        history = with_task_state(turns, task_state)
+        if len(history) > len(turns or []):
+            timing["taskState"] = 1
         by_code = {str(r.get("intent_code")): r for r in visible_intents}
         if not by_code:
+            exit_metrics.set_decision_none_reason("decision_no_visible_intents")
             return None
 
         # ===== ① 精确表: 归一化后整句相等, 只认 APPROVED =====
@@ -150,7 +220,54 @@ class Orchestrator:
                 return self._build_result(query=query, top_candidates=[cand], method=MatchMethod.EXACT,
                                           visible_intents=visible_intents, min_confidence=0.0, timing=timing)
 
+        # ===== 第 1 层: 业务域缩小「给模型看的」候选 (PR-4) =====
+        # 只换粗选 / 合并理解提示词里列的意图。by_code 仍是全部可见意图: 精确表 (上面) 与语义召回补足的候选
+        # 不受业务域限制 (语义召回 = 兜底), 权限 / 写确认 / 审批仍全在 Java 侧照旧。
+        state = scope_state if scope_state is not None else {}
+        if widen:
+            scope = None
+        elif not getattr(self.config, "domain_scope_enabled", True):
+            scope = None
+            if catalog_version is not None:
+                exit_metrics.note_trace("domainScope", "disabled")
+        else:
+            scope = domain_scope(query, visible_intents, catalog_version,
+                                 contextual=bool(turns) or bool(task_state))
+        narrowed = scope is not None and scope.narrowed
+        llm_visible = scope.rows if narrowed else visible_intents
+        if catalog_version is not None:
+            # 只有带了业务域表版本的请求 (PR-4 起的 Java) 才记业务域痕迹; 老请求的痕迹与改动前逐字相同
+            exit_metrics.note_trace("catalogVersion", catalog_version)
+            if widen:
+                exit_metrics.note_trace("domainScope", "narrowed_retry_wide")
+                exit_metrics.note_trace("optionSetHash", _option_set_hash(visible_intents))
+                state["widened"] = True
+            elif scope is not None:
+                exit_metrics.note_trace("domains", sorted(scope.domains))
+                # 收窄了但还没交给模型: 先记「没用上」, 真交给粗选 / 合并理解时才改成 narrowed (L1)
+                exit_metrics.note_trace("domainScope", "narrowed_unused" if narrowed else scope.reason)
+
+        def use_scope() -> None:
+            """粗选 / 合并理解真的拿缩小后的列表去问模型时调用: 这时才算收窄生效。"""
+            if not narrowed:
+                return
+            state["used"] = True
+            timing["domainNarrowed"] = 1
+            timing["domainCandidates"] = len(llm_visible)
+            exit_metrics.note_trace("domainScope", "narrowed")
+            exit_metrics.note_trace("domainCandidates", len(llm_visible))
+            # 候选集合变了 ⇒ 这道题的「选项集合」跟着变 (飞轮蒸馏按它分题)
+            exit_metrics.note_trace("optionSetHash", _option_set_hash(llm_visible))
+
         retriever = self.candidate_retriever or self.semantic_matcher
+        if getattr(self.config, "decision_merged", False):
+            use_scope()
+            merged = await self._match_merged(query, factoryId, businessType, role, visible_intents, history,
+                                              retriever, by_code, timing, t0, llm_visible=llm_visible)
+            if merged is not None:
+                return merged
+            # 合并调用拿不到合法输出 ⇒ 回落下面原来的分开调用 (留痕, 不猜)
+            timing["mergedFallback"] = 1
         # Determine the speech act separately from choosing a related function.
         # This generates a semantic disposition, not confidence or execution permission.
         # organizer 2026-10-09: 与候选召回、决策选择并行跑 (串行时 p50 684→1124ms); 只在用到结论时才 await。
@@ -165,34 +282,14 @@ class Orchestrator:
                 return None
             purpose = await purpose_task
             timing["requestPurposeMs"] = int((time.time() - purpose_started) * 1000)
-            if purpose == RequestPurpose.CURRENT:
-                return None
-            result = IntentMatchResultDto.empty(userInput=query)
-            result.matchMethod = MatchMethod.LLM
-            result.questionType = QuestionType.CONVERSATIONAL
-            # Java recognizes this as an explicit no-business-action conclusion,
-            # rather than falling back to its legacy keyword/vector guesses.
-            timing["decisionNone"] = 1
-            if purpose == RequestPurpose.INFORMATION_ONLY:
-                timing["requestPurposeInformation"] = 1
-                result.requiresConfirmation = True
-                result.clarificationQuestion = "您想了解哪个功能的操作步骤，或需要我现在处理什么？请再说明一下。"
-            else:
-                timing["requestPurposeUnresolved" if purpose is not None else "requestPurposeUnavailable"] = 1
-                result.requiresConfirmation = True
-                result.clarificationQuestion = ("您是在讨论操作方法，还是希望我现在查询或办理？请再说明一下。"
-                                                if purpose is not None else
-                                                "系统暂时无法确认您的请求，请稍后重试。当前不会进行业务操作。")
-            timing["totalMs"] = int((time.time() - t0) * 1000)
-            result.timingMs = timing
-            return result
+            return self._purpose_result(purpose, query, timing, t0)
 
         # ===== ② 候选 (重排路): 向量 Top-N → 微调重排 → 前 K, 0 token =====
         # 带对话历史的轮次不走这条: 重排只看这一句, LLM 粗选能看到前文。
         codes = None
         if (getattr(self.config, "decision_candidates", "shortlist") == "rerank" and self.rerank_client is not None
                 and isinstance(retriever, BlendRetriever)):
-            if history:
+            if turns:
                 timing["rerankSkippedHistory"] = 1
             else:
                 codes = await self._rerank_candidates(query, factoryId, businessType, retriever, by_code, timing)
@@ -200,9 +297,10 @@ class Orchestrator:
         # ===== ② 候选: LLM 粗选 ‖ 向量召回 (并行), 合并去重 =====
         t = time.time()
         if codes is None:
+            use_scope()
             sem, short = await asyncio.gather(
                 retriever.match(query, factoryId=factoryId, businessType=businessType),
-                self.decision_matcher.shortlist(query, role, visible_intents, history),
+                self.decision_matcher.shortlist(query, role, llm_visible, history),
                 return_exceptions=True,
             )
             timing["retrievalMs"] = int((time.time() - t) * 1000)
@@ -219,25 +317,208 @@ class Orchestrator:
                 if len(codes) >= self.config.decision_k:
                     break
         if not codes:
+            exit_metrics.set_decision_none_reason("decision_no_candidates")
             return await purpose_block()
 
         # ===== ② 决策: 读概率 =====
         t = time.time()
         special = bool(getattr(self.config, "decision_special_options", False))
-        if special:
+        fallback = None
+        ask_tier = None  # 本厂先问档位; 只有 Luna 主路径 (combo) 用得上
+        if getattr(self.config, "decision_fallback", "legacy") == "combo":
+            # Luna → 组合退路 (阿里云意图 ‖ qwen 动作/先问 → qwen 单用 → 保守先问 → 按钮), 见 fallback_combo
+            options = [by_code[c] for c in codes]
+            if len(options) == 1 and not special:
+                probs = {codes[0]: 1.0}
+            else:
+                ask_tier, ask_source = resolve_ask_tier(self.config, ask_policy)
+                if ask_tier is not None:
+                    timing["askTier" + ask_tier.name.capitalize()] = 1
+                    if ask_source.startswith("default"):
+                        timing["askPolicyDefaulted"] = 1  # 请求没带 / 认不出档位 ⇒ 默认档 (已计数 + WARNING)
+                probs = await self.decision_matcher.choose_luna(
+                    query, role, options, history, special_options=special,
+                    ask=ask_tier is not None, ask_rules=ask_tier.rules if ask_tier is not None else None)
+            if probs is None:
+                luna_reason = exit_metrics.get_luna_failure_reason()  # None = 没启用 Luna
+                modes = {c: ("WRITE" if _is_write_row(by_code[c]) else "READ") for c in codes}
+                fallback = await run_fallback(self.decision_matcher, query, role, options, history, modes,
+                                              FallbackThresholds.from_env())
+                exit_metrics.record_fallback(fallback.hop, fallback.outcome, fallback.failures)
+                if luna_reason is not None:
+                    exit_metrics.record_luna_outcome(luna_reason, "fallback_" + fallback.hop)
+        elif special:
             probs = await self.decision_matcher.choose(query, role, [by_code[c] for c in codes], history,
                                                        special_options=True)
         else:
             probs = await self.decision_matcher.choose(query, role, [by_code[c] for c in codes], history)
         timing["decisionMs"] = int((time.time() - t) * 1000)
+        timing_before_purpose = dict(timing)
         # 说话意图不是「现在办」⇒ 不采用刚选出的业务意图 (结论在这里才用到, 前面一直在并行跑)
         purpose_result = await purpose_block()
         if purpose_result is not None:
+            # 说话意图只回「说不清」(UNRESOLVED), 而决策层本身已判定要先问并给出 >= 2 个候选 ⇒ 出按钮, 不出纯文字追问。
+            # (2026-11-18: 目的分类换成 qwen3.8-flash 后, 「这个客户的量给我弄一下」这类含糊办事请求被判 UNRESOLVED,
+            #  把 Luna 已算好的按钮澄清盖成了文字, 用户没法点选。)
+            if purpose_result.timingMs.get("requestPurposeUnresolved"):
+                buttons = None
+                if fallback is not None:
+                    buttons = self._result_from_fallback(fallback, query, by_code, visible_intents,
+                                                         dict(timing_before_purpose), t0)
+                elif probs:
+                    buttons = self._result_from_probs(probs, special, query, by_code, visible_intents,
+                                                      dict(timing_before_purpose), t0, ask_tier=ask_tier)
+                if (buttons is not None and buttons.requiresConfirmation and len(buttons.topCandidates) >= 2
+                        and (buttons.timingMs or {}).get("decisionClarify")):
+                    buttons.timingMs["requestPurposeUnresolved"] = 1
+                    buttons.timingMs["purposeUnresolvedButtons"] = 1
+                    return buttons
             return purpose_result
+        if fallback is not None:
+            return self._result_from_fallback(fallback, query, by_code, visible_intents, timing, t0)
         if not probs:
+            exit_metrics.set_decision_none_reason(
+                "decision_no_probs_" + (exit_metrics.get_luna_failure_reason() and "after_luna" or "qwen_only"))
             return None
+        return self._result_from_probs(probs, special, query, by_code, visible_intents, timing, t0,
+                                       ask_tier=ask_tier)
+
+    @staticmethod
+    def _wants_wide_retry(result: Optional[IntentMatchResultDto]) -> bool:
+        """收窄后的结论是否该用全部意图重判: 没答出来 / 以上都不是 / 先问清楚 (按钮澄清) ⇒ 是;
+        直接办 ⇒ 否; 说话目的不是「现在办」或明确取消 ⇒ 否 (那与候选是哪些无关)。"""
+        if result is None:
+            return True
+        timing = result.timingMs or {}
+        if any(timing.get(k) for k in ("mergedCancel", "requestPurposeInformation", "requestPurposeUnresolved",
+                                       "requestPurposeUnavailable")):
+            return False
+        return result.bestMatch is None or bool(result.requiresConfirmation)
+
+    async def _match_merged(self, query, factoryId, businessType, role, visible_intents, history,
+                            retriever, by_code, timing, t0,
+                            llm_visible: Optional[List[Dict[str, Any]]] = None) -> Optional[IntentMatchResultDto]:
+        """合并理解 (1 次) → 只在需要时 Choice (第 2 次)。返回 None = 合并输出不可用, 调用方走分开调用。
+
+        Choice 触发条件 (INTENT-DISTILL E, 门槛来由见 config / PR 回执):
+          - 本轮要先问 (clarify_probability >= decision_clarify_threshold): 按钮要真实概率排序;
+          - 没有 target, 或 target 把握 < decision_choice_below。
+        「给出了 alternatives」**不**触发: 开发集上它几乎每轮都有 (ORDER_LIST 旁边总挂着 ORDER_STATUS),
+        触发后 Choice 的分布很平、过不了 0.8 自动门槛, 72% 的轮次变成多余的澄清。
+        调了 Choice 且不是先问: Choice 首选 == 合并 target ⇒ 两个独立判断一致, 执行; 否则按原 Choice 规则
+        (以上都不是 / 先问清楚 / 置信不够出按钮)。
+        其余轮次直接按合并输出的 target 交给 Java; 权限过滤 / 读写判定 / 参数落地校验仍在 Java 侧照旧执行。
+        """
+        t = time.time()
+        sem_task = asyncio.ensure_future(retriever.match(query, factoryId=factoryId, businessType=businessType))
+        # llm_visible: 按业务域缩小后给提示词的候选 (PR-4); 没给 = 全部可见意图
+        u = await self.decision_matcher.understand(query, role, llm_visible if llm_visible is not None else visible_intents,
+                                                   history)
+        timing["understandMs"] = int((time.time() - t) * 1000)
+        if u is None:
+            sem_task.cancel()
+            return None
+        try:
+            sem = await sem_task
+        except Exception as ex:  # noqa: BLE001
+            logger.warning("decision: candidate retrieval failed: %s", ex)
+            sem = []
+        timing["merged"] = 1
+        timing["mergedAct"] = DIALOGUE_ACTS.index(u.act)
+        timing["mergedConfidence"] = int(round(u.confidence * 1000))
+        timing["mergedClarifyP"] = int(round(u.clarify_probability * 1000))
+        # 「先不查了」类: 模型常同时判 purpose=INFORMATION_ONLY (否定), 先认取消, 否则会被改成追问
+        if u.act == "CANCEL":
+            timing["mergedCancel"] = 1
+            return self._none_result(query, timing, t0, CANCEL_REPLY)
+        purpose_result = self._purpose_result(u.purpose, query, timing, t0)
+        if purpose_result is not None:
+            return purpose_result
+        codes: List[str] = []
+        for c in list(u.candidates) + list(u.alternatives) + [s.intentCode for s in sem]:
+            if c in by_code and c not in codes:
+                codes.append(c)
+            if len(codes) >= self.config.decision_k:
+                break
+        if not codes:
+            return None
+        clarify = u.clarify_probability >= self.config.decision_clarify_threshold
+        need_choice = (clarify or u.target is None or u.target not in by_code
+                       or u.confidence < self.config.decision_choice_below)
+        if need_choice:
+            t = time.time()
+            probs = await self.decision_matcher.choose(query, role, [by_code[c] for c in codes], history,
+                                                       special_options=True)
+            timing["decisionMs"] = int((time.time() - t) * 1000)
+            timing["choiceCalled"] = 1
+            if not probs:
+                return None
+            if clarify:
+                timing["mergedClarify"] = 1
+                probs = {k: v for k, v in probs.items() if k not in NON_INTENT_KEYS}
+                probs[CLARIFY_KEY] = 1.0  # 先问的结论来自合并输出; Choice 只给按钮排序
+                return self._result_from_probs(probs, True, query, by_code, visible_intents, timing, t0)
+            real = {k: v for k, v in probs.items() if k not in NON_INTENT_KEYS}
+            if not (u.target and real and max(real, key=real.get) == u.target):
+                return self._result_from_probs(probs, True, query, by_code, visible_intents, timing, t0)
+            timing["choiceAgrees"] = 1
+        else:
+            timing["choiceSkipped"] = 1
+        row = by_code[u.target]
+        cand = CandidateIntentDto(
+            intentCode=u.target, intentName=row.get("intent_name") or u.target,
+            intentCategory=row.get("intent_category"), confidence=round(float(u.confidence), 4),
+            matchMethod=MatchMethod.LLM, description=row.get("description"),
+        )
+        timing["totalMs"] = int((time.time() - t0) * 1000)
+        return self._build_result(query=query, top_candidates=[cand], method=MatchMethod.LLM,
+                                  visible_intents=visible_intents, min_confidence=0.0, timing=timing)
+
+    @staticmethod
+    def _purpose_result(purpose: Optional[RequestPurpose], query: str, timing: Dict[str, int],
+                        t0: float) -> Optional[IntentMatchResultDto]:
+        """purpose != CURRENT ⇒「先问清楚」的结论; CURRENT ⇒ None。分开调用与合并调用共用这一份。"""
+        if purpose == RequestPurpose.CURRENT:
+            return None
+        result = IntentMatchResultDto.empty(userInput=query)
+        result.matchMethod = MatchMethod.LLM
+        result.questionType = QuestionType.CONVERSATIONAL
+        # Java recognizes this as an explicit no-business-action conclusion,
+        # rather than falling back to its legacy keyword/vector guesses.
+        timing["decisionNone"] = 1
+        if purpose == RequestPurpose.INFORMATION_ONLY:
+            timing["requestPurposeInformation"] = 1
+            result.requiresConfirmation = True
+            result.clarificationQuestion = "您想了解哪个功能的操作步骤，或需要我现在处理什么？请再说明一下。"
+        else:
+            timing["requestPurposeUnresolved" if purpose is not None else "requestPurposeUnavailable"] = 1
+            result.requiresConfirmation = True
+            result.clarificationQuestion = ("您是在讨论操作方法，还是希望我现在查询或办理？请再说明一下。"
+                                            if purpose is not None else
+                                            "系统暂时无法确认您的请求，请稍后重试。当前不会进行业务操作。")
+        timing["totalMs"] = int((time.time() - t0) * 1000)
+        result.timingMs = timing
+        return result
+
+    def _none_result(self, query: str, timing: Dict[str, int], t0: float,
+                     message: str = NONE_REPLY) -> IntentMatchResultDto:
+        timing["decisionNone"] = 1
+        timing["totalMs"] = int((time.time() - t0) * 1000)
+        result = IntentMatchResultDto.empty(userInput=query)
+        result.matchMethod = MatchMethod.LLM
+        result.questionType = QuestionType.CONVERSATIONAL
+        result.conversationMessage = message
+        result.timingMs = timing
+        return result
+
+    def _result_from_probs(self, probs: Dict[str, float], special: bool, query: str, by_code: Dict[str, Any],
+                           visible_intents: List[Dict[str, Any]], timing: Dict[str, int],
+                           t0: float, ask_tier: Optional[AskTier] = None) -> IntentMatchResultDto:
+        """Choice 概率 -> 结论 (以上都不是 / 先问清楚 / 置信不够出按钮 / 执行)。两条路径共用。"""
+        probs = dict(probs)
         p_none = float(probs.pop(NONE_KEY, 0.0) or 0.0)
         p_clarify = float(probs.pop(CLARIFY_KEY, 0.0) or 0.0)
+        p_ask = probs.pop(ASK_KEY, None)
         ranked = sorted(probs.items(), key=lambda kv: -kv[1])
         top_real = ranked[0][1] if ranked else 0.0
         if special:
@@ -245,16 +526,30 @@ class Orchestrator:
             timing["decisionClarifyP"] = int(round(p_clarify * 1000))
         # 「以上都不是」最大且过半 → 明确判无对应功能: 不执行、不回落旧路径猜一个 (Java 认 decisionNone)
         if special and p_none >= 0.5 and p_none > top_real and p_none >= p_clarify:
-            timing["decisionNone"] = 1
-            timing["totalMs"] = int((time.time() - t0) * 1000)
-            result = IntentMatchResultDto.empty(userInput=query)
-            result.matchMethod = MatchMethod.LLM
-            result.questionType = QuestionType.CONVERSATIONAL
-            result.conversationMessage = NONE_REPLY
-            result.timingMs = timing
-            return result
+            return self._none_result(query, timing, t0)
         # 「需要先问清楚」最大 → 一律出按钮 (不管真实第一名的概率是多少)
         force_clarify = special and p_clarify > top_real and p_clarify >= p_none
+        auto_threshold = self.config.decision_auto_threshold
+        if p_ask is not None and ranked and ask_tier is not None:
+            # Luna 判断题在手: 先问 / 按默认直接办 / 写确认卡; 门槛按本厂档位 (ai/ask_policy.py)
+            timing["lunaPolicyV3"] = 1
+            timing["lunaAskP"] = int(round(float(p_ask) * 1000))
+            top_code, p_top = ranked[0]
+            p_second = ranked[1][1] if len(ranked) > 1 else 0.0
+            if float(p_ask) >= ask_tier.ask_threshold:
+                timing["lunaAsk"] = 1
+                force_clarify = True
+            elif not force_clarify:
+                if _is_write_row(by_code[top_code]):
+                    go = p_top >= ask_tier.write_threshold and p_top >= p_clarify
+                    timing["lunaWriteToConfirm" if go else "lunaWriteWeak"] = 1
+                else:
+                    go = p_top >= ask_tier.read_threshold or p_top - p_second >= ask_tier.margin
+                    timing["lunaReadWithDefaults" if go else "lunaTwoWay"] = 1
+                if go:
+                    auto_threshold = 0.0  # 只把首选交给 Java: 读按默认执行并写明默认, 写一律走确认卡
+                else:
+                    force_clarify = True
         if force_clarify:
             timing["decisionClarify"] = 1
         candidates = []
@@ -271,8 +566,58 @@ class Orchestrator:
         # ③ 置信不够 → requiresConfirmation=true, Java 走 buildClarificationResponse 出候选按钮
         return self._build_result(query=query, top_candidates=candidates, method=MatchMethod.LLM,
                                   visible_intents=visible_intents,
-                                  min_confidence=1.01 if force_clarify else self.config.decision_auto_threshold,
+                                  min_confidence=1.01 if force_clarify else auto_threshold,
                                   timing=timing)
+
+    def _result_from_fallback(self, fb: FallbackDecision, query: str, by_code: Dict[str, Any],
+                              visible_intents: List[Dict[str, Any]], timing: Dict[str, int],
+                              t0: float) -> IntentMatchResultDto:
+        """退路结论 -> 结果。只有「只读目标 + EXECUTE」交给 Java 直接办; 其余一律按钮 (requiresConfirmation)。
+
+        写目标在退路上**一律不自动执行**: decide_v3 的 write_to_confirm 在这里也转成按钮 (首个按钮就是那个写意图,
+        点了之后 Java 照常走写确认)。比 Luna 路径多一次点击, 换来退路上不存在「写意图直通 Java」这条路。
+        """
+        timing.update(fb.timing)
+        timing["fallbackHop"] = HOPS.index(fb.hop) + 1  # 1 combo / 2 qwen_only / 3 intent_ask / 4 buttons
+        for side in sorted(fb.failures):
+            timing["fallbackFail_" + side] = 1
+        if fb.clarify_p is not None:
+            timing["fallbackClarifyP"] = int(round(fb.clarify_p * 1000))
+        if fb.act in DIALOGUE_ACTS:
+            timing["fallbackAct"] = DIALOGUE_ACTS.index(fb.act)
+        if fb.outcome == "NONE":
+            return self._none_result(query, timing, t0, CANCEL_REPLY if fb.reason == "act_cancel" else NONE_REPLY)
+        if fb.outcome == "EXECUTE" and fb.intent in by_code and not _is_write_row(by_code[fb.intent]):
+            row = by_code[fb.intent]
+            cand = CandidateIntentDto(
+                intentCode=fb.intent, intentName=row.get("intent_name") or fb.intent,
+                intentCategory=row.get("intent_category"),
+                confidence=round(float(fb.intent_probs.get(fb.intent, 0.0)), 4),
+                matchMethod=MatchMethod.LLM, description=row.get("description"),
+            )
+            timing["totalMs"] = int((time.time() - t0) * 1000)
+            return self._build_result(query=query, top_candidates=[cand], method=MatchMethod.LLM,
+                                      visible_intents=visible_intents, min_confidence=0.0, timing=timing)
+        if fb.outcome == "EXECUTE":
+            timing["fallbackWriteHeld"] = 1
+        if fb.hop == "buttons":
+            timing["fallbackNoSignal"] = 1  # 置信度一律 0: 没有任何模型给出概率, ⛔ 不编
+        codes: List[str] = []
+        for c in ([fb.intent] if fb.intent else []) + list(fb.top):
+            if c in by_code and c not in codes:
+                codes.append(c)
+        candidates = []
+        for c in codes[:5]:
+            row = by_code[c]
+            candidates.append(CandidateIntentDto(
+                intentCode=c, intentName=row.get("intent_name") or c, intentCategory=row.get("intent_category"),
+                confidence=round(float(fb.intent_probs.get(c, 0.0)), 4),
+                matchMethod=MatchMethod.LLM, description=row.get("description"),
+            ))
+        timing["decisionClarify"] = 1
+        timing["totalMs"] = int((time.time() - t0) * 1000)
+        return self._build_result(query=query, top_candidates=candidates, method=MatchMethod.LLM,
+                                  visible_intents=visible_intents, min_confidence=1.01, timing=timing)
 
     async def _rerank_candidates(self, query, factoryId, businessType, retriever, by_code, timing):
         """向量 Top-N → 重排 → 前 K 个意图码; 任何一步拿不到结果 → None (调用方走 LLM 粗选)。"""

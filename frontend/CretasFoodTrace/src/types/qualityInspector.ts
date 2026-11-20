@@ -88,6 +88,12 @@ export interface DynamicQualitySubmitResponse {
   batchQualityStatus?: string;
   /** 批次判过不合格、这次检验没有解除它: 还要走处置复核。 */
   dispositionRequired?: boolean;
+  /**
+   * 有项目不合格, 但按本厂设置 (quality.inspection.fail_scope) 不判整批不合格: 结论是 CONDITIONAL,
+   * 这些项目已标出交质量经理决定 (2026-11-11)。
+   */
+  reviewRequired?: boolean;
+  reviewItems?: string[];
 }
 
 // ============================================
@@ -379,7 +385,7 @@ export type QualityInspectorStackParamList = {
     batchNumber: string;
     productionDate: string;
   };
-  QIResult: { recordId: string; passed: boolean; dispositionRequired?: boolean };
+  QIResult: { recordId: string; passed: boolean; dispositionRequired?: boolean; reviewItems?: string[] };
   QIRecords: undefined;
   QIRecordDetail: { recordId: string };
   QIAnalysis: undefined;
@@ -388,6 +394,15 @@ export type QualityInspectorStackParamList = {
   QIProfile: undefined;
   QISettings: undefined;
   QIClockIn: undefined;
+  // 纪律排查 B14 App 端: 不良品处置 / 批次召回 (入口按 quality 模块权限, 见 utils/qualityClosurePermissions)
+  QIDisposition: undefined;
+  QIDispositionExecute: { candidate: import('../services/api/qualityDispositionApiClient').DispositionCandidate };
+  QIRecall: undefined;
+  QIRecallCreate: undefined;
+  QIRecallDetail: { recallId: string };
+  // 食品 DAG 缺口 14 App 端: 超时处置 (入口按 quality / production 可读, 处置按 quality 读写)
+  QITimeout: undefined;
+  QITimeoutDecision: { event: import('../services/api/processTimeLimitApi').ProcessTimeLimitEvent };
 };
 
 // ============================================

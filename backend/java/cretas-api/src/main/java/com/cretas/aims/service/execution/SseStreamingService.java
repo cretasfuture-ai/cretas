@@ -22,6 +22,7 @@ import com.cretas.aims.entity.config.AIIntentConfig;
 import com.cretas.aims.exception.LlmSchemaValidationException;
 import com.cretas.aims.service.AIIntentService;
 import com.cretas.aims.service.AnalysisRouterService;
+import com.cretas.aims.service.QueryPreprocessorService;
 import com.cretas.aims.service.ResultFormatterService;
 import com.cretas.aims.service.SemanticCacheService;
 import com.cretas.aims.service.SlotFillingService;
@@ -84,6 +85,18 @@ public class SseStreamingService {
     static final String CONVERSATIONAL_EGRESS_SITE = "conversational-reply-stream";
     static final String MINI_EGRESS_SITE = "f006-boss-question";
     static final String EGRESS_REFUSED_REPLY = "抱歉，这句话里有无法脱敏的内容，没有发给 AI。您可以换个说法，或直接使用系统的查询功能。";
+
+    /**
+     * 闲聊 / 咨询 / F006 老板提问 (都没有工具查询结果) 的业务事实护栏, 与普通入口同一个类。
+     * 流式回复先攒齐、过闸后才下发, 被拦的回复一个 token 也不会到用户那里。默认实例保证裸构造的单测也走闸。
+     */
+    @Autowired(required = false)
+    private com.cretas.aims.ai.grounding.ChatBusinessFactGuard chatBusinessFactGuard =
+            new com.cretas.aims.ai.grounding.ChatBusinessFactGuard();
+
+    static final String CHAT_FACT_GUARD_SITE = "conversational-no-data-stream";
+    static final String MINI_FACT_GUARD_SITE = "f006-boss-question";
+    static final String GENERATING_PROGRESS_MESSAGE = "正在生成回答...";
     private final DashScopeConfig dashScopeConfig;
 
     @Autowired(required = false)
@@ -133,6 +146,10 @@ public class SseStreamingService {
     @Autowired(required = false)
     private com.cretas.aims.client.PythonAiMatcherClient pythonAiMatcherClient;
 
+    /** 识别用最近对话的唯一来源 (与普通入口共用)。裸构造的单测缺席时只读 App 的 recentTurns。 */
+    @Autowired(required = false)
+    private RecognitionHistoryResolver recognitionHistoryResolver;
+
     /** Optional for bare SSE tests; required in the real Spring path for server-owned sessions. */
     @Autowired(required = false)
     private com.cretas.aims.service.ConversationMemoryService conversationMemoryService;
@@ -150,9 +167,52 @@ public class SseStreamingService {
     @Autowired(required = false)
     private com.cretas.aims.service.ConversationService conversationService;
 
+    /** 任务状态 (挂起 / 恢复 / 识别摘要)。缺席时 (裸构造的单测) 被打断 = 取消, 行为同旧版。 */
+    @Autowired(required = false)
+    private ConversationTaskStateService taskStateService;
+
     /** Optional in bare SSE tests; required by the real supplier comparison resolution path. */
     @Autowired(required = false)
     private AIIntentConfigRepository intentConfigRepository;
+
+    /** 短语快捷通道判否定说法用 (与 /execute 同一个服务)。裸构造的单测缺席时不做否定判断。 */
+    @Autowired(required = false)
+    private QueryPreprocessorService queryPreprocessorService;
+
+    /**
+     * 原普通入口独有、PR-3 起两个入口都跑的步骤 (Drools 校验、NEED_MORE_INFO 补问、对话记忆、早期通用问法路由):
+     * 单一实现在编排器里, 本管线 (App 流式与 /execute 同一条) 每一轮都调。
+     * {@code @Lazy}: 编排器不依赖本类, 不成环; 只有裸构造的单测缺席 (这些步骤不跑)。
+     * 生产上必须在 (PR-3 复审 L2): 缺了 Drools / 补问 / 对话记忆 / 早期路由 (含分析流准入) 会被悄悄跳过,
+     * 所以是必需依赖, 且本 bean 建好时由 {@link #verifyTurnStepsWired} 实际解析一次 —— 解析不到应用就起不来 (fail closed)。
+     */
+    @Autowired
+    @Lazy
+    private IntentExecutionOrchestrator turnSteps;
+
+    /** 只给启动校验用: 懒代理本身永远非 null, 要问容器「到底有没有这个 bean」。 */
+    @Autowired(required = false)
+    private org.springframework.beans.factory.ObjectProvider<IntentExecutionOrchestrator> turnStepsBean;
+
+    /**
+     * 启动校验: 每轮共用步骤的编排器必须真的在。缺了就让本 bean 创建失败 (普通 profile 下即启动失败) ——
+     * ⛔ 不带着「Drools / 记忆 / 分析流准入都不跑」的管线对外服务。
+     * ⛔ 不要改回 SmartInitializingSingleton: Spring Boot 的懒加载后处理器对该接口的 bean 一律不懒,
+     * lineage-backfill (全局懒加载) 进程会因此在启动时建出本类并带出调度器 / 工具路由等副作用组件
+     * (LineageBackfillProcessIsolationTest 在 #1790 上就是这样红的)。{@code @PostConstruct} 只在本 bean 真被建出时跑。
+     */
+    @jakarta.annotation.PostConstruct
+    public void verifyTurnStepsWired() {
+        IntentExecutionOrchestrator resolved = turnStepsBean == null ? null : turnStepsBean.getIfAvailable();
+        if (resolved == null) {
+            throw new IllegalStateException(
+                    "SseStreamingService: 每轮共用步骤 (IntentExecutionOrchestrator) 未装配, 流式管线不能对外服务");
+        }
+    }
+
+    /** Workdesk / Skill 编排输出的摘要 (文字兜底的最后一步, 与原普通入口同一个 bean)。缺席时不做摘要。 */
+    @Autowired(required = false)
+    private WorkdeskOutputSummarizer workdeskOutputSummarizer;
 
     @Autowired
     public SseStreamingService(@Lazy AIIntentService aiIntentService,
@@ -240,11 +300,13 @@ public class SseStreamingService {
             // 工作线程上的深层外发按路径上的工厂脱敏 (平台账号替某厂对话时同样按那家, Steve 2026-10-29)
             try (var actorScope = com.cretas.aims.security.AuthenticatedActor.trustedAsyncScope(actor);
                  SecurityUtils.Scope ignored = SecurityUtils.trustedUserIdScope(userId);
-                 var egressFactory = com.cretas.aims.service.consent.LlmEgressGuard.analysing(factoryId)) {
+                 var egressFactory = com.cretas.aims.service.consent.LlmEgressGuard.analysing(factoryId);
+                 var flywheel = com.cretas.aims.service.intent.flywheel.IntentFlywheelTurnContext.open()) {
                 long startedNanos = System.nanoTime();
                 try {
                     executeStreamAsync(emitter, factoryId, request, userId, userRole, miniCancellation);
                 } finally {
+                    recordStreamedFlywheel(emitter, factoryId, userId, request, flywheel.turn(), startedNanos);
                     recordStreamedFactoryTrace(emitter, factoryId, userId, userRole, startedNanos);
                 }
             }
@@ -297,6 +359,16 @@ public class SseStreamingService {
                         ? retiredTenantResponse() : tenantTypeUnavailableResponse(), startTime);
                 return;
             }
+            // 个人工资明细: 识别之前整轮拒答 (与非流式入口 IntentExecutionOrchestrator.executeInScope 同一守卫)
+            if (request != null && com.cretas.aims.ai.tool.PersonalPayRefusalGuard.refuses(request.getUserInput())) {
+                streamTerminalResponse(emitter, IntentExecutionOrchestrator.personalPayRefusalResponse(), startTime);
+                return;
+            }
+            // 问别家的成本 / 价格 / 毛利: 识别和权限判定之前整轮拒答 (与非流式入口同一守卫)
+            if (request != null && com.cretas.aims.ai.tool.OwnFactoryDataOnlyGuard.refusesBeforeRouting(request.getUserInput())) {
+                streamTerminalResponse(emitter, IntentExecutionOrchestrator.externalDataRefusalResponse("stream", factoryId), startTime);
+                return;
+            }
             boolean trustedFactoryActor = hasBoundFactoryActor(factoryId, userId);
             boolean requestNamesSession = request != null && request.getSessionId() != null
                     && !request.getSessionId().isBlank();
@@ -307,15 +379,23 @@ public class SseStreamingService {
             // Platform/stateless callers may still use unrelated no-session routes. They must
             // never turn their numeric userId into a conversation lookup; only a typed,
             // factory-scoped actor may establish or access server-owned conversation state.
-            ConversationContext sessionContext = trustedFactoryActor
+            // 普通入口 /execute 没带 sessionId = 独立一问 (该入口的契约): 不建立、不接上会话 —— 否则
+            // getOrCreateContext(sessionId=null) 会接上本人最近一次 (App) 会话, 「100」被当成那边报工追问的回答
+            // (#1782 终审 中-1)。App 流式不带 sessionId 照旧接上最近会话 (App 的契约)。
+            boolean standaloneTurn = !requestNamesSession && StreamTurnCollector.standaloneTurnOnCurrentThread();
+            ConversationContext sessionContext = trustedFactoryActor && !standaloneTurn
                     ? establishOwnedSession(factoryId, request, userId)
                     : null;
-            if (trustedFactoryActor && conversationMemoryService != null && (sessionContext == null
+            if (trustedFactoryActor && !standaloneTurn && conversationMemoryService != null && (sessionContext == null
                     || !java.util.Objects.equals(factoryId, sessionContext.getFactoryId())
                     || !java.util.Objects.equals(userId, sessionContext.getUserId())
                     || sessionContext.getSessionId() == null || sessionContext.getSessionId().isBlank())) {
                 streamTerminalResponse(emitter, sessionOwnershipFailureResponse(), startTime);
                 return;
+            }
+            // 识别用最近对话: 与普通入口同一个解析器 (App 的 recentTurns 优先, 否则本人会话记忆里的用户话)
+            if (recognitionHistoryResolver != null) {
+                recognitionHistoryResolver.materialize(factoryId, trustedFactoryActor ? userId : null, request);
             }
 
             // 1. 开始事件
@@ -353,6 +433,27 @@ public class SseStreamingService {
             // 回来 (此前 App 把按钮上的名字当一句新话再识别一遍, 原话里的数量等信息就丢了)。
             // 显式码只换掉「识别」这一步: 权限码 / 审批 / 业态门 / W0 写确认 / 咨询页拦写
             // 全部照常在 executeAndStreamResult 及其下游执行。查意图只认在用未删的。
+            // 澄清选项的文字回复 (「1」「完成工序」) = 点了那个按钮: 换成「原话 + 选中的意图码」, 走下面的显式意图路径
+            // (普通入口同一个方法, 见 ClarificationCandidateService.applyChoicePick)
+            // 1.2 否定说法 (W1b, 两入口一份 —— PR-3 前只有原普通入口在这个时机判; PR-2b C 类 #9):
+            //     显式意图码 (按钮点选 / 确认后执行) 不判, 用户明确选了要做什么。
+            //     VETO_READ (「别查库存了」) → 先澄清, 不认选项回复、不续缺参、不恢复任务、不出追问确认按钮;
+            //     VETO_WRITE (「不要报工」) → 不认选项回复、不恢复任务、不出追问确认按钮、不进早期闲聊 / 短语快捷,
+            //     交给识别层 (它自己的否决闸把写变成只读孪生 / 域外, 从不执行写)。缺参续轮照常 (同原普通入口)。
+            QueryPreprocessorService.NegationKind negation = request.getIntentCode() == null
+                    || request.getIntentCode().isBlank()
+                    ? detectNegation(userInput) : QueryPreprocessorService.NegationKind.NONE;
+            if (negation == QueryPreprocessorService.NegationKind.VETO_READ) {
+                log.info("[W1b] VETO_READ → clarification (no shortcut, no continuation, no execution)");
+                streamTerminalResponse(emitter, IntentTurnSharedSteps.negationVetoClarification(), startTime);
+                return;
+            }
+            boolean negationVetoWrite = negation == QueryPreprocessorService.NegationKind.VETO_WRITE;
+            if (!factoryPackConstrained && trustedFactoryActor && !negationVetoWrite
+                    && ClarificationCandidateService.applyChoicePick(conversationService, request, factoryId, userId)) {
+                log.info("[SSE] 澄清选项文字回复已按选中处理: session={}, intent={}",
+                        request.getSessionId(), request.getIntentCode());
+            }
             Optional<AIIntentConfig> explicitIntent =
                     request.getIntentCode() == null || request.getIntentCode().isBlank()
                             ? Optional.empty()
@@ -373,12 +474,8 @@ public class SseStreamingService {
             }
             if (!factoryPackConstrained && explicitIntent.isPresent()) {
                 AIIntentConfig intent = explicitIntent.get();
-                sendSseEvent(emitter, "intent_recognized", Map.of(
-                        "intentCode", intent.getIntentCode(),
-                        "intentName", intent.getIntentName(),
-                        "intentCategory", intent.getIntentCategory(),
-                        "confidence", 1.0d,
-                        "matchMethod", "EXPLICIT"));
+                sendSseEvent(emitter, "intent_recognized", intentRecognizedEvent(intent, 1.0d,
+                        "EXPLICIT"));
                 recordClarificationSelection(factoryId, userId, userRole, request, intent);
                 // 点了按钮 = 用户自己选了要做什么; 之前没答完的缺参追问作废, 免得下一个数字被它截走
                 closeOpenSlotSession(factoryId, userId, request, "explicit-intent");
@@ -391,7 +488,7 @@ public class SseStreamingService {
                                 .requiresConfirmation(false)
                                 .questionType(QuestionType.OPERATIONAL_COMMAND)
                                 .build(),
-                        factoryPackRoute);
+                        factoryPackRoute, false, true);
                 return;
             }
             if (factoryPackConstrained
@@ -412,15 +509,11 @@ public class SseStreamingService {
                         .requiresConfirmation(false)
                         .questionType(QuestionType.OPERATIONAL_COMMAND)
                         .build();
-                sendSseEvent(emitter, "intent_recognized", Map.of(
-                        "intentCode", intent.getIntentCode(),
-                        "intentName", intent.getIntentName(),
-                        "intentCategory", intent.getIntentCategory(),
-                        "confidence", 1.0d,
-                        "matchMethod", "EXPLICIT"));
+                sendSseEvent(emitter, "intent_recognized", intentRecognizedEvent(intent, 1.0d,
+                        "EXPLICIT"));
                 executeAndStreamResult(
                         emitter, factoryId, request, intent, userId, userRole, startTime,
-                        explicitMatch, factoryPackRoute);
+                        explicitMatch, factoryPackRoute, false, true);
                 return;
             }
 
@@ -429,29 +522,59 @@ public class SseStreamingService {
             // → 确认按钮 (不执行)。在早期问题类型检测之前 —— 否则「好了」会被当闲聊流式回复;
             // 显式意图码 (点了按钮回来) 已在上面处理, 不会再进这里。能力包受限路由与餐饮租户不走。
             // 2026-10-06 缺参续轮在它前面: 上一轮刚问了「请提供工序任务ID」, 「1827」是在回答那个问题。
+            // 任务状态 (终审 S1): 这一轮开始时有没有正在问参数的任务。有 → 这一轮要么回答它、要么打断它,
+            // 不在同一轮里再恢复 (同一句话既打断又恢复 = 原地吞话)。
+            // 只查一次会话: 续轮用的就是这一份 (再查一次会读到另一份 —— 中间可能已被别的请求改过)
+            Optional<com.cretas.aims.entity.conversation.ConversationSession> openAtStart = factoryPackConstrained
+                    ? Optional.empty() : openSlotSession(factoryId, userId, request);
+            boolean openTaskAtStart = openAtStart.isPresent();
             if (!factoryPackConstrained
                     && streamSlotContinuation(emitter, factoryId, request, userId, userRole, startTime,
-                            factoryPackRoute)) {
+                            factoryPackRoute, openAtStart)) {
                 return;
             }
-            if (!factoryPackConstrained
+            // 任务状态: 没有正在问的任务时, 「继续报工」「接着刚才的」回到被挂起的那个 (只找回参数、接着问, 不执行)
+            if (!factoryPackConstrained && trustedFactoryActor && !openTaskAtStart && !negationVetoWrite
+                    && streamTaskResume(emitter, factoryId, request, userId, startTime)) {
+                return;
+            }
+            if (!factoryPackConstrained && !negationVetoWrite
                     && streamFollowUpConfirmation(emitter, factoryId, request, userId, userRole, startTime)) {
                 return;
             }
-            // 1.5. 早期问题类型检测
-            if (!factoryPackConstrained && userInput != null && !userInput.isEmpty()) {
+            // 1.4. 短语快捷通道 —— 与 /execute (IntentExecutionOrchestrator 0.2) 同一张短语表、同一条优先级:
+            //      整句命中已知短语 (「先看下库存」→ REPORT_INVENTORY) 就定这个意图, 不再去问决策层。
+            //      2026-11-14 F006 实测: 流式缺这一步, 同一句话被决策层判成 MATERIAL_BATCH_QUERY, 与普通入口分叉。
+            //      命中后下面的缓存 / 早期问题类型 / 识别都跳过, 但意图权限、缺参追问、写确认照常在第 5-7 步。
+            IntentMatchResult phraseShortcut = factoryPackConstrained || negation != QueryPreprocessorService.NegationKind.NONE
+                    ? null : tryPhraseShortcut(factoryId, userInput);
+            if (!factoryPackConstrained && negation == QueryPreprocessorService.NegationKind.NONE
+                    && userInput != null && !userInput.isEmpty()) {
+                recordPhraseShortcutExit(factoryId, phraseShortcut);
+            }
+
+            // 1.5. 早期问题类型检测 (两入口一份, PR-3; PR-2b C 类 #16): 早期即判通用咨询 / 闲聊的句子 ——
+            //      分析流 (复杂度路由 / 多代理)、食品知识、RAG 路由、短语表意图由编排器的唯一实现接;
+            //      业务问法 (「这个月卖得怎么样」) 交给下面的识别; 其余闲聊走流式模型回复。否定说法不进这里。
+            if (!factoryPackConstrained && phraseShortcut == null && !negationVetoWrite
+                    && userInput != null && !userInput.isEmpty()) {
                 QuestionType earlyQuestionType = knowledgeBase.detectQuestionType(userInput);
                 if (earlyQuestionType == QuestionType.GENERAL_QUESTION ||
                     earlyQuestionType == QuestionType.CONVERSATIONAL) {
-
-                    boolean isAnalysis = earlyQuestionType == QuestionType.GENERAL_QUESTION
-                            && analysisRouterService.isAnalysisRequest(userInput, earlyQuestionType);
-                    Optional<String> foodPhrase = knowledgeBase.matchPhrase(userInput);
-                    boolean isFood = foodPhrase.isPresent() && "FOOD_KNOWLEDGE_QUERY".equals(foodPhrase.get())
-                            && aiIntentService.getIntentByCode(factoryId, "FOOD_KNOWLEDGE_QUERY")
-                                    .filter(config -> Boolean.TRUE.equals(config.getIsActive())).isPresent();
-
-                    if (!isAnalysis && !isFood) {
+                    IntentExecuteResponse routed = turnSteps == null ? null
+                            : turnSteps.routeEarlyGeneralQuestion(factoryId, userInput, earlyQuestionType,
+                                    request, userId, userRole);
+                    if (routed != null) {
+                        log.info("Stream: 早期{}由分析流 / 知识 / 短语路由接住: status={}", earlyQuestionType,
+                                routed.getStatus());
+                        streamTerminalResponse(emitter, routed, startTime);
+                        return;
+                    }
+                    // 业务问法 (「这个月卖得怎么样」) 不进闲聊 / 老板提问模型: 交给下面的识别, 识别不出就是澄清候选
+                    if (com.cretas.aims.ai.grounding.ChatBusinessFactGuard.isBusinessQuestion(userInput)) {
+                        log.info("[ChatBusinessFactGuard] Stream: 业务问法不进闲聊, 交给意图识别: questionType={}",
+                                earlyQuestionType);
+                    } else {
                         log.info("Stream: 早期检测到{}，使用流式 LLM 回复", earlyQuestionType);
                         streamConversationalResponse(emitter, factoryId, userId, userRole,
                                 request.getSessionId(), userInput, earlyQuestionType,
@@ -463,7 +586,7 @@ public class SseStreamingService {
 
             // 2. 查询语义缓存
             // 第 3b 步: 带最近对话的轮次也不读语义缓存 (缓存键只有工厂+原话, 不含上下文)。
-            boolean skipCacheForScopedRequest = factoryPackConstrained
+            boolean skipCacheForScopedRequest = factoryPackConstrained || phraseShortcut != null
                     || !recentTurns(request).isEmpty();
             SemanticCacheHit cacheHit = skipCacheForScopedRequest
                     ? SemanticCacheHit.miss(0L)
@@ -496,14 +619,26 @@ public class SseStreamingService {
             ));
 
             IntentMatchResult matchResult;
-            try {
+            if (phraseShortcut != null) {
+                matchResult = phraseShortcut;
+            } else try {
                 // spec §8.2 洞②: 流式路径同样把 tab 模式带进识别层, 否则咨询 tab 走 SSE 时
                 // 候选集里仍然留着写意图 (多意图执行/兜底重排会用到它们)。
                 Long recognizerUserId = trustedFactoryActor ? userId : null;
                 String recognizerSessionId = trustedFactoryActor ? request.getSessionId() : null;
-                matchResult = aiIntentService.recognizeIntentWithConfidence(
-                        userInput, factoryId, 3, recognizerUserId, userRole, recognizerSessionId,
-                        request.getMode(), null, recentTurns(request));
+                // 任务状态摘要 (白名单, 见 TaskStateSummary): 开关关 / 没有任务时为空, 调用形状与改动前相同
+                Map<String, Object> taskState = taskStateService != null && trustedFactoryActor
+                        ? taskStateService.summary(factoryId, userId, request.getSessionId()) : Map.of();
+                // 识别候选按权限收窄 (操作 tab): 与普通入口同一个方法 (IntentTurnSharedSteps)
+                java.util.Set<String> filterPermissions = IntentTurnSharedSteps.recognitionPermissionFilter(
+                        request.getMode(), userId, factoryId, intentPermissionGate);
+                matchResult = taskState.isEmpty()
+                        ? aiIntentService.recognizeIntentWithConfidence(
+                                userInput, factoryId, 3, recognizerUserId, userRole, recognizerSessionId,
+                                request.getMode(), filterPermissions, recentTurns(request))
+                        : aiIntentService.recognizeIntentWithConfidence(
+                                userInput, factoryId, 3, recognizerUserId, userRole, recognizerSessionId,
+                                request.getMode(), filterPermissions, recentTurns(request), taskState);
             } catch (LlmSchemaValidationException e) {
                 IntentExecuteResponse validationFailureResponse = buildValidationFailureResponse(e);
                 sendSseEvent(emitter, "result", validationFailureResponse);
@@ -525,6 +660,12 @@ public class SseStreamingService {
                             : "intent-not-allowed";
                     streamTerminalResponse(
                             emitter, buildFactoryPackNoMatch(factoryPackRoute, reason), startTime);
+                } else if (IntentTurnSharedSteps.answersGeneralQuestionDirectly(matchResult, userInput)) {
+                    // 识别不出 + 通用咨询/闲聊 + 非业务问法 → 直答, 与普通入口 2b 同一个判定 (「怎么降低成本？」)
+                    log.info("Stream: 识别后判为{}且无匹配，使用流式 LLM 回复", matchResult.getQuestionType());
+                    streamConversationalResponse(emitter, factoryId, userId, userRole,
+                            request.getSessionId(), userInput, matchResult.getQuestionType(),
+                            request.getEnableThinking(), request.getThinkingBudget(), startTime, miniCancellation);
                 } else {
                     IntentExecuteResponse noMatchResponse = buildNoMatchResponseForStream(matchResult, factoryId);
                     sendSseEvent(emitter, "result", noMatchResponse);
@@ -556,13 +697,8 @@ public class SseStreamingService {
                     return;
                 }
             }
-            sendSseEvent(emitter, "intent_recognized", Map.of(
-                    "intentCode", intent.getIntentCode(),
-                    "intentName", intent.getIntentName(),
-                    "intentCategory", intent.getIntentCategory(),
-                    "confidence", matchResult.getConfidence(),
-                    "matchMethod", matchResult.getMatchMethod() != null ? matchResult.getMatchMethod().name() : "UNKNOWN"
-            ));
+            sendSseEvent(emitter, "intent_recognized", intentRecognizedEvent(intent, matchResult.getConfidence(),
+                    matchResult.getMatchMethod() != null ? matchResult.getMatchMethod().name() : "UNKNOWN"));
 
             // Pack-constrained intents authorize and terminate here. This deliberately precedes
             // generic confirmation, legacy Skill and slot-filling branches so none can bypass the
@@ -579,14 +715,47 @@ public class SseStreamingService {
                     && !Boolean.TRUE.equals(request.getForceExecute())) {
                 IntentExecuteResponse clarificationResponse = buildClarificationResponseForStream(
                         matchResult, factoryId, userId, userRole, request.getMode());
+                if (trustedFactoryActor) {
+                    clarificationResponse = ClarificationCandidateService.attachChoiceSession(
+                            conversationService, clarificationResponse, factoryId, userId,
+                            userInput != null && !userInput.isBlank() ? userInput : matchResult.getUserInput());
+                }
                 sendSseEvent(emitter, "result", clarificationResponse);
                 sendSseEvent(emitter, "complete", Map.of(
-                        "status", "NEED_CLARIFICATION",
+                        "status", clarificationResponse.getStatus(),
                         "cacheHit", false,
                         "totalLatencyMs", System.currentTimeMillis() - startTime
                 ));
                 emitter.complete();
                 return;
+            }
+
+            // 6.5 意图权限 → 咨询 tab 拦写 → 审批, 与普通入口同序同判定 (IntentTurnSharedSteps):
+            //     先于 Skill / 抽参 / 缺参追问 —— 咨询 tab 的写意图不追问参数, 需审批的不进执行层。
+            String intentDenied = permissionDeniedMessage(factoryId, intent, userId, userRole);
+            if (intentDenied != null) {
+                streamNoPermission(emitter, intent, intentDenied, startTime);
+                return;
+            }
+            IntentExecuteResponse readModeBlocked = IntentTurnSharedSteps.readModeWriteBlocked(
+                    request, intent, intentAccessModeFilter, writeGuardService);
+            if (readModeBlocked != null) {
+                streamTerminalResponse(emitter, readModeBlocked, startTime);
+                return;
+            }
+            if (IntentTurnSharedSteps.stopsForApproval(intent, request)) {
+                streamTerminalResponse(emitter,
+                        IntentTurnSharedSteps.approvalResponse(intent, writeGuardService, toolRegistry), startTime);
+                return;
+            }
+            // 6.6 Drools 校验 (只读查询不进; 短语快捷不跑, 同原普通入口) —— PR-3 起 App 流式也跑 (PR-2b C 类 #10)
+            if (turnSteps != null && phraseShortcut == null) {
+                IntentExecuteResponse droolsBlocked = turnSteps.droolsValidationBlock(
+                        factoryId, intent, request, userId, userRole);
+                if (droolsBlocked != null) {
+                    streamTerminalResponse(emitter, droolsBlocked, startTime);
+                    return;
+                }
             }
 
             // 7a. Skill 路由 —— 与 /execute (IntentExecutionOrchestrator 3.5) 同一前提:
@@ -595,12 +764,13 @@ public class SseStreamingService {
             // CLOCK_IN) 被 0.30 分的人员排班 Skill 抢走, 跑了管理员级考勤统计, 卡没打上。
             String streamBoundToolName = intent.getToolName();
             boolean intentHasNoTool = streamBoundToolName == null || streamBoundToolName.isBlank();
-            if (dynamicToolSelectionService.isSkillsEnabled() && intentHasNoTool
-                    && permissionDeniedMessage(factoryId, intent, userId, userRole) == null) {
+            if (dynamicToolSelectionService.isSkillsEnabled() && intentHasNoTool) {
                 try {
                     IntentExecuteResponse skillResponse = dynamicToolSelectionService.trySkillRoute(
                             request.getUserInput(), factoryId, userId, userRole);
                     if (skillResponse != null) {
+                        skillResponse = enrichNeedMoreInfo(skillResponse, request, intent, factoryId, userId);
+                        applySharedResultSteps(skillResponse, intent, streamBoundToolName, factoryId, userId);
                         sendSseEvent(emitter, "result", skillResponse);
                         sendSseEvent(emitter, "complete", Map.of(
                                 "status", skillResponse.getStatus(),
@@ -616,6 +786,9 @@ public class SseStreamingService {
                     IntentExecuteResponse explicitSkillResp = dynamicToolSelectionService
                             .tryExplicitSkillRouteForIntent(intent, request.getUserInput(), factoryId, userId, userRole);
                     if (explicitSkillResp != null) {
+                        explicitSkillResp = enrichNeedMoreInfo(
+                                explicitSkillResp, request, intent, factoryId, userId);
+                        applySharedResultSteps(explicitSkillResp, intent, streamBoundToolName, factoryId, userId);
                         sendSseEvent(emitter, "result", explicitSkillResp);
                         sendSseEvent(emitter, "complete", Map.of(
                                 "status", explicitSkillResp.getStatus(),
@@ -634,15 +807,21 @@ public class SseStreamingService {
             //      Slot Filling 只追问真正没抽到的; 被 W0 拦下时随确认卡带去预览 (见 attachPreviewParams)。
             //      ⛔ 先过意图权限再抽: 没权限的请求不许碰执行层 (SseSemanticCacheAdmissionContractTest 守的就是这条),
             //      也不该为一个注定被拒的请求花一次 LLM 抽参、再追问参数。权限只算这一次, 结果带进 7c (不重算)。
-            String admissionDenied = permissionDeniedMessage(factoryId, intent, userId, userRole);
-            if (admissionDenied == null) {
-                admissionDenied = frontlineWriteDenied(factoryId, userRole, intent);
-            }
+            // 意图权限已在 6.5 判过 (每个请求只算一次), 这里只剩一线写开放
+            String admissionDenied = frontlineWriteDenied(factoryId, userRole, intent);
             if (admissionDenied != null) {
                 streamNoPermission(emitter, intent, admissionDenied, startTime);
                 return;
             }
             prefillWriteToolParameters(factoryId, request, intent);
+
+            // 7a.6 缺「要操作哪一个」(报工缺工序任务): 先列出本人可选的让他选, 再轮到通用缺参追问 ——
+            //      否则 7b 会问「请提供工序任务编号」, 回「1」被当成 taskId=1 (prod 2026-11-14 F006)。
+            //      只有一个时带出来写进 context, 照常往下走, 写操作仍停在 W0 写确认。
+            if (trustedFactoryActor && streamWriteChoiceAsked(emitter, factoryId, request, intent, userId, userRole,
+                    startTime)) {
+                return;
+            }
 
             // 7b. Slot Filling
             if (trustedFactoryActor && !Boolean.TRUE.equals(request.getSkipSlotFilling())
@@ -657,6 +836,8 @@ public class SseStreamingService {
                                 && slotFillingResponse.getMessage().length() >= 5) {
                             slotFillingResponse.setFormattedText(slotFillingResponse.getMessage());
                         }
+                        IntentTurnSharedSteps.applyAiModeStamp(slotFillingResponse, intent, intent.getToolName(),
+                                writeGuardService, toolRegistry);
                         sendSseEvent(emitter, "result", slotFillingResponse);
                         sendSseEvent(emitter, "complete", Map.of(
                                 "status", "NEED_MORE_INFO",
@@ -689,38 +870,116 @@ public class SseStreamingService {
         }
     }
 
-    /** 最近几轮对话最多带几轮、每轮最多几个字 —— 只为消歧, 不是完整会话。 */
-    static final int MAX_RECENT_TURNS = 4;
-    static final int MAX_TURN_CHARS = 200;
+    /**
+     * 短语快捷通道 (两入口唯一一份; 编排器那一份随识别分支删了, PR-3)。置信度 0.96。
+     * 否定说法 (别查库存了 / 不要报工) 一律不抢: 调用方 (管线 1.4) 按本轮否定判定不调这里, 交给识别层否决闸。
+     * 短语指向的意图在本厂没有配置 / 已退役 / 需要特殊解析 (采购) 时返回 null, 照常识别。
+     */
+    private IntentMatchResult tryPhraseShortcut(String factoryId, String userInput) {
+        if (userInput == null || userInput.isBlank()) {
+            return null;
+        }
+        try {
+            // 否定说法 (别查库存了 / 不要报工) 由调用方 (管线 1.4) 按本轮唯一一次判定挡掉, 这里不再判第二遍
+            Optional<String> phrase = knowledgeBase.matchPhrase(userInput.toLowerCase().trim(), "FACTORY");
+            if (phrase.isEmpty()) {
+                return null;
+            }
+            // 2026-11-17 F006 数字班组: 带条件 (物料 / 时间 / 客户) 或多个子问的句子不走短语快捷, 交给决策层
+            Optional<Map.Entry<String, String>> hit = knowledgeBase.matchPhraseHit(userInput.toLowerCase().trim(), "FACTORY");
+            String hitPhrase = hit != null && hit.isPresent() && phrase.get().equals(hit.get().getValue())
+                    ? hit.get().getKey() : null;
+            if (!PhraseShortcutEligibility.isUnconditionedSimple(userInput, hitPhrase, phrase.get())) {
+                log.info("[SSE-EarlyPhrase] 带条件/复合问句不走短语快捷: phrase='{}', residual='{}'", hitPhrase,
+                        PhraseShortcutEligibility.residual(userInput, hitPhrase));
+                return null;
+            }
+            String code = phrase.get();
+            if (com.cretas.aims.ai.catalog.FactoryIntentCatalog.isRetiredIntent(code)) {
+                return null;
+            }
+            code = com.cretas.aims.ai.catalog.FactoryIntentCatalog.canonicalCode(code);
+            if ("PURCHASE_ORDER_CREATE".equals(code)) {
+                return null;
+            }
+            Optional<AIIntentConfig> configured = resolveStreamingIntentByCode(factoryId, code);
+            if (configured.isEmpty() && factoryId != null && !factoryId.isBlank()) {
+                configured = aiIntentService.getIntentByCode(code);
+            }
+            if (configured == null || configured.isEmpty()) {
+                return null;
+            }
+            log.info("[SSE-EarlyPhrase] phrase shortcut: input='{}', intentCode={}", userInput, code);
+            IntentMatchResult shortcut = IntentMatchResult.builder()
+                    .userInput(userInput)
+                    .bestMatch(configured.get())
+                    .confidence(0.96)
+                    .matchMethod(IntentMatchResult.MatchMethod.PHRASE_MATCH)
+                    .build();
+            // 飞轮: 短语快捷不经识别层, 这里补记本轮定下的意图 (否则 decided_intent_code 为空)
+            com.cretas.aims.service.intent.flywheel.IntentFlywheelTurnContext.noteRecognition(shortcut);
+            return shortcut;
+        } catch (Exception e) {
+            log.debug("[SSE-EarlyPhrase] shortcut failed (fall through): {}", e.getMessage());
+            return null;
+        }
+    }
 
     /**
-     * App 随请求带来的 {@code context.recentTurns}: 只认 role=user/assistant 的非空文本,
-     * 截断到 {@link #MAX_TURN_CHARS} 字, 取最后 {@link #MAX_RECENT_TURNS} 轮。格式不对的条目丢弃。
+     * 旧出口计数 (INTENT-DISTILL-20261111): 短语直达不经决策模型定意图, 只计数不改行为。PR-3 起两个入口都经这里
+     * (原先计在已删的编排器短语快捷上, App 流式这一处没计 —— 只计一处的读数会偏低)。缺席 (裸构造的单测) 不计。
+     */
+    @Autowired(required = false)
+    private com.cretas.aims.service.intent.LegacyIntentExitMetrics legacyExitMetrics;
+
+    private void recordPhraseShortcutExit(String factoryId, IntentMatchResult phraseShortcut) {
+        if (legacyExitMetrics == null) {
+            return;
+        }
+        try {
+            if (phraseShortcut != null && phraseShortcut.hasMatch()) {
+                AIIntentConfig hit = phraseShortcut.getBestMatch();
+                legacyExitMetrics.recordExit(com.cretas.aims.service.intent.LegacyIntentExitMetrics.SITE_EXECUTE_PHRASE,
+                        "java_phrase_shortcut", factoryId,
+                        com.cretas.aims.service.intent.LegacyIntentExitMetrics.rw(hit,
+                                () -> IntentExecutionOrchestrator.isWriteIntentDeclarationAware(
+                                        hit, intentAccessModeFilter, writeGuardService)),
+                        "precedes_decision");
+            } else {
+                legacyExitMetrics.recordPass(com.cretas.aims.service.intent.LegacyIntentExitMetrics.SITE_EXECUTE_PHRASE);
+            }
+        } catch (RuntimeException e) {
+            log.debug("[SSE] 旧出口计数失败 (不影响回答): {}", e.getClass().getSimpleName());
+        }
+    }
+
+    /**
+     * 否定说法判定 (与识别层同一个服务)。判定失败按「不是否定」(fail-open, 同原普通入口 W1b):
+     * 识别层还有自己的否决闸; 服务缺席 (裸构造的单测) 同样按不是否定。
+     */
+    private QueryPreprocessorService.NegationKind detectNegation(String userInput) {
+        if (queryPreprocessorService == null || userInput == null || userInput.isBlank()) {
+            return QueryPreprocessorService.NegationKind.NONE;
+        }
+        try {
+            QueryPreprocessorService.NegationKind kind = queryPreprocessorService.detectNegationVeto(userInput, knowledgeBase);
+            return kind == null ? QueryPreprocessorService.NegationKind.NONE : kind;
+        } catch (Exception e) {
+            log.warn("[W1b] detectNegationVeto failed, fail-open NONE: {}", e.getClass().getSimpleName());
+            return QueryPreprocessorService.NegationKind.NONE;
+        }
+    }
+
+    /** 最近几轮对话最多带几轮、每轮最多几个字 —— 只为消歧, 不是完整会话。 */
+    static final int MAX_RECENT_TURNS = RecognitionHistoryResolver.MAX_RECENT_TURNS;
+    static final int MAX_TURN_CHARS = RecognitionHistoryResolver.MAX_TURN_CHARS;
+
+    /**
+     * 本轮识别用的最近对话: 入口已解析就用解析结果 (与普通入口同一份),
+     * 否则退回只读 App 带来的 {@code context.recentTurns}。见 {@link RecognitionHistoryResolver}。
      */
     static java.util.List<Map<String, String>> recentTurns(IntentExecuteRequest request) {
-        if (request == null || request.getContext() == null) {
-            return java.util.Collections.emptyList();
-        }
-        Object raw = request.getContext().get("recentTurns");
-        if (!(raw instanceof java.util.Collection<?> items)) {
-            return java.util.Collections.emptyList();
-        }
-        java.util.List<Map<String, String>> out = new java.util.ArrayList<>();
-        for (Object item : items) {
-            if (!(item instanceof Map<?, ?> m)) {
-                continue;
-            }
-            Object role = m.get("role");
-            Object content = m.get("content");
-            if (!("user".equals(role) || "assistant".equals(role)) || !(content instanceof String text)
-                    || text.isBlank()) {
-                continue;
-            }
-            String trimmed = text.strip();
-            out.add(Map.of("role", (String) role,
-                    "content", trimmed.length() > MAX_TURN_CHARS ? trimmed.substring(0, MAX_TURN_CHARS) : trimmed));
-        }
-        return out.size() > MAX_RECENT_TURNS ? out.subList(out.size() - MAX_RECENT_TURNS, out.size()) : out;
+        return RecognitionHistoryResolver.effective(request);
     }
 
     /**
@@ -790,34 +1049,15 @@ public class SseStreamingService {
                                           FactoryCapabilityPackRoutingPolicy.Route factoryPackRoute)
             throws IOException {
         boolean previous = isPreviousPaginationRequest(request);
-        IntentExecuteResponse refusal = paginationRefusal(previous, "当前会话没有可继续的成功列表查询。");
-        if (conversationMemoryService == null || request.getSessionId() == null
-                || request.getSessionId().isBlank() || userId == null || factoryId == null) {
-            streamTerminalResponse(emitter, refusal, startTime);
+        // 页码与条件的唯一一份规则, 普通入口用同一个 (INTENT-DISTILL D1)
+        ReadPaginationSupport.Plan plan = ReadPaginationSupport.plan(previous, conversationMemoryService,
+                toolRegistry, writeGuardService, code -> resolveStreamingIntentByCode(factoryId, code),
+                factoryId, userId, request);
+        if (plan.refused()) {
+            streamTerminalResponse(emitter, plan.refusal(), startTime);
             return;
         }
-
-        ConversationContext owner = conversationMemoryService.getContext(request.getSessionId());
-        if (owner == null || !factoryId.equals(owner.getFactoryId()) || !userId.equals(owner.getUserId())) {
-            streamTerminalResponse(emitter, paginationRefusal(previous, "当前会话不属于当前用户或工厂，无法翻页。"), startTime);
-            return;
-        }
-        Map<String, Object> metadata = latestPaginationMetadata(owner);
-        if (metadata == null) {
-            streamTerminalResponse(emitter, refusal, startTime);
-            return;
-        }
-        String intentCode = stringValue(metadata.get("intentCode"));
-        if (intentCode == null || intentCode.isBlank()) {
-            streamTerminalResponse(emitter, paginationRefusal(previous, "上次查询没有可复用的服务端意图。"), startTime);
-            return;
-        }
-        Optional<AIIntentConfig> intentOpt = resolveStreamingIntentByCode(factoryId, intentCode);
-        if (intentOpt.isEmpty()) {
-            streamTerminalResponse(emitter, paginationRefusal(previous, "上次查询已不可用，无法安全翻页。"), startTime);
-            return;
-        }
-        AIIntentConfig intent = intentOpt.get();
+        AIIntentConfig intent = plan.intent();
         if (SupplierComparisonReadIntent.CODE.equals(intent.getIntentCode())) {
             String admissionDenied = permissionDeniedMessage(factoryId, intent, userId, userRole);
             if (admissionDenied != null) {
@@ -825,122 +1065,13 @@ public class SseStreamingService {
                 return;
             }
         }
-        Optional<ToolExecutor> toolOpt = intent.getToolName() == null
-                ? Optional.empty() : toolRegistry.getExecutor(intent.getToolName());
-        if (toolOpt.isEmpty() || toolOpt.get().getAccessMode() != ToolExecutor.AccessMode.READ
-                || (writeGuardService != null && writeGuardService.isWriteTool(toolOpt.get()))
-                || (writeGuardService != null && writeGuardService.isWriteIntent(intent))) {
-            streamTerminalResponse(emitter, paginationRefusal(previous, "上次查询不是受支持的只读列表，无法翻页。"), startTime);
-            return;
-        }
-        Integer pageBase = paginationPageBase(toolOpt.get());
-
-        Map<String, Object> replayContext = new LinkedHashMap<>();
-        Object filters = metadata.get("filters");
-        if (filters instanceof Map<?, ?> filterMap) {
-            for (Map.Entry<?, ?> entry : filterMap.entrySet()) {
-                String key = entry.getKey() == null ? null : String.valueOf(entry.getKey());
-                if (key != null && entry.getValue() != null
-                        && !Set.of("page", "pageBase", "paginationReplay").contains(key)) {
-                    replayContext.put(key, entry.getValue());
-                }
-            }
-        }
-        Integer currentPage = strictPageValue(metadata.get("page"));
-        if (currentPage == null) {
-            streamTerminalResponse(emitter, paginationRefusal(previous, "上次查询页码基准未知，无法安全翻页。"), startTime);
-            return;
-        }
-        boolean hasMorePresent = metadata.containsKey("hasMore");
-        Boolean hasMore = hasMorePresent ? strictBooleanValue(metadata.get("hasMore")) : null;
-        if (hasMorePresent && hasMore == null) {
-            streamTerminalResponse(emitter, paginationRefusal(previous, "分页元数据中的 hasMore 无效，无法安全翻页。"), startTime);
-            return;
-        }
-        boolean totalPagesPresent = metadata.containsKey("totalPages");
-        Long totalPages = totalPagesPresent ? strictTotalPagesValue(metadata.get("totalPages")) : null;
-        if (totalPagesPresent && totalPages == null) {
-            streamTerminalResponse(emitter, paginationRefusal(previous, "分页元数据中的总页数无效，无法安全翻页。"), startTime);
-            return;
-        }
-        if (pageBase == null) {
-            if (previous) {
-                streamTerminalResponse(emitter, paginationRefusal(previous, "上次查询页码基准未知，无法安全翻页。"), startTime);
-                return;
-            }
-            if (!hasMorePresent || !Boolean.TRUE.equals(hasMore)) {
-                streamTerminalResponse(emitter, paginationRefusal(previous,
-                        hasMorePresent ? "已经是最后一页，没有更多数据。" : "分页元数据缺少 hasMore，无法安全翻页。"), startTime);
-                return;
-            }
-        } else if (totalPages != null) {
-            long lastPage = pageBase == 0 ? totalPages - 1L : totalPages;
-            if (totalPages <= 0 || currentPage < pageBase || (long) currentPage > lastPage) {
-                streamTerminalResponse(emitter, paginationRefusal(previous, "当前页码超出服务端分页范围，无法安全翻页。"), startTime);
-                return;
-            }
-            boolean atTail = currentPage == lastPage;
-            if (hasMore != null && hasMore != !atTail) {
-                streamTerminalResponse(emitter, paginationRefusal(previous, "分页元数据与总页数不一致，无法安全翻页。"), startTime);
-                return;
-            }
-            if (!previous && atTail) {
-                streamTerminalResponse(emitter, paginationRefusal(previous, "已经是最后一页，没有更多数据。"), startTime);
-                return;
-            }
-        } else {
-            if (currentPage < pageBase) {
-                streamTerminalResponse(emitter, paginationRefusal(previous, "当前页码超出服务端分页范围，无法安全翻页。"), startTime);
-                return;
-            }
-            if (!previous) {
-                if (!hasMorePresent) {
-                    streamTerminalResponse(emitter, paginationRefusal(previous,
-                            "分页元数据缺少 hasMore 和总页数，无法安全翻页。"), startTime);
-                    return;
-                }
-                if (Boolean.FALSE.equals(hasMore)) {
-                    streamTerminalResponse(emitter, paginationRefusal(previous,
-                            "已经是最后一页，没有更多数据。"), startTime);
-                    return;
-                }
-            }
-        }
-        if (!previous && currentPage == Integer.MAX_VALUE) {
-            streamTerminalResponse(emitter, paginationRefusal(previous, "下一页页码超出可支持范围，无法安全翻页。"), startTime);
-            return;
-        }
-        int targetPage = previous ? currentPage - 1 : currentPage + 1;
-        if (previous && targetPage < pageBase) {
-            streamTerminalResponse(emitter, paginationRefusal(previous, "已经是第一页，没有上一页。"), startTime);
-            return;
-        }
-        replayContext.put("page", targetPage);
-        Object size = metadata.get("size");
-        if (size != null) replayContext.put("size", size);
-        replayContext.put("paginationReplay", true);
-        String queryInput = stringValue(metadata.get("queryInput"));
-        if (queryInput == null || queryInput.isBlank()) queryInput = "列表查询";
-        IntentExecuteRequest replay = IntentExecuteRequest.builder()
-                .userInput(queryInput)
-                .intentCode(intentCode)
-                .context(replayContext)
-                .sessionId(request.getSessionId())
-                .mode(request.getMode())
-                .build();
-        IntentMatchResult replayMatch = IntentMatchResult.builder()
-                .bestMatch(intent)
-                .confidence(1.0d)
-                .matchMethod(IntentMatchResult.MatchMethod.EXACT)
-                .requiresConfirmation(false)
-                .build();
         sendSseEvent(emitter, "intent_recognized", Map.of(
-                "intentCode", intentCode,
-                "intentName", intent.getIntentName() == null ? intentCode : intent.getIntentName(),
+                "intentCode", intent.getIntentCode(),
+                "intentName", intent.getIntentName() == null ? intent.getIntentCode() : intent.getIntentName(),
                 "confidence", 1.0d,
                 "matchMethod", "SERVER_SESSION"));
-        executeAndStreamResult(emitter, factoryId, replay, intent, userId, userRole,
-                startTime, replayMatch, factoryPackRoute);
+        executeAndStreamResult(emitter, factoryId, plan.replay(), intent, userId, userRole,
+                startTime, plan.match(), factoryPackRoute);
     }
 
     private IntentExecuteResponse paginationRefusal(String message) {
@@ -948,14 +1079,7 @@ public class SseStreamingService {
     }
 
     private IntentExecuteResponse paginationRefusal(boolean previous, String message) {
-        return IntentExecuteResponse.builder()
-                .intentRecognized(true)
-                .intentCode(previous ? "PAGINATION_PREVIOUS" : "PAGINATION_NEXT")
-                .status("PAGINATION_REFUSED")
-                .message(message)
-                .formattedText(message)
-                .executedAt(LocalDateTime.now())
-                .build();
+        return ReadPaginationSupport.refusal(previous, message);
     }
 
     private boolean isPreviousPaginationRequest(IntentExecuteRequest request) {
@@ -964,89 +1088,6 @@ public class SseStreamingService {
                 || "NAVIGATION_PREVIOUS_PAGE".equalsIgnoreCase(request.getIntentCode())) return true;
         String input = request.getUserInput() == null ? "" : request.getUserInput().trim();
         return Set.of("上一页", "翻到上一页").contains(input);
-    }
-
-    private Integer strictPageValue(Object value) {
-        if (value instanceof Number number) {
-            try {
-                BigDecimal decimal = new BigDecimal(number.toString());
-                if (decimal.signum() < 0
-                        || decimal.compareTo(BigDecimal.valueOf(Integer.MAX_VALUE)) > 0) return null;
-                return decimal.intValueExact();
-            } catch (ArithmeticException | NumberFormatException ignored) {
-                return null;
-            }
-        }
-        if (value instanceof String text) {
-            try {
-                int parsed = Integer.parseInt(text.trim());
-                return parsed < 0 ? null : parsed;
-            } catch (NumberFormatException ignored) {
-                return null;
-            }
-        }
-        return null;
-    }
-
-    private Boolean strictBooleanValue(Object value) {
-        return value instanceof Boolean booleanValue ? booleanValue : null;
-    }
-
-    private Long strictTotalPagesValue(Object value) {
-        if (value instanceof Number number) {
-            try {
-                BigDecimal decimal = new BigDecimal(number.toString());
-                if (decimal.signum() < 0 || decimal.compareTo(BigDecimal.valueOf(Long.MAX_VALUE)) > 0) {
-                    return null;
-                }
-                return decimal.longValueExact();
-            } catch (ArithmeticException | NumberFormatException ignored) {
-                return null;
-            }
-        }
-        if (value instanceof String text) {
-            try {
-                long parsed = Long.parseLong(text.trim());
-                return parsed < 0 ? null : parsed;
-            } catch (NumberFormatException ignored) {
-                return null;
-            }
-        }
-        return null;
-    }
-
-    @SuppressWarnings("unchecked")
-    private Integer paginationPageBase(ToolExecutor executor) {
-        if (executor == null) return null;
-        Map<String, Object> schema;
-        try {
-            schema = executor.getParametersSchema();
-        } catch (RuntimeException ignored) {
-            return null;
-        }
-        if (schema == null || !(schema.get("properties") instanceof Map<?, ?> properties)) return null;
-        Object rawPage = properties.get("page");
-        if (!(rawPage instanceof Map<?, ?> pageSchema)) return null;
-        Integer minimum = strictPageValue(pageSchema.get("minimum"));
-        if (minimum == null || (minimum != 0 && minimum != 1)) return null;
-        if (pageSchema.containsKey("default")) {
-            Integer defaultPage = strictPageValue(pageSchema.get("default"));
-            if (defaultPage == null || defaultPage < minimum) return null;
-        }
-        return minimum;
-    }
-
-    @SuppressWarnings("unchecked")
-    private Map<String, Object> latestPaginationMetadata(ConversationContext context) {
-        List<ConversationMessage> messages = context.getRecentMessages();
-        if (messages == null) return null;
-        for (int i = messages.size() - 1; i >= 0; i--) {
-            ConversationMessage message = messages.get(i);
-            if (message.getRole() != ConversationMessage.Role.ASSISTANT || message.getMetadata() == null) continue;
-            Object raw = message.getMetadata().get("pagination");
-            if (raw instanceof Map<?, ?> map) return new LinkedHashMap<>((Map<String, Object>) map);
-        }
-        return null;
     }
 
     private String stringValue(Object value) {
@@ -1071,19 +1112,34 @@ public class SseStreamingService {
                                          FactoryCapabilityPackRoutingPolicy.Route factoryPackRoute)
             throws IOException {
         executeAndStreamResult(emitter, factoryId, request, intent, userId, userRole, startTime,
-                matchResult, factoryPackRoute, false);
+                matchResult, factoryPackRoute, false, false);
     }
 
-    /**
-     * @param permissionAlreadyChecked 调用方刚用 {@link #permissionDeniedMessage} 判过且放行 —— 不重算
-     *        (每个请求只算一次意图权限; 其它入口一律传 false)。
-     */
     private void executeAndStreamResult(SseEmitter emitter, String factoryId,
                                          IntentExecuteRequest request, AIIntentConfig intent,
                                          Long userId, String userRole, long startTime,
                                          IntentMatchResult matchResult,
                                          FactoryCapabilityPackRoutingPolicy.Route factoryPackRoute,
                                          boolean permissionAlreadyChecked)
+            throws IOException {
+        executeAndStreamResult(emitter, factoryId, request, intent, userId, userRole, startTime,
+                matchResult, factoryPackRoute, permissionAlreadyChecked, false);
+    }
+
+    /**
+     * @param permissionAlreadyChecked 调用方刚用 {@link #permissionDeniedMessage} 判过且放行 —— 不重算
+     *        (每个请求只算一次意图权限; 其它入口一律传 false)。
+     * @param explicitIntentCode 请求带了意图码 (App 澄清按钮点选): 执行前的停步走编排器
+     *        {@link IntentExecutionOrchestrator#explicitIntentStopBeforeExecution} —— 与 /execute 显式意图路径同一份
+     *        (先判审批再出写确认、先列可选对象、预览分支; PR-3b)。识别分支传 false (它在 7a.5 / 7a.6 已抽参、列过选项)。
+     */
+    private void executeAndStreamResult(SseEmitter emitter, String factoryId,
+                                         IntentExecuteRequest request, AIIntentConfig intent,
+                                         Long userId, String userRole, long startTime,
+                                         IntentMatchResult matchResult,
+                                         FactoryCapabilityPackRoutingPolicy.Route factoryPackRoute,
+                                         boolean permissionAlreadyChecked,
+                                         boolean explicitIntentCode)
             throws IOException {
         if (!permissionAlreadyChecked) {
             String deniedMessage = permissionDeniedMessage(factoryId, intent, userId, userRole);
@@ -1100,47 +1156,53 @@ public class SseStreamingService {
             return;
         }
 
-        // 审批检查
-        if (intent.needsApproval() && !Boolean.TRUE.equals(request.getForceExecute())) {
-            IntentExecuteResponse approvalResponse = IntentExecuteResponse.builder()
-                    .intentRecognized(true)
-                    .intentCode(intent.getIntentCode())
-                    .intentName(intent.getIntentName())
-                    .status("PENDING_APPROVAL")
-                    .message("此操作需要审批，已提交审批请求")
-                    .requiresApproval(true)
-                    .executedAt(LocalDateTime.now())
-                    .build();
-            sendSseEvent(emitter, "result", approvalResponse);
-            sendSseEvent(emitter, "complete", Map.of(
-                    "status", "PENDING_APPROVAL",
-                    "totalLatencyMs", System.currentTimeMillis() - startTime
-            ));
-            emitter.complete();
-            return;
-        }
-
-        // 业态门控 (Sprint 13 #305): domain-exclusive intent on a mismatched factory.type →
-        // honest empty-state + domain next-action, instead of executing a tool with no data.
-        if (!factoryPackRoute.isConstrained()) {
-            Optional<IntentExecuteResponse> gate = businessTypeGate.check(factoryId, intent);
-            if (gate.isPresent()) {
-                IntentExecuteResponse gateResponse = gate.get();
-                sendSseEvent(emitter, "result", gateResponse);
-                sendSseEvent(emitter, "complete", Map.of(
-                        "status", gateResponse.getStatus() != null ? gateResponse.getStatus() : "NOT_APPLICABLE",
-                        "totalLatencyMs", System.currentTimeMillis() - startTime
-                ));
-                emitter.complete();
+        if (explicitIntentCode && turnSteps != null) {
+            // 显式意图码: 咨询页拦写 → 审批 → 业态门 → 先列可选对象 → 一线未开放 → W0 写确认卡 → 预览,
+            // 与 /execute 显式意图路径同一个方法。生产上 turnSteps 必在 (启动校验 verifyTurnStepsWired);
+            // 只有裸构造的单测缺席, 那时退回下面的咨询页拦写 / 审批 / 业态门 (顺序同样是先审批)。
+            IntentExecuteResponse stopped = turnSteps.explicitIntentStopBeforeExecution(
+                    factoryId, request, intent, userId, userRole, factoryPackRoute);
+            if (stopped != null) {
+                streamTerminalResponse(emitter, stopped, startTime);
                 return;
+            }
+        } else {
+            // 咨询 tab 拦写 + 审批: 与普通入口同一个方法、同一个谓词 (IntentTurnSharedSteps)。
+            // 识别分支到这里已判过 6.5, 再判结果相同。
+            IntentExecuteResponse readModeBlocked = IntentTurnSharedSteps.readModeWriteBlocked(
+                    request, intent, intentAccessModeFilter, writeGuardService);
+            if (readModeBlocked != null) {
+                streamTerminalResponse(emitter, readModeBlocked, startTime);
+                return;
+            }
+            if (IntentTurnSharedSteps.stopsForApproval(intent, request)) {
+                streamTerminalResponse(emitter,
+                        IntentTurnSharedSteps.approvalResponse(intent, writeGuardService, toolRegistry), startTime);
+                return;
+            }
+
+            // 业态门控 (Sprint 13 #305): domain-exclusive intent on a mismatched factory.type →
+            // honest empty-state + domain next-action, instead of executing a tool with no data.
+            if (!factoryPackRoute.isConstrained()) {
+                Optional<IntentExecuteResponse> gate = businessTypeGate.check(factoryId, intent);
+                if (gate.isPresent()) {
+                    IntentExecuteResponse gateResponse = gate.get();
+                    sendSseEvent(emitter, "result", gateResponse);
+                    sendSseEvent(emitter, "complete", Map.of(
+                            "status", gateResponse.getStatus() != null ? gateResponse.getStatus() : "NOT_APPLICABLE",
+                            "totalLatencyMs", System.currentTimeMillis() - startTime
+                    ));
+                    emitter.complete();
+                    return;
+                }
             }
         }
 
         // 发送执行中事件
-        sendSseEvent(emitter, "executing", Map.of(
-                "intentCode", intent.getIntentCode(),
-                "intentName", intent.getIntentName()
-        ));
+        Map<String, Object> executingEvent = new LinkedHashMap<>();
+        executingEvent.put("intentCode", intent.getIntentCode());
+        if (intent.getIntentName() != null) executingEvent.put("intentName", intent.getIntentName());
+        sendSseEvent(emitter, "executing", executingEvent);
 
         // 路由到 Tool
         String toolName = intent.getToolName();
@@ -1156,6 +1218,13 @@ public class SseStreamingService {
                 log.warn("[SSE] Tool 未找到: toolName={}", toolName);
                 response = toolDispatchService.buildNoToolResponse(intent);
             }
+        } else if (permissionAlreadyChecked
+                && dynamicToolSelectionService.requiresDynamicSelection(matchResult)) {
+            // 没绑工具 + 需要动态选工具 (识别分支才有, 显式意图码路径不选, 同原普通入口) —— PR-3 起 App 流式也选 (C 类 #11)。
+            // permissionAlreadyChecked 只有识别分支 (7c) 传 true。
+            log.info("[SSE] 动态工具选择: intentCode={}", intent.getIntentCode());
+            response = dynamicToolSelectionService.executeWithDynamicToolSelection(
+                    factoryId, request, intent, matchResult, userId, userRole);
         } else {
             // Sprint 9 P0.1 fix (2026-05-21): tool_name=NULL — 走 explicit Skill fallback (cover
             // 7a Skill route 已尝试但仍 fall through 到 executeAndStreamResult 的 corner case).
@@ -1171,24 +1240,20 @@ public class SseStreamingService {
             }
         }
 
-        // 格式化结果
-        boolean isSuccessStatus = "SUCCESS".equals(response.getStatus()) || "COMPLETED".equals(response.getStatus());
-        if (resultFormatterService != null && isSuccessStatus && response.getResultData() != null) {
-            try {
-                resultFormatterService.formatAndSet(response, userId);
-            } catch (Exception e) {
-                log.warn("[SSE] 结果格式化异常: {}", e.getMessage());
-            }
-        }
-        if (response.getFormattedText() == null && response.getMessage() != null
-                && response.getMessage().length() >= 5) {
-            response.setFormattedText(response.getMessage());
-        }
+        // NEED_MORE_INFO 补问 (追问问题 + 参数收集会话) —— PR-3 起 App 流式也补 (C 类 #11)
+        response = enrichNeedMoreInfo(response, request, intent, factoryId, userId);
+
+        // 遮价 → 格式化 → 文字兜底 (含内部推理消毒、workdesk 摘要) → aiMode
+        applySharedResultSteps(response, intent, toolName, factoryId, userId);
 
         if (request.getSessionId() != null && !request.getSessionId().isBlank()) {
             response.setSessionId(request.getSessionId());
         }
-        persistSuccessfulReadPagination(factoryId, userId, request, intent, toolName, response);
+        // 对话记忆 (两入口一份, PR-3): 执行过的一轮 (任何状态 + 实体槽 + readQuery/翻页元数据) 写进本人会话;
+        // 文字兜底已在上面做完, 记的是用户看到的那句 (#1782 终审 低-2)。原流式只记成功的只读翻页那一份已删。
+        if (turnSteps != null) {
+            turnSteps.recordExecutedTurnMemory(factoryId, request, response, matchResult, userId);
+        }
 
         if (factoryFollowUpService != null
                 && com.cretas.aims.util.RetiredAnalysisContext.isKnownFactoryDomain(resolveFactoryDomainForTenantCheck(factoryId))) {
@@ -1225,6 +1290,77 @@ public class SseStreamingService {
         }
         sendSseEvent(emitter, "complete", complete);
         emitter.complete();
+    }
+
+    private IntentExecuteResponse enrichNeedMoreInfo(IntentExecuteResponse response,
+                                                     IntentExecuteRequest request, AIIntentConfig intent,
+                                                     String factoryId, Long userId) {
+        return turnSteps == null ? response
+                : turnSteps.enrichNeedMoreInfo(response, request, intent, factoryId, userId);
+    }
+
+    // ==================== 普通入口 (/execute) 同线程跑本管线 (PR-2b) ====================
+
+    /** 一轮跑完后取回的东西: 最后一个 result、complete 状态、路由定下的意图码、是否走了 error 出口。 */
+    record CollectedTurn(IntentExecuteResponse result, String completeStatus, String resolvedIntentCode,
+                         boolean errorExit, String errorMessage) {
+    }
+
+    /**
+     * 在当前线程上跑一整轮流式管线 (不另开工作线程, 不记 STREAM 飞轮 / trace —— 由普通入口门面按 NORMAL 记),
+     * 跑完取回并清掉这个 emitter 的读数。只给 {@link StreamTurnCollector} 用。
+     */
+    CollectedTurn runOnCurrentThread(SseEmitter emitter, String factoryId, IntentExecuteRequest request,
+                                     Long userId, String userRole) {
+        executeStreamAsync(emitter, factoryId, request, userId, userRole,
+                new com.cretas.aims.ai.client.F006BossQuestionClient.Cancellation());
+        IntentExecuteResponse result = lastStreamedResult.remove(emitter);
+        String completeStatus = streamedCompleteStatus.remove(emitter);
+        String resolvedIntent = streamedIntentCode.remove(emitter);
+        String errorMessage = erroredEmitters.remove(emitter);
+        return new CollectedTurn(result, completeStatus, resolvedIntent, errorMessage != null,
+                errorMessage == null || errorMessage.isEmpty() ? null : errorMessage);
+    }
+
+    /** 走了 error 出口的 emitter → error 事件里的 message (没有则空串; sendSseEvent 记)。 */
+    private final Map<SseEmitter, String> erroredEmitters =
+            java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+
+    /**
+     * intent_recognized 事件: 意图配置里名称 / 分类允许为空 (Map.of 遇 null 会让整轮走 error 出口 —— PR-3 起 /execute
+     * 也经这里, 编排器原路径不发这个事件、不会因此失败)。空的字段不放进事件。
+     */
+    private static Map<String, Object> intentRecognizedEvent(AIIntentConfig intent, Object confidence, Object matchMethod) {
+        Map<String, Object> event = new LinkedHashMap<>();
+        event.put("intentCode", intent.getIntentCode());
+        if (intent.getIntentName() != null) event.put("intentName", intent.getIntentName());
+        if (intent.getIntentCategory() != null) event.put("intentCategory", intent.getIntentCategory());
+        if (confidence != null) event.put("confidence", confidence);
+        if (matchMethod != null) event.put("matchMethod", matchMethod);
+        return event;
+    }
+
+    /**
+     * 执行结果下发前的共用收尾 (与普通入口 applyCallerPriceView → applyResultFormatting → 兜底 → aiMode 同序):
+     * 先把 resultData 换成这个人看得到的那一份, 再格式化 —— 格式化按 resultData 写文字, 先格式化再在线上遮
+     * resultData, 文字里的价格已经出去了。
+     */
+    private void applySharedResultSteps(IntentExecuteResponse response, AIIntentConfig intent, String toolName,
+                                        String factoryId, Long userId) {
+        if (response == null) {
+            return;
+        }
+        boolean priceMasked = IntentTurnSharedSteps.applyCallerPriceView(priceView, response, userId);
+        boolean isSuccessStatus = "SUCCESS".equals(response.getStatus()) || "COMPLETED".equals(response.getStatus());
+        if (resultFormatterService != null && isSuccessStatus && response.getResultData() != null) {
+            try {
+                resultFormatterService.formatAndSet(response, userId);
+            } catch (Exception e) {
+                log.warn("[SSE] 结果格式化异常: {}", e.getMessage());
+            }
+        }
+        IntentTurnSharedSteps.applyTextFallback(response, workdeskOutputSummarizer, factoryId, priceMasked);
+        IntentTurnSharedSteps.applyAiModeStamp(response, intent, toolName, writeGuardService, toolRegistry);
     }
 
     /**
@@ -1264,7 +1400,7 @@ public class SseStreamingService {
         } else if (!(SupplierComparisonReadIntent.CODE.equals(intent.getIntentCode())
                 ? aiIntentService.hasPermission(factoryId, intent.getIntentCode(), userRole)
                 : aiIntentService.hasPermission(intent.getIntentCode(), userRole))) {
-            return "您没有权限执行此操作。需要角色: " + intent.getRequiredRoles();
+            return "您没有权限执行此操作。需要角色: " + com.cretas.aims.ai.tool.RoleDisplay.listOf(intent.getRequiredRoles());
         }
         return null;
     }
@@ -1421,11 +1557,10 @@ public class SseStreamingService {
      */
     private boolean streamSlotContinuation(SseEmitter emitter, String factoryId, IntentExecuteRequest request,
                                            Long userId, String userRole, long startTime,
-                                           FactoryCapabilityPackRoutingPolicy.Route factoryPackRoute)
+                                           FactoryCapabilityPackRoutingPolicy.Route factoryPackRoute,
+                                           Optional<com.cretas.aims.entity.conversation.ConversationSession> open)
             throws IOException {
-        Optional<com.cretas.aims.entity.conversation.ConversationSession> open =
-                openSlotSession(factoryId, userId, request);
-        if (open.isEmpty()) {
+        if (open == null || open.isEmpty()) {
             return false;
         }
         com.cretas.aims.entity.conversation.ConversationSession session = open.get();
@@ -1437,11 +1572,38 @@ public class SseStreamingService {
         }
         List<com.cretas.aims.entity.conversation.ConversationSession.RequiredParameter> pending =
                 session.getRequiredParameters().stream().filter(p -> !p.isCollected()).toList();
-        if (!SlotAnswerRule.looksLikeAnswer(request.getUserInput(), pending,
-                text -> knowledgeBase.matchPhrase(text).isPresent())) {
-            log.info("[SSE][SlotContinuation] 这句不像在回答缺参问题, 关闭会话后正常识别: session={}, pending={}",
+        // 续轮规则与普通入口共用一份 (TaskContinuationRule): 不像回答 = 打断。开关开时挂起待恢复, 关时取消 (旧行为)
+        TaskContinuationRule.Action action = taskStateService != null
+                ? taskStateService.classify(session, request.getUserInput(),
+                        text -> knowledgeBase.matchPhrase(text).isPresent(), knowledgeBase::matchPhrase,
+                        intentNames(factoryId))
+                : TaskContinuationRule.forActive(request.getUserInput(), pending,
+                        text -> knowledgeBase.matchPhrase(text).isPresent());
+        if (action == TaskContinuationRule.Action.REPEAT) {
+            // 「继续完成工序」时它正问着: 不挂起、不另起一份同意图的收集, 把这一问再问一遍 (会话 id 不变)
+            String message = ConversationTaskStateService.repeatMessage(session, intentNames(factoryId), paramLabels(factoryId));
+            streamTerminalResponse(emitter, IntentExecuteResponse.builder()
+                    .intentRecognized(true).intentCode(session.getKnownIntentCode())
+                    .status("NEED_MORE_INFO").message(message).formattedText(message)
+                    .sessionId(slotSessionId)
+                    .metadata(Map.of("taskResumed", true, "sessionId", slotSessionId))
+                    .executedAt(LocalDateTime.now()).build(), startTime);
+            return true;
+        }
+        if (action == TaskContinuationRule.Action.INTERRUPT) {
+            log.info("[SSE][SlotContinuation] 这句不像在回答缺参问题, 打断后正常识别: session={}, pending={}",
                     slotSessionId, pending.stream().map(p -> p.getName()).toList());
-            conversationService.cancelConversation(factoryId, userId, slotSessionId);
+            if (taskStateService != null) {
+                try {
+                    taskStateService.interrupt(factoryId, userId, session);
+                } catch (RuntimeException concurrent) {
+                    // 乐观锁 (终审 S3): 同一会话的并发请求刚改过这一行 —— 不拿旧副本覆盖, 这句照常当新话识别
+                    log.warn("[SSE][SlotContinuation] 挂起时会话已被并发修改, 不覆盖: session={}, error={}",
+                            slotSessionId, concurrent.getMessage());
+                }
+            } else {
+                conversationService.cancelConversation(factoryId, userId, slotSessionId);
+            }
             return false;
         }
         Optional<AIIntentConfig> target = session.getKnownIntentCode() == null
@@ -1520,6 +1682,55 @@ public class SseStreamingService {
         return true;
     }
 
+    /**
+     * 任务状态 (INTENT-DISTILL-20261111 第二批): 回到被挂起的任务。规则见 {@link TaskContinuationRule#resumeTarget},
+     * 与普通入口共用 {@link ConversationTaskStateService#tryResume}。恢复只流出「回到 X, 还需要 …」,
+     * 带回那个会话的 id, 下一句照常走缺参续轮; 补齐后走显式意图, 写操作只出确认卡。
+     */
+    private boolean streamTaskResume(SseEmitter emitter, String factoryId, IntentExecuteRequest request,
+                                     Long userId, long startTime) throws IOException {
+        if (taskStateService == null || !taskStateService.isEnabledFor(factoryId) || userId == null
+                || request.getUserInput() == null || request.getUserInput().isBlank()) {
+            return false;
+        }
+        Optional<ConversationTaskStateService.Resumed> resumed;
+        try {
+            resumed = taskStateService.tryResume(factoryId, userId, request.getUserInput(),
+                    knowledgeBase::matchPhrase,
+                    intentNames(factoryId), paramLabels(factoryId));
+        } catch (Exception e) {
+            log.warn("[SSE][TaskResume] 恢复失败, 按新话识别: {}", e.getMessage());
+            return false;
+        }
+        if (resumed.isEmpty()) {
+            return false;
+        }
+        com.cretas.aims.entity.conversation.ConversationSession session = resumed.get().session();
+        streamTerminalResponse(emitter, IntentExecuteResponse.builder()
+                .intentRecognized(true)
+                .intentCode(session.getKnownIntentCode())
+                .status("NEED_MORE_INFO")
+                .message(resumed.get().message())
+                .formattedText(resumed.get().message())
+                .sessionId(session.getSessionId())
+                .metadata(Map.of("taskResumed", true, "sessionId", session.getSessionId()))
+                .executedAt(LocalDateTime.now())
+                .build(), startTime);
+        return true;
+    }
+
+    /** 意图码 → 名称与配置的关键词 (与普通入口同一个来源: 本厂可见的意图配置)。 */
+    /** (意图码, 参数名) → 绑定工具的参数说明, 恢复/重问时不把字段名说给用户 (两个入口同一个来源)。 */
+    private java.util.function.BiFunction<String, String, String> paramLabels(String factoryId) {
+        return ConversationTaskStateService.toolParamLabels(
+                code -> aiIntentService.getIntentByCode(factoryId, code), toolRegistry);
+    }
+
+    private java.util.function.Function<String, List<String>> intentNames(String factoryId) {
+        return code -> aiIntentService.getIntentByCode(factoryId, code)
+                .map(ConversationTaskStateService::namesOf).orElse(List.of());
+    }
+
     /** 请求点名的、本人本厂的、仍在收集参数且没超时的会话。查询失败一律当没有。 */
     private Optional<com.cretas.aims.entity.conversation.ConversationSession> openSlotSession(
             String factoryId, Long userId, IntentExecuteRequest request) {
@@ -1593,6 +1804,42 @@ public class SseStreamingService {
         log.info("[SSE] 写意图抽参: intentCode={}, keys={}", intent.getIntentCode(), extracted.keySet());
     }
 
+    /**
+     * 7a.6: 写意图缺「要操作哪一个」时先列选项 (见 {@link ToolDispatchService#askWhichOneBeforeWriteGuard})。
+     * 抽参已在 7a.5 做过, 这里不再抽。
+     *
+     * @return true 表示已经流出响应 (选项 / 没有可选的), 调用方必须就地 return
+     */
+    private boolean streamWriteChoiceAsked(SseEmitter emitter, String factoryId, IntentExecuteRequest request,
+                                           AIIntentConfig intent, Long userId, String userRole, long startTime)
+            throws IOException {
+        String toolName = intent.getToolName();
+        if (toolName == null || toolName.isBlank() || writeGuardService == null
+                || Boolean.TRUE.equals(request.getPreviewOnly())) {
+            return false;
+        }
+        Optional<ToolExecutor> tool = toolRegistry.getExecutor(toolName);
+        if (tool.isEmpty() || !(writeGuardService.isWriteTool(tool.get()) || writeGuardService.isWriteIntent(intent))) {
+            return false;
+        }
+        IntentExecuteResponse asked;
+        try {
+            asked = toolDispatchService.askWhichOneBeforeWriteGuard(
+                    tool.get(), factoryId, request, intent, userId, userRole, false);
+        } catch (RuntimeException e) {
+            log.warn("[SSE] 列可选对象失败, 交给 Slot Filling: intentCode={}, error={}",
+                    intent.getIntentCode(), e.getMessage());
+            return false;
+        }
+        if (asked == null) {
+            return false;
+        }
+        log.info("[SSE] 写意图缺要操作的对象, 列出可选项: intentCode={}, status={}, session={}",
+                intent.getIntentCode(), asked.getStatus(), asked.getSessionId());
+        streamTerminalResponse(emitter, asked, startTime);
+        return true;
+    }
+
     /** 主体键与确认类键不随确认卡带去预览 (预览端会按 JWT 重新绑定, 这里也不给它们出门的机会)。 */
     private static final Set<String> PREVIEW_PARAM_EXCLUDED = Set.of(
             "factoryId", "factory_id", "tenantId", "tenant_id", "userId", "user_id",
@@ -1608,7 +1855,7 @@ public class SseStreamingService {
      * <p>只带工具 schema 里声明的参数、只带标量。这些值本来就来自这个用户自己的话 / 他点的按钮,
      * /preview 也本来就接受 context; 带回去不给任何新权限 —— 预览端照样重绑主体、照样出确认卡。
      */
-    void attachPreviewParams(IntentExecuteResponse response, IntentExecuteRequest request, ToolExecutor tool) {
+    static void attachPreviewParams(IntentExecuteResponse response, IntentExecuteRequest request, ToolExecutor tool) {
         if (response == null || !"WRITE_CONFIRM_REQUIRED".equals(response.getStatus())
                 || request == null || request.getContext() == null || tool == null) {
             return;
@@ -1651,111 +1898,6 @@ public class SseStreamingService {
         return picked;
     }
 
-    private void persistSuccessfulReadPagination(String factoryId, Long userId,
-                                                 IntentExecuteRequest request,
-                                                 AIIntentConfig intent, String toolName,
-                                                 IntentExecuteResponse response) {
-        if (conversationMemoryService == null || request == null || userId == null
-                || request.getSessionId() == null || request.getSessionId().isBlank()
-                || intent == null || toolName == null || response == null
-                || !("SUCCESS".equals(response.getStatus()) || "COMPLETED".equals(response.getStatus()))) {
-            return;
-        }
-        Optional<ToolExecutor> executor = toolRegistry.getExecutor(toolName);
-        if (executor.isEmpty() || executor.get().getAccessMode() != ToolExecutor.AccessMode.READ
-                || (writeGuardService != null && writeGuardService.isWriteTool(executor.get()))
-                || (writeGuardService != null && writeGuardService.isWriteIntent(intent))) {
-            return;
-        }
-        Map<String, Object> pagination = buildPaginationMetadata(request, intent, toolName,
-                executor.get(), response.getResultData());
-        if (pagination == null) return;
-
-        try {
-            ConversationContext owner = conversationMemoryService.getOrCreateContext(
-                    factoryId, userId, request.getSessionId());
-            if (owner == null || !factoryId.equals(owner.getFactoryId()) || !userId.equals(owner.getUserId())) return;
-            conversationMemoryService.addMessage(request.getSessionId(),
-                    ConversationMessage.user(request.getUserInput()));
-            ConversationMessage assistant = ConversationMessage.assistant(
-                    response.getMessage() == null ? "查询完成" : response.getMessage(), intent.getIntentCode());
-            Map<String, Object> messageMetadata = new LinkedHashMap<>();
-            messageMetadata.put("pagination", pagination);
-            assistant.setMetadata(messageMetadata);
-            conversationMemoryService.addMessage(request.getSessionId(), assistant);
-            conversationMemoryService.updateLastIntent(request.getSessionId(), intent.getIntentCode());
-        } catch (Exception e) {
-            log.warn("SSE 对话记忆持久化失败: factoryId={}, userId={}, failureType={}",
-                    factoryId, userId, e.getClass().getSimpleName());
-        }
-    }
-
-    @SuppressWarnings("unchecked")
-    private Map<String, Object> buildPaginationMetadata(IntentExecuteRequest request,
-                                                        AIIntentConfig intent, String toolName,
-                                                        ToolExecutor executor,
-                                                        Object rawResultData) {
-        Map<String, Object> pageData = findPageMap(rawResultData);
-        if (pageData == null) return null;
-        Object pageValue = pageData.containsKey("currentPage")
-                ? pageData.get("currentPage") : pageData.get("page");
-        if (pageValue == null) return null;
-        Integer pageNumber = strictPageValue(pageValue);
-        if (pageNumber == null) return null;
-        Map<String, Object> metadata = new LinkedHashMap<>();
-        metadata.put("intentCode", intent.getIntentCode());
-        metadata.put("toolName", toolName);
-        metadata.put("queryInput", request.getUserInput());
-        metadata.put("page", pageNumber);
-        Integer pageBase = paginationPageBase(executor);
-        if (pageBase != null && (pageBase == 0 || pageBase == 1)) metadata.put("pageBase", pageBase);
-        Object size = firstValue(pageData, "size", "pageSize", "limit");
-        if (size == null && request.getContext() != null) {
-            size = firstValue(request.getContext(), "size", "pageSize", "limit");
-        }
-        if (size != null) metadata.put("size", size);
-        Object hasMore = pageData.get("hasMore");
-        if (hasMore != null) metadata.put("hasMore", hasMore);
-        Object totalPages = pageData.get("totalPages");
-        if (totalPages != null) metadata.put("totalPages", totalPages);
-
-        Object conditions = firstValue(pageData, "queryConditions", "filters", "filter");
-        if (conditions instanceof Map<?, ?> conditionMap) {
-            metadata.put("filters", copyMap(conditionMap));
-        } else if (request.getContext() != null) {
-            Map<String, Object> requestFilters = new LinkedHashMap<>();
-            for (Map.Entry<String, Object> entry : request.getContext().entrySet()) {
-                if (entry.getValue() != null && !Set.of("page", "pageBase", "size", "paginationReplay").contains(entry.getKey())) {
-                    requestFilters.put(entry.getKey(), entry.getValue());
-                }
-            }
-            if (!requestFilters.isEmpty()) metadata.put("filters", requestFilters);
-        }
-        return metadata;
-    }
-
-    @SuppressWarnings("unchecked")
-    private Map<String, Object> findPageMap(Object raw) {
-        if (!(raw instanceof Map<?, ?> map)) return null;
-        Map<String, Object> candidate = copyMap(map);
-        if (candidate.containsKey("currentPage") || candidate.containsKey("page")) return candidate;
-        Object nested = candidate.get("data");
-        return nested instanceof Map<?, ?> ? findPageMap(nested) : null;
-    }
-
-    private Object firstValue(Map<String, Object> map, String... keys) {
-        for (String key : keys) if (map.containsKey(key)) return map.get(key);
-        return null;
-    }
-
-    private Map<String, Object> copyMap(Map<?, ?> map) {
-        Map<String, Object> copy = new LinkedHashMap<>();
-        for (Map.Entry<?, ?> entry : map.entrySet()) {
-            if (entry.getKey() != null) copy.put(String.valueOf(entry.getKey()), entry.getValue());
-        }
-        return copy;
-    }
-
     /**
      * 流式生成对话回复
      */
@@ -1767,7 +1909,9 @@ public class SseStreamingService {
                                                com.cretas.aims.ai.client.F006BossQuestionClient.Cancellation miniCancellation) throws IOException {
         if (questionType == QuestionType.GENERAL_QUESTION && f006BossQuestionClient != null
                 && f006BossQuestionClient.shouldRoute(factoryId, userId, userRole)) {
-            if (conversationMemoryService == null || sessionId == null || sessionId.isBlank()) {
+            // 会话已由入口建立并核过归属; /execute 的独立一问 (没带 sessionId) 本来就不建会话, 照样可以问
+            if (!StreamTurnCollector.standaloneTurnOnCurrentThread()
+                    && (conversationMemoryService == null || sessionId == null || sessionId.isBlank())) {
                 streamTerminalResponse(emitter, sessionOwnershipFailureResponse(), startTime);
                 return;
             }
@@ -1777,8 +1921,10 @@ public class SseStreamingService {
         }
         String systemPrompt;
         if (questionType == QuestionType.GENERAL_QUESTION) {
-            systemPrompt = """
-                你是白垩纪AI Agent的智能助手。用户正在询问一个关于生产管理、质量控制或食品安全的通用咨询问题。
+            systemPrompt = com.cretas.aims.ai.grounding.ChatBusinessFactGuard.PERSONA
+                    + com.cretas.aims.ai.grounding.ChatBusinessFactGuard.NO_DATA_RULES + """
+
+                用户正在询问一个关于生产管理、质量控制或食品安全的通用咨询问题。
 
                 请根据以下原则回答：
                 1. 提供专业、实用的建议
@@ -1790,8 +1936,10 @@ public class SseStreamingService {
                 注意：这不是一个具体的系统操作指令，而是通用知识咨询。
                 """;
         } else {
-            systemPrompt = """
-                你是白垩纪AI Agent的智能助手。用户发起了一个日常对话。
+            systemPrompt = com.cretas.aims.ai.grounding.ChatBusinessFactGuard.PERSONA
+                    + com.cretas.aims.ai.grounding.ChatBusinessFactGuard.NO_DATA_RULES + """
+
+                用户发起了一个日常对话。
 
                 请根据以下原则回答：
                 1. 友好、亲切地回应
@@ -1834,21 +1982,25 @@ public class SseStreamingService {
                 "thinking", useThinking,
                 "questionType", questionType.name()));
 
-        com.cretas.aims.service.consent.LlmEgressRedactor.StreamRestorer restorer = redacted.streamRestorer(token -> {
-            try {
-                emitter.send(SseEmitter.event().name("token").data(token));
-            } catch (Exception e) {
-                log.debug("Client disconnected during stream token");
-            }
-        });
+        // 模型的 token 先攒在这里不下发: 整段过了业务事实护栏才发给用户 (被拦的回复一个字也不出去)
+        StringBuilder held = new StringBuilder();
+        com.cretas.aims.service.consent.LlmEgressRedactor.StreamRestorer restorer =
+                redacted.streamRestorer(held::append);
+        // 攒的这段时间用户看不到 token: 先发 progress (沿用既有事件类型), 免得首字等待像卡住
+        sendSseEvent(emitter, "progress", Map.of("stage", "generating", "message", GENERATING_PROGRESS_MESSAGE));
         try {
             dashScopeClient.chatCompletionStream(aiRequest,
                 restorer,
                 response -> {
                     try {
                         restorer.flush();
-                        String fullContent = response.getContent() != null
-                                ? redacted.restore(response.getContent()) : "";
+                        String modelContent = response.getContent() != null
+                                ? redacted.restore(response.getContent()) : held.toString();
+                        String fullContent = chatBusinessFactGuard.enforce(CHAT_FACT_GUARD_SITE, userInput,
+                                modelContent, questionType == QuestionType.GENERAL_QUESTION);
+                        if (!fullContent.isEmpty()) {
+                            sendSseEvent(emitter, "token", fullContent);
+                        }
                         Integer tokensUsed = response.getUsage() != null
                                 ? response.getUsage().getTotalTokens() : null;
                         String finishReason = response.getChoices() != null && !response.getChoices().isEmpty()
@@ -1914,14 +2066,16 @@ public class SseStreamingService {
                     .executedAt(LocalDateTime.now()).build(), startTime);
             return;
         }
-        com.cretas.aims.service.consent.LlmEgressRedactor.StreamRestorer restorer = redacted.streamRestorer(token -> {
-            try {
-                sendSseEvent(emitter, "token", token);
-            } catch (IOException e) {
-                throw new java.io.UncheckedIOException(e);
-            }
-        });
+        // 老板提问同样没有工具查询结果: token 先攒着, 整段过了业务事实护栏才下发
+        StringBuilder held = new StringBuilder();
+        com.cretas.aims.service.consent.LlmEgressRedactor.StreamRestorer restorer =
+                redacted.streamRestorer(held::append);
         try {
+            try {
+                sendSseEvent(emitter, "progress", Map.of("stage", "generating", "message", GENERATING_PROGRESS_MESSAGE));
+            } catch (IOException e) {
+                throw new java.io.UncheckedIOException(e); // 客户端断开: 走下面的断开出口, 不当成上游失败
+            }
             var answer = f006BossQuestionClient.stream(factoryId, userId, userRole, redacted.text(0), thinking,
                     metadata -> {
                         try {
@@ -1934,7 +2088,15 @@ public class SseStreamingService {
                         }
                     }, restorer, cancellation);
             restorer.flush();
-            String content = redacted.restore(answer.content());
+            String content = chatBusinessFactGuard.enforce(MINI_FACT_GUARD_SITE, userInput,
+                    redacted.restore(answer.content()), true);
+            if (content != null && !content.isEmpty()) {
+                try {
+                    sendSseEvent(emitter, "token", content);
+                } catch (IOException e) {
+                    throw new java.io.UncheckedIOException(e); // 客户端断开: 不发结果, 走下面的断开出口
+                }
+            }
             Map<String, Object> source = new LinkedHashMap<>();
             source.put("provider", answer.provider());
             source.put("model", answer.model());
@@ -1962,7 +2124,9 @@ public class SseStreamingService {
         } catch (IOException unavailable) {
             log.warn("F006 Mini question failed: userId={}, elapsedMs={}",
                     userId, System.currentTimeMillis() - startTime);
-            sendSseEvent(emitter, "error", Map.of("status", "FAILED", "message", unavailable.getMessage()));
+            // 说明先脱敏再下发 (两入口同一句; 本地通道地址 / 内部类名不出门)
+            sendSseEvent(emitter, "error", Map.of("status", "FAILED",
+                    "message", ErrorSanitizer.sanitize(unavailable.getMessage())));
             emitter.complete();
         }
     }
@@ -2091,6 +2255,11 @@ public class SseStreamingService {
         } else if ("error".equals(eventName)) {
             // The run ended in the error exit without ever sending a result: still a (failed) run.
             lastStreamedResult.putIfAbsent(emitter, IntentExecuteResponse.builder().status("FAILED").build());
+            if (emitter instanceof StreamTurnCollector.CollectingEmitter) {
+                // 普通入口要知道这一轮走的是 error 出口, 以及要给用户看的那句说明
+                Object message = data instanceof Map<?, ?> error ? error.get("message") : null;
+                erroredEmitters.put(emitter, message instanceof String text ? text : "");
+            }
         }
         try {
             String json = objectMapper.writeValueAsString(priceMaskedWire(eventName, data));
@@ -2119,6 +2288,40 @@ public class SseStreamingService {
         tree.set("resultData", objectMapper.valueToTree(
                 priceView.maskedViewFor(response.getResultData(), SecurityUtils.currentUserId())));
         return tree;
+    }
+
+    /** 意图飞轮 (INTENT-DISTILL-20261111): 流式入口每轮一条; null = 不记。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.intent.flywheel.IntentFlywheelRecorder flywheelRecorder;
+
+    /** 在 {@link #recordStreamedFactoryTrace} 取走结果之前读 (只读, 不移除); 从不抛。 */
+    private void recordStreamedFlywheel(SseEmitter emitter, String factoryId, Long userId, IntentExecuteRequest request,
+                                        com.cretas.aims.service.intent.flywheel.IntentFlywheelTurnContext.Turn turn,
+                                        long startedNanos) {
+        if (flywheelRecorder == null) {
+            return;
+        }
+        try {
+            IntentExecuteResponse streamed = lastStreamedResult.get(emitter);
+            String completeStatus = streamedCompleteStatus.get(emitter);
+            String resolvedIntent = streamedIntentCode.get(emitter);
+            // 只抄记录要的四个字段 (状态 / 意图 / 会话 / 确认卡), 不改推出去的那个对象
+            String status = streamed == null ? (completeStatus == null ? "UNKNOWN" : completeStatus) : streamed.getStatus();
+            if ("NO_MATCH".equals(completeStatus) && streamed != null && "NEED_CLARIFICATION".equals(streamed.getStatus())) {
+                status = "NO_MATCH";
+            }
+            IntentExecuteResponse recorded = IntentExecuteResponse.builder()
+                    .status(status)
+                    .intentCode(streamed != null && streamed.getIntentCode() != null ? streamed.getIntentCode() : resolvedIntent)
+                    .sessionId(streamed == null ? null : streamed.getSessionId())
+                    .confirmableAction(streamed == null ? null : streamed.getConfirmableAction())
+                    .build();
+            flywheelRecorder.recordTurn(com.cretas.aims.entity.intent.IntentFlywheelTurn.Entry.STREAM, factoryId, userId,
+                    request, recorded, turn, (System.nanoTime() - startedNanos) / 1_000_000L);
+        } catch (RuntimeException e) {
+            log.warn("[flywheel] 流式入口记录失败 (不影响回答): factory={}, reason={}", factoryId,
+                    com.cretas.aims.service.intent.flywheel.IntentFlywheelRecorder.errorKind(e));
+        }
     }
 
     /** S6-07: streamed runs (the app's AI chat) leave the same trace as facade runs; never throws. */
@@ -2189,41 +2392,26 @@ public class SseStreamingService {
     private IntentExecuteResponse buildClarificationResponseForStream(
             IntentMatchResult matchResult, String factoryId, Long userId, String userRole, String mode) {
         AIIntentConfig matchedIntent = matchResult.getBestMatch();
-        List<IntentExecuteResponse.SuggestedAction> candidateActions =
+        // 与普通入口同一份: 全被权限滤掉 ⇒ PERMISSION_DENIED + 标准拒答; 确实没有 ⇒ 澄清 + 可问的示例
+        ClarificationCandidateService.Clarification clarification =
                 clarificationCandidateService == null
-                        ? List.of(IntentExecuteResponse.SuggestedAction.builder()
-                                .actionCode("REPHRASE").actionName("重新描述").build())
-                        : clarificationCandidateService.buildCandidateActions(
+                        ? ClarificationCandidateService.rephraseOnlyClarification()
+                        : clarificationCandidateService.clarify(
                                 matchResult, factoryId, userId, userRole, mode);
-        String clarificationMessage = buildSafeClarificationMessage(candidateActions);
+        List<IntentExecuteResponse.SuggestedAction> candidateActions = clarification.actions();
+        String clarificationMessage = clarification.message();
         return IntentExecuteResponse.builder()
                 .intentRecognized(true)
                 .intentCode(matchedIntent.getIntentCode())
                 .intentName(matchedIntent.getIntentName())
                 .intentCategory(matchedIntent.getIntentCategory())
-                .status("NEED_CLARIFICATION")
+                .status(clarification.status())
                 .message(clarificationMessage)
                 .formattedText(clarificationMessage)
                 .confidence(matchResult.getConfidence())
                 .suggestedActions(candidateActions)
                 .executedAt(LocalDateTime.now())
                 .build();
-    }
-
-    private String buildSafeClarificationMessage(List<IntentExecuteResponse.SuggestedAction> actions) {
-        String choices = streamChoicesLine(actions);
-        if (choices.isBlank()) {
-            return "当前没有可安全提供的业务选项，请重新描述您的需求。";
-        }
-        // 只剩一个选项时不说「可能匹配多个操作」—— 2026-10-06 真机: 一个按钮配「请选择」读起来像坏了。
-        List<IntentExecuteResponse.SuggestedAction> intentChoices = actions.stream()
-                .filter(x -> x != null && "SELECT_INTENT".equals(x.getActionCode())
-                        && x.getActionName() != null && !x.getActionName().isBlank())
-                .toList();
-        if (intentChoices.size() == 1) {
-            return "您是要「" + intentChoices.get(0).getActionName() + "」吗？点下面确认；不是的话请换个说法。";
-        }
-        return "您的请求可能匹配多个操作, 请选择您实际想做的:" + choices;
     }
 
     /** 一线角色 + 写操作 + 本厂未开放 ⇒ 拒绝说明; 否则 null。与执行入口 (ToolDispatchService) 同一判定。 */
@@ -2234,25 +2422,6 @@ public class SseStreamingService {
         ToolExecutor tool = intent.getToolName() == null || intent.getToolName().isBlank()
                 ? null : toolRegistry.getExecutor(intent.getToolName()).orElse(null);
         return frontlineWriteGrants.denyReason(factoryId, userRole, tool, intent).orElse(null);
-    }
-
-    private String streamChoicesLine(List<IntentExecuteResponse.SuggestedAction> actions) {
-        if (actions == null || actions.isEmpty()) {
-            return "";
-        }
-        StringBuilder line = new StringBuilder("\n");
-        int index = 1;
-        for (IntentExecuteResponse.SuggestedAction action : actions) {
-            if (action == null || !"SELECT_INTENT".equals(action.getActionCode())
-                    || action.getActionName() == null || action.getActionName().isBlank()) {
-                continue;
-            }
-            line.append(index++).append(". ").append(action.getActionName()).append("\n");
-            if (index > 3) {
-                break;
-            }
-        }
-        return index == 1 ? "" : line.toString();
     }
 
     /** Resolve server-owned metadata before admitting an analysis request. */

@@ -14,6 +14,54 @@ function isPositiveInteger(value) {
   return Number.isSafeInteger(value) && value > 0;
 }
 
+function isRecord(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function boundedReadContext(value) {
+  if (!isRecord(value) || Object.keys(value).length > 32) return false;
+  try {
+    return new TextEncoder().encode(JSON.stringify(value)).length <= 8192;
+  } catch {
+    return false;
+  }
+}
+
+const LEGACY_READ_INTENTS_WITHOUT_SESSION = new Set([
+  'ADDITIVE_COMPLIANCE_QUALITY',
+  'CUSTOMER_QUALITY_STANDARD',
+  'HACCP_STATUS_QUERY',
+  'INCOME_STATEMENT_QUERY',
+  'PRODUCTION_DEMAND_QUERY',
+  'QUALITY_CHIEF_WORKDESK',
+  'SPRINT10_SHIPMENT_PENDING_TODAY',
+]);
+
+/**
+ * The shared workdesk recognizer always sends this exact READ envelope. Keep
+ * this contract separate from the older intent fixtures below: those fixtures
+ * deliberately cover legacy mount queries that predate the mode/session
+ * fields, while this entry must never make a write or preview look read-only.
+ */
+function workdeskIntentReadBodyMatches(body) {
+  if (!isRecord(body) || body.mode !== 'READ' || typeof body.userInput !== 'string'
+    || !body.userInput.trim() || body.userInput.length > 1000
+    || (Object.hasOwn(body, 'sessionId')
+      && (typeof body.sessionId !== 'string' || !body.sessionId.trim() || body.sessionId.length > 128))) {
+    return false;
+  }
+  const allowedKeys = new Set(['mode', 'userInput', 'sessionId', 'context', 'parameters', 'intentCode']);
+  if (Object.keys(body).some((key) => !allowedKeys.has(key))) return false;
+  if (!Object.hasOwn(body, 'sessionId')
+    && !LEGACY_READ_INTENTS_WITHOUT_SESSION.has(body.intentCode)
+    && body.userInput !== '今天 HACCP 监控全通过吗?') return false;
+  if (Object.hasOwn(body, 'context') && !boundedReadContext(body.context)) return false;
+  if (Object.hasOwn(body, 'parameters') && !boundedReadContext(body.parameters)) return false;
+  if (Object.hasOwn(body, 'intentCode')
+    && (typeof body.intentCode !== 'string' || !body.intentCode.trim() || body.intentCode.length > 128)) return false;
+  return true;
+}
+
 function factoryAnalysisBodyMatches(body) {
   if (!body || typeof body !== 'object' || typeof body.question !== 'string'
     || !body.question.trim() || body.question.length > 1000) return false;
@@ -50,8 +98,8 @@ function factoryAnalysisBodyMatches(body) {
 }
 
 // Every entry must point to a server contract that is query-only. Do not add
-// generic prefixes. AI chat is deliberately absent because some modes may
-// execute tools with side effects behind a single HTTP request.
+// generic prefixes. AI chat is deliberately absent; only the bounded READ
+// workdesk envelope below is allowed through the mutation guard.
 const READONLY_POST_WHITELIST = [
   {
     id: 'proposal-comparison-evaluate',
@@ -316,6 +364,13 @@ const READONLY_POST_WHITELIST = [
     rationale: 'Quality-chief workdesk read-only pending-release query.',
   },
   {
+    id: 'workdesk-intent-read-session',
+    method: 'POST',
+    path: /^\/api\/mobile\/[^/]+\/ai-intents\/execute\/?$/,
+    bodyMatches: workdeskIntentReadBodyMatches,
+    rationale: 'Bounded useWorkdeskIntent READ session; only mode/userInput/sessionId/context/parameters/intentCode are accepted.',
+  },
+  {
     id: 'smartbi-chart-smart-recommend',
     method: 'POST',
     path: /^\/smartbi-api\/api\/chart\/smart-recommend\/?$/,
@@ -380,6 +435,7 @@ module.exports = {
   findAuthRequest,
   findReadonlyPost,
   proposalComparisonBodyMatches,
+  workdeskIntentReadBodyMatches,
 };
 
 function proposalComparisonBodyMatches(body) {

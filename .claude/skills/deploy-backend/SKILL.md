@@ -5,7 +5,7 @@ description: 全栈部署工作流。当用户说"部署"、"deploy"、"发布"�
 
 # 部署
 
-prod 只从 clean 且 `HEAD == origin/main` 的树部署，原因和 GitHub 不可用时的离线协议见 `.claude/rules/worktree-and-main-only-deploy.md`。常规部署验证绿就部，不再请示（Steve 2026-08-21）；判据照常一条不省。服务器上的东西放在哪、怎么查，见 `server-operations` skill。
+prod 只从 clean 且 `HEAD == origin/main` 的树部署，原因见 `.claude/rules/worktree-and-main-only-deploy.md`；合入通道分档、完整发布命令、部署后核对、GitHub 不可用时的离线协议见 `references/main-only-deploy-details.md`。常规部署验证绿就部，不再请示（Steve 2026-08-21）；判据照常一条不省。服务器上的东西放在哪、怎么查，见 `server-operations` skill。
 
 ## 统一发布入口（Java / Web）
 
@@ -23,6 +23,17 @@ prod 只从 clean 且 `HEAD == origin/main` 的树部署，原因和 GitHub 不�
 
 合并别人的 PR（本机没建过那棵树）时，在合并后的 main 上先跑 build 阶段再跑 deploy 阶段。
 
+### 远程构建车道：`--remote-build canada-mini`（2026-11-18）
+
+Windows 同时跑多路 Maven 会把桌面应用拖死（11-18 凌晨 6 路 × 2GB）。给 build 阶段加 `--remote-build canada-mini`，只把 Maven 那一步搬到 mini（M4 Pro / 64GB，热构建 `-DskipTests` 69s；Windows 发布期同类构建 506–805s），JAR 按 rsync 差量取回（186MB 实传约 30MB，约 9s），manifest、stage、validate、deploy 和 `RELEASE_FINAL_STATUS` 判据一行不变。manifest 里 `maven_command` 以 `remote:canada-mini` 开头，`jdk_*` 记 mini 的 Zulu 21.0.10。
+
+- 候选提交必须已推到 origin（mini 按 SHA 从 GitHub 取，并核对 backend tree hash 与本机一致）。
+- mini 拒绝时明确失败、不回退本机 Maven：北京时间 23:30–00:30（黑湖夜间 27B 模型加载）、`memory_pressure` 空闲 < 25% 或读不到、已有一个远程构建在跑。等一会儿重跑，或去掉 `--remote-build`。
+- mini 有人在用桌面：worker 只用 `~/Tools/jdk21` 绝对路径（⛔ 不碰 `/usr/bin/java` stub，会弹安装框），`nice 10`、Maven `-Xmx4g`、测试 fork `-Xmx3g`，不调用任何 GUI。
+- mini 环境：JDK `~/Tools/jdk21`、Maven `~/Tools/maven`（3.9.9）、仓库 `~/cretas-build/repo`（blobless + sparse）、Maven settings `~/cretas-build/maven-settings.xml`（阿里云镜像）、日志 `~/cretas-build/logs/`。
+- 默认仍由 Windows stage 到 47（rsync 差量约 20MB，8–10MB/s）。`CRETAS_REMOTE_BUILD_STAGE_FROM_REMOTE=1` 可改为 mini 直传 47，但 mini→47 实测约 6MB/s 且只能整包（186MB ≈ 31s），通常更慢。
+- mini 的部署密钥 `~/.ssh/cretas_remote_build_47_ed25519`（不进 git）在 47 `/root/.ssh/authorized_keys` 里是 `restrict,command="/usr/local/sbin/cretas-stage-receive"`：拿不到 shell / pty / 端口转发，只能 `has` / `stage`（字节数 + sha256 + `unzip -tqq` 后 0444 原子落 `release-cache/sha256/`）/ `bench`。接收端源码 `scripts/deploy/ecs/cretas-stage-receive`，由 `install-server-scripts.sh` 管。
+
 复用条件，三条同时成立才 `reused`；任一不成立就回退本地 Maven（≈4 min），脚本会明说 `RELEASE_BUILD_MODE=java-fallback`：
 
 1. 合并后 `origin/main:backend/java/cretas-api` 的 tree hash 等于 build 阶段时的 tree hash，也就是 build 到合并之间没有别的后端改动落 main。合并前 `git fetch && git log --oneline <base>..origin/main -- backend/java/cretas-api` 为空即可；不为空就在合并后的 main 上重跑 build 阶段。
@@ -39,7 +50,7 @@ prod 只从 clean 且 `HEAD == origin/main` 的树部署，原因和 GitHub 不�
 ## 蓝绿 / 锁 / 并行
 
 - prod Java 在 `10010` / `10020` 之间交替 active，部署或核对前先读网关 upstream，不要假设哪一槽长期停用。命令和坑见 `server-operations` 的「蓝绿双槽」一节。
-- `deploy-backend.sh` 的 idle readiness 三态（空串是 ssh 断线没量到，不是挂了）见 `worktree-and-main-only-deploy.md` 铁律 3。
+- `deploy-backend.sh` 的 idle readiness 三态（空串是 ssh 断线没量到，不是挂了）见 `references/main-only-deploy-details.md`。
 - 三把本机锁 `cretas-release` / `cretas-backend-deploy` / `cretas-web-admin-deploy`。被拒时拒绝信息会区分「真并发」和「孤儿子进程按着锁」，处置步骤见 `references/lock-and-history.md`。不要 `rm` 锁文件：flock 模式下那只会造出第二把互不可见的锁。
 - 默认串行；只有显式 `--parallel-if-independent YES-INDEPENDENT-SERVICES`，且迁移 / Entity / Security / 跨端契约风险检测全部未命中时才并行。
 

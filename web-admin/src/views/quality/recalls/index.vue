@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ListEmptyExplain from '@/components/common/ListEmptyExplain.vue';
 import { computed, onActivated, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
@@ -116,6 +117,12 @@ function validBatchId(value: unknown): string {
 
 function batchLabel(batch: BatchOption): string {
   return `${batch.batchNumber || `批次 #${batch.id}`}${batch.productName ? ` · ${batch.productName}` : ''}`;
+}
+
+// E-3：批次页的扣留标签读召回事件自己的 eventCode（独立字段 + FROZEN 状态），
+// 不把召回单号塞进检验单号（inspectionNo）；标签与批次号之间留间隔。
+function holdRecalls(items: FactoryRecallSummary[]): FactoryRecallSummary[] {
+  return items.filter((item) => String(item.status || '').toUpperCase() === 'FROZEN' && item.eventCode);
 }
 
 function defaultRecall(items: FactoryRecallSummary[]): FactoryRecallSummary | undefined {
@@ -578,6 +585,9 @@ onActivated(() => {
       <el-alert v-if="preview" type="info" :closable="false" class="batch-context">
         <template #title>
           <strong>{{ preview.batchNumber }} · {{ preview.productName }}</strong>
+          <el-tag v-for="hold in holdRecalls(recalls)" :key="hold.eventCode" type="warning" size="small" class="hold-tag" data-testid="recall-hold-tag">
+            扣留中 · {{ hold.eventCode }}
+          </el-tag>
           <span> · 剩余库存 {{ preview.remainingInventory }} {{ preview.unit }}</span>
         </template>
         <template #default>
@@ -587,7 +597,7 @@ onActivated(() => {
         </template>
       </el-alert>
 
-      <el-empty v-if="!route.query.batchId && !recalls.length && !loading" description="请选择批次，或暂无召回记录" />
+      <ListEmptyExplain v-if="!route.query.batchId && !recalls.length && !loading" empty-title="还没有批次召回记录" empty-hint="发现已出库批次有质量或安全问题时，从批次追溯页选择批次发起召回；没有召回说明暂无此类事件。" />
 
       <div v-if="preview" class="recall-workspace">
         <el-card shadow="never" class="start-card">
@@ -765,6 +775,7 @@ onActivated(() => {
 </template>
 
 <style scoped>
+.hold-tag { margin-left: 12px; }
 .recall-page { padding: 20px; }
 .page-card { max-width: 1440px; margin: 0 auto; }
 .page-header, .detail-header, .batch-picker, .close-bar { display: flex; align-items: center; gap: 12px; }

@@ -133,8 +133,91 @@ public class QualityDispositionRuleServiceImpl implements QualityDispositionRule
     }
 
     @Override
+    @Transactional
+    public DispositionExecutionResult recheckPlanRelease(String factoryId, Long productionBatchId, Long userId) {
+        if (dispositionInventoryService == null) {
+            throw new IllegalStateException("质检处置库存桥接未注入，不能重新核对放行");
+        }
+        User executor = userRepository.findById(userId)
+                .orElseThrow(() -> new EntityNotFoundException("User", userId));
+        var applied = dispositionInventoryService.releaseHeldGoodsOfPassedBatch(factoryId, productionBatchId);
+
+        Map<String, Object> context = new HashMap<>();
+        context.put("productionBatchId", productionBatchId);
+        context.put("executorId", userId);
+        context.put("trigger", "PASSED_BATCH_RELEASE_REQUEST");
+        Map<String, Object> output = new HashMap<>();
+        output.put("finishedGoodsReleased", applied.getFinishedGoodsReleased());
+        output.put("finishedGoodsHeld", applied.getFinishedGoodsHeld());
+        output.put("notice", applied.getFinishedGoodsNotice());
+        var auditLog = decisionAuditService.logRuleExecution(
+                factoryId,
+                "ProductionBatch",
+                String.valueOf(productionBatchId),
+                context,
+                output,
+                List.of("PLAN_RELEASE_RECHECK"),
+                "已放行批次申请放行隔离成品 (单人决定, Owner 2026-11-09)",
+                userId,
+                executor.getFullName(),
+                executor.getRole() != null ? executor.getRole() : "UNKNOWN");
+
+        int released = applied.getFinishedGoodsReleased();
+        int held = applied.getFinishedGoodsHeld();
+        String message = released == 0 && held == 0
+                ? "这个计划没有在隔离中的成品"
+                : "已重新核对: 放行 " + released + " 个成品批次"
+                        + (held > 0 ? "；仍有 " + held + " 个成品批次在隔离中，不可销售"
+                                + (applied.getFinishedGoodsNotice() != null
+                                        ? "（" + applied.getFinishedGoodsNotice() + "）" : "")
+                                : "");
+        return DispositionExecutionResult.builder()
+                .success(true)
+                .executedAction(DispositionAction.RELEASE)
+                .approvalInitiated(false)
+                .auditLogId(auditLog != null ? auditLog.getId() : null)
+                .message(message)
+                .newBatchStatus(applied.getBatchQualityStatus())
+                .finishedGoodsHeld(held)
+                .build();
+    }
+
+    @Override
+    @Transactional
+    public void recordRefusedPlanRelease(String factoryId, Long productionBatchId, Long userId, String code,
+                                         String reason) {
+        User executor = userRepository.findById(userId).orElse(null);
+        Map<String, Object> context = new HashMap<>();
+        context.put("productionBatchId", productionBatchId);
+        context.put("executorId", userId);
+        context.put("trigger", "PASSED_BATCH_RELEASE_REQUEST");
+        Map<String, Object> output = new HashMap<>();
+        output.put("refused", true);
+        output.put("code", code);
+        output.put("reason", reason);
+        decisionAuditService.logRuleExecution(
+                factoryId,
+                "ProductionBatch",
+                String.valueOf(productionBatchId),
+                context,
+                output,
+                List.of("PLAN_RELEASE_RECHECK"),
+                "已放行批次申请放行隔离成品被拒: " + reason,
+                userId,
+                executor != null ? executor.getFullName() : null,
+                executor != null && executor.getRole() != null ? executor.getRole() : "UNKNOWN");
+    }
+
+    @Override
     public boolean isAwaitingDisposition(QualityInspection inspection) {
         return dispositionInventoryService != null && dispositionInventoryService.isAwaitingDisposition(inspection);
+    }
+
+    @Override
+    public boolean meetsDirectReleaseCriteria(QualityInspection inspection) {
+        return inspection != null && Set.of("PASS", "PASSED", "QUALIFIED")
+                .contains(inspection.getResult() == null ? "" : inspection.getResult().toUpperCase(Locale.ROOT))
+                && inspection.getPassRate() != null && inspection.getPassRate().compareTo(PASS_RATE_THRESHOLD_RELEASE) >= 0;
     }
 
     /** D-S302-01: 批次还不合格时, 哪怕最新一次检验全合格, 放行也要另一个人复核。 */
@@ -197,9 +280,9 @@ public class QualityDispositionRuleServiceImpl implements QualityDispositionRule
                 factoryId, inspection.getId(), action, executorId);
 
         inspection = decisionGuard.lockInspection(factoryId, inspection);
-        if (action == DispositionAction.RELEASE && (!Set.of("PASS", "PASSED", "QUALIFIED")
-                .contains(inspection.getResult() == null ? "" : inspection.getResult().toUpperCase(Locale.ROOT))
-                || inspection.getPassRate() == null || inspection.getPassRate().compareTo(PASS_RATE_THRESHOLD_RELEASE) < 0)) {
+        // Q6: 已报废批次不能返工 —— 在待审批申请 / 库存翻转任何一笔写入之前, 读的是锁后的批次状态
+        decisionGuard.assertReworkAllowed(factoryId, inspection.getProductionBatchId(), action.name());
+        if (action == DispositionAction.RELEASE && !meetsDirectReleaseCriteria(inspection)) {
             throw new com.cretas.aims.exception.BusinessException(409,
                     "本次质检未达到直接放行条件，请提交条件放行申请并由另一人复核");
         }
@@ -225,6 +308,7 @@ public class QualityDispositionRuleServiceImpl implements QualityDispositionRule
         boolean approvalInitiated = false;
         String newStatus = null;
         int finishedGoodsHeld = 0;
+        String finishedGoodsNotice = null;
 
         if (needsApproval) {
             // 需要特批 - 记录审计并启动审批流程
@@ -261,9 +345,11 @@ public class QualityDispositionRuleServiceImpl implements QualityDispositionRule
             newStatus = mapActionToStatus(action);
             if (dispositionInventoryService != null) {
                 try {
-                    var applied = dispositionInventoryService.applyDisposition(inspection, action);
+                    // 成品只在复核通过的处置里解除隔离 (Q4): approvalGranted = 走过另一人复核
+                    var applied = dispositionInventoryService.applyDisposition(inspection, action, approvalGranted);
                     if (applied != null) {
                         finishedGoodsHeld = applied.getFinishedGoodsHeld();
+                        finishedGoodsNotice = applied.getFinishedGoodsNotice();
                         if (applied.getBatchQualityStatus() != null) newStatus = applied.getBatchQualityStatus();
                     }
                 } catch (Exception e) {
@@ -307,8 +393,11 @@ public class QualityDispositionRuleServiceImpl implements QualityDispositionRule
                         ? "处置请求已提交，等待审批"
                         : "处置已执行: " + action.getDescription()
                                 + (finishedGoodsHeld > 0
-                                        ? "；同计划还有 " + finishedGoodsHeld + " 个成品批次仍在隔离中，不可销售" : ""))
+                                        ? "；同计划还有 " + finishedGoodsHeld + " 个成品批次仍在隔离中，不可销售"
+                                                + (finishedGoodsNotice != null ? "（" + finishedGoodsNotice + "）" : "")
+                                        : ""))
                 .newBatchStatus(newStatus)
+                .finishedGoodsHeld(finishedGoodsHeld)
                 .build();
     }
 

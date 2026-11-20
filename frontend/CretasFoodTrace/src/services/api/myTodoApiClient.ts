@@ -4,6 +4,7 @@
  * 端点:
  *   GET /api/mobile/{factoryId}/my-todos          → ApiResponse<List<TodoItemDTO>>
  *   GET /api/mobile/{factoryId}/my-todos/count     → ApiResponse<Integer>
+ *   GET /api/mobile/{factoryId}/my-todos/types     → ApiResponse<TodoType[]>（能办的类型，决定入口显不显示）
  *
  * 审批动作: 调各域现有端点（不重写）。
  *
@@ -28,7 +29,8 @@ export type TodoType =
   | 'STOCKTAKE_APPROVAL'       // 盘点任务待财务审批
   | 'RETURN_FINANCE_REVIEW'    // 退货单待财务审批
   | 'WASTAGE_APPROVAL'         // 报损单待审批
-  | 'PAYMENT_DISBURSE';        // 已审批付款请求（出纳执行）
+  | 'PAYMENT_DISBURSE'         // 已审批付款请求（出纳执行）
+  | 'FORCE_INSERT_APPROVAL';   // 强制插单待审批（OA 实例, 当前节点审批岗位含自己）
 
 export interface TodoItemDTO {
   type: TodoType;
@@ -42,7 +44,7 @@ export interface TodoItemDTO {
   submittedAt: string;   // ISO datetime string
   needDetail: boolean;
   detailPath: string | null;
-  /** OA 审批实例 ID —— 仅 OA 驱动的类型有值(当前: PURCHASE_FINANCE_REVIEW) */
+  /** OA 审批实例 ID —— 仅 OA 驱动的类型有值(PURCHASE_FINANCE_REVIEW / STOCKTAKE_APPROVAL / FORCE_INSERT_APPROVAL) */
   instanceId?: string | null;
   /** 当前节点 ID(乐观锁), 调 OA 动作端点必带 */
   expectedNodeId?: string | null;
@@ -78,6 +80,14 @@ class MyTodoApiClient {
   /** 获取我的待办列表（按角色过滤） */
   async getMyTodos(factoryId?: string): Promise<{ success: boolean; data: TodoItemDTO[]; message?: string }> {
     return apiClient.get(this.getBasePath(factoryId));
+  }
+
+  /**
+   * 我「能办」的待办类型（B4 App 按权限拼界面）。非空 = 显示「待办」入口（此刻 0 条也显示），空 = 不显示。
+   * 判断全在后端（按本人权限 + 个人覆盖 + 插单审批画布点名），App 不抄一份岗位/权限映射。
+   */
+  async getMyTodoTypes(factoryId?: string): Promise<{ success: boolean; data: TodoType[]; message?: string }> {
+    return apiClient.get(this.getBasePath(factoryId) + '/types');
   }
 
   /** 获取待办数量（RN 导航 tab 徽标用） */
@@ -120,7 +130,8 @@ class TodoApprovalApiClient {
       `/api/mobile/${this.fid(factoryId)}/workflow/instances/${instanceId}/actions`,
       {
         action,
-        comment: notes,
+        // 后端 WorkflowActionRequest 的字段叫 notes; 发 comment 会被静默丢掉 ⇒ 驳回原因 / 本人审批原因全丢, 强制插单驳回直接 422
+        notes,
         expectedNodeId,
         // 每次点击一个新键。重复点不会重复执行 —— 第一次成功后节点已推进,
         // 第二次会被 expectedNodeId 的乐观锁挡成 409, 而不是批两次。

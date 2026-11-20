@@ -1,0 +1,46 @@
+{
+  "date": "2026-11-03",
+  "baseline_head": "7f5a761c7ac6e85a560f655ba38822ccf173ec19",
+  "source_sha256": {
+    "backend/python/blacklake/blocked_audit.py": "5fdeb9626f7d2d427d2721d583c2ec15253a2554a32c19de2864f484412b1d7b",
+    "backend/python/blacklake/blocked_report.py": "f56178a9c2ede89d76a2aa7039e335b3f075cc1d3eae5742aea9a840ba982987",
+    "backend/python/blacklake/blocked_workbook.mjs": "dd99c606d459279e201aa0efe2324a366dd274bd4b9e1b86f5de65e199324c7b",
+    "backend/python/tests/test_blacklake_blocked_audit.py": "f7a49db9df7cde2f7ea276e03f3ec8f8ba1899faed4e398379bb403d9affc66b"
+  },
+  "tests": {
+    "command": "python -m pytest tests/test_blacklake_blocked_audit.py tests/test_blacklake_analytics.py tests/test_blacklake_intelligence.py -q",
+    "exit_code": 0,
+    "passed": 92,
+    "skipped": 0
+  },
+  "official_queries": {
+    "passes": 2,
+    "requests_per_pass": 22,
+    "business_mutations": 0,
+    "final_counts": {
+      "project": 109,
+      "task": 301,
+      "output": 272,
+      "stock_order": 336,
+      "product": 205,
+      "process": 28
+    }
+  },
+  "checklist": {
+    "projects": 93,
+    "material_rows": 74,
+    "quantity_rows": 9,
+    "labor_rows": 3,
+    "unlinked_rows": 2,
+    "newly_cost_eligible": 0,
+    "sheets": 6,
+    "formula_errors": 0,
+    "xlsx_sha256": "fdf53f774e0665081b30738469f9413f36688ae0378fb6bc90fd45cb56fdc143",
+    "visual_review": "all six bounded sheet previews inspected; summary and project column widths final inspected"
+  },
+  "limits": [
+    "No historical reference price substituted",
+    "No original BI dataset overwritten",
+    "No deployment, migration, or business acceptance"
+  ]
+}

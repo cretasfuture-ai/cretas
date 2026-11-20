@@ -15,10 +15,13 @@ import com.cretas.aims.service.scheduling.core.SchedulingAIService;
 import com.cretas.aims.service.scheduling.core.SchedulingPlanCrudService;
 import com.cretas.aims.service.scheduling.core.WorkerAssignmentService;
 import com.cretas.aims.service.scheduling.SchedulingResourceWriteLock;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
@@ -53,6 +56,9 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
     private final PushNotificationService pushNotificationService;
     private final SchedulingResourceWriteLock resourceWriteLock;
     private final ProductionLineSupervisorRepository supervisorRepository;
+    /** 重开已取消的调度计划时锁行并刷新 (见 claimDayPlan)。 */
+    @PersistenceContext
+    private EntityManager entityManager;
     @Lazy @Autowired
     private WorkerAssignmentService workerAssignmentService;
     @Lazy @Autowired
@@ -66,7 +72,7 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
     @Override
     @Transactional
     public SchedulingPlanDTO createPlan(String factoryId, CreateSchedulingPlanRequest request, Long userId) {
-        validateExplicitSchedules(factoryId, request);
+        Set<String> productionPlanIds = validateExplicitSchedules(factoryId, request);
         List<LineSchedule> schedules = new ArrayList<>();
         if (request.getSchedules() != null) {
             for (CreateSchedulingPlanRequest.ScheduleItem item : request.getSchedules()) {
@@ -83,7 +89,7 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
             }
         }
         return persistPlan(factoryId, request.getPlanDate(), request.getPlanName(), request.getNotes(),
-                schedules, userId);
+                schedules, productionPlanIds, userId, SOURCE_MANUAL);
     }
 
     /**
@@ -102,6 +108,7 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
             throw new BusinessException("自动排程没有可落库的排程");
         }
         List<LineSchedule> schedules = new ArrayList<>();
+        Set<String> productionPlanIds = new HashSet<>();
         for (AutoScheduleItem item : items) {
             if (item == null) {
                 throw new BusinessException("排程明细不能为空");
@@ -124,8 +131,10 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
             if (line.getStatus() != ProductionLine.LineStatus.active) {
                 throw new BusinessException("产线当前不可排程: " + item.productionLineId());
             }
-            productionPlanRepository.findByIdAndFactoryId(item.productionPlanId(), factoryId)
+            com.cretas.aims.entity.ProductionPlan productionPlan = productionPlanRepository
+                    .findByIdAndFactoryId(item.productionPlanId(), factoryId)
                     .orElseThrow(() -> new BusinessException("生产计划不存在或不属于当前工厂: " + item.productionPlanId()));
+            productionPlanIds.add(productionPlan.getId());
             if (item.batchId() != null) {
                 batchRepository.findByIdAndFactoryId(item.batchId(), factoryId)
                         .orElseThrow(() -> new BusinessException("批次不存在或不属于当前工厂: " + item.batchId()));
@@ -141,29 +150,35 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
             schedule.setDailyAllocations(item.dailyAllocations());
             schedules.add(schedule);
         }
-        return persistPlan(factoryId, planDate, planName, notes, schedules, userId);
+        return persistPlan(factoryId, planDate, planName, notes, schedules, productionPlanIds, userId, SOURCE_AUTO);
     }
 
+    static final String SOURCE_AUTO = "自动排程";
+    static final String SOURCE_MANUAL = "手动新建";
+    /** 重开已取消的调度计划时, 名下没开工的旧排程作废的原因 (与缺口 17 插单重开同一句)。 */
+    public static final String REOPEN_VOIDED_ROW_REASON = "调度计划取消后重开，旧排程作废";
+    private static final java.time.format.DateTimeFormatter REOPEN_STAMP =
+            java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
+
+    /** 重开结果: 这一天的调度计划 (新建或重开), 以及重开时作废 / 保留的旧排程条数。 */
+    private record ClaimedDay(SchedulingPlan plan, boolean reopened, int voidedRows, int keptRows) {
+    }
+
+    /**
+     * 排程落库的唯一入口: 手工新建 ({@link #createPlan}) 与自动 / AI 生成 ({@link #createAutoSchedulePlan}, 经
+     * DailyCapacityScheduleGenerator) 都走这里, ⛔ 不各写一份加锁。
+     *
+     * <p>先锁涉及的生产计划 (手工 = 批次所属的计划; 自动 = 每条排程的计划), 按 id 排序逐个 FOR UPDATE, 锁内读已提交的
+     * 状态复核: 已取消 / 已完成 → 409 拒绝, 一行都不写。之后才建 / 重开当天的调度计划。加锁顺序固定为
+     * 「生产计划 (按 id) → 日调度计划 → 排程行」, 与取消生产计划的级联一致, 不会互相等成死锁。
+     * 读计划之后、写排程之前计划被取消: 取消已提交 → 锁内读到已取消拒绝; 取消还没提交 → 在锁上等它, 等到的同样是已取消。
+     */
     private SchedulingPlanDTO persistPlan(String factoryId, LocalDate planDate, String planName, String notes,
-                                          List<LineSchedule> schedules, Long userId) {
-        // 检查是否已存在同日计划
-        Optional<SchedulingPlan> existing = planRepository.findByFactoryIdAndPlanDateAndDeletedAtIsNull(
-            factoryId, planDate);
-        if (existing.isPresent()) {
-            throw new BusinessException(409, "该日期已存在调度计划, 请勿重复创建")
-                    .withHint("如需查看请打开该日期已有的调度计划")
-                    .withHintTarget(existing.get().getId());
-        }
-
-        SchedulingPlan plan = new SchedulingPlan();
-        plan.setFactoryId(factoryId);
-        plan.setPlanDate(planDate);
-        plan.setPlanName(planName != null ? planName : planDate.toString() + " 生产计划");
-        plan.setNotes(notes);
-        plan.setCreatedBy(userId);
-        plan.setStatus(SchedulingPlan.PlanStatus.draft);
-
-        plan = planRepository.save(plan);
+                                          List<LineSchedule> schedules, Collection<String> productionPlanIds,
+                                          Long userId, String source) {
+        lockProductionPlansOrReject(factoryId, productionPlanIds, source);
+        ClaimedDay claimed = claimDayPlan(factoryId, planDate, planName, notes, userId, source);
+        SchedulingPlan plan = claimed.plan();
 
         // 创建排程
         if (!schedules.isEmpty()) {
@@ -172,8 +187,14 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
                 schedule.setStatus(LineSchedule.ScheduleStatus.pending);
             }
             scheduleRepository.saveAll(schedules);
-            plan.setTotalBatches(schedules.size());
-            plan.setTotalWorkers(0);
+        }
+        if (!schedules.isEmpty() || claimed.reopened()) {
+            // 按名下排程现算 (缺口 18 后续): 重开时作废的旧排程不算、保留的已开工排程算;
+            // 派工人数只算没作废的排程上的人 (作废的排程上原来派的人不再算进这一天)。
+            SchedulingPlanTotals.Totals totals = new SchedulingPlanTotals(scheduleRepository, planRepository)
+                    .count(factoryId, plan.getId());
+            plan.setTotalBatches(totals.batches());
+            plan.setTotalWorkers(totals.workers());
             planRepository.save(plan);
         }
 
@@ -208,12 +229,150 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
             log.error("发送调度计划创建推送通知失败: planId={}", plan.getId(), e);
         }
 
-        return enrichPlanDTO(SchedulingPlanDTO.fromEntity(plan));
+        SchedulingPlanDTO dto = enrichPlanDTO(SchedulingPlanDTO.fromEntity(plan));
+        if (claimed.reopened()) {
+            dto.setWarnings(new ArrayList<>(List.of(reopenWarning(claimed))));
+        }
+        return dto;
     }
 
-    private void validateExplicitSchedules(String factoryId, CreateSchedulingPlanRequest request) {
+    /** 锁住要写排程的生产计划并在锁内复核状态; 已取消 / 已完成就拒绝 (见 {@link #persistPlan})。 */
+    private void lockProductionPlansOrReject(String factoryId, Collection<String> productionPlanIds, String source) {
+        if (productionPlanIds == null || productionPlanIds.isEmpty()) {
+            return;
+        }
+        String closed = com.cretas.aims.service.scheduling.ProductionPlanScheduleLock
+                .lockAndFindClosed(productionPlanRepository, factoryId, productionPlanIds);
+        if (closed == null) {
+            return;
+        }
+        String planNumber = productionPlanRepository.findByIdAndFactoryId(closed, factoryId)
+                .map(com.cretas.aims.entity.ProductionPlan::getPlanNumber)
+                .orElse(closed);
+        throw new BusinessException(409, "生产计划「" + planNumber + "」刚被取消或已完成，本次排程未保存")
+                .withCode("SCHEDULE_PLAN_CLOSED")
+                .withHint(SOURCE_AUTO.equals(source)
+                        ? "重新生成排程，已取消 / 已完成的计划不会再排"
+                        : "请刷新后重新选择批次，已取消 / 已完成的生产计划不能再排");
+    }
+
+    /** 给用户看的一句: 这一天原来的调度计划已取消, 本次重开了它。 */
+    public static String reopenWarning(int voidedRows, int keptRows) {
+        return "这一天原来的调度计划已取消，本次把它重开为草稿；原来没开工的 " + voidedRows + " 条排程已作废，不会再生效"
+                + (keptRows > 0 ? "；已开工的 " + keptRows + " 条保留" : "");
+    }
+
+    private static String reopenWarning(ClaimedDay claimed) {
+        return reopenWarning(claimed.voidedRows(), claimed.keptRows());
+    }
+
+    /**
+     * 拿到这一天可以写的调度计划 (食品 DAG 缺口 18 后续)。
+     *
+     * <p>{@code scheduling_plans} 的唯一约束是 (factory_id, plan_date), 取消只改状态 ⇒ 不复用的话,
+     * 某天取消之后这一天再也建不了调度计划 (一律 409)。规则:
+     * <ul>
+     *   <li>没有 → 新建草稿。两个请求同时新建同一天: 后提交的撞唯一约束, 转成同一句 409, 不报 500。</li>
+     *   <li>已取消 → 锁住这一行并读最新状态, 仍是已取消才重开为草稿, 并作废名下没开工的旧排程
+     *       (⛔ 不让旧排程跟着复活); 已开工的旧排程保留。两个请求同时重开: 后到的在锁上等,
+     *       读到的已是草稿 ⇒ 409。</li>
+     *   <li>草稿 / 已确认 / 进行中 / 已完成 → 409, 照旧。</li>
+     * </ul>
+     */
+    private ClaimedDay claimDayPlan(String factoryId, LocalDate planDate, String planName, String notes,
+                                    Long userId, String source) {
+        Optional<SchedulingPlan> existing = planRepository.findByFactoryIdAndPlanDateAndDeletedAtIsNull(
+                factoryId, planDate);
+        if (existing.isPresent()) {
+            SchedulingPlan plan = existing.get();
+            if (plan.getStatus() != SchedulingPlan.PlanStatus.cancelled) {
+                throw duplicateDay(plan.getId());
+            }
+            // 锁行 + 读已提交的最新状态: 另一个请求可能刚重开了它。⛔ 不用 em.refresh(plan, PESSIMISTIC_WRITE):
+            // 真 PostgreSQL 实测它没把两边串起来, 两个请求都重开成功 (CancelledDayPlanReopenPostgresContractTest)。
+            String current = planRepository.lockStatusForUpdate(plan.getId(), factoryId).orElse(null);
+            if (!SchedulingPlan.PlanStatus.cancelled.name().equals(current)) {
+                throw duplicateDay(plan.getId());
+            }
+            return reopenCancelled(plan, planName, notes, userId, source);
+        }
+
+        SchedulingPlan plan = new SchedulingPlan();
+        plan.setFactoryId(factoryId);
+        plan.setPlanDate(planDate);
+        plan.setPlanName(planName != null ? planName : planDate.toString() + " 生产计划");
+        plan.setNotes(notes);
+        plan.setCreatedBy(userId);
+        plan.setStatus(SchedulingPlan.PlanStatus.draft);
+        planRepository.flush(); // 先把这次事务里别的待写入刷掉: 下面接住的唯一冲突只能是这一行的
+        try {
+            plan = planRepository.save(plan);
+            planRepository.flush(); // 当场插入: 撞唯一约束要在这里接住, 不能拖到提交时变成 500
+        } catch (DataIntegrityViolationException e) {
+            if (!isUniqueViolation(e)) {
+                throw e;
+            }
+            // 同一天另一个请求刚建好并提交了: 与上面同一句 409
+            throw new BusinessException(409, "该日期已存在调度计划, 请勿重复创建")
+                    .withHint("刚有人同时建了这一天的调度计划，请刷新后打开它");
+        }
+        return new ClaimedDay(plan, false, 0, 0);
+    }
+
+    private ClaimedDay reopenCancelled(SchedulingPlan plan, String planName, String notes, Long userId,
+                                       String source) {
+        LocalDateTime now = LocalDateTime.now();
+        // 一条带条件的 UPDATE: 与并发开工不丢更新 (先读后写会把刚开工的那条作废, 或把作废的写回来)
+        int voided = scheduleRepository.voidNotStartedRows(plan.getId(), NOT_STARTED_STATUSES,
+                LineSchedule.ScheduleStatus.cancelled, REOPEN_VOIDED_ROW_REASON, now);
+        int kept = (int) scheduleRepository.countByPlanIdAndStatusNot(plan.getId(), LineSchedule.ScheduleStatus.cancelled);
+        // 已持锁, 且在作废之后刷新: 级联刷新会把名下排程装进持久化上下文, 先刷新就会装进作废前的旧状态
+        entityManager.refresh(plan);
+        plan.setStatus(SchedulingPlan.PlanStatus.draft);
+        plan.setConfirmedBy(null);
+        plan.setConfirmedAt(null);
+        if (planName != null) {
+            plan.setPlanName(planName);
+        }
+        StringBuilder trail = new StringBuilder(plan.getNotes() == null ? "" : plan.getNotes() + "\n")
+                .append(reopenTrail(now, source, userId, voided, kept));
+        if (notes != null && !notes.isBlank()) {
+            trail.append("\n").append(notes);
+        }
+        plan.setNotes(trail.toString());
+        planRepository.save(plan);
+        log.info("重开已取消的调度计划: planId={}, 来源={}, 作废旧排程 {} 条, 保留已开工 {} 条",
+                plan.getId(), source, voided, kept);
+        return new ClaimedDay(plan, true, voided, kept);
+    }
+
+    /** 重开留痕 (备注里追加的一行); 来源: 自动排程 / 手动新建 / 紧急插单 <计划号>。 */
+    public static String reopenTrail(LocalDateTime at, String source, Long userId, int voidedRows, int keptRows) {
+        return "[重开 " + REOPEN_STAMP.format(at) + "] 原调度计划已取消，由" + source + "重开为草稿"
+                + (userId != null ? "（操作人 " + userId + "）" : "")
+                + "；作废没开工的旧排程 " + voidedRows + " 条"
+                + (keptRows > 0 ? "，保留已开工的 " + keptRows + " 条" : "");
+    }
+
+    /** 没开工的状态口径只有一份, 在 {@link LineSchedule#NOT_STARTED_STATUSES}。 */
+    static final Set<LineSchedule.ScheduleStatus> NOT_STARTED_STATUSES = LineSchedule.NOT_STARTED_STATUSES;
+
+    private static BusinessException duplicateDay(String existingPlanId) {
+        return new BusinessException(409, "该日期已存在调度计划, 请勿重复创建")
+                .withHint("如需查看请打开该日期已有的调度计划")
+                .withHintTarget(existingPlanId);
+    }
+
+    private static boolean isUniqueViolation(DataIntegrityViolationException e) {
+        String raw = String.valueOf(e.getMostSpecificCause().getMessage()).toLowerCase(Locale.ROOT);
+        return raw.contains("unique") || raw.contains("duplicate key");
+    }
+
+    /** 校验手工排程明细; 返回这些批次所属的生产计划 id (落库前要锁住复核, 见 {@link #persistPlan})。 */
+    private Set<String> validateExplicitSchedules(String factoryId, CreateSchedulingPlanRequest request) {
+        Set<String> productionPlanIds = new HashSet<>();
         if (request.getSchedules() == null || request.getSchedules().isEmpty()) {
-            return; // Preserve the existing empty draft compatibility path.
+            return productionPlanIds; // Preserve the existing empty draft compatibility path.
         }
         for (CreateSchedulingPlanRequest.ScheduleItem item : request.getSchedules()) {
             if (item == null) {
@@ -246,7 +405,11 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
                     && batch.getStatus() != ProductionBatchStatus.PLANNING) {
                 throw new BusinessException("批次当前状态不可排程: " + batch.getStatus());
             }
+            if (batch.getProductionPlanId() != null && !batch.getProductionPlanId().isBlank()) {
+                productionPlanIds.add(batch.getProductionPlanId());
+            }
         }
+        return productionPlanIds;
     }
 
     @Override
@@ -394,6 +557,14 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
     public void cancelPlan(String factoryId, String planId, String reason) {
         SchedulingPlan plan = planRepository.findByIdAndFactoryIdAndDeletedAtIsNull(planId, factoryId)
             .orElseThrow(() -> new EntityNotFoundException("SchedulePlan", planId));
+        // 锁行读最新: 与「重开」串行, 已取消的不再取消一次 (否则旧页面上的取消会盖掉刚做的重开)
+        String current = planRepository.lockStatusForUpdate(planId, factoryId).orElse(null);
+        if (SchedulingPlan.PlanStatus.cancelled.name().equals(current)) {
+            throw new BusinessException(409, "该调度计划已取消").withHint("请刷新后查看该日期的调度计划");
+        }
+        if (current != null && entityManager != null) {
+            entityManager.refresh(plan); // 已持锁: 备注接在最新内容后面
+        }
 
         plan.setStatus(SchedulingPlan.PlanStatus.cancelled);
         plan.setNotes(plan.getNotes() != null ? plan.getNotes() + "\n取消原因: " + reason : "取消原因: " + reason);
@@ -428,6 +599,7 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
         line.setDepartmentId(request.getDepartmentId());
         line.setMinWorkers(request.getMinWorkers() != null ? request.getMinWorkers() : 1);
         line.setMaxWorkers(request.getMaxWorkers() != null ? request.getMaxWorkers() : 10);
+        line.setStandardWorkers(request.getStandardWorkers());
         line.setRequiredSkillLevel(request.getRequiredSkillLevel() != null ? request.getRequiredSkillLevel() : 1);
         line.setHourlyCapacity(request.getHourlyCapacity());
         line.setEquipmentIds(request.getEquipmentIds());
@@ -450,10 +622,50 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
         if (request.getDepartmentId() != null) line.setDepartmentId(request.getDepartmentId());
         if (request.getMinWorkers() != null) line.setMinWorkers(request.getMinWorkers());
         if (request.getMaxWorkers() != null) line.setMaxWorkers(request.getMaxWorkers());
+        if (request.getStandardWorkers() != null) line.setStandardWorkers(request.getStandardWorkers());
         if (request.getRequiredSkillLevel() != null) line.setRequiredSkillLevel(request.getRequiredSkillLevel());
         if (request.getHourlyCapacity() != null) line.setHourlyCapacity(request.getHourlyCapacity());
         if (request.getEquipmentIds() != null) line.setEquipmentIds(request.getEquipmentIds());
 
+        line = lineRepository.save(line);
+        return ProductionLineDTO.fromEntity(line);
+    }
+
+    /**
+     * 产线人数配置。整体替换 (null = 清空 = 不比较), 只改本厂的产线。
+     * 插单最少人数 (insertMinWorkers) 存 standard_workers: 紧急插单唯一读这一列比较当天排班人数, 空 = 不比较 (默认行为不变)。
+     * 不写 min_workers (建表 DEFAULT 1, 分不出「没配」, 且被 APS 当特征读), 见 {@link ProductionLineStaffingRequest}。
+     */
+    @Override
+    @Transactional
+    public ProductionLineDTO updateProductionLineStaffing(String factoryId, String lineId,
+                                                          ProductionLineStaffingRequest request) {
+        if (request == null) {
+            throw new BusinessException(400, "人数配置不能为空").withCode("LINE_STAFFING_INVALID");
+        }
+        Integer min = request.getInsertMinWorkers();
+        Integer max = request.getMaxWorkers();
+        Integer skill = request.getRequiredSkillLevel();
+        if ((min != null && min < 0) || (max != null && max < 0)) {
+            throw new BusinessException(400, "人数不能是负数").withCode("LINE_STAFFING_INVALID")
+                    .withHint("最少人数、最多人数填 0 以上的整数，或留空表示不比较");
+        }
+        if (min != null && max != null && min > max) {
+            throw new BusinessException(400, "最少人数 " + min + " 人不能多于最多人数 " + max + " 人")
+                    .withCode("LINE_STAFFING_INVALID")
+                    .withHint("把最少人数改小，或把最多人数改大");
+        }
+        if (skill != null && (skill < 1 || skill > 5)) {
+            throw new BusinessException(400, "所需技能等级只能是 1 到 5 级").withCode("LINE_STAFFING_INVALID")
+                    .withHint("选 1 到 5 级，或留空表示不要求");
+        }
+        resourceWriteLock.lockFactory(factoryId);
+        ProductionLine line = lineRepository.findByIdAndFactoryIdAndDeletedAtIsNull(lineId, factoryId)
+            .orElseThrow(() -> new EntityNotFoundException("ProductionLine", lineId));
+        // 0 与留空同义: 插单遇到 null 或 <= 0 都不比较; 统一存 null, 读回来不会出现「最少 0 人」
+        line.setStandardWorkers(min != null && min > 0 ? min : null);
+        line.setMaxWorkers(max);
+        line.setRequiredSkillLevel(skill);
         line = lineRepository.save(line);
         return ProductionLineDTO.fromEntity(line);
     }
@@ -472,13 +684,254 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
 
     // ==================== Dashboard ====================
 
+    /** 工作流批次进今日排程的状态: 在产 (PRODUCING 是 IN_PROGRESS 的旧写法) + 已完工。PAUSED / CANCELLED 不进。 */
+    static final List<ProductionBatchStatus> DASHBOARD_ACTIVE_BATCH_STATUSES =
+        List.of(ProductionBatchStatus.IN_PROGRESS, ProductionBatchStatus.PRODUCING, ProductionBatchStatus.COMPLETED);
+    /** 「跨日在产」只数此刻仍在产的。 */
+    static final List<ProductionBatchStatus> DASHBOARD_RUNNING_BATCH_STATUSES =
+        List.of(ProductionBatchStatus.IN_PROGRESS, ProductionBatchStatus.PRODUCING);
+    static final String SOURCE_SCHEDULE = "SCHEDULE";
+    static final String SOURCE_WORKFLOW_BATCH = "WORKFLOW_BATCH";
+    /** 「今天」按业务时区算, 不跟 JVM 默认时区。 */
+    static final java.time.ZoneId BUSINESS_ZONE = java.time.ZoneId.of("Asia/Shanghai");
+    /** 已签到 = 这几个派工状态 (assigned 没签到, absent 缺勤)。 */
+    private static final Set<WorkerAssignment.AssignmentStatus> CHECKED_IN_STATUSES = EnumSet.of(
+        WorkerAssignment.AssignmentStatus.checked_in, WorkerAssignment.AssignmentStatus.working,
+        WorkerAssignment.AssignmentStatus.checked_out);
+
     @Override
     public SchedulingDashboardDTO getDashboard(String factoryId, LocalDate date) {
-        log.debug("getDashboard: factoryId={}, date={}", factoryId, date);
+        return getDashboard(factoryId, date, LocalDate.now(BUSINESS_ZONE));
+    }
+
+    /**
+     * 调度 Dashboard。⛔ 所有查询带 factoryId; 量不到的给 null 并在 unavailableReasons 写原因, 不用 0 兜底。
+     * {@code today} 单独传入只为测试能固定「今天」; 生产入口见 {@link #getDashboard(String, LocalDate)}。
+     *
+     * <h3>口径 (PR 正文同步)</h3>
+     * <ul>
+     *   <li><b>今日排程 todaySchedules</b> = ① 本厂当天调度计划 (scheduling_plans.plan_date = date, 未删、未取消)
+     *       上未取消的排程行 (source=SCHEDULE, 已完成的行也算) + ② 本厂 date 当天<b>有活动</b>的正式批次
+     *       (source=WORKFLOW_BATCH): 当天开工 / 当天完工 / 当天有报工 (production_reports) / 当天有加工环节记录
+     *       (processing_stage_records), 状态为 IN_PROGRESS/PRODUCING/COMPLETED, 不含 CLERK_WIP。
+     *       工作流开批次直接 IN_PROGRESS, 不经过调度计划, 只看 ① 永远是 0。按「当天活动」取, 看历史日期 / 明天时
+     *       不会混进「今天此刻在产」的批次; 几周前开工、当天没有任何动静的批次也不算。
+     *       <br>去重: ② 里的批次若已被 ① 的某一行引用 (line_schedules.batch_id), 或它所属的生产计划已被 ① 中
+     *       <i>没有挂批次</i> 的行引用 (APS 按计划排的行), 就不再列 —— 同一份活只算一次。</li>
+     *   <li><b>跨日在产 carryOverIdleBatches</b> (只在 date = 今天时统计): 今天之前开工、此刻仍在产、今天没有任何活动、
+     *       也没被 ① 覆盖的批次数。它们不进今日排程, 也不进利用率。date ≠ 今天 → null (过去某天「当时在产」量不到)。</li>
+     *   <li><b>排程计数</b>: totalSchedules = 今日排程条数; inProgress / completed = ① 对应状态的行 + ② 对应状态的批次;
+     *       pending / delayed 只来自 ①。</li>
+     *   <li><b>计划统计 planStats</b>: 只数调度计划 (每厂每天至多一份), 已取消不计。工作流批次不是调度计划, 不计入。</li>
+     *   <li><b>产线利用率 utilizationRate</b> = 今日有任务的启用产线数 ÷ 启用产线数 (产线占用率, 不是工时利用率)。
+     *       「有任务」= ① 的行落在这条线, 或 ② 的批次所属生产计划的建议产线是这条线。② 中没有产线归属的批次不计入,
+     *       条数写进 lineStats.unattributedBatches 并在 unavailableReasons 说明; 今日任务全都没有产线归属 → null;
+     *       没有启用产线 → null。工时口径量不到: 班次时长没有落库。</li>
+     *   <li><b>平均效率 averageEfficiency</b> 恒为 null: line_schedules.actual_efficiency 两个写入口径不一致
+     *       (完工按 完成/计划×100 写百分数, 报进度按 完成/应完成 写比值), 混在一起求平均没有意义。</li>
+     *   <li><b>人员 workerStats</b>: 只数 ① 的派工 (按工人去重); 工作流批次没有派工记录。平均绩效没有任何打分 → null。</li>
+     *   <li><b>告警</b>: alerts = 本厂未处理的告警; totalAlerts = unresolvedAlerts = 其条数; criticalAlerts = 其中严重级。</li>
+     * </ul>
+     * 工作流批次行的数量字段 (计划/完成量) 不填: 批次计划量按计划单位、完成量可能已换成产出单位, 不能直接相除。
+     */
+    public SchedulingDashboardDTO getDashboard(String factoryId, LocalDate date, LocalDate today) {
+        log.debug("getDashboard: factoryId={}, date={}, today={}", factoryId, date, today);
+        Map<String, String> unavailable = new LinkedHashMap<>();
+        LocalDateTime dayStart = date.atStartOfDay();
+        LocalDateTime dayEnd = date.plusDays(1).atStartOfDay();
+
+        // ① 调度计划上的排程行
+        List<LineSchedule> scheduleRows = scheduleRepository.findDashboardRows(
+            factoryId, date, SchedulingPlan.PlanStatus.cancelled, LineSchedule.ScheduleStatus.cancelled);
+        List<LineScheduleDTO> todaySchedules = new ArrayList<>(enrichScheduleDTOs(scheduleRows));
+        todaySchedules.forEach(dto -> dto.setSource(SOURCE_SCHEDULE));
+
+        // ② 当天有活动、没被 ① 覆盖的工作流批次
+        Set<Long> scheduledBatchIds = scheduleRows.stream().map(LineSchedule::getBatchId)
+            .filter(Objects::nonNull).collect(Collectors.toSet());
+        Set<String> scheduledPlanIdsWithoutBatch = scheduleRows.stream()
+            .filter(r -> r.getBatchId() == null).map(LineSchedule::getProductionPlanId)
+            .filter(Objects::nonNull).collect(Collectors.toSet());
+        java.util.function.Predicate<ProductionBatch> notCoveredBySchedule = b ->
+            !scheduledBatchIds.contains(b.getId())
+                && (b.getProductionPlanId() == null || !scheduledPlanIdsWithoutBatch.contains(b.getProductionPlanId()));
+        List<ProductionBatch> activeOnDay = batchRepository.findActiveOnDayForDashboard(
+            factoryId, DASHBOARD_ACTIVE_BATCH_STATUSES, ProductionBatchStatus.COMPLETED, date, dayStart, dayEnd);
+        List<ProductionBatch> workflowBatches = activeOnDay.stream().filter(notCoveredBySchedule).toList();
+
+        // 跨日在产: 只有看今天时有意义
+        Integer carryOverIdle = null;
+        if (date.equals(today)) {
+            Set<Long> activeIds = activeOnDay.stream().map(ProductionBatch::getId).collect(Collectors.toSet());
+            carryOverIdle = (int) batchRepository
+                .findRunningForDashboard(factoryId, DASHBOARD_RUNNING_BATCH_STATUSES, dayStart).stream()
+                .filter(b -> !activeIds.contains(b.getId()))
+                .filter(notCoveredBySchedule)
+                .count();
+            if (carryOverIdle > 0) {
+                unavailable.put("carryOverIdleBatches", "跨日在产 " + carryOverIdle
+                    + " 个 (今日无活动), 不计入今日排程与利用率");
+            }
+        } else {
+            unavailable.put("carryOverIdleBatches", "只在查看今天时统计; 过去某天当时有哪些批次在产量不到");
+        }
+
+        Map<String, String[]> planRefs = new HashMap<>();   // planId -> [planNumber, suggestedLineId]
+        Set<String> batchPlanIds = workflowBatches.stream().map(ProductionBatch::getProductionPlanId)
+            .filter(Objects::nonNull).collect(Collectors.toSet());
+        if (!batchPlanIds.isEmpty()) {
+            for (Object[] row : productionPlanRepository.findDashboardPlanRefsByFactoryIdAndIdIn(factoryId, batchPlanIds)) {
+                planRefs.put((String) row[0], new String[]{(String) row[1], (String) row[2]});
+            }
+        }
+
+        // 产线 (只要本厂启用中的)
+        List<ProductionLine> activeLines = lineRepository
+            .findByFactoryIdAndStatusAndDeletedAtIsNull(factoryId, ProductionLine.LineStatus.active);
+        Map<String, ProductionLine> activeLineById = activeLines.stream()
+            .collect(Collectors.toMap(ProductionLine::getId, Function.identity(), (a, b) -> a));
+
+        Set<String> occupiedLineIds = new HashSet<>();
+        scheduleRows.stream().map(LineSchedule::getProductionLineId).filter(Objects::nonNull)
+            .forEach(occupiedLineIds::add);
+        int unattributed = 0;
+        for (ProductionBatch batch : workflowBatches) {
+            String[] ref = batch.getProductionPlanId() == null ? null : planRefs.get(batch.getProductionPlanId());
+            String lineId = ref == null ? null : ref[1];
+            if (lineId != null) {
+                occupiedLineIds.add(lineId);
+            } else {
+                unattributed++;
+            }
+            todaySchedules.add(toWorkflowBatchRow(batch, ref, lineId == null ? null : activeLineById.get(lineId)));
+        }
+        occupiedLineIds.retainAll(activeLineById.keySet());
+
+        BigDecimal utilization = null;
+        boolean allTasksUnattributed = scheduleRows.isEmpty() && !workflowBatches.isEmpty()
+            && unattributed == workflowBatches.size();
+        if (activeLines.isEmpty()) {
+            unavailable.put("lineStats.utilizationRate", "本厂没有启用中的产线, 利用率没有分母");
+        } else if (allTasksUnattributed) {
+            unavailable.put("lineStats.utilizationRate",
+                "今日 " + unattributed + " 个批次都未指定产线, 量不到产线利用率");
+        } else {
+            utilization = BigDecimal.valueOf(occupiedLineIds.size())
+                .divide(BigDecimal.valueOf(activeLines.size()), 4, java.math.RoundingMode.HALF_UP);
+        }
+        if (unattributed > 0 && !allTasksUnattributed) {
+            unavailable.put("lineStats.unattributedBatches", unattributed + " 个批次未指定产线, 未计入利用率");
+        }
+        unavailable.put("lineStats.averageEfficiency",
+            "排程实际效率有两种写入口径 (百分数 / 比值), 混在一起求平均没有意义, 暂不汇总");
+
+        // 人员: 只有 ① 有派工
+        Set<String> scheduleIds = scheduleRows.stream().map(LineSchedule::getId).collect(Collectors.toSet());
+        List<WorkerAssignment> assignments = scheduleIds.isEmpty() ? Collections.emptyList()
+            : assignmentRepository.findByFactoryIdAndScheduleIdIn(factoryId, scheduleIds);
+        Set<Long> assigned = new HashSet<>();
+        Set<Long> checkedIn = new HashSet<>();
+        Set<Long> temporary = new HashSet<>();
+        List<Integer> scores = new ArrayList<>();
+        for (WorkerAssignment a : assignments) {
+            if (a.getUserId() == null) continue;
+            assigned.add(a.getUserId());
+            if (a.getStatus() != null && CHECKED_IN_STATUSES.contains(a.getStatus())) checkedIn.add(a.getUserId());
+            if (Boolean.TRUE.equals(a.getIsTemporary())) temporary.add(a.getUserId());
+            if (a.getPerformanceScore() != null) scores.add(a.getPerformanceScore());
+        }
+        BigDecimal avgPerformance = null;
+        if (scores.isEmpty()) {
+            unavailable.put("workerStats.averagePerformance", "今日派工还没有任何绩效打分");
+        } else {
+            avgPerformance = BigDecimal.valueOf(scores.stream().mapToInt(Integer::intValue).sum())
+                .divide(BigDecimal.valueOf(scores.size()), 1, java.math.RoundingMode.HALF_UP);
+        }
+        if (!workflowBatches.isEmpty()) {
+            unavailable.put("workerStats.workflowBatches",
+                "工作流直接开出的批次没有派工记录, 到岗人数只含调度排程上的派工");
+        }
+
+        // 计划
+        Optional<SchedulingPlan> dayPlan = planRepository.findByFactoryIdAndPlanDateAndDeletedAtIsNull(factoryId, date)
+            .filter(p -> p.getStatus() != SchedulingPlan.PlanStatus.cancelled);
+        SchedulingPlan.PlanStatus planStatus = dayPlan.map(SchedulingPlan::getStatus).orElse(null);
+        SchedulingDashboardDTO.PlanStats planStats = SchedulingDashboardDTO.PlanStats.builder()
+            .totalPlans(dayPlan.isPresent() ? 1 : 0)
+            .draftPlans(planStatus == SchedulingPlan.PlanStatus.draft ? 1 : 0)
+            .confirmedPlans(planStatus == SchedulingPlan.PlanStatus.confirmed ? 1 : 0)
+            .inProgressPlans(planStatus == SchedulingPlan.PlanStatus.in_progress ? 1 : 0)
+            .completedPlans(planStatus == SchedulingPlan.PlanStatus.completed ? 1 : 0)
+            .build();
+
+        // 告警
+        List<SchedulingAlertDTO> alerts = alertRepository.findByFactoryIdAndIsResolvedFalseOrderByCreatedAtDesc(factoryId)
+            .stream().map(this::toAlertDTO).toList();
+        int critical = (int) alerts.stream().filter(a -> "critical".equals(a.getSeverity())).count();
+
+        int workflowCompleted = (int) workflowBatches.stream()
+            .filter(b -> b.getStatus() == ProductionBatchStatus.COMPLETED).count();
+        int inProgressRows = countRows(scheduleRows, LineSchedule.ScheduleStatus.in_progress)
+            + (workflowBatches.size() - workflowCompleted);
+        int completedRows = countRows(scheduleRows, LineSchedule.ScheduleStatus.completed) + workflowCompleted;
+
         return SchedulingDashboardDTO.builder()
-            .date(date).totalPlans(0).confirmedPlans(0).inProgressPlans(0).completedPlans(0)
-            .totalSchedules(0).pendingSchedules(0).inProgressSchedules(0).completedSchedules(0)
-            .delayedSchedules(0).totalAlerts(0).criticalAlerts(0).build();
+            .date(date)
+            .planStats(planStats)
+            .totalPlans(planStats.getTotalPlans())
+            .confirmedPlans(planStats.getConfirmedPlans())
+            .inProgressPlans(planStats.getInProgressPlans())
+            .completedPlans(planStats.getCompletedPlans())
+            .todaySchedules(todaySchedules)
+            .totalSchedules(todaySchedules.size())
+            .pendingSchedules(countRows(scheduleRows, LineSchedule.ScheduleStatus.pending))
+            .inProgressSchedules(inProgressRows)
+            .completedSchedules(completedRows)
+            .delayedSchedules(countRows(scheduleRows, LineSchedule.ScheduleStatus.delayed))
+            .carryOverIdleBatches(carryOverIdle)
+            .workerStats(SchedulingDashboardDTO.WorkerStats.builder()
+                .totalAssigned(assigned.size()).checkedIn(checkedIn.size())
+                .temporaryWorkers(temporary.size()).averagePerformance(avgPerformance).build())
+            .totalWorkers(assigned.size())
+            .checkedInWorkers(checkedIn.size())
+            .temporaryWorkers(temporary.size())
+            .lineStats(SchedulingDashboardDTO.LineStats.builder()
+                .activeLines(activeLines.size()).occupiedLines(occupiedLineIds.size())
+                .unattributedBatches(unattributed)
+                .utilizationRate(utilization).averageEfficiency(null).build())
+            .productionLines(activeLines.stream().map(ProductionLineDTO::fromEntity).toList())
+            .alerts(alerts)
+            .totalAlerts(alerts.size())
+            .unresolvedAlerts(alerts.size())
+            .criticalAlerts(critical)
+            .unavailableReasons(unavailable)
+            .build();
+    }
+
+    private static int countRows(List<LineSchedule> rows, LineSchedule.ScheduleStatus status) {
+        return (int) rows.stream().filter(r -> r.getStatus() == status).count();
+    }
+
+    /** 工作流批次 → 今日排程里的一行。数量不填 (单位可能不一致, 见 getDashboard 口径)。 */
+    private static LineScheduleDTO toWorkflowBatchRow(ProductionBatch batch, String[] planRef, ProductionLine line) {
+        LineScheduleDTO dto = new LineScheduleDTO();
+        dto.setId("batch-" + batch.getId());
+        dto.setSource(SOURCE_WORKFLOW_BATCH);
+        dto.setBatchId(batch.getId());
+        dto.setBatchNumber(batch.getBatchNumber());
+        dto.setProductionPlanId(batch.getProductionPlanId());
+        dto.setPlanNumber(planRef == null ? null : planRef[0]);
+        if (line != null) {
+            dto.setProductionLineId(line.getId());
+            dto.setProductionLineName(line.getName());
+        }
+        dto.setActualStartTime(batch.getStartTime());
+        boolean done = batch.getStatus() == ProductionBatchStatus.COMPLETED;
+        dto.setActualEndTime(done ? batch.getEndTime() : null);
+        dto.setStatus(done ? LineSchedule.ScheduleStatus.completed.name() : LineSchedule.ScheduleStatus.in_progress.name());
+        dto.setWorkerAssignments(Collections.emptyList());
+        dto.setIsDelayed(false);
+        return dto;
     }
 
     @Override
@@ -560,13 +1013,22 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
     public List<ProductionPlanDTO> getPendingBatches(String factoryId, LocalDate startDate, LocalDate endDate) {
         // 不传起始日期时**含已逾期**的待处理计划: 原来下限是今天, 逾期没排的计划 (最需要排的那些)
         // 在排程页里一个都看不到 —— 2026-10-28 F006 三个 PENDING 计划到期 10-26/10-27, 列表为空。
-        List<ProductionPlan> plans = productionPlanRepository
+        List<ProductionPlan> plans = new ArrayList<>(productionPlanRepository
             .findByFactoryIdAndStatusAndExpectedCompletionDateBetween(
                 factoryId,
                 ProductionPlanStatus.PENDING,
                 startDate != null ? startDate : OVERDUE_FLOOR,
                 endDate != null ? endDate : LocalDate.now().plusMonths(1)
-            );
+            ));
+        // D-S411-03 (2026-11-10): 「未定日期」(预计完成日为空) 的待处理计划, BETWEEN 对 NULL 恒不命中,
+        // 原来被静默丢掉 —— 订单没填交期时财审自动生成的 PP-AUTO-* 在排程页里看不到, 生产经理只能先进
+        // 计划编辑手填日期。不传日期范围时 (web-admin 按日产能排程页) 把它们一并列出, 交期为空,
+        // 前端显示「未定日期」; 排程引擎本身就把没交期的排在有交期的后面 (priorityOrder nullsLast)。
+        // 调用方明确传了日期范围时仍原样使用 —— 一个没有日期的计划不属于任何日期范围, 不替调用方放宽。
+        if (startDate == null && endDate == null) {
+            plans.addAll(productionPlanRepository
+                .findByFactoryIdAndStatusAndExpectedCompletionDateIsNull(factoryId, ProductionPlanStatus.PENDING));
+        }
 
         double threshold = getUrgentThreshold(factoryId);
 

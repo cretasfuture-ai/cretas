@@ -19,7 +19,9 @@
  */
 import { ref, computed, onMounted } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Refresh, Search } from '@element-plus/icons-vue';
+import type { CsTableColumn as TableColumn } from '@/types/csTable';
+import { badgeColor } from '@/utils/csBadge';
+import { displayName } from './returnDisplay';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import {
@@ -58,7 +60,7 @@ const STATUS_OPTIONS: Array<{ value: ReturnOrderStatus | ''; label: string }> = 
   { value: 'COMPLETED', label: '已完成' },
 ];
 
-function statusType(s: string) {
+function statusType(s: string): 'primary' | 'success' | 'warning' | 'danger' | 'info' {
   switch (s) {
     case 'DRAFT': return 'info';
     case 'SUBMITTED': return 'warning';
@@ -69,6 +71,25 @@ function statusType(s: string) {
     default: return 'info';
   }
 }
+
+// USelect 的选项值不能是空串: 页面内用 ALL 表示不筛
+const statusItems = STATUS_OPTIONS.map((o) => ({ label: o.label, value: o.value === '' ? 'ALL' : o.value }));
+const statusSelect = computed({
+  get: () => filterStatus.value || 'ALL',
+  set: (v: string) => { filterStatus.value = v === 'ALL' ? '' : (v as ReturnOrderStatus); },
+});
+const sizeItems = [10, 20, 50, 100].map((n) => ({ label: `${n} 条/页`, value: n }));
+const columns = computed<TableColumn<ReturnOrder>[]>(() => [
+  { id: 'returnNumber', header: '退货单号' },
+  { id: 'supplier', header: '供应商' },
+  { id: 'source', header: '源采购单' },
+  { id: 'returnDate', header: '退货日期' },
+  ...(canViewPrice.value ? [{ id: 'amount', header: '退货金额', meta: { class: { th: 'text-right', td: 'text-right' } } }] : []),
+  { id: 'status', header: '状态' },
+  { id: 'reason', header: '退货原因' },
+  { id: 'createdAt', header: '创建时间' },
+  { id: 'actions', header: '操作' },
+]);
 
 function statusLabel(s: string) {
   const o = STATUS_OPTIONS.find((x) => x.value === s);
@@ -176,108 +197,86 @@ function doComplete(row: ReturnOrder) {
 
 <template>
   <div class="page-wrapper">
-    <el-card class="page-card" shadow="never">
-      <template #header>
-        <div class="card-header">
-          <div class="header-left">
-            <span class="page-title">采购退货</span>
-            <span class="data-count">共 {{ pagination.total }} 单</span>
-          </div>
-          <div class="header-right">
-            <el-select v-model="filterStatus" placeholder="状态筛选" clearable style="width: 180px" @change="handleSearch">
-              <el-option v-for="opt in STATUS_OPTIONS" :key="opt.value" :label="opt.label" :value="opt.value" />
-            </el-select>
-            <el-button :icon="Search" type="primary" @click="handleSearch">查询</el-button>
-            <el-button :icon="Refresh" @click="loadData">刷新</el-button>
-          </div>
-        </div>
-      </template>
+    <div class="cs-page-head">
+      <div>
+        <h2>采购退货</h2>
+        <p>共 {{ pagination.total }} 单</p>
+      </div>
+    </div>
 
-      <el-alert
-        type="info" show-icon :closable="false" style="margin-bottom: 12px"
-        title="采购退货流程"
-        description="采购退货单来自「采购管理 → 入库异常」选「退货(拒收,退回供应商)」自动生成。退货跟资金相关，需走 提交 → 业务审批 → 财务审批 → 完成，财务审批通过后才能交仓管出货。"
-      />
+    <UAlert
+      color="info"
+      variant="subtle"
+      icon="i-lucide-info"
+      class="mb-3"
+      title="采购退货流程"
+      description="采购退货单来自「采购管理 → 入库异常」选「退货(拒收,退回供应商)」自动生成。退货跟资金相关，需走 提交 → 业务审批 → 财务审批 → 完成，财务审批通过后才能交仓管出货。"
+    />
 
-      <el-table :data="tableData" v-loading="loading" empty-text="暂无采购退货单" stripe border style="width: 100%">
-        <el-table-column prop="returnNumber" label="退货单号" width="200" />
-        <el-table-column label="供应商" min-width="140" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.counterpartyId || '-' }}</template>
-        </el-table-column>
-        <el-table-column label="源采购单" min-width="140" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.sourceOrderId || '-' }}</template>
-        </el-table-column>
-        <el-table-column prop="returnDate" label="退货日期" width="120" />
-        <el-table-column v-if="canViewPrice" label="退货金额" width="130" align="right">
-          <template #default="{ row }">{{ formatAmount(row.totalAmount) }}</template>
-        </el-table-column>
-        <el-table-column label="状态" width="140" align="center">
-          <template #default="{ row }">
-            <el-tag :type="statusType(row.status)" size="small">{{ statusLabel(row.status) }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="退货原因" min-width="200" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.reason || '-' }}</template>
-        </el-table-column>
-        <el-table-column label="创建时间" width="160">
-          <template #default="{ row }">{{ formatDateTime(row.createdAt) }}</template>
-        </el-table-column>
-        <el-table-column label="操作" width="220" align="center" fixed="right">
-          <template #default="{ row }">
-            <!-- DRAFT → 提交 / 驳回(撤销) (采购写权限) -->
-            <template v-if="row.status === 'DRAFT' && canProcurementWrite">
-              <el-button link type="primary" size="small" :loading="submitting" @click="doSubmit(row)">提交</el-button>
+    <section class="cs-card">
+      <div class="cs-card-head">
+        <USelect v-model="statusSelect" :items="statusItems" placeholder="状态筛选" class="w-48" @update:model-value="handleSearch" />
+        <UButton icon="i-lucide-search" @click="handleSearch">查询</UButton>
+        <UButton icon="i-lucide-refresh-cw" color="neutral" variant="outline" :loading="loading" @click="loadData">刷新</UButton>
+      </div>
+
+      <UTable :data="tableData" :columns="columns" :loading="loading" class="cs-table">
+        <template #empty>暂无采购退货单</template>
+        <template #returnNumber-cell="{ row }">{{ row.original.returnNumber }}</template>
+        <template #supplier-cell="{ row }">
+          <span :title="displayName(row.original.counterpartyName) ? undefined : '名称未取到'">{{ displayName(row.original.counterpartyName) || '—' }}</span>
+        </template>
+        <template #source-cell="{ row }">
+          <span :title="displayName(row.original.sourceOrderNumber) ? undefined : '名称未取到'">{{ displayName(row.original.sourceOrderNumber) || '—' }}</span>
+        </template>
+        <template #returnDate-cell="{ row }"><span class="num">{{ row.original.returnDate }}</span></template>
+        <template #amount-cell="{ row }"><span class="num">{{ formatAmount(row.original.totalAmount) }}</span></template>
+        <template #status-cell="{ row }">
+          <UBadge :color="badgeColor(statusType(row.original.status))" variant="soft">{{ statusLabel(row.original.status) }}</UBadge>
+        </template>
+        <template #reason-cell="{ row }">{{ row.original.reason || '-' }}</template>
+        <template #createdAt-cell="{ row }"><span class="muted">{{ formatDateTime(row.original.createdAt) }}</span></template>
+        <template #actions-cell="{ row }">
+          <div class="row-actions">
+            <!-- DRAFT → 提交 (采购写权限) -->
+            <template v-if="row.original.status === 'DRAFT' && canProcurementWrite">
+              <UButton size="xs" variant="link" :loading="submitting" @click="doSubmit(row.original)">提交</UButton>
             </template>
             <!-- SUBMITTED → 业务审批 / 驳回 (采购写权限) -->
-            <template v-else-if="row.status === 'SUBMITTED' && canProcurementWrite">
-              <el-button link type="primary" size="small" :loading="submitting" @click="doApprove(row)">业务审批</el-button>
-              <el-button link type="danger" size="small" :loading="submitting" @click="doReject(row)">驳回</el-button>
+            <template v-else-if="row.original.status === 'SUBMITTED' && canProcurementWrite">
+              <UButton size="xs" variant="link" :loading="submitting" @click="doApprove(row.original)">业务审批</UButton>
+              <UButton size="xs" variant="link" color="error" :loading="submitting" @click="doReject(row.original)">驳回</UButton>
             </template>
             <!-- APPROVED → 财务审批 / 财务驳回 (财务写权限; 客户红线: 退货必须先财务审批) -->
-            <template v-else-if="row.status === 'APPROVED'">
+            <template v-else-if="row.original.status === 'APPROVED'">
               <template v-if="canFinanceWrite">
-                <el-button link type="success" size="small" :loading="submitting" @click="doFinanceApprove(row)">财务审批</el-button>
-                <el-button link type="danger" size="small" :loading="submitting" @click="doFinanceReject(row)">财务驳回</el-button>
+                <UButton size="xs" variant="link" color="success" :loading="submitting" @click="doFinanceApprove(row.original)">财务审批</UButton>
+                <UButton size="xs" variant="link" color="error" :loading="submitting" @click="doFinanceReject(row.original)">财务驳回</UButton>
               </template>
-              <el-tooltip v-else content="退货跟资金相关，需财务角色 (finance) 审批" placement="top">
-                <span class="text-muted">待财务审批</span>
-              </el-tooltip>
+              <span v-else class="muted" title="退货跟资金相关，需财务角色 (finance) 审批">待财务审批</span>
             </template>
             <!-- FINANCE_APPROVED → 完成 (采购写权限) -->
-            <template v-else-if="row.status === 'FINANCE_APPROVED' && canProcurementWrite">
-              <el-button link type="primary" size="small" :loading="submitting" @click="doComplete(row)">完成出货</el-button>
+            <template v-else-if="row.original.status === 'FINANCE_APPROVED' && canProcurementWrite">
+              <UButton size="xs" variant="link" :loading="submitting" @click="doComplete(row.original)">完成出货</UButton>
             </template>
-            <span v-else class="text-muted">—</span>
-          </template>
-        </el-table-column>
-      </el-table>
+            <span v-else class="muted">—</span>
+          </div>
+        </template>
+      </UTable>
 
       <div class="pagination-wrapper">
-        <el-pagination
-          v-model:current-page="pagination.page" v-model:page-size="pagination.size"
-          :total="pagination.total" :page-sizes="[10, 20, 50, 100]"
-          layout="total, sizes, prev, pager, next, jumper"
-          background
-          @current-change="handlePageChange" @size-change="handleSizeChange"
-        />
+        <span class="total">共 {{ pagination.total }} 条</span>
+        <USelect v-model="pagination.size" :items="sizeItems" class="w-28" @update:model-value="handleSizeChange" />
+        <UPagination v-model:page="pagination.page" :items-per-page="pagination.size" :total="pagination.total" show-edges :sibling-count="1" @update:page="handlePageChange" />
       </div>
-    </el-card>
+    </section>
   </div>
 </template>
 
-<style lang="scss" scoped>
-.page-wrapper { height: 100%; width: 100%; display: flex; flex-direction: column; }
-.page-card { flex: 1; display: flex; flex-direction: column;
-  :deep(.el-card__header) { padding: 16px 20px; border-bottom: 1px solid #ebeef5; }
-  :deep(.el-card__body) { flex: 1; display: flex; flex-direction: column; padding: 20px; }
-}
-.card-header { display: flex; justify-content: space-between; align-items: center;
-  .header-left { display: flex; align-items: baseline; gap: 12px;
-    .page-title { font-size: 16px; font-weight: 600; color: #303133; }
-    .data-count { font-size: 13px; color: #909399; }
-  }
-  .header-right { display: flex; gap: 8px; align-items: center; }
-}
-.pagination-wrapper { display: flex; justify-content: flex-end; padding-top: 16px; border-top: 1px solid #ebeef5; margin-top: 16px; }
-.text-muted { color: #C0C4CC; }
+<style scoped>
+.page-wrapper { padding: var(--cs-space-4); }
+.row-actions { display: flex; gap: var(--cs-space-1); align-items: center; }
+.muted { color: var(--cs-muted); }
+.total { color: var(--cs-muted); font-size: var(--cs-font); }
+.pagination-wrapper { display: flex; justify-content: flex-end; align-items: center; gap: var(--cs-space-3); padding: var(--cs-space-3) var(--cs-space-5); border-top: 1px solid var(--cs-border); }
 </style>

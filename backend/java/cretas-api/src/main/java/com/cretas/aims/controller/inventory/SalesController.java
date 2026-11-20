@@ -104,6 +104,10 @@ public class SalesController {
     private final SalesPriceAdjustmentService priceAdjustmentService;
     private final ProductPackagingSpecService productPackagingSpecService;
 
+    /** 成品列表回填仓库名; 字段注入以保持既有直接 new 的测试可用。 */
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.cretas.aims.repository.factory.FactoryWarehouseRepository factoryWarehouseRepository;
+
     /** Field injection keeps the controller's existing direct-construction tests stable. */
     @org.springframework.beans.factory.annotation.Autowired
     private FinishedGoodsFeedService finishedGoodsFeedService;
@@ -152,9 +156,14 @@ public class SalesController {
     public ApiResponse<PageResponse<SalesOrder>> listOrders(
             @PathVariable @NotBlank String factoryId,
             @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) LocalDate startDate,
+            @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) LocalDate endDate,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size) {
-        PageResponse<SalesOrder> result = salesService.getSalesOrders(factoryId, keyword, page, size);
+        // 带订单日期范围时走统一服务端搜索 (关键词 + 日期 + DataScope, 分页前由数据库过滤); 否则保持原路径
+        PageResponse<SalesOrder> result = (startDate != null || endDate != null)
+                ? salesService.searchSalesOrders(factoryId, null, keyword, startDate, endDate, page, size)
+                : salesService.getSalesOrders(factoryId, keyword, page, size);
         return ApiResponse.success("查询成功", result);
     }
 
@@ -468,6 +477,9 @@ public class SalesController {
     public ApiResponse<PageResponse<SalesOrder>> listOrdersByStatus(
             @PathVariable @NotBlank String factoryId,
             @RequestParam SalesOrderStatus status,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) LocalDate startDate,
+            @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) LocalDate endDate,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size,
             @RequestHeader("Authorization") String authorization) {
@@ -487,7 +499,7 @@ public class SalesController {
             }
         }
         // 与 AI 工具同一个方法: 状态在数据库里过滤并按 DataScope 收窄 (以前这个接口不收窄, SELF 角色看到全厂该状态的单)
-        PageResponse<SalesOrder> result = salesService.getSalesOrdersFiltered(factoryId, status, null, null, page, size);
+        PageResponse<SalesOrder> result = salesService.searchSalesOrders(factoryId, status, keyword, startDate, endDate, page, size);
         return ApiResponse.success("查询成功", result);
     }
 
@@ -658,17 +670,35 @@ public class SalesController {
         return ApiResponse.success("销售订单已确认", order);
     }
 
+    @GetMapping("/orders/cancel-policy")
+    @Operation(summary = "当前用户能否取消财务已批准的销售订单 (本厂开关 + 权限)")
+    @RequirePermission({"sales:read_write", "sales:read", "finance:read", "procurement:read",
+            com.cretas.aims.service.PermissionService.SALES_ORDER_CANCEL_APPROVED_PERMISSION})
+    public ApiResponse<java.util.Map<String, Object>> cancelPolicy(
+            @PathVariable @NotBlank String factoryId,
+            HttpServletRequest httpRequest) {
+        Long userId = (Long) httpRequest.getAttribute("userId");
+        return ApiResponse.success("获取成功",
+                java.util.Map.of("canCancelApproved", salesService.mayCancelApprovedOrders(factoryId, userId)));
+    }
+
     @PostMapping("/orders/{orderId}/cancel")
     @Operation(summary = "取消销售订单")
-    @RequirePermission("sales:read_write")
+    // 任一即可: 销售写权限, 或「取消已批准销售单」权限 (厂长默认有, 工厂可给别的岗位)。后者没有销售写权限时,
+    // 服务层只放行财务已批准的单 (SalesServiceImpl#cancelOrder → requireSalesWriteForOrdinaryCancel)。
+    @RequirePermission({"sales:read_write", com.cretas.aims.service.PermissionService.SALES_ORDER_CANCEL_APPROVED_PERMISSION})
     public ApiResponse<SalesOrder> cancelOrder(
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String orderId,
             // E-FP-2 (fool-proof Rule 3): 取消原因 — 前端 el-select 标准原因 (客户撤单/原料缺货/
             // 质量问题/排程冲突/价格分歧/其他)。required=false 以保持向后兼容 (旧调用方不传).
-            @RequestParam(required = false) String reason) {
-        SalesOrder order = salesService.cancelOrder(factoryId, orderId, reason);
-        return ApiResponse.success("销售订单已取消", order);
+            @RequestParam(required = false) String reason,
+            HttpServletRequest httpRequest) {
+        // 财务已批准的订单: 本厂开了「批准后可取消」时按操作人权限判 (sales.permission.cancel_approved_order)
+        Long userId = (Long) httpRequest.getAttribute("userId");
+        SalesOrder order = salesService.cancelOrder(factoryId, orderId, reason, userId);
+        String summary = salesService.lastCancelSummary();
+        return ApiResponse.success(summary != null ? summary : "销售订单已取消", order);
     }
 
     /**
@@ -996,9 +1026,31 @@ public class SalesController {
                                 ProductType::getName,
                                 (left, right) -> left,
                                 LinkedHashMap::new));
+        Map<String, String> warehouseNamesById = resolveWarehouseNames(factoryId, source);
         return source.stream()
-                .map(batch -> detachedFinishedGoods(batch, productNamesById.get(batch.getProductTypeId())))
+                .map(batch -> {
+                    FinishedGoodsBatch copy = detachedFinishedGoods(
+                            batch, batch.getProductTypeId() == null
+                                    ? null : productNamesById.get(batch.getProductTypeId()));
+                    if (copy != null && batch.getWarehouseId() != null) {
+                        copy.setWarehouseName(warehouseNamesById.get(batch.getWarehouseId()));
+                    }
+                    return copy;
+                })
                 .toList();
+    }
+
+    private Map<String, String> resolveWarehouseNames(String factoryId, List<FinishedGoodsBatch> source) {
+        if (factoryWarehouseRepository == null) {
+            return Map.of();
+        }
+        Map<String, String> names = new LinkedHashMap<>();
+        factoryWarehouseRepository.findByFactoryIdAndDeletedAtIsNullOrderByCodeAsc(factoryId).forEach(w -> {
+            if (w.getId() != null && w.getName() != null && !w.getName().isBlank()) {
+                names.put(w.getId(), w.getName());
+            }
+        });
+        return names;
     }
 
     private FinishedGoodsBatch detachedFinishedGoods(FinishedGoodsBatch source) {
@@ -1162,16 +1214,20 @@ public class SalesController {
      */
     @PostMapping("/price-adjustments/{recordId}/approve")
     @Operation(summary = "审批通过改价 (PENDING → APPROVED, 应用改价 + 重算总额)")
-    @RequirePermission({"finance:read_write", "sales:read_write"})
+    // 纪律排查 B11: 审批权限码; 默认跟原门槛 finance / sales:read_write 走 (各厂可改)
+    @RequirePermission({"approval_price_adjustment:approve"})
     public ApiResponse<SalesPriceAdjustmentRecordDTO> approvePriceAdjustment(
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String recordId,
-            @RequestHeader("Authorization") String authorization) {
+            @RequestHeader("Authorization") String authorization,
+            @RequestBody(required = false) java.util.Map<String, String> body) {
         Long approverId = extractUserId(authorization);
         log.info("改价审批通过请求: factoryId={}, recordId={}, approverId={}",
                 factoryId, recordId, approverId);
-        SalesPriceAdjustmentRecordDTO result =
-                priceAdjustmentService.approvePriceAdjustment(factoryId, recordId, approverId);
+        // 本人审批原因 (纪律排查 B11): 只在审批人就是改价人、且工厂开了「允许本人审批」时用到
+        String selfApprovalReason = body == null ? null : body.get("selfApprovalReason");
+        SalesPriceAdjustmentRecordDTO result = priceAdjustmentService.approvePriceAdjustment(
+                factoryId, recordId, approverId, selfApprovalReason);
         return ApiResponse.success("改价审批通过", result);
     }
 
@@ -1184,7 +1240,7 @@ public class SalesController {
      */
     @PostMapping("/price-adjustments/{recordId}/reject")
     @Operation(summary = "驳回改价 (PENDING → REJECTED, 丢弃改价)")
-    @RequirePermission({"finance:read_write", "sales:read_write"})
+    @RequirePermission({"approval_price_adjustment:approve"})
     public ApiResponse<SalesPriceAdjustmentRecordDTO> rejectPriceAdjustment(
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String recordId,

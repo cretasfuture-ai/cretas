@@ -62,7 +62,7 @@ describe('销售订单详情: 收款记录标签页要分清「没有」和「�
     expect(detail).toContain('v-if="paymentsLoadError"');
     expect(detail).toContain('收款记录未能加载');
     // 空表文案由 paymentsLoadError 决定, 不是写死的「暂无收款记录」
-    expect(detail).toMatch(/:empty-text="paymentsLoadError \?/);
+    expect(detail).toMatch(/<template #empty>\{\{ paymentsLoadError \?/);
   });
 
   it('阴性对照: 成功路径仍然照常填充列表', () => {

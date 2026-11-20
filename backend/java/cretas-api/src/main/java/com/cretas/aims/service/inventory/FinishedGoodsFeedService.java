@@ -132,6 +132,19 @@ public interface FinishedGoodsFeedService {
     void restoreForFeed(String factoryId, String batchNumber, BigDecimal qty, Long operatorId);
 
     /**
+     * 撤回结单 — 逆结单按逐道录入做的 {@link #consumeForFeedStrict} (N1, 结单投料明细里的成品笔)。
+     *
+     * <p>与 {@link #restoreForFeed} 同样 {@code producedQuantity += qty} 并写调整日志
+     * ({@code referenceType=SETTLEMENT_REVERSAL}), 只在一处不同: 批次已是 {@code REVERSED} 时 ⛔ 不改回可用。
+     * 成品批次只有两条路会变成 REVERSED —— 产出它的计划被整单撤回, 或产出它的小结被撤销; 投料那一侧的撤回
+     * 不能把一批已经作废的产出复活成可售。量照样还回 (账上: 产出计划的整批产出都留在这个作废批次上,
+     * 投料计划的领用归零), 状态留 REVERSED; 只有因量耗尽变成的 DEPLETED 才恢复 AVAILABLE。
+     *
+     * @throws com.cretas.aims.exception.BusinessException 409 FG_NOT_FOUND
+     */
+    void restoreForSettlementReversal(String factoryId, String batchNumber, BigDecimal qty, Long operatorId);
+
+    /**
      * 读成品批次的单位成本 {@code unitCost} — 成本传导基准 (FG 投料下游道算本道产出成本时用)。
      *
      * <p>🔴 诚实 null: 批次缺失 或 {@code unitCost} 为 null (未接通成本的成品) → 返 <b>null</b>, 绝不伪造 ¥0。

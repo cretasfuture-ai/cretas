@@ -167,6 +167,15 @@ public class ProductionPlanCreateTool extends AbstractBusinessTool {
         return preview;
     }
 
+    /**
+     * 只新建记录 (确认前状态核对按新建型处理, 见 ToolExecutor#previewCreatesNewRecordOnly)。
+     * 新建生产计划; 提交后的自动排程按提交时的数据跑, 不依赖预览时的任何已有记录。
+     */
+    @Override
+    public boolean previewCreatesNewRecordOnly() {
+        return true;
+    }
+
     @Override
     protected String getParameterQuestion(String paramName) {
         return switch (paramName) {

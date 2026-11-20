@@ -37,6 +37,8 @@ export const HIDDEN_KEYS: ReadonlySet<string> = new Set([
 
 /** 已确认存在的业务键 → 中文标签 (与 RN 的 KEY_LABELS 逐键相同)。 */
 export const KEY_LABELS: Readonly<Record<string, string>> = {
+  // 预览给出的改前值 (写入确认前状态核对): 没有 newValues 的预览按键值行显示, 这一行要有中文名
+  currentValues: '当前状态',
   orderNumber: '单号',
   supplierName: '供应商',
   materialName: '物料',

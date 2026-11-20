@@ -61,6 +61,18 @@
 
     <dependencyManagement>
         <dependencies>
+            <!-- Pin Aliyun SDK transitive ranges to avoid Maven metadata lookups. -->
+            <dependency>
+                <groupId>com.aliyun</groupId>
+                <artifactId>aliyun-java-sdk-core</artifactId>
+                <version>4.5.10</version>
+            </dependency>
+            <dependency>
+                <groupId>com.aliyun</groupId>
+                <artifactId>tea</artifactId>
+                <version>1.2.7</version>
+            </dependency>
+
             <!-- gRPC BOM for consistent version management -->
             <dependency>
                 <groupId>io.grpc</groupId>
@@ -176,6 +188,12 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- IdleWatchdogTestExecutionListener 编译需要 launcher API (版本由 Boot 的 junit-bom 管理, 与 surefire 运行时一致) -->
+        <dependency>
+            <groupId>org.junit.platform</groupId>
+            <artifactId>junit-platform-launcher</artifactId>
             <scope>test</scope>
         </dependency>
 
@@ -613,6 +631,11 @@
                          duplicate maven-compiler-plugin declaration that newer Maven rejects). -->
                     <testIncludes>
                         <include>${cretas.testIncludes}</include>
+                        <!-- Always compiled: listed in src/test/resources/META-INF/services, so the surefire fork
+                             loads it via ServiceLoader even when the release build narrows cretas.testIncludes
+                             to one class (release-jar-manifest.sh). Missing => "Provider ... not found", 0 tests,
+                             BUILD FAILURE. Pinned by scripts/tests/test-release-jar-manifest.sh. -->
+                        <include>**/testsupport/IdleWatchdogTestExecutionListener.java</include>
                     </testIncludes>
                 </configuration>
             </plugin>

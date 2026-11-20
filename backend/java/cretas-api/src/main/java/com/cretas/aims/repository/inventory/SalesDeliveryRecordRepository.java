@@ -62,4 +62,33 @@ public interface SalesDeliveryRecordRepository extends JpaRepository<SalesDelive
             @Param("factoryId") String factoryId,
             @Param("statuses") List<SalesDeliveryStatus> statuses,
             Pageable pageable);
+
+    /**
+     * Warehouse queue for an account whose factory data scope is narrower than the whole factory.
+     * Ownership follows the source document, the same rule the route guard uses before confirm:
+     * a linked delivery belongs to its sales order's creator, a standalone sample delivery to its
+     * customer's creator. Rows whose owner cannot be read are excluded (fail closed).
+     */
+    @Query(value = "SELECT d FROM SalesDeliveryRecord d "
+            + "WHERE d.factoryId = :factoryId AND d.status IN :statuses AND ("
+            + " (d.salesOrderId IS NOT NULL AND d.salesOrderId <> '' AND EXISTS ("
+            + "   SELECT 1 FROM SalesOrder o WHERE o.id = d.salesOrderId AND o.factoryId = d.factoryId"
+            + "   AND o.createdBy IN :creators))"
+            + " OR ((d.salesOrderId IS NULL OR d.salesOrderId = '') AND EXISTS ("
+            + "   SELECT 1 FROM Customer c WHERE c.id = d.customerId AND c.factoryId = d.factoryId"
+            + "   AND c.createdBy IN :creators))) "
+            + "ORDER BY d.createdAt DESC",
+            countQuery = "SELECT COUNT(d) FROM SalesDeliveryRecord d "
+            + "WHERE d.factoryId = :factoryId AND d.status IN :statuses AND ("
+            + " (d.salesOrderId IS NOT NULL AND d.salesOrderId <> '' AND EXISTS ("
+            + "   SELECT 1 FROM SalesOrder o WHERE o.id = d.salesOrderId AND o.factoryId = d.factoryId"
+            + "   AND o.createdBy IN :creators))"
+            + " OR ((d.salesOrderId IS NULL OR d.salesOrderId = '') AND EXISTS ("
+            + "   SELECT 1 FROM Customer c WHERE c.id = d.customerId AND c.factoryId = d.factoryId"
+            + "   AND c.createdBy IN :creators)))")
+    Page<SalesDeliveryRecord> findByFactoryIdAndStatusInAndOwnerIn(
+            @Param("factoryId") String factoryId,
+            @Param("statuses") List<SalesDeliveryStatus> statuses,
+            @Param("creators") List<Long> creators,
+            Pageable pageable);
 }

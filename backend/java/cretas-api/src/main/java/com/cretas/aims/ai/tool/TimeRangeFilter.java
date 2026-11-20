@@ -33,8 +33,39 @@ public final class TimeRangeFilter {
     public static final String MODE = "x-time-range";
     /** schema 顶层: 不能按时间查时的说明 (替换通用措辞), 如「库存报表是当前时点的库存, 不能按过去的时间查」。 */
     public static final String NOTICE = "x-time-range-notice";
+    /**
+     * schema 顶层: 对话里没说时间时默认查最近 N 天 (Steve 2026-11-12 口径 1: 「看看待发货的订单」= 最近 7 天,
+     * 回复写明)。只给列表型、真按 startDate/endDate 过滤的工具声明; 由 ToolDispatchService 的只读参数合并补上。
+     */
+    public static final String DEFAULT_RECENT_DAYS = "x-default-recent-days";
+
+    /** 参数标记: startDate/endDate 是对话默认补的「最近 N 天」, 不是用户说的; 工具 0 条时可放宽。 */
+    public static final String DEFAULT_WINDOW = "defaultTimeWindow";
 
     private TimeRangeFilter() {
+    }
+
+    /** 原话里有没有时间说法 (故意宽: 宁可保留提示也不吞掉用户真说了的时间)。 */
+    private static final java.util.regex.Pattern TIME_WORDS = java.util.regex.Pattern.compile(
+            "[0-9０-９]|[今昨明周月年季天日号刚]|最近|近期|早上|上午|下午|晚上|前天|后天|当月|本月");
+
+    /** 用户原话里是否说了时间; 没说时预处理补出的日期不能算「你说的」。 */
+    public static boolean mentionsTime(String userInput) {
+        return userInput != null && TIME_WORDS.matcher(userInput).find();
+    }
+
+    /** 放宽后的结果说明 (进结果 windowNotice, 格式化时放在答案前)。 */
+    public static String widenedNotice(int days, java.time.LocalDate latest, java.time.LocalDate from, java.time.LocalDate to) {
+        return "最近 " + days + " 天内没有记录；最近一次有记录是 " + latest + "，下面是 " + from + " 至 " + to + " 这段时间的结果。";
+    }
+
+    /** 工具声明的默认最近天数; 没声明、或工具不按时间过滤时为 null。 */
+    public static Integer defaultRecentDays(Map<String, Object> parametersSchema) {
+        if (!supported(parametersSchema) || !(parametersSchema.get(DEFAULT_RECENT_DAYS) instanceof Number n)
+                || n.intValue() < 1) {
+            return null;
+        }
+        return n.intValue();
     }
 
     /** schema 里的 startDate / endDate 属性 (yyyy-MM-dd, 含当天)。声明它们 = 工具真的按它们过滤。 */

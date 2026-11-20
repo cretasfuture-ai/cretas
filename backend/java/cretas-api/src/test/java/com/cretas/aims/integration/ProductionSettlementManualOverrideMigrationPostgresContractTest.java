@@ -36,6 +36,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 class ProductionSettlementManualOverrideMigrationPostgresContractTest {
     private static final String MIGRATION =
             "db/flyway/V20261105_93__production_settlement_manual_override_and_semi_stocking.sql";
+    private static final String STOCK_FEED_MIGRATION =
+            "db/flyway/V20261109_20__production_settlement_stock_feed_detail.sql";
 
     @Test
     void upgradePreservesLegacySettlementAndHibernateReadsFalseDefault() throws Exception {
@@ -90,6 +92,22 @@ class ProductionSettlementManualOverrideMigrationPostgresContractTest {
                 assertThat(after.remove("semi_stocking_detail")).isNull();
                 assertThat(after).as("all prior settlement fields remain unchanged").isEqualTo(before);
             }
+            // N1 (V20261109_20): 结单投料扣减明细列。实体映射了它, Hibernate validate 之前它必须已由迁移建好;
+            // 旧结单读出来是 NULL (= 上线前的结单, 撤回据此判「扣过但没记」)。
+            assertThat(jdbc.queryForObject("SELECT count(*) FROM information_schema.columns "
+                    + "WHERE table_schema=? AND table_name='production_settlements' AND column_name='stock_feed_detail'",
+                    Integer.class, schema)).isZero();
+            Files.writeString(directory.resolve(Path.of(STOCK_FEED_MIGRATION).getFileName()), sql(STOCK_FEED_MIGRATION),
+                    StandardCharsets.UTF_8);
+            Flyway withStockFeed = flyway(dataSource, schema, directory);
+            assertThat(withStockFeed.migrate().migrationsExecuted).isEqualTo(1);
+            assertThat(withStockFeed.migrate().migrationsExecuted).isZero();
+            assertThat(jdbc.queryForObject("SELECT version FROM flyway_schema_history "
+                    + "WHERE success ORDER BY installed_rank DESC LIMIT 1", String.class)).isEqualTo("20261109.20");
+            if (legacy) {
+                assertThat(jdbc.queryForObject("SELECT stock_feed_detail FROM production_settlements WHERE id='legacy'",
+                        String.class)).as("旧结单没有明细").isNull();
+            }
             insert(jdbc, "fresh");
             assertThrows(org.springframework.dao.DataAccessException.class,
                     () -> jdbc.update("UPDATE production_settlements SET manual_override=NULL WHERE id='fresh'"));
@@ -102,11 +120,13 @@ class ProductionSettlementManualOverrideMigrationPostgresContractTest {
                     assertThat(fresh.isManualOverride()).isFalse();
                     assertThat(fresh.getManualOverrideReason()).isNull();
                     assertThat(fresh.getSemiStockingDetail()).isNull();
+                    assertThat(fresh.getStockFeedDetail()).isNull();
                     if (legacy) assertThat(em.find(ProductionSettlement.class, "legacy").isManualOverride()).isFalse();
                     em.getTransaction().begin();
                     fresh.setManualOverride(true);
                     fresh.setManualOverrideReason("QA explicit override");
                     fresh.setSemiStockingDetail("[{\"quantity\":0.2}]");
+                    fresh.setStockFeedDetail("[]");
                     em.getTransaction().commit();
                 }
             }
@@ -116,6 +136,8 @@ class ProductionSettlementManualOverrideMigrationPostgresContractTest {
                     String.class)).isEqualTo("QA explicit override");
             assertThat(jdbc.queryForObject("SELECT semi_stocking_detail FROM production_settlements WHERE id='fresh'",
                     String.class)).isEqualTo("[{\"quantity\":0.2}]");
+            assertThat(jdbc.queryForObject("SELECT stock_feed_detail FROM production_settlements WHERE id='fresh'",
+                    String.class)).isEqualTo("[]");
         } finally {
             admin.execute("DROP SCHEMA IF EXISTS " + schema + " CASCADE");
             try (var paths = Files.walk(directory)) {

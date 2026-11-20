@@ -100,7 +100,7 @@ run_case() (
     binding=$(cat "$case_root/.last-deploy-rollback")
     local current_port=$BLUE_PORT
     [ "$port" != "$BLUE_PORT" ] || current_port=$GREEN_PORT
-    printf 'upstream cretas_backend {\n server 47.100.235.168:%s; # ACTIVE=%s\n}\n' "$current_port" "$current_port" > "$NGINX_UPSTREAM_FILE"
+    printf 'upstream cretas_backend {\n server 127.0.0.1:%s; # ACTIVE=%s\n}\n' "$current_port" "$current_port" > "$NGINX_UPSTREAM_FILE"
     # Legacy baseline also runs entirely inside the stub filesystem.
     printf '#!/usr/bin/env bash\nsystemctl restart cretas-backend\n' > "$case_root/restart.sh"
     case "$fault" in
@@ -130,7 +130,7 @@ run_case() (
         [ "$(file_sha256 "$case_root/$RUNTIME_JAR_NAME")" = "$old_sha" ] || { echo 'FAIL: restored an unbound backup'; return 1; }
         grep -Fxq "systemctl restart $EXPECTED_SERVICE" "$EVENTS" || return 1
         grep -Fxq "health $port" "$EVENTS" || return 1
-        grep -Fq "47.100.235.168:$port;" "$NGINX_UPSTREAM_FILE" || return 1
+        grep -Fq "127.0.0.1:$port;" "$NGINX_UPSTREAM_FILE" || return 1
         grep -Fq 'ROLLBACK_STATUS=restored' "$case_root/output" || return 1
         # Restart only after the verified copy; switch traffic only after health.
         local copied restarted healthy switched
@@ -177,7 +177,7 @@ for port in 10010 10020; do
         printf 'candidate\n' > "$case_root/candidate"
         LOCAL_SHA256=$(file_sha256 "$case_root/candidate") || exit 1
         expected_old=$(file_sha256 "$case_root/$RUNTIME_JAR_NAME") || exit 1
-        printf ' server 47.100.235.168:%s;\n' "$port" > "$NGINX_UPSTREAM_FILE"
+        printf ' server 127.0.0.1:%s;\n' "$port" > "$NGINX_UPSTREAM_FILE"
         prepare_bound_rollback || exit 1
         [ "$ROLLBACK_BOUND_PORT" = "$port" ] || exit 1
         [ "$(sed -n '3p' "$case_root/.last-deploy-rollback")" = "$expected_old" ] || exit 1
@@ -191,7 +191,7 @@ for port in 10010 10020; do
         printf '\nchanged\n' >> "$case_root/.last-deploy-rollback"
         if restore_bound_rollback disk "$DEPLOY_ROLLBACK_BINDING"; then exit 1; fi
         # Ambiguous upstream must fail before a backup/install operation.
-        printf ' server 47.100.235.168:10010;\n server 47.100.235.168:10020;\n' > "$NGINX_UPSTREAM_FILE"
+        printf ' server 127.0.0.1:10010;\n server 127.0.0.1:10020;\n' > "$NGINX_UPSTREAM_FILE"
         if prepare_bound_rollback; then exit 1; fi
         printf 'PASS: %s prepare/disk/changed-binding/ambiguous-upstream\n' "$port"
     ); then

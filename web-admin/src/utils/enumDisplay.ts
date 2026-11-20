@@ -344,6 +344,43 @@ export const RETURN_ORDER_STATUS_LABELS: Record<string, string> = {
   COMPLETED: '已完成',
 };
 
+/** `InvoiceStatus` (backend/.../enums/InvoiceStatus.java) —— 措辞与财务开票列表一致。 */
+export const INVOICE_STATUS_LABELS: Record<string, string> = {
+  REQUESTED: '待审核',
+  APPROVED: '已审核',
+  ISSUED: '已开具',
+  REJECTED: '已驳回',
+  CANCELLED: '已取消',
+};
+
+/** `InvoiceType` displayName (InvoiceType.java)。 */
+export const INVOICE_TYPE_LABELS: Record<string, string> = {
+  NORMAL: '普通发票',
+  SPECIAL: '增值税专票',
+  DIGITAL: '数电票',
+  RECEIPT: '收据',
+  NONE: '不开票',
+  OTHER: '其他',
+};
+
+/** `PaymentRecordStatus` (收款单)。 */
+export const PAYMENT_RECORD_STATUS_LABELS: Record<string, string> = {
+  PENDING: '待核实',
+  VERIFIED: '已核实',
+  REJECTED: '已驳回',
+};
+
+/** 销售报价单状态 (sales/quotes/list.vue 同款, 另含后端会写入的 QUOTED)。 */
+export const QUOTE_STATUS_LABELS: Record<string, string> = {
+  DRAFT: '草稿',
+  PENDING_QUOTE: '待录价',
+  QUOTED: '已报价',
+  PENDING_APPROVAL: '待审批',
+  APPROVED: '已批准',
+  REJECTED: '已驳回',
+  EXPIRED: '已过期',
+};
+
 /**
  * 单据追踪抽屉: documentType → 该单据的状态表。
  *
@@ -391,3 +428,74 @@ export function enumLabel(
     || ROLE_LABELS[normalized]
     || `未知状态（${normalized}）`;
 }
+
+/** 财务交易流水类型 (finance/costs 交易记录) —— 之前写在页面里, 抽到这里与其它枚举同源。 */
+export const FINANCE_TRANSACTION_TYPE_LABELS: Record<string, string> = {
+  RECEIVABLE: '应收挂账',
+  AR_INVOICE: '应收开票',
+  AR_PAYMENT: '客户付款',
+  AR_ADJUSTMENT: '应收调整',
+  AP_ADJUSTMENT: '应付调整',
+  AR_CREDIT_NOTE: '应收冲减',
+  AP_CREDIT_NOTE: '应付冲减',
+  AR_REFUND: '客户退款结清',
+  PAYABLE: '应付挂账',
+  AP_INVOICE: '应付开票',
+  AP_PAYMENT: '供应商付款',
+  ADJUSTMENT: '手工调整',
+};
+
+/**
+ * 盘点过账生成的凭证类型 (prod 凭证列表实测出现 INVENTORY_STOCKTAKE; api/voucher.ts 的 VoucherType 联合
+ * 里没有它们, 不能直接并进 VOUCHER_TYPE_LABEL —— 凭证模板编辑器拿那张表当可选类型下拉)。
+ */
+export const VOUCHER_STOCKTAKE_TYPE_LABELS: Record<string, string> = {
+  INVENTORY_STOCKTAKE: '库存盘点',
+  SEMI_FINISHED_STOCKTAKE: '半成品盘点',
+};
+
+/**
+ * 凭证类型全集 (后端 VoucherType 枚举 12 个值 + 盘点过账来源码); 凭证详情头部和凭证列表共用, 不再露原码。
+ * TRANSFER 后端枚举里没有, 只是历史/外部数据里见过的写法, 兜底给「调拨」; 其余未知码显示「其他类型」, 不露英文。
+ * 与 api/voucher.ts 的 VOUCHER_TYPE_LABEL 必须一致 (enumDisplay.spec 钉住)。
+ */
+const VOUCHER_TYPE_TEXT: Record<string, string> = {
+  SALES_RECEIPT: '销售收款',
+  PURCHASE_PAYMENT: '采购付款',
+  INVENTORY_TRANSFER: '库存调拨',
+  EXPENSE: '报销',
+  WAGE: '工资发放',
+  RETURN: '退货',
+  DEPRECATION: '折旧',
+  PL_CLOSING: '损益结转',
+  INVENTORY_STOCKTAKE: '库存盘点',
+  COST_CARRYOVER: '销售成本结转',
+  CASH_RECEIPT: '现金收款',
+  CASH_PAYMENT: '现金付款',
+  SEMI_FINISHED_STOCKTAKE: '半成品盘点',
+  TRANSFER: '调拨',
+};
+export function voucherTypeText(code: unknown): string {
+  const c = String(code ?? '').trim();
+  if (!c) return '—';
+  return VOUCHER_TYPE_TEXT[c] ?? '其他类型';
+}
+
+/** 收款方式 (`PaymentMethod`)。CREDIT 与全局表一致写「赊账」(旧页面写「信用」)。 */
+export const PAYMENT_METHOD_LABELS: Record<string, string> = {
+  BANK_TRANSFER: '银行转账',
+  CASH: '现金',
+  WECHAT: '微信',
+  ALIPAY: '支付宝',
+  CHECK: '支票',
+  CREDIT: '赊账',
+  POS: 'POS',
+  OTHER: '其他',
+};
+
+/** 月结对账结论 (accounting-period 「月结报表」列)。 */
+export const RECONCILIATION_STATUS_LABELS: Record<string, string> = {
+  PASS: '通过',
+  WARNING: '有提示',
+  FAIL: '未通过',
+};

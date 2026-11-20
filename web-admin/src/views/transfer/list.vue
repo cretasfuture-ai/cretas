@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import ListEmptyExplain from '@/components/common/ListEmptyExplain.vue';
+import { loadErrorText } from '@/utils/listEmptyState';
 import { ref, computed, onMounted, onActivated, onDeactivated, onUnmounted, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
@@ -58,6 +60,7 @@ let draftRevision = 0;
 let validating = false;
 
 const loading = ref(false);
+const loadError = ref('');
 const tableData = ref<TableRow[]>([]);
 const pagination = ref({ page: 1, size: 10, total: 0 });
 
@@ -205,6 +208,7 @@ async function loadData() {
   if (!factoryId.value) return;
   const revision = draftRevision;
   loading.value = true;
+  loadError.value = '';
   try {
     const res = await get(`/${factoryId.value}/transfers`, {
       params: { page: pagination.value.page, size: pagination.value.size },
@@ -214,9 +218,14 @@ async function loadData() {
       tableData.value = res.data.content || [];
       pagination.value.total = res.data.totalElements || 0;
     } else if (res.success === false) {
-      ElMessage.error(res.message || '加载失败');
+      tableData.value = [];
+      loadError.value = res.message || '加载调拨单失败';
+      ElMessage.error(loadError.value);
     }
-  } catch { /* axios interceptor already displayed error toast */ }
+  } catch (e) {
+    if (revision === draftRevision) { tableData.value = []; loadError.value = loadErrorText(e, '加载调拨单失败'); }
+    /* axios interceptor already displayed error toast */
+  }
   finally { if (revision === draftRevision) loading.value = false; }
 }
 
@@ -660,7 +669,15 @@ function isOutbound(row: TableRow) { return row.sourceFactoryId === factoryId.va
         </div>
       </template>
 
-      <el-table :data="tableData" v-loading="loading" empty-text="暂无数据" stripe border style="width: 100%">
+      <el-table :data="tableData" v-loading="loading" stripe border style="width: 100%">
+        <template #empty>
+          <ListEmptyExplain
+            :load-error="loadError"
+            empty-title="还没有调拨单"
+            empty-hint="仓库之间或工厂之间要搬运库存时，点右上角「手动新建调拨单」登记；审批并确认入库后库存才会变动。"
+            @retry="loadData"
+          />
+        </template>
         <el-table-column prop="transferNumber" label="调拨编号" width="170" />
         <el-table-column label="方向" width="80" align="center">
           <template #default="{ row }">
@@ -975,7 +992,7 @@ function isOutbound(row: TableRow) { return row.sourceFactoryId === factoryId.va
           <el-table-column label="现有库存" width="110" align="right">
             <template #default="{ row }">
               <span v-if="row._currentStock != null && row._currentStock !== ''"
-                    :style="{ color: Number(row._currentStock) < transferBaseQuantity(row) ? '#f56c6c' : '#67c23a' }">
+                    :style="{ color: Number(row._currentStock) < transferBaseQuantity(row) ? 'var(--cs-danger)' : 'var(--cs-success)' }">
                 {{ formatStock(row._currentStock) }} {{ displayUnit(row._inventoryUnit || row.unit) }}
               </span>
               <span v-else style="color: #c0c4cc">-</span>
@@ -1040,23 +1057,23 @@ function isOutbound(row: TableRow) { return row.sourceFactoryId === factoryId.va
 <style lang="scss" scoped>
 .page-wrapper { height: 100%; width: 100%; display: flex; flex-direction: column; overflow: auto; }
 .page-card { flex: 1; display: flex; flex-direction: column;
-  :deep(.el-card__header) { padding: 16px 20px; border-bottom: 1px solid #ebeef5; }
+  :deep(.el-card__header) { padding: 16px 20px; border-bottom: 1px solid var(--cs-border); }
   :deep(.el-card__body) { flex: 1; display: flex; flex-direction: column; padding: 20px; }
 }
 .card-header { display: flex; justify-content: space-between; align-items: center;
   .header-left { display: flex; align-items: baseline; gap: 12px;
-    .page-title { font-size: 16px; font-weight: 600; color: #303133; }
-    .data-count { font-size: 13px; color: #909399; }
+    .page-title { font-size: 16px; font-weight: 600; color: var(--cs-text); }
+    .data-count { font-size: 13px; color: var(--cs-muted); }
   }
   .header-right { display: flex; gap: 8px; }
 }
-.pagination-wrapper { display: flex; justify-content: flex-end; padding-top: 16px; border-top: 1px solid #ebeef5; margin-top: 16px; }
+.pagination-wrapper { display: flex; justify-content: flex-end; padding-top: 16px; border-top: 1px solid var(--cs-border); margin-top: 16px; }
 /* F-FP-3: 超库存时橙色边框提示 */
-:deep(.over-stock .el-input__wrapper) { box-shadow: 0 0 0 1px #e6a23c inset !important; }
+:deep(.over-stock .el-input__wrapper) { box-shadow: 0 0 0 1px var(--cs-warning) inset !important; }
 .quantity-unit-cell { display: flex; align-items: center; gap: 8px;
   :deep(.el-input-number) { flex: 1; min-width: 0; }
 }
-.unit-chip { flex: 0 0 36px; text-align: center; color: #606266; font-weight: 600; }
+.unit-chip { flex: 0 0 36px; text-align: center; color: var(--cs-muted); font-weight: 600; }
 .tf-await-confirm {
   margin-top: 3px; font-size: 12px; line-height: 1.3;
   color: var(--el-color-warning); font-weight: 600; white-space: nowrap;

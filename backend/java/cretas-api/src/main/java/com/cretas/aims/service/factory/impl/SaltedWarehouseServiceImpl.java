@@ -90,6 +90,9 @@ public class SaltedWarehouseServiceImpl implements SaltedWarehouseService {
                     .withCode("BATCH_UNAVAILABLE")
                     .withHint("请选择状态为 AVAILABLE 的批次");
         }
+        // #1590 遗留: 盐化扣量是把料取出来用, 与领料同一道状态闸 —— 质检中 (含冻结扣住) / 不良品 / 过期 / 报废的批次
+        // 有余量也不能扣 (以前只拦已用完 / 已耗尽 / 报废, 冻结和判不合格的批次照样被扣走)
+        com.cretas.aims.service.gate.MaterialBatchStateGate.assertUsable(batch);
 
         BigDecimal remaining = batch.getRemainingQuantity();
         if (remaining.compareTo(req.getQuantity()) < 0) {
@@ -103,7 +106,8 @@ public class SaltedWarehouseServiceImpl implements SaltedWarehouseService {
         // 4. 扣减 MaterialBatch.usedQuantity (复用现有基建)
         batch.setUsedQuantity(batch.getUsedQuantity().add(req.getQuantity()));
         if (batch.getRemainingQuantity().compareTo(BigDecimal.ZERO) == 0) {
-            batch.setStatus(MaterialBatchStatus.USED_UP);
+            // 交接单 11-11 二.1: 数量用尽不盖掉质量结论 (不良品/质检中/过期/报废保持原状态)
+            batch.setStatus(MaterialBatchStatus.whenExhausted(batch.getStatus(), MaterialBatchStatus.USED_UP));
         }
         batchRepo.save(batch);
         inventoryLowStockEventPublisher.publishIfLowStock(factoryId, batch, "OUT");

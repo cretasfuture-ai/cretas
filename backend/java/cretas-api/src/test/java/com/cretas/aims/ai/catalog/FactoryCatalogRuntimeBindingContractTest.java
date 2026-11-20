@@ -49,16 +49,18 @@ class FactoryCatalogRuntimeBindingContractTest {
         CatalogSnapshot catalog = readCatalog();
         Map<String, ToolExecutor> metadata = scanToolMetadata();
 
-        assertThat(catalog.canonicalCodes).hasSize(266);
+        // 2026-11-18 v3 复核缺口 +4 意图 (CUSTOMER_CREATE / HR_MY_WAGE_QUERY / HR_EMPLOYEE_WORK_LOCATION_QUERY / SSOP_SCHEDULE_PLAN_CREATE)
+        assertThat(catalog.canonicalCodes).hasSize(275);
         assertThat(catalog.reclassifiedCodes).hasSize(29);
         Set<String> canonicalReclassifiedCodes = catalog.reclassifiedCodes.stream()
                 .map(FactoryIntentCatalog::canonicalCode)
                 .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
         assertThat(canonicalReclassifiedCodes).hasSize(29);
         assertThat(FactoryIntentCatalog.canonicalCodes())
-                .hasSize(266)
+                .hasSize(275)
                 .containsAll(canonicalReclassifiedCodes);
-        assertThat(catalog.toolNames).hasSize(252);
+        // +4 工具名: customer_create (之前没有意图绑定) / my_wage_query / employee_work_location_query / ssop_schedule_plan
+        assertThat(catalog.toolNames).hasSize(261);
         assertThat(metadata.keySet()).containsAll(catalog.toolNames);
 
         ToolRegistry toolRegistry = register(metadata.values());

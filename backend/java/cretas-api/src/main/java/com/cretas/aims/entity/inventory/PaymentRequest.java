@@ -187,6 +187,22 @@ public class PaymentRequest extends BaseEntity {
     @Column(name = "approve_note", columnDefinition = "TEXT")
     private String approveNote;
 
+    /** 本人审批留痕: 提交人=审批人, 工厂开了 allow_self_approval (V20261110_47)。 */
+    @Column(name = "self_approved", nullable = false)
+    private boolean selfApproved = false;
+
+    /** 本人审批原因 (开关开时必填)。 */
+    @Column(name = "self_approval_reason", columnDefinition = "TEXT")
+    private String selfApprovalReason;
+
+    /** 本人登记付款留痕: 退款申请人=付款登记人, 工厂开了 allow_self_approval。 */
+    @Column(name = "self_paid", nullable = false)
+    private boolean selfPaid = false;
+
+    @Column(name = "self_paid_reason", columnDefinition = "TEXT")
+    private String selfPaidReason;
+
+
     // ─── 付款执行 ───────────────────────────────────────────────────────────
     @Column(name = "paid_by")
     private Long paidBy;

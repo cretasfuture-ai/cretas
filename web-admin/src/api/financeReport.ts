@@ -1,3 +1,4 @@
+import { SHIPMENT_COST_SOURCE_INCOMPLETE } from './financeReportCodes';
 /**
  * Sprint 7 T3 — 财务三表 API client.
  *
@@ -170,7 +171,34 @@ export interface ShipmentSkuMargin {
 
 export function getShipmentSkuMargin(factoryId: string, periodStart: string, periodEnd: string) {
   return get<ShipmentSkuMargin>(`/${factoryId}/finance/report/shipment-sku-margin`,
-    { params: { periodStart, periodEnd } });
+    // 出货扣库不完整 (409) 由页面内说明, 不让全局拦截器弹红窗; 其它错误照旧走全局提示。
+    { params: { periodStart, periodEnd }, _handledErrorCodes: [SHIPMENT_COST_SOURCE_INCOMPLETE] });
+}
+
+/**
+ * 经营分析「财务」区块的系统毛利 (Steve 2026-11-18: 收入 = 发货收入, 与应收挂账同一批发运单)。
+ * 金额按工厂权限配置的财务读可见, 无权时为 null (status / 条数 / 原因照常返回)。
+ */
+export type ShippedGrossProfitStatus = 'OK' | 'NO_SHIPMENT' | 'PRICE_MISSING' | 'COST_INCOMPLETE';
+
+export interface ShippedGrossProfit {
+  periodStart: string;
+  periodEnd: string;
+  status: ShippedGrossProfitStatus;
+  shipmentLineCount: number;
+  revenue: number | null;
+  cost: number | null;
+  grossProfit: number | null;
+  marginRate: number | null;
+  unavailableReason: string | null;
+  revenueBasis: string;
+  costBasis: string;
+}
+
+export function getShippedGrossProfit(factoryId: string, periodStart: string, periodEnd: string) {
+  // _silent: 卡片自己说明失败原因 (含 403 无权), 不再弹全局提示
+  return get<ShippedGrossProfit>(`/${factoryId}/finance/report/shipped-gross-profit`,
+    { params: { periodStart, periodEnd }, _silent: true });
 }
 
 export function getIncomeStatement(

@@ -466,6 +466,8 @@ class ProcessSecretRereviewSecurityTest {
         com.cretas.aims.ai.tool.impl.bom.BomReverseQueryTool tool = new com.cretas.aims.ai.tool.impl.bom.BomReverseQueryTool();
         ReflectionTestUtils.setField(tool, "reverseQueryService", reverse);
         ReflectionTestUtils.setField(tool, "processSecretGuard", new ProcessSecretRecipeGuard(recipes, access));
+        // 本用例测工艺保密的合计口径; 价格可见性 (看不到时成本差额置空) 由 BomReverseQueryToolPriceVisibilityContractTest 覆盖
+        com.cretas.aims.ai.tool.ToolPriceViewTestSupport.callerSeesAllAmounts(tool);
         Method exec = tool.getClass().getDeclaredMethod("doExecute", String.class, Map.class, Map.class);
         exec.setAccessible(true);
         actAs(user(77));

@@ -119,7 +119,7 @@ public class DynamicToolSelectionService {
         try {
             com.cretas.aims.dto.ai.PreprocessedQuery pq = queryPreprocessorService.preprocessRulesOnly(userQuery);
             com.cretas.aims.config.TimeNormalizationRules.TimeRange range = pq == null ? null : pq.getPrimaryTimeRange();
-            if (range != null && range.isValid()) {
+            if (range != null && range.isValid() && com.cretas.aims.ai.tool.TimeRangeFilter.mentionsTime(userQuery)) {
                 String from = range.getStart().toLocalDate().toString();
                 String to = range.getEnd().toLocalDate().toString();
                 params.put("startDate", from);
@@ -436,14 +436,26 @@ public class DynamicToolSelectionService {
      */
     Optional<String> skillPreemptionBlocker(com.cretas.aims.dto.skill.SkillDefinition skill,
                                             String factoryId, Long userId, String userRole) {
-        if (toolPermissionChain == null || clarificationCandidateService == null || configService == null) {
+        if (clarificationCandidateService == null || configService == null) {
             return Optional.of("权限预检不可用");
         }
+        // 第一层: 与显式 Skill 执行 (SkillExecutor 第 2a 步) / 澄清候选同一个预检 (#1747 遗留 L-b)
+        Optional<String> preflight = clarificationCandidateService
+                .skillPermissionRefusal(skill, factoryId, userId, userRole);
+        if (preflight.isPresent()) {
+            return preflight;
+        }
+        // 第二层 (只在抢先时): 关键词抢先没经过意图权限, 所以 Skill 里每个工具还要有一个对他开放的意图;
+        // 没有意图绑定的工具, 一线角色一律不放 —— 一线角色经 Skill 拿到的不能比经意图拿到的多。
         java.util.LinkedHashSet<String> toolNames = new java.util.LinkedHashSet<>();
-        if (skill.getTools() != null) {
+        if (com.cretas.aims.ai.workflow.inventory.InventoryAnalysisWorkflow.CANONICAL_SKILL_NAME.equals(skill.getName())) {
+            // 执行期走固定工作流, 定义里的 tools/DAG 不生效 (与 SkillExecutorImpl 预检同一口径)
+            toolNames.addAll(com.cretas.aims.ai.workflow.inventory.InventoryAnalysisWorkflow.APPROVED_TOOLS);
+        } else if (skill.getTools() != null) {
             toolNames.addAll(skill.getTools());
         }
-        if (skill.getExecutionGraph() != null) {
+        if (!com.cretas.aims.ai.workflow.inventory.InventoryAnalysisWorkflow.CANONICAL_SKILL_NAME.equals(skill.getName())
+                && skill.getExecutionGraph() != null) {
             for (com.cretas.aims.dto.skill.SkillDefinition.ExecutionNode node : skill.getExecutionGraph()) {
                 if (node.getToolName() != null) toolNames.add(node.getToolName());
                 if (node.getFallbackTool() != null) toolNames.add(node.getFallbackTool());
@@ -457,12 +469,6 @@ public class DynamicToolSelectionService {
             Optional<ToolExecutor> tool = toolRegistry.getExecutor(toolName);
             if (tool.isEmpty()) {
                 continue;   // 未注册的工具执行时会被跳过 / 报错, 跑不到
-            }
-            Map<String, Object> trusted = new HashMap<>();
-            TrustedExecutionContext.enforcePrincipal(trusted, factoryId, userId, userRole);
-            Optional<String> denied = toolPermissionChain.denyReason(tool.get(), factoryId, userRole, null, trusted);
-            if (denied.isPresent()) {
-                return Optional.of(toolName + ": " + denied.get());
             }
             List<AIIntentConfig> owners = intents == null ? List.of() : intents.stream()
                     .filter(i -> i != null && toolName.equals(i.getToolName()))

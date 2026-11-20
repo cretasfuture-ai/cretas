@@ -201,8 +201,13 @@ def test_stale_capability_table_falls_back_to_expiry_order():
         entries = list(llm_router._SLOT_POOLS[slot])
         if slot not in llm_router._NO_TEXT_TAIL_SLOTS:
             entries += llm_router._TEXT_TAIL
+        # 2026-11-12: 停用账号与(未启用的)付费两家在排序前滤掉; 本地优先的槽排序后把本地挪到链头。
+        entries = [p for p in entries if p[0] not in llm_router._DISABLED_ACCOUNTS
+                   and p[0] not in llm_router._PAID_ACCOUNTS]
         expiry_only = llm_router._dedup_chain(
             sorted(entries, key=lambda p: llm_router._expiry_of(*p)))
+        if slot in llm_router._LOCAL_FIRST_SLOTS and llm_router._LOCAL_PAIR in expiry_only:
+            expiry_only = [llm_router._LOCAL_PAIR] + [p for p in expiry_only if p != llm_router._LOCAL_PAIR]
 
         with mock.patch.object(llm_router, "_today", lambda: far):
             assert llm_router._capability_stale() is True

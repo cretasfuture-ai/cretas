@@ -1,0 +1,158 @@
+{
+  "taskId": "SMARTBI-CLAUDE-TEACHER-20261104",
+  "baseSha": "bb1a811201c5a1f8df8d0f06bb5fd149bde863ad",
+  "profile": "manufacturing-analyst/2026-11-04.6",
+  "teacher": {
+    "calls": 32,
+    "budgetUsd": 10,
+    "actualUsd": 1.46905,
+    "unsettled": 0,
+    "inputTokens": 108045,
+    "outputTokens": 88464,
+    "standardGlobalResponses": true,
+    "retainedTruncatedResponses": 2,
+    "localPartialSummaries": 2,
+    "totalTokens": 196509
+  },
+  "backend": {
+    "passed": 347,
+    "skipped": 0,
+    "command": "python -m blacklake.test_local",
+    "realPostgreSQLScram": true,
+    "realRedis": true,
+    "log": "validation/pytest-sections-final.log"
+  },
+  "budgetTests": {
+    "passed": 12,
+    "command": "python -m pytest tests/test_blacklake_teacher_eval.py -q",
+    "privateLog": "experiment-20261104/budget-tests-final.log"
+  },
+  "realLocalModel": {
+    "success": true,
+    "reportId": "090144e7734645cc916edc42fa8dbab7",
+    "profile": "manufacturing-analyst/2026-11-04.6",
+    "status": "ready",
+    "aiStatus": "complete",
+    "sections": 7,
+    "validation": {
+      "allSections": true,
+      "evidenceScope": true,
+      "numbersBoundByProgram": true,
+      "requiredRisks": true,
+      "schema": true
+    },
+    "usage": {
+      "durationSeconds": 156.165338208,
+      "estimated": false,
+      "inputTokens": 6962,
+      "outputTokens": 2376,
+      "requestIds": [
+        "72c67207e6ea4afea4d876d91f380523"
+      ],
+      "source": "ollama_response",
+      "totalTokens": 9338
+    },
+    "currentRequestUsage": {
+      "durationSeconds": 156.165338208,
+      "estimated": false,
+      "inputTokens": 6962,
+      "outputTokens": 2376,
+      "requestIds": [
+        "72c67207e6ea4afea4d876d91f380523"
+      ],
+      "source": "ollama_response",
+      "totalTokens": 9338
+    },
+    "modelCalls": 1,
+    "repairAttempts": 0,
+    "validationFeedback": null,
+    "preservedReady": 27,
+    "sourceBusinessWrites": 0,
+    "sourceRefreshed": false
+  },
+  "questionChecks": {
+    "baseline": 3,
+    "candidate": 3,
+    "sharedStatisticsInSmallSampleQuestion": true,
+    "accuracyImprovementClaimed": false
+  },
+  "sourceHashes": {
+    "backend/python/blacklake/teacher_eval.py": "105edaef47ef3cde7c9530b2d85df0861c9b9e8b75992bc2d37dc8fea071b2f2",
+    "backend/python/smartbi/services/analysis_distillation.py": "34cfdefe84c814f329482ac05d0af3722db138600621d9d3030f06bddce861e4",
+    "backend/python/smartbi/services/analysis_methods.py": "16e310bc36d48bb6fffc0973d1aafc88fda1ee756574a40b8c6c9dfa1f27c6e1",
+    "backend/python/smartbi/services/analysis_playbook.py": "554e05d69bae453d7a587a3c21355d427d1925785bc6c64b901b64071082fc23",
+    "backend/python/smartbi/services/local_analyst.py": "ad3d77ee3102e7c7b64bbc940ef044eab94e056e57d20b8f7258de1038fe366f",
+    "backend/python/tests/test_blacklake_teacher_eval.py": "0283d9a361450f2f042c8fa2505842ea630ed7589d5779bdf642ba115700a8a2",
+    "backend/python/tests/test_smartbi_analysis_distillation.py": "e24cb27bf8adc6e43ab89992ec3b2c5826ab9677807aecc0129c099ff2149e2b",
+    "backend/python/tests/test_smartbi_local_analyst.py": "5d87496778f83aa75d0636a7bd31ba896ab770d9ccab940fd90aad62193e779d",
+    "web-admin/vite.config.ts": "cd0bc5de07d51626aeb11337cebe2438a8ced719377d92b98f21a09c4b42bac6",
+    "web-admin/tooling/blacklakePythonTarget.ts": "f18d2e4e53eb1307555effaa2dc3389096346335354069bc530c5d43cf5e347e",
+    "web-admin/src/__tests__/blacklakePythonTarget.spec.ts": "6dbe5db41f70ff69408cdf7472a277e6f9002e2b62b5eb7f27c9f92d2a8778f7"
+  },
+  "surface": {
+    "apiVersionReadback": true,
+    "browserVersionReadback": true,
+    "api": {
+      "reportId": "090144e7734645cc916edc42fa8dbab7",
+      "profile": "manufacturing-analyst/2026-11-04.6",
+      "sections": 7,
+      "cached": true,
+      "apiPort": 8095,
+      "sourceBusinessWrites": 0
+    },
+    "proxy": {
+      "profile": "manufacturing-analyst/2026-11-04.6",
+      "reportId": "090144e7734645cc916edc42fa8dbab7",
+      "cached": true,
+      "webPort": 5178,
+      "apiPort": 8095
+    },
+    "browser": {
+      "profile": "manufacturing-analyst/2026-11-04.6",
+      "reportId": "090144e7734645cc916edc42fa8dbab7",
+      "url": "http://127.0.0.1:5178/blacklake-smartbi.html",
+      "directEntry": true,
+      "sectionInterpretations": 7,
+      "scopedFollowup": true,
+      "cachedModelAnalysisReused": true,
+      "privateScreenshot": "experiment-20261104/teacher-analysis-followup.jpg",
+      "surface": "fresh in-app browser session",
+      "legacyHotReloadSessionFailed": true
+    },
+    "newApiPort": 8095,
+    "previewPort": 5178,
+    "originalBackendUntouched": true,
+    "originalRestartAutoReview": "rejected: blocked by policy",
+    "parallelRuntimeUsesCopiedMetadataDb": true,
+    "parallelSchedulerEnabled": false,
+    "legacySchedulerUnchanged": true
+  },
+  "sourceRefreshed": false,
+  "sourceBusinessWrites": 0,
+  "productionDeployed": false,
+  "pr": 1390,
+  "draft": true,
+  "unseenDateCheck": {
+    "date": "2026-10-28",
+    "outsideTrainingWindow": true,
+    "baseline": 1,
+    "candidate": 1,
+    "interpretation": "classification check only; not a broad accuracy benchmark"
+  },
+  "frontendProxyTests": {
+    "passed": 15,
+    "files": 2,
+    "privateLog": "experiment-20261104/proxy-tests.log"
+  },
+  "typecheck": {
+    "exitCode": 0,
+    "command": "NODE_OPTIONS=--max-old-space-size=8192 npx vue-tsc -b --noEmit",
+    "privateLog": "experiment-20261104/typecheck-8gb.log",
+    "initialDefaultHeapRun": "failed with heap exhaustion; not a product type error"
+  },
+  "builds": {
+    "productionBundleRebuilt": false,
+    "reason": "proxy helper affects only explicit local dev experiment; server config compiled live and mode isolation/complete types verified"
+  },
+  "backendCommit": "7605435f7b"
+}

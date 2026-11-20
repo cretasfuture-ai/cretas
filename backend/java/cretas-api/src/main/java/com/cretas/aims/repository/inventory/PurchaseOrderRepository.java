@@ -24,6 +24,48 @@ public interface PurchaseOrderRepository extends JpaRepository<PurchaseOrder, St
     Page<PurchaseOrder> findByFactoryIdOrderByCreatedAtDesc(String factoryId, Pageable pageable);
 
     /**
+     * 采购订单列表「关键词 + 状态 + 订单日期 + 创建人范围」服务端搜索 (原型统一 DECISIONS 十九: 以前只在前端对当前页
+     * 做 includes)。关键词匹配 订单号 / 供应商名; {@code escapedKeyword} 必须已转义 LIKE 通配符, 空串 = 不过滤。
+     * 全部在分页之前由数据库过滤, 总数随过滤变化, 永远带 factory_id。
+     * ⛔ 不用 {@code CAST(:x AS string) IS NULL} (null 的 LocalDate/枚举在 PG 上绑不出类型), 用布尔标志 + 永远非空的值。
+     */
+    default Page<PurchaseOrder> searchListPage(String factoryId, java.util.Collection<Long> createdByList,
+                                               PurchaseOrderStatus status, String escapedKeyword,
+                                               LocalDate orderDateFrom, LocalDate orderDateTo, Pageable pageable) {
+        boolean byKeyword = escapedKeyword != null && !escapedKeyword.isBlank();
+        return searchListPageBound(factoryId,
+                createdByList != null, createdByList != null && !createdByList.isEmpty() ? createdByList : List.of(-1L),
+                status != null, status != null ? status : PurchaseOrderStatus.DRAFT,
+                byKeyword, byKeyword ? escapedKeyword : "",
+                orderDateFrom != null, orderDateFrom != null ? orderDateFrom : LocalDate.of(1970, 1, 1),
+                orderDateTo != null, orderDateTo != null ? orderDateTo : LocalDate.of(9999, 12, 31),
+                pageable);
+    }
+
+    @Query("SELECT po FROM PurchaseOrder po LEFT JOIN Supplier s ON s.id = po.supplierId " +
+            "WHERE po.factoryId = :factoryId " +
+            "AND (:scoped = false OR po.createdBy IN :createdByList) " +
+            "AND (:byStatus = false OR po.status = :status) " +
+            "AND (:byKeyword = false OR (" +
+            "LOWER(po.orderNumber) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\' OR " +
+            "LOWER(COALESCE(s.name, '')) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\')) " +
+            "AND (:byFrom = false OR po.orderDate >= :orderDateFrom) " +
+            "AND (:byTo = false OR po.orderDate <= :orderDateTo) " +
+            "ORDER BY po.createdAt DESC")
+    Page<PurchaseOrder> searchListPageBound(@Param("factoryId") String factoryId,
+                                            @Param("scoped") boolean scoped,
+                                            @Param("createdByList") java.util.Collection<Long> createdByList,
+                                            @Param("byStatus") boolean byStatus,
+                                            @Param("status") PurchaseOrderStatus status,
+                                            @Param("byKeyword") boolean byKeyword,
+                                            @Param("keyword") String keyword,
+                                            @Param("byFrom") boolean byFrom,
+                                            @Param("orderDateFrom") LocalDate orderDateFrom,
+                                            @Param("byTo") boolean byTo,
+                                            @Param("orderDateTo") LocalDate orderDateTo,
+                                            Pageable pageable);
+
+    /**
      * 某工厂某天已经存在多少张自动采购建议单 —— 用来接着编号, ⛔ 不要每次从 1 开始。
      *
      * <p>🔴 2026-08-28: 编号原来是「本次调用内的下标」, 每次调用都从 1 开始,
@@ -48,6 +90,20 @@ public interface PurchaseOrderRepository extends JpaRepository<PurchaseOrder, St
             nativeQuery = true)
     long countAutoSuggestionsOn(@Param("factoryId") String factoryId,
                                 @Param("dateStr") String dateStr);
+
+    /**
+     * 某原料最近几次真实采购的供应商 (新的在前): 自动采购草稿预填供应商的第二来源 (2026-11-11)。
+     * 排除草稿 (还没采购)、已取消、财务驳回 (都不算一次采购), 只取有供应商的单。
+     */
+    @Query("SELECT po.supplierId FROM PurchaseOrder po, PurchaseOrderItem i "
+            + "WHERE i.purchaseOrderId = po.id AND po.factoryId = :factoryId "
+            + "AND i.materialTypeId = :materialTypeId AND i.deletedAt IS NULL "
+            + "AND po.supplierId IS NOT NULL AND po.status NOT IN :excludedStatuses "
+            + "ORDER BY po.orderDate DESC, po.createdAt DESC, po.id DESC")
+    List<String> findRecentSupplierIdsForMaterial(@Param("factoryId") String factoryId,
+                                                  @Param("materialTypeId") String materialTypeId,
+                                                  @Param("excludedStatuses") java.util.Collection<PurchaseOrderStatus> excludedStatuses,
+                                                  Pageable pageable);
 
     /**
      * Sprint 6 W2-B (RBAC DataScope SELF) — 仅查当前用户创建的采购单.

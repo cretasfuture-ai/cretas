@@ -11,6 +11,8 @@ import { usePermissionStore } from '@/store/modules/permission';
 import { get } from '@/api/request';
 import { getGoldDataRange } from '@/api/smartbi/dataRange';
 import { getKpiSummary, getTrendBundle } from '@/api/smartbi/gold';
+import { getFactorySalesSummary } from '@/api/smartbi/factoryOverview';
+import { buildSystemSalesKpiCards, hasSystemSalesCards, SYS_KEY, SYSTEM_SALES_PERIOD } from './dashboardSystemSales';
 import { ElMessage } from 'element-plus';
 import {
   TrendCharts,
@@ -36,6 +38,8 @@ import SmartBIEmptyState from '@/components/smartbi/SmartBIEmptyState.vue';
 import ChartSkeleton from '@/components/smartbi/ChartSkeleton.vue';
 import { enhanceChartDefaults } from '@/composables/useChartEnhancer';
 import TemplateGrid from './components/TemplateGrid.vue';
+import RegionSalesList from './components/RegionSalesList.vue';
+import { manufacturingQuickQuestions } from './components/dashboardQuickQuestions';
 import type { ChartWithMeta } from './components/chartInsight';
 import ChartInsight from './components/ChartInsight.vue';
 import { useChartInsight } from '@/composables/useChartInsight';
@@ -73,8 +77,7 @@ interface DepartmentRank {
 // 前端使用的区域排行数据
 interface RegionRank {
   name: string;
-  sales: number;
-  percentage: number;
+  value: number;
 }
 
 // 前端使用的 AI 洞察
@@ -169,6 +172,30 @@ const kpiData = computed(() => {
     (c.title || '').toLowerCase().includes(keyword)
   );
 
+  // 系统销售订单口径 (无上传数据时的回退, 与经营分析页「销售订单」同源)。
+  if (hasSystemSalesCards(cards)) {
+    const amt = findCard(SYS_KEY.amount);
+    const avg = findCard(SYS_KEY.avg);
+    const ord = findCard(SYS_KEY.orders);
+    const inflight = findCard(SYS_KEY.inFlight);
+    return {
+      totalRevenue: amt?.rawValue ?? null,
+      revenueGrowth: null as number | null,
+      revenueLabel: '订单金额',
+      totalProfit: avg?.rawValue ?? null,
+      profitGrowth: null as number | null,
+      profitLabel: '单均金额',
+      profitUnit: '元',
+      orderCount: ord?.rawValue ?? null,
+      orderGrowth: null as number | null,
+      orderLabel: '有效订单数',
+      customerCount: inflight?.rawValue ?? null,
+      customerGrowth: null as number | null,
+      customerLabel: '在途订单',
+      customerUnit: '张',
+    };
+  }
+
   // Gold-mode mapping (restaurant POS): total_revenue / bill_count / avg_bill_value / store_count.
   // Restaurants don't track profit or unique customers at this layer, so relabel slots 2-4 accordingly.
   const goldRev = findCard('total_revenue');
@@ -191,7 +218,7 @@ const kpiData = computed(() => {
       orderGrowth: null as number | null,
       customerCount: goldStores.rawValue ?? null,
       customerGrowth: null as number | null,
-      customerLabel: authStore.factoryType === 'RESTAURANT' ? '门店数' : '网点数',
+      customerLabel: authStore.factoryType === 'RESTAURANT' ? '门店数' : '销售网点数',
       customerUnit: '家',
     };
   }
@@ -261,7 +288,8 @@ const isGoldMode = computed(() => {
   const cards = dashboardData.value?.kpiCards;
   if (!cards || cards.length === 0) return false;
   const has = (key: string) => cards.some(c => c.key === key);
-  return has('total_revenue') && has('bill_count') && has('avg_bill_value') && has('store_count');
+  return (has('total_revenue') && has('bill_count') && has('avg_bill_value') && has('store_count'))
+    || hasSystemSalesCards(cards);
 });
 
 // 部门排行数据 (从 rankings 提取)
@@ -281,7 +309,8 @@ const departmentRanking = computed<DepartmentRank[]>(() => {
   }));
 });
 
-// 区域排行数据 (从 rankings 提取)
+// 区域排行原始数据 (从 rankings 提取); 占比由 RegionSalesList 用 regionShare.ts 计算,
+// 无数据/数据不可信时整块显示空状态, 不渲染区域数字。
 const regionRanking = computed<RegionRank[]>(() => {
   if (!dashboardData.value?.rankings) return [];
 
@@ -289,13 +318,9 @@ const regionRanking = computed<RegionRank[]>(() => {
     || dashboardData.value.rankings['区域']
     || [];
 
-  // 计算总值用于百分比
-  const total = regionRankings.reduce((sum, item) => sum + item.value, 0);
-
   return regionRankings.map(item => ({
     name: item.name,
-    sales: item.value,
-    percentage: total > 0 ? Math.round((item.value / total) * 100) : 0
+    value: item.value
   }));
 });
 
@@ -460,12 +485,6 @@ const restaurantQuickQuestions = [
   { text: '周末周中对比', icon: Clock },
   { text: '峰值月份', icon: DataLine },
   { text: '优惠券使用情况', icon: Histogram }
-];
-const manufacturingQuickQuestions = [
-  { text: '本月销售额如何?', icon: TrendCharts },
-  { text: '哪个部门业绩最好?', icon: Histogram },
-  { text: '利润率变化趋势如何?', icon: DataLine },
-  { text: '客户增长情况怎样?', icon: User }
 ];
 const quickQuestions = computed(() =>
   isRestaurantTenant.value ? restaurantQuickQuestions : manufacturingQuickQuestions
@@ -1057,6 +1076,17 @@ async function loadGoldDashboardData() {
   }
 }
 
+async function loadSystemSalesCards() {
+  try {
+    return buildSystemSalesKpiCards(await getFactorySalesSummary());
+  } catch (e) {
+    console.warn('系统销售订单汇总加载失败, 驾驶舱保持空状态:', e);
+    return null;
+  }
+}
+
+const isSystemSalesSource = computed(() => dashboardData.value?.period === SYSTEM_SALES_PERIOD);
+
 async function loadDashboardData() {
   if (!factoryId.value) {
     ElMessage.warning('未获取到工厂ID，请重新登录');
@@ -1126,6 +1156,29 @@ async function loadDashboardData() {
       } else {
         fallbackRangeLabel.value = '';
         fallbackDateRange.value = null;
+      }
+
+      // 无上传/gold 数据时回退到业务库销售订单汇总 (与经营分析页同一接口, 租户来自登录)。
+      // 失败或无订单 → 保持空状态, 不造数。
+      const finalCards = dashboardData.value?.kpiCards || [];
+      if (!finalCards.some(c => c.rawValue != null && c.rawValue !== 0)) {
+        const sysCards = await loadSystemSalesCards();
+        if (sysCards) {
+          dashboardData.value = {
+            period: SYSTEM_SALES_PERIOD,
+            startDate: '',
+            endDate: '',
+            kpiCards: sysCards,
+            rankings: {},
+            charts: {},
+            aiInsights: [],
+            alerts: [],
+            generatedAt: new Date().toISOString(),
+          } as DashboardResponse;
+          fallbackRangeLabel.value = '';
+          fallbackDateRange.value = null;
+          return;
+        }
       }
 
       // Async load LLM insights (non-blocking, renders after KPIs+charts)
@@ -1777,6 +1830,20 @@ onUnmounted(() => {
       @action="goToUpload"
     />
 
+    <el-alert
+      v-if="isSystemSalesSource && !loading"
+      type="info"
+      :closable="false"
+      show-icon
+      style="margin-bottom: 12px;"
+      data-testid="system-sales-source-note"
+    >
+      <template #title>
+        暂无上传报表数据，以下 KPI 来自业务系统销售订单（全部历史，不含已取消、草稿、财务驳回）。图表与排行需要上传报表，更多见
+        <el-link type="primary" :underline="false" @click="router.push('/smart-bi/analysis-hub')">经营分析</el-link>。
+      </template>
+    </el-alert>
+
     <!-- Apr 24 UX: fallback-range notice (本月 empty, auto-switched to historical) -->
     <el-alert
       v-if="fallbackRangeLabel && !dateRange && !loading"
@@ -1917,7 +1984,7 @@ onUnmounted(() => {
 
     <!-- 排行榜区 -->
     <el-row :gutter="16" class="ranking-section" v-loading="loading" aria-label="排行榜">
-      <el-col v-if="!isRestaurantTenant && departmentRanking.length > 0" :xs="24" :md="regionRanking.length > 0 ? 12 : 24">
+      <el-col v-if="!isRestaurantTenant && departmentRanking.length > 0" :xs="24" :md="12">
         <CapabilityGate card-id="dashboard_dept_ranking" :requires="['staff_name', 'net_amount']">
         <el-card class="ranking-card">
           <template #header>
@@ -1947,9 +2014,9 @@ onUnmounted(() => {
         </el-card>
         </CapabilityGate>
       </el-col>
-      <!-- P2-18: 区域销售分布空时整个 col 隐藏, 部门排行 col 自动扩宽到 24. 避免大片"暂无区域销售数据" 占屏 -->
+      <!-- 区域销售分布: 无数据时整块显示空状态(说明缺什么数据), 不渲染区域数字 -->
       <el-col
-        v-if="!isRestaurantTenant && regionRanking.length > 0"
+        v-if="!isRestaurantTenant"
         :xs="24"
         :md="departmentRanking.length > 0 ? 12 : 24"
       >
@@ -1962,20 +2029,7 @@ onUnmounted(() => {
             </div>
           </template>
           <div class="ranking-list">
-            <div
-              v-for="item in regionRanking"
-              :key="item.name"
-              class="ranking-item region-item"
-            >
-              <div class="region-name">{{ item.name }}</div>
-              <div class="region-bar-wrapper">
-                <div class="region-bar" :class="'rank-bar-' + Math.min(regionRanking.indexOf(item), 3)" :style="{ width: item.percentage + '%' }"></div>
-              </div>
-              <div class="region-value">
-                <span class="value">{{ formatMoney(item.sales) }}</span>
-                <span class="percent">{{ item.percentage }}%</span>
-              </div>
-            </div>
+            <RegionSalesList :items="regionRanking" />
           </div>
         </el-card>
         </CapabilityGate>
@@ -2452,65 +2506,6 @@ onUnmounted(() => {
         color: var(--el-color-danger, #FF5630);
       }
     }
-
-    .region-item {
-      border-radius: 6px;
-      padding: 12px 8px;
-      margin: 0 -8px;
-      transition: background 0.2s ease;
-
-      &:hover {
-        background: var(--el-fill-color-light, #F4F6F9);
-
-        .region-bar {
-          filter: brightness(1.1);
-        }
-      }
-
-      .region-name {
-        width: 80px;
-        font-size: 14px;
-        color: var(--el-text-color-primary, #1A2332);
-      }
-
-      .region-bar-wrapper {
-        flex: 1;
-        height: 8px;
-        background: #F4F6F9;
-        border-radius: 4px;
-        margin: 0 12px;
-        overflow: hidden;
-
-        .region-bar {
-          height: 100%;
-          background: linear-gradient(90deg, #2D8B57, #4C9AFF);
-          border-radius: 4px;
-          transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1), filter 0.2s ease;
-
-          &.rank-bar-0 { background: linear-gradient(90deg, #2D8B57, #4C9AFF); }
-          &.rank-bar-1 { background: linear-gradient(90deg, #36B37E, #57D9A3); }
-          &.rank-bar-2 { background: linear-gradient(90deg, #FFAB00, #FFC400); }
-          &.rank-bar-3 { background: linear-gradient(90deg, #A0AEC0, #CBD5E0); }
-        }
-      }
-
-      .region-value {
-        width: 100px;
-        text-align: right;
-
-        .value {
-          font-size: 14px;
-          color: var(--el-text-color-primary, #1A2332);
-          font-weight: 500;
-        }
-
-        .percent {
-          font-size: 12px;
-          color: var(--color-text-secondary);
-          margin-left: 8px;
-        }
-      }
-    }
   }
 }
 
@@ -2663,7 +2658,7 @@ onUnmounted(() => {
     word-break: break-word;
 
     .cursor {
-      color: #409EFF;
+      color: var(--cs-primary);
       animation: blink 1s step-end infinite;
       margin-left: 1px;
     }

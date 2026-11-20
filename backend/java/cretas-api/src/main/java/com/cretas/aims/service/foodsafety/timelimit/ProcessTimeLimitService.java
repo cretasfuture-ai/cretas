@@ -16,6 +16,7 @@ import com.cretas.aims.entity.workflow.ProductionWorkflowInstance;
 import com.cretas.aims.entity.workflow.WorkflowTaskPort;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.service.processentry.IntermediateOwnershipGuard;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
@@ -82,8 +83,17 @@ import java.util.stream.Collectors;
  * 端口没配时限 ⇒ 第一步就返回, 不读流水。旧批次钉的是旧版本, 端口上本来就没有配置。
  *
  * <h3>处置</h3>
- * 被拦时写 {@link ProcessTimeLimitEvent} (独立事务), 质检复检放行 / 判不合格。放行只覆盖事件当时已有的笔,
+ * 超时时写 {@link ProcessTimeLimitEvent} (独立事务), 质检复检放行 / 判不合格。放行只覆盖事件当时已有的笔,
  * 之后新入同一行的料不沾光。
+ *
+ * <h3>拦不拦 (PROTO-Q41, Steve 2026-11-18 拍板「默认只警告」)</h3>
+ * 工厂开关 {@code production.time_limit.block_on_exceed} ({@link
+ * com.cretas.aims.service.discipline.FactoryDisciplinePolicy#timeLimitBlockOnExceed}):
+ * <ul>
+ *   <li>关 (默认): 超时 / 未登记开始解冻<b>不拦</b>, 照常投料; 超时照样写一条 OPEN 记录供复盘, 警告经
+ *       {@code assert*} 的返回值和 {@link TimeLimitWarnings} 带回调用方 (成功响应 errorCode=TIME_LIMIT_WARNING)。</li>
+ *   <li>开: 原行为, 409 BLOCKING, 质检复检放行 / 判不合格后才能领。</li>
+ * </ul>
  */
 @Slf4j
 @Service
@@ -95,6 +105,12 @@ public class ProcessTimeLimitService {
     public static final String CODE_INVALID = "TIME_LIMIT_INVALID_REQUEST";
     public static final String CODE_EVENT_CLOSED = "TIME_LIMIT_EVENT_CLOSED";
     public static final String CODE_PAUSE_OPEN = "TIME_LIMIT_PAUSE_ALREADY_OPEN";
+    /** 纪律排查 A13: 补登解冻开始时间没填原因。 */
+    public static final String CODE_BACKFILL_REASON_REQUIRED = "TIME_LIMIT_BACKFILL_REASON_REQUIRED";
+    /** 纪律排查 A13: 补登时间超出本厂允许的最长补登时长 (含配置为 0 = 不允许补登)。 */
+    public static final String CODE_BACKFILL_TOO_EARLY = "TIME_LIMIT_BACKFILL_TOO_EARLY";
+    /** 补登时允许的客户端时钟误差: 这个范围内的时间按「现在」处理, 不算补登。 */
+    static final long BACKFILL_CLOCK_SKEW_MINUTES = 1;
 
     public static final class TargetType {
         public static final String SEMI_FINISHED = "SEMI_FINISHED";
@@ -122,7 +138,8 @@ public class ProcessTimeLimitService {
     }
 
     private static final String TRANSFER_IN_DOC = "TRANSFER_IN";
-    private static final String RELEASE_PATH = "质量管理 → 质检放行 → 超时处置";
+    /** 质检员在哪里处置: App 首页卡片 (质检员不登网页, MOBILE_ONLY_ROLES) 或网页页签。 */
+    private static final String RELEASE_PATH = "App 首页「超时处置」或网页「质量管理 → 质检放行 → 超时处置」";
     private static final int CONCLUSION_MAX = 2000;
     private static final int LINEAGE_DEPTH_CAP = 8;
     private static final DateTimeFormatter TIME_TEXT = DateTimeFormatter.ofPattern("MM-dd HH:mm");
@@ -146,6 +163,8 @@ public class ProcessTimeLimitService {
     private final WarehouseResolver warehouseResolver;
     private final ProductProcessWorkflowRevisionRepository revisionRepository;
     private final ObjectMapper objectMapper;
+    /** 缺口 16: 时限列表 = 这道可领来源清单, 归属与领用计划不同的半成品 / 在制批不出现在这里 (领用闸同一口径)。 */
+    private final IntermediateOwnershipGuard ownershipGuard;
 
     /**
      * 逐道录入是延迟扣减: 已录入还没小结的量账上还在。按笔判可领量时要减掉, 否则两行各领一次就把超时的料领走了。
@@ -154,6 +173,15 @@ public class ProcessTimeLimitService {
     @Autowired(required = false)
     @Lazy
     private PendingInterimFeedService pendingInterimFeedService;
+
+    /** 纪律排查 A13: 解冻开始最多可往前补登多久 (工厂配置)。未注入 (单测) 按默认值。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.discipline.FactoryDisciplinePolicy disciplinePolicy;
+
+    /** 测试 / 装配用。 */
+    public void setDisciplinePolicy(com.cretas.aims.service.discipline.FactoryDisciplinePolicy policy) {
+        this.disciplinePolicy = policy;
+    }
 
     /** 测试 / 装配用。 */
     public void setPendingInterimFeedService(PendingInterimFeedService service) {
@@ -182,7 +210,9 @@ public class ProcessTimeLimitService {
             boolean paused,
             boolean perLot,
             /** 进行中的暂停登记 id: 页面刷新后也能结束暂停。 */
-            Long pauseMarkId) {
+            Long pauseMarkId,
+            /** 本厂超时拦不拦 (PROTO-Q41): false = 只警告, 页面不要把超时 / 未登记解冻的料置灰。 */
+            boolean blockOnExceed) {
     }
 
     /** 处置请求。decision = RELEASED / REJECTED。 */
@@ -190,7 +220,14 @@ public class ProcessTimeLimitService {
     }
 
     /** 登记请求。kind = START / PAUSE。 */
-    public record MarkCommand(String targetType, String targetId, String kind, String code, String note) {
+    /**
+     * @param startedAt      纪律排查 A13: 只对「开始解冻」有效 —— 实际开始时间 (补登); 为空 = 现在。
+     *                       早于现在即为补登: 必须填 backfillReason, 且不得早于本厂允许的最长补登时长。
+     *                       冷藏暂停仍只收现在 (往前补一条暂停能把已超时的料救回来)。
+     * @param backfillReason 补登原因, 落库留痕。
+     */
+    public record MarkCommand(String targetType, String targetId, String kind, String code, String note,
+                              LocalDateTime startedAt, String backfillReason) {
     }
 
     /** 谁在领: 工序任务 (可能为空) + 这道的端口。 */
@@ -217,46 +254,55 @@ public class ProcessTimeLimitService {
 
     // ===================== 写入口 =====================
 
-    /** App 报工领半成品。 */
-    public void assertSemiFeedForTask(String factoryId, WorkProcessTask task, SemiFinishedInventory semi,
-                                      BigDecimal quantity, Long userId) {
+    /** App 报工领半成品。@return 只警告档下的警告 (空 = 没有); 拦截档超时直接 409。 */
+    public List<String> assertSemiFeedForTask(String factoryId, WorkProcessTask task, SemiFinishedInventory semi,
+                                              BigDecimal quantity, Long userId) {
+        List<String> warnings = new ArrayList<>();
         if (semi == null || task == null) {
-            return;
+            return warnings;
         }
         Consumer consumer = consumerOfTask(factoryId, task);
         WorkflowTaskPort port = matchBySku(consumer, semi.getProductTypeId());
         if (port != null) {
-            assertDrawable(factoryId, evaluate(factoryId, semiSource(semi), port, consumer, now()), quantity, userId);
+            addWarning(warnings, assertDrawable(factoryId,
+                    evaluate(factoryId, semiSource(semi), port, consumer, now()), quantity, userId));
         }
+        return warnings;
     }
 
-    /** App 报工 / 领料投原料。 */
-    public void assertRawFeedForTask(String factoryId, WorkProcessTask task, MaterialBatch batch,
-                                     BigDecimal quantity, Long userId) {
+    /** App 报工 / 领料投原料。@return 只警告档下的警告 (空 = 没有); 拦截档超时直接 409。 */
+    public List<String> assertRawFeedForTask(String factoryId, WorkProcessTask task, MaterialBatch batch,
+                                             BigDecimal quantity, Long userId) {
+        List<String> warnings = new ArrayList<>();
         if (batch == null || task == null) {
-            return;
+            return warnings;
         }
         Consumer consumer = consumerOfTask(factoryId, task);
         WorkflowTaskPort port = matchBySku(consumer, batch.getMaterialTypeId());
         if (port != null) {
-            assertDrawable(factoryId, evaluate(factoryId, rawSource(batch), port, consumer, now()), quantity, userId);
+            addWarning(warnings, assertDrawable(factoryId,
+                    evaluate(factoryId, rawSource(batch), port, consumer, now()), quantity, userId));
         }
+        return warnings;
     }
 
-    /** 二次加工开工领半成品: 没有工序任务上下文, 按计划的端口找。 */
-    public void assertSemiFeedForPlan(String factoryId, ProductionPlan plan, SemiFinishedInventory semi,
-                                      BigDecimal quantity, Long userId) {
+    /** 二次加工开工领半成品: 没有工序任务上下文, 按计划的端口找。@return 只警告档下的警告。 */
+    public List<String> assertSemiFeedForPlan(String factoryId, ProductionPlan plan, SemiFinishedInventory semi,
+                                              BigDecimal quantity, Long userId) {
+        List<String> warnings = new ArrayList<>();
         if (semi == null || plan == null) {
-            return;
+            return warnings;
         }
         Consumer consumer = consumerOfPlan(factoryId, plan.getId());
         if (consumer == null) {
-            return;
+            return warnings;
         }
         WorkflowTaskPort port = matchBySku(consumer, semi.getProductTypeId());
         if (port != null) {
-            assertDrawable(factoryId, evaluate(factoryId, semiSource(semi), port, consumer, now()), quantity, userId);
+            addWarning(warnings, assertDrawable(factoryId,
+                    evaluate(factoryId, semiSource(semi), port, consumer, now()), quantity, userId));
         }
+        return warnings;
     }
 
     /**
@@ -265,19 +311,20 @@ public class ProcessTimeLimitService {
      * @param before 这一行上次已保存的内容, 没有或还是草稿传 {@code null}。
      *               已经投下去的量不重判: 改备注重存不能因为后来超时了而失败, 只判新增的量。
      */
-    public void assertWebFeed(String factoryId, String planId, ProcessSheetRowRequest req,
-                              ProcessSheetRowRequest before, Long userId) {
+    public List<String> assertWebFeed(String factoryId, String planId, ProcessSheetRowRequest req,
+                                      ProcessSheetRowRequest before, Long userId) {
+        List<String> warnings = new ArrayList<>();
         if (req == null) {
-            return;
+            return warnings;
         }
         boolean hasUpstream = req.getUpstreamSources() != null && !req.getUpstreamSources().isEmpty();
         boolean hasRaw = req.getRawMaterialInputs() != null && !req.getRawMaterialInputs().isEmpty();
         if (!hasUpstream && !hasRaw) {
-            return;
+            return warnings;
         }
         Consumer consumer = consumerOfPlan(factoryId, planId);
         if (consumer == null || consumer.limited().isEmpty()) {
-            return;
+            return warnings;
         }
         LocalDateTime now = now();
         if (hasRaw) {
@@ -298,7 +345,8 @@ public class ProcessTimeLimitService {
                 WorkflowTaskPort port = matchRef(consumer, input.getWorkflowPortId(), input.getMaterialNodeId(),
                         batch.getMaterialTypeId(), req.getProcessOrder());
                 if (port != null) {
-                    assertDrawable(factoryId, evaluate(factoryId, rawSource(batch), port, consumer, now), added, userId);
+                    addWarning(warnings, assertDrawable(factoryId,
+                            evaluate(factoryId, rawSource(batch), port, consumer, now), added, userId));
                 }
             }
         }
@@ -321,16 +369,37 @@ public class ProcessTimeLimitService {
                 if (port != null) {
                     // 投料量只有和这一行同单位才能按量比; 折算不了传 null, 由 assertDrawable 按最严判
                     BigDecimal quantity = sameUnit(req, source.unit()) ? added : null;
-                    assertDrawable(factoryId, evaluate(factoryId, source, port, consumer, now), quantity, userId);
+                    addWarning(warnings, assertDrawable(factoryId,
+                            evaluate(factoryId, source, port, consumer, now), quantity, userId));
                 }
             }
         }
+        return warnings;
     }
 
-    private void assertDrawable(String factoryId, Evaluation e, BigDecimal quantity, Long userId) {
+    private static void addWarning(List<String> warnings, String warning) {
+        if (warning != null && !warnings.contains(warning)) {
+            warnings.add(warning);
+            TimeLimitWarnings.add(warning);
+        }
+    }
+
+    /**
+     * @return 只警告档 (默认) 下要带给操作员的一句警告; 没有超时 / 已解冻登记返回 null。
+     *         拦截档 ({@code blockOnExceed}) 下超时 / 未登记开始解冻直接抛 409 (原行为)。
+     */
+    private String assertDrawable(String factoryId, Evaluation e, BigDecimal quantity, Long userId) {
         SourceStatus s = e.status();
         String label = label(e.source());
+        boolean block = s.blockOnExceed();
         if (State.START_MISSING.equals(s.state())) {
+            if (!block) {
+                log.info("[时限] 只警告: 未登记开始解冻仍投料 factory={} target={}:{} user={}",
+                        factoryId, s.targetType(), s.targetId(), userId);
+                recordEvent(factoryId, e, userId, ProcessTimeLimitEvent.RecordKind.WARN_START_MISSING);
+                return label + " 还没有登记开始解冻，算不出「" + e.processName() + "」的投料时限。"
+                        + "本厂超时只警告，这次照常投料，已记一条复盘记录；请在时限面板补登「开始解冻」";
+            }
             throw new BusinessException(409, label + " 还没有登记开始解冻，「" + e.processName() + "」不能投料")
                     .withCode(CODE_START_MISSING)
                     .withHint("这道工序的投料时限从解冻开始算。请先在逐道录入的时限面板里登记「开始解冻」；"
@@ -344,13 +413,24 @@ public class ProcessTimeLimitService {
         }
         BigDecimal expired = s.expiredQuantity();
         if (expired == null || expired.signum() <= 0) {
-            return;
+            return null;
         }
         if (e.config().perLot() && quantity != null && quantity.compareTo(s.drawableQuantity()) <= 0) {
-            return;
+            return null;
         }
-        recordBlocked(factoryId, e, userId);
-        throw exceeded(e, quantity, label);
+        recordEvent(factoryId, e, userId, block
+                ? ProcessTimeLimitEvent.RecordKind.BLOCKED : ProcessTimeLimitEvent.RecordKind.WARN_EXCEEDED);
+        if (block) {
+            throw exceeded(e, quantity, label);
+        }
+        log.info("[时限] 只警告: 超时仍投料 factory={} target={}:{} expired={} user={}",
+                factoryId, s.targetType(), s.targetId(), expired, userId);
+        String unit = UnitDisplayNames.display(s.unit());
+        String head = e.config().perLot() && s.drawableQuantity().signum() > 0
+                ? label + " 有 " + plain(expired) + unit + " 已超过「" + e.processName() + "」的投料时限"
+                        + "（本厂超时只警告，照常投料，会留一条超时记录供复盘）"
+                : s.reason();
+        return head + "。质检员可在 " + RELEASE_PATH + "复检放行或判不合格";
     }
 
     private BusinessException exceeded(Evaluation e, BigDecimal quantity, String label) {
@@ -363,7 +443,7 @@ public class ProcessTimeLimitService {
         }
         return new BusinessException(409, message)
                 .withCode(CODE_EXCEEDED)
-                .withHint("请通知质检员在「" + RELEASE_PATH + "」复检放行或判不合格，处置后再领；也可以改选没有超时的批次")
+                .withHint("请通知质检员在 " + RELEASE_PATH + "复检放行或判不合格，处置后再领；也可以改选没有超时的批次")
                 .withSeverity("BLOCKING")
                 .withHintTarget(e.source().batchNumber())
                 .withDiagnosis(com.cretas.aims.service.gate.GateDiagnosis.of(
@@ -374,9 +454,15 @@ public class ProcessTimeLimitService {
                                 + "; 或改选没有超时的批次", com.cretas.aims.service.gate.GateRoutes.QC_RELEASE).build());
     }
 
-    private void recordBlocked(String factoryId, Evaluation e, Long userId) {
+    /**
+     * 写一条待处置 / 待复盘记录。{@code WARN_START_MISSING} 没有起算点: 起止与覆盖时刻都记为发生时刻,
+     * 超时量为空 (这类记录不参与放行豁免, 判不合格也不动库存)。
+     */
+    private void recordEvent(String factoryId, Evaluation e, Long userId, String kind) {
         SourceStatus s = e.status();
         WorkflowTaskPort port = e.port();
+        boolean startMissing = ProcessTimeLimitEvent.RecordKind.WARN_START_MISSING.equals(kind);
+        LocalDateTime at = now();
         try {
             eventWriter.openIfAbsent(ProcessTimeLimitEvent.builder()
                     .factoryId(factoryId)
@@ -391,40 +477,79 @@ public class ProcessTimeLimitService {
                     .limitMinutes(s.limitMinutes())
                     .startEvent(s.startEvent())
                     .mixRule(e.config().mixRule())
-                    .startAt(e.expiredStart())
-                    .deadlineAt(e.expiredDeadline())
-                    .blockedAt(now())
+                    .startAt(startMissing ? at : e.expiredStart())
+                    .deadlineAt(startMissing ? at : e.expiredDeadline())
+                    .blockedAt(at)
                     .blockedBy(userId)
-                    .expiredQuantity(s.expiredQuantity())
+                    .expiredQuantity(startMissing ? null : s.expiredQuantity())
                     .unit(s.unit())
-                    .coveredUntil(e.coveredUntil())
+                    .coveredUntil(startMissing ? at : e.coveredUntil())
                     .recheckValidMinutes(e.config().recheckValidMinutes())
                     .status(ProcessTimeLimitEvent.Status.OPEN)
+                    .recordKind(kind)
                     .build());
         } catch (RuntimeException ex) {
-            // 留痕失败不能把「超时」这个结论吞掉: 领用照样拦, 下一次被拦时再写
+            // 留痕失败不能把「超时」这个结论吞掉: 拦截档照样拦, 只警告档照样带警告; 下一次超时投料时再写
             log.error("[时限] 超时留痕写入失败 factory={} target={}:{}", factoryId, s.targetType(), s.targetId(), ex);
         }
     }
 
     // ===================== 页面读 =====================
 
+    /**
+     * 列表 + 一句归属提示。{@code ownershipNotice} 非空 = 领用计划的归属判不出 (旧数据: 代工计划缺客户 id 等):
+     * 在制批 / 半成品一律不列 (领用闸同样会拒), 原料照常列出 —— ⛔ 不因为一条归属判定把整张列表打挂。
+     */
+    public record SourceStatusView(List<SourceStatus> sources, String ownershipNotice) {
+    }
+
     /** 这道工序每个配了时限的端口, 当前可选来源的状态。App 用。 */
     @Transactional(readOnly = true)
     public List<SourceStatus> statusForTask(String factoryId, Long taskId) {
+        return statusViewForTask(factoryId, taskId).sources();
+    }
+
+    @Transactional(readOnly = true)
+    public SourceStatusView statusViewForTask(String factoryId, Long taskId) {
         WorkProcessTask task = taskRepository.findByFactoryIdAndId(factoryId, taskId)
                 .orElseThrow(() -> new BusinessException(404, "工序任务不存在: " + taskId));
-        return statusOf(factoryId, consumerOfTask(factoryId, task), null);
+        OwnerLookup owner = lookupOwner(() -> ownershipGuard.ofProductionBatch(factoryId, task.getProductionBatchId()));
+        return statusOf(factoryId, consumerOfTask(factoryId, task), null, owner);
     }
 
     /** 同上, 按计划 + 工序序。web 逐道录入用。 */
     @Transactional(readOnly = true)
     public List<SourceStatus> statusForPlan(String factoryId, String planId, Integer processOrder) {
-        Consumer consumer = consumerOfPlan(factoryId, planId);
-        return consumer == null ? List.of() : statusOf(factoryId, consumer, processOrder);
+        return statusViewForPlan(factoryId, planId, processOrder).sources();
     }
 
-    private List<SourceStatus> statusOf(String factoryId, Consumer consumer, Integer processOrder) {
+    @Transactional(readOnly = true)
+    public SourceStatusView statusViewForPlan(String factoryId, String planId, Integer processOrder) {
+        Consumer consumer = consumerOfPlan(factoryId, planId);
+        if (consumer == null) {
+            return new SourceStatusView(List.of(), null);
+        }
+        return statusOf(factoryId, consumer, processOrder, lookupOwner(() -> ownershipGuard.ofPlanId(factoryId, planId)));
+    }
+
+    /** 领用计划的归属; 判不出 ({@code INTERMEDIATE_OWNER_CONTEXT_REQUIRED}) 时 owner 为空并带上原因, 其余异常照抛。 */
+    private record OwnerLookup(IntermediateOwnershipGuard.Owner owner, String failure) {
+    }
+
+    private static OwnerLookup lookupOwner(java.util.function.Supplier<IntermediateOwnershipGuard.Owner> lookup) {
+        try {
+            return new OwnerLookup(lookup.get(), null);
+        } catch (BusinessException e) {
+            if (!IntermediateOwnershipGuard.CODE_CONTEXT_REQUIRED.equals(e.getErrorCode())) {
+                throw e;
+            }
+            return new OwnerLookup(null, e.getMessage());
+        }
+    }
+
+    static final String OWNER_UNKNOWN_NOTICE_PREFIX = "本计划缺客户信息，无法判定在制品归属";
+
+    private SourceStatusView statusOf(String factoryId, Consumer consumer, Integer processOrder, OwnerLookup owner) {
         List<WorkflowTaskPort> limited = consumer.limited();
         if (consumer.task() != null) {
             limited = limited.stream()
@@ -435,16 +560,27 @@ public class ProcessTimeLimitService {
             limited = limited.stream().filter(p -> taskIds.contains(p.getTaskId())).toList();
         }
         if (limited.isEmpty()) {
-            return List.of();
+            return new SourceStatusView(List.of(), null);
+        }
+        IntermediateOwnershipGuard.Owner listOwner = owner.owner();
+        String notice = null;
+        if (listOwner == null && limited.stream().anyMatch(p -> !isRawPort(p))) {
+            notice = OWNER_UNKNOWN_NOTICE_PREFIX + "（" + owner.failure() + "）：在制品和半成品暂不列出，原料照常显示。"
+                    + "请从已审批的代工销售订单重新建计划。";
+            log.warn("时限列表: 领用计划归属判不出, 只列原料: {}", owner.failure());
         }
         LocalDateTime now = now();
         List<SourceStatus> out = new ArrayList<>();
+        Map<Long, Optional<IntermediateOwnershipGuard.Owner>> wipOwners = new HashMap<>();
         for (WorkflowTaskPort port : limited) {
             for (Source source : candidates(factoryId, port)) {
+                if (!visibleTo(factoryId, listOwner, source, wipOwners)) {
+                    continue;
+                }
                 out.add(evaluate(factoryId, source, port, consumer, now).status());
             }
         }
-        return out;
+        return new SourceStatusView(out, notice);
     }
 
     private Set<Long> tasksAtOrder(String factoryId, List<WorkflowTaskPort> ports, Integer processOrder) {
@@ -455,6 +591,54 @@ public class ProcessTimeLimitService {
                     .ifPresent(t -> ids.add(taskId));
         }
         return ids;
+    }
+
+    /**
+     * 缺口 16 (2026-11-14 F006 验收): 这张列表在逐道录入里就是「这道能领哪些料」, 此前不看归属 ——
+     * 客户 A 的在制批一放行就会出现在客户 B 计划的列表里 (保存时才被 {@link IntermediateOwnershipGuard} 409)。
+     * 现在与领用闸、半成品投料下拉同一口径 ({@code sameOwner}): 领用计划的归属 == 料的归属才列出 ——
+     * 客户所有的只给同一客户的计划, 公司自有的只给本厂自有计划 (列出注定 409 的批次只会让人选了再被拒,
+     * organizer 2026-11-14 定)。
+     * 在制批归属从产出它的生产批次的计划现算 (与领用闸同口径); 算不出 (批次 / 计划已不存在) ⇒ 不列出 —— 领用闸同样会拒。
+     */
+    private boolean visibleTo(String factoryId, IntermediateOwnershipGuard.Owner listOwner, Source source,
+                              Map<Long, Optional<IntermediateOwnershipGuard.Owner>> wipOwners) {
+        boolean intermediate = TargetType.SEMI_FINISHED.equals(source.type())
+                || TargetType.WIP_MATERIAL_BATCH.equals(source.type());
+        if (intermediate && listOwner == null) {
+            return false;   // 领用计划归属判不出: 在制品 / 半成品一律不列 (列表上另有提示)
+        }
+        IntermediateOwnershipGuard.Owner material;
+        if (TargetType.SEMI_FINISHED.equals(source.type())) {
+            material = IntermediateOwnershipGuard.ofSemi(source.semi());
+        } else if (TargetType.WIP_MATERIAL_BATCH.equals(source.type())) {
+            Optional<IntermediateOwnershipGuard.Owner> owner = wipOwner(factoryId, source.material(), wipOwners);
+            if (owner.isEmpty()) {
+                return false;
+            }
+            material = owner.get();
+        } else {
+            return true;   // 原料 / 成品: 归属另有闸, 本修复不动
+        }
+        return IntermediateOwnershipGuard.sameOwner(listOwner, material);
+    }
+
+    private Optional<IntermediateOwnershipGuard.Owner> wipOwner(
+            String factoryId, MaterialBatch batch, Map<Long, Optional<IntermediateOwnershipGuard.Owner>> cache) {
+        Long productionBatchId;
+        try {
+            productionBatchId = Long.valueOf(batch.getSourceDocId());
+        } catch (NumberFormatException | NullPointerException e) {
+            return Optional.empty();
+        }
+        return cache.computeIfAbsent(productionBatchId, id -> {
+            try {
+                return Optional.of(ownershipGuard.ofProductionBatch(factoryId, id));
+            } catch (BusinessException e) {
+                log.warn("时限列表: 在制批 {} 的归属算不出, 不列出: {}", batch.getBatchNumber(), e.getMessage());
+                return Optional.empty();
+            }
+        });
     }
 
     private List<Source> candidates(String factoryId, WorkflowTaskPort port) {
@@ -518,6 +702,11 @@ public class ProcessTimeLimitService {
         if (release) {
             event.setValidUntil(event.getRecheckValidMinutes() == null
                     ? null : now.plusMinutes(event.getRecheckValidMinutes()));
+        } else if (ProcessTimeLimitEvent.RecordKind.isWarn(event.getRecordKind())) {
+            // 只警告档的复盘记录 (PROTO-Q41 复审 M1): 料已经照常投下去了, 事件记的超时量对不上现有库存,
+            // 自动转出会报废没超时的料、而超时的料早在下游。只记结论; 实际报损走报损流程
+            log.info("[时限] 复盘记录判不合格, 不自动转出 factory={} event={} kind={}",
+                    factoryId, eventId, event.getRecordKind());
         } else {
             writeOff(factoryId, event, userId);
         }
@@ -566,8 +755,13 @@ public class ProcessTimeLimitService {
     // ===================== 人工登记 =====================
 
     /**
-     * 登记解冻开始 / 开始暂停。时刻取服务端当前时间。
+     * 登记解冻开始 / 开始暂停。时刻默认取服务端当前时间。
      * 解冻重复登记返回第一条: 再点一次不能把起算点往后挪。
+     *
+     * <p>纪律排查 A13 (Steve 2026-11-10): 解冻开始允许补登实际开始时间 —— 早上 6 点开始解冻、8 点才登记,
+     * 原来只能记成 8 点, 计时失真且偏宽。补登必须填原因并留痕 (backfill_reason + 登记时刻 created_at),
+     * 最多往前补多久由工厂配置 ({@code production.time_limit.thaw_backfill_max_minutes}, 0 = 不允许补登)。
+     * 补登只会把起算点往<b>前</b>挪 (更严), 不会把超时的料救回来。冷藏暂停仍只收当前时刻。
      */
     @Transactional
     public ProcessTimeMark startMark(String factoryId, MarkCommand cmd, Long userId, String userName) {
@@ -594,16 +788,52 @@ public class ProcessTimeLimitService {
                     .withCode(CODE_PAUSE_OPEN)
                     .withHint("请先结束上一次暂停");
         }
+        LocalDateTime at = now();
+        String backfillReason = null;
+        if (cmd.startedAt() != null) {
+            LocalDateTime claimed = cmd.startedAt();
+            if (claimed.isAfter(at.plusMinutes(BACKFILL_CLOCK_SKEW_MINUTES))) {
+                throw invalid("开始时间不能晚于现在");
+            }
+            if (claimed.isBefore(at.minusMinutes(BACKFILL_CLOCK_SKEW_MINUTES))) {
+                if (pause) {
+                    throw invalid("冷藏暂停只能登记当前时刻, 不能补登");
+                }
+                int maxMinutes = disciplinePolicy != null
+                        ? disciplinePolicy.thawBackfillMaxMinutes(factoryId)
+                        : com.cretas.aims.service.discipline.FactoryDisciplinePolicy.DEFAULT_THAW_BACKFILL_MAX_MINUTES_PUBLIC;
+                LocalDateTime earliest = at.minusMinutes(maxMinutes);
+                if (maxMinutes <= 0 || claimed.isBefore(earliest)) {
+                    throw new BusinessException(409, maxMinutes <= 0
+                            ? "本厂设置为解冻开始不允许补登, 只能登记当前时刻"
+                            : "补登的开始解冻时间超出本厂允许的范围 (最多往前补 " + maxMinutes + " 分钟, 最早 "
+                                    + earliest.format(TIME_TEXT) + ")")
+                            .withCode(CODE_BACKFILL_TOO_EARLY)
+                            .withHint("最长补登时长由本厂在「业务阈值配置 → 生产」里设置 (production.time_limit.thaw_backfill_max_minutes)")
+                            .withHintTarget("开始时间");
+                }
+                if (cmd.backfillReason() == null || cmd.backfillReason().isBlank()) {
+                    throw new BusinessException(409, "补登开始解冻时间必须填写补登原因")
+                            .withCode(CODE_BACKFILL_REASON_REQUIRED)
+                            .withHint("请说明为什么没有在开始解冻时当场登记")
+                            .withHintTarget("补登原因");
+                }
+                at = claimed;
+                String reason = cmd.backfillReason().trim();
+                backfillReason = reason.length() > 500 ? reason.substring(0, 500) : reason;
+            }
+        }
         return markRepository.save(ProcessTimeMark.builder()
                 .factoryId(factoryId)
                 .targetType(cmd.targetType())
                 .targetId(cmd.targetId())
                 .markKind(kind)
                 .markCode(cmd.code())
-                .startedAt(now())
+                .startedAt(at)
                 .startedBy(userId)
                 .startedByName(userName)
                 .note(cmd.note())
+                .backfillReason(backfillReason)
                 .build());
     }
 
@@ -651,6 +881,8 @@ public class ProcessTimeLimitService {
         List<ProcessTimeLimitEvent> releases = eventRepository.findByFactoryIdAndTargetTypeAndTargetIdAndStatus(
                         factoryId, source.type(), source.id(), ProcessTimeLimitEvent.Status.RELEASED).stream()
                 .filter(e -> Objects.equals(e.getWorkflowPortId(), port.getWorkflowPortId()))
+                // 「未登记解冻」的复盘结论不是对超时的复检: 不能拿它豁免计时 (PROTO-Q41)
+                .filter(e -> !ProcessTimeLimitEvent.RecordKind.WARN_START_MISSING.equals(e.getRecordKind()))
                 .toList();
         boolean paused;
         List<LotClock> clocks;
@@ -676,13 +908,20 @@ public class ProcessTimeLimitService {
         }
         Long pauseMarkId = paused ? openPauseMarkId(factoryId, source, config) : null;
         return summarize(source, port, consumer.productionBatchId(), config, processName, clocks, paused,
-                pauseMarkId, startMissing, claimedNotDeducted(factoryId, source, config), now);
+                pauseMarkId, startMissing, claimedNotDeducted(factoryId, source, config), now,
+                blockOnExceed(factoryId));
+    }
+
+    /** 未注入策略 (单测装配) 按默认 = 只警告。 */
+    private boolean blockOnExceed(String factoryId) {
+        return disciplinePolicy != null && disciplinePolicy.timeLimitBlockOnExceed(factoryId);
     }
 
     private Evaluation summarize(Source source, WorkflowTaskPort port, Long consumerBatchId,
                                  ProcessTimeLimitConfig config,
                                  String processName, List<LotClock> clocks, boolean paused, Long pauseMarkId,
-                                 boolean startMissing, BigDecimal claimed, LocalDateTime now) {
+                                 boolean startMissing, BigDecimal claimed, LocalDateTime now,
+                                 boolean blockOnExceed) {
         List<LotClock> active = clocks.stream().filter(c -> !c.waived() && c.start() != null)
                 .sorted(Comparator.comparing(LotClock::deadline)).toList();
         List<LotClock> overdue = active.stream().filter(c -> c.deadline().isBefore(now)).toList();
@@ -721,11 +960,12 @@ public class ProcessTimeLimitService {
             state = State.OK;
         }
         Long remaining = clockShown == null ? null : minutesBetween(now, clockShown.deadline());
-        String reason = reason(source, config, processName, state, shown, now, paused);
+        String reason = reason(source, config, processName, state, shown, now, paused, blockOnExceed);
         SourceStatus status = new SourceStatus(source.type(), source.id(), source.batchNumber(),
                 port.getWorkflowPortId(), processName, config.maxMinutes(), config.startEvent(), state,
                 clockShown == null ? null : clockShown.start(), clockShown == null ? null : clockShown.deadline(),
-                remaining, reason, balance, expired, drawable, source.unit(), paused, config.perLot(), pauseMarkId);
+                remaining, reason, balance, expired, drawable, source.unit(), paused, config.perLot(), pauseMarkId,
+                blockOnExceed);
         LotClock first = overdue.isEmpty() ? null : overdue.get(0);
         return new Evaluation(source, port, consumerBatchId, config, processName, status, coveredUntil,
                 first == null ? null : first.start(), first == null ? null : first.deadline());
@@ -747,14 +987,17 @@ public class ProcessTimeLimitService {
     }
 
     private String reason(Source source, ProcessTimeLimitConfig config, String processName, String state,
-                          LotClock shown, LocalDateTime now, boolean paused) {
+                          LotClock shown, LocalDateTime now, boolean paused, boolean blockOnExceed) {
         return switch (state) {
-            case State.START_MISSING -> "还没有登记开始解冻，不能投料";
+            case State.START_MISSING -> blockOnExceed
+                    ? "还没有登记开始解冻，不能投料"
+                    : "还没有登记开始解冻，算不出时限（本厂超时只警告，可以投料；请补登开始解冻）";
             case State.NOT_STARTED -> "还没有开始计时（" + startText(config.startEvent()) + "后开始算）";
             case State.RELEASED -> "超时后已复检放行";
             case State.EXPIRED -> label(source) + " 从 " + shown.start().format(TIME_TEXT) + "（"
                     + startText(config.startEvent()) + "）起算，「" + processName + "」限 " + duration(config.maxMinutes())
-                    + "，已超时 " + duration(minutesBetween(shown.deadline(), now)) + "，不能领用";
+                    + "，已超时 " + duration(minutesBetween(shown.deadline(), now))
+                    + (blockOnExceed ? "，不能领用" : "（本厂超时只警告，可以领用，会留一条超时记录供复盘）");
             default -> paused ? "冷藏暂停中，暂不计时" : null;
         };
     }

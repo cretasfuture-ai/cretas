@@ -69,6 +69,19 @@ class MaterialBatchServiceImplConsumptionFieldsTest {
                 productionPlanBatchUsageRepository,
                 excelUtil,
                 futurePlanMatchingService);
+        // 排查 2026-11-10 A4/A5: 带计划的领料 / 预留 / 消耗要核对归属, 计划仓储必注入; 桩成本厂的公司备料计划
+        {
+            com.cretas.aims.repository.ProductionPlanRepository ownershipPlans =
+                    org.mockito.Mockito.mock(com.cretas.aims.repository.ProductionPlanRepository.class);
+            org.mockito.Mockito.lenient().when(ownershipPlans.existsById(org.mockito.ArgumentMatchers.anyString())).thenReturn(true);
+            org.mockito.Mockito.lenient().when(ownershipPlans.findById(org.mockito.ArgumentMatchers.anyString())).thenAnswer(inv -> {
+                com.cretas.aims.entity.ProductionPlan p = new com.cretas.aims.entity.ProductionPlan();
+                p.setId(inv.getArgument(0));
+                p.setFactoryId("F006");
+                return java.util.Optional.of(p);
+            });
+            org.springframework.test.util.ReflectionTestUtils.setField(service, "productionPlanRepository", ownershipPlans);
+        }
         InventoryLowStockEventPublisher lowStockEventPublisher = new InventoryLowStockEventPublisher(
                 applicationEventPublisher,
                 materialBatchRepository,

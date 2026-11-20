@@ -86,7 +86,7 @@ class QualityDispositionRuleServiceInventoryHookTest {
 
         service.executeDisposition(FACTORY_ID, inspection, DispositionAction.RELEASE, 9L, "质检合格放行");
 
-        verify(dispositionInventoryService, times(1)).applyDisposition(inspection, DispositionAction.RELEASE);
+        verify(dispositionInventoryService, times(1)).applyDisposition(inspection, DispositionAction.RELEASE, false);
     }
 
     @Test
@@ -103,7 +103,7 @@ class QualityDispositionRuleServiceInventoryHookTest {
 
         service.executeDisposition(FACTORY_ID, inspection, DispositionAction.RELEASE, 9L, "低合格率放行申请");
 
-        verify(dispositionInventoryService, never()).applyDisposition(any(), any());
+        verify(dispositionInventoryService, never()).applyDisposition(any(), any(), anyBoolean());
     }
 
     @Test
@@ -124,7 +124,7 @@ class QualityDispositionRuleServiceInventoryHookTest {
         verify(decisionAuditService).logPendingApproval(
                 eq(FACTORY_ID), eq("QualityInspection"), eq(inspection.getId()), anyMap(),
                 eq("REWORK"), eq("申请返工"), eq(9L), anyString(), anyString(), any(), any(), any());
-        verify(dispositionInventoryService, never()).applyDisposition(any(), any());
+        verify(dispositionInventoryService, never()).applyDisposition(any(), any(), anyBoolean());
         verify(approvalChainService, never()).requiresApproval(
                 eq(FACTORY_ID), eq(DecisionType.QUALITY_EXCEPTION), anyMap());
     }
@@ -141,7 +141,7 @@ class QualityDispositionRuleServiceInventoryHookTest {
 
         assertFalse(result.isApprovalInitiated());
         assertEquals("REWORK_REQUIRED", result.getNewBatchStatus());
-        verify(dispositionInventoryService, times(1)).applyDisposition(inspection, DispositionAction.REWORK);
+        verify(dispositionInventoryService, times(1)).applyDisposition(inspection, DispositionAction.REWORK, true);
         verifyNoInteractions(approvalChainService);
     }
 

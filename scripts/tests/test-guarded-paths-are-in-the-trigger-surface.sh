@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# GUARDS=.github/workflows/ops-script-tests.yml
+# GUARDS=.github/workflows/ops-script-tests.yml,scripts/ci/trigger-paths/ops-script-tests.txt
 #
 # 每个用例**自己声明**它依赖哪些路径, 这些路径必须落在 ops-script-tests.yml 的触发面里。
+# 2026-11-12 起 (合并队列准备): pull_request 触发面不再写在 workflow 的 paths 里, 而在
+# scripts/ci/trigger-paths/ops-script-tests.txt (由 changes 作业经 changed-paths.py 判定)。
 #
 # ═══════════════════════════════════════════════════════════════════════════
 # 为什么 (票 CI-GUARDED-PATHS-MUST-BE-DECLARED-NOT-INFERRED-20260907)
@@ -43,6 +45,7 @@ set -uo pipefail
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 TESTS_DIR="$ROOT_DIR/scripts/tests"
 WF="$ROOT_DIR/.github/workflows/ops-script-tests.yml"
+TRIGGER="$ROOT_DIR/scripts/ci/trigger-paths/ops-script-tests.txt"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 pass=0
@@ -50,13 +53,24 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 ok() { pass=$((pass + 1)); echo "  ok - $*"; }
 
 [ -s "$WF" ] || fail "找不到 $WF"
+[ -s "$TRIGGER" ] || fail "找不到 $TRIGGER"
 [ -d "$TESTS_DIR" ] || fail "找不到 $TESTS_DIR"
 
-# ---- 1. 取 ops-script-tests.yml 的 pull_request.paths ----
-# ⚠️ 只取 pull_request 那一段。push 那段刻意**不带 paths**(见该文件注释), 混进来会让
-#    这道闸恒绿 —— 「没有 paths」在语义上等于「全部都在触发面里」。
-awk '/^  pull_request:/{inpr=1; next} inpr && /^  [a-z_]+:/{inpr=0} inpr' "$WF" \
-    | grep -oE "^ *- '[^']+'" | sed "s/^ *- '//;s/'$//" > "$TMP/paths.txt"
+# ---- 1. 取 ops-script-tests 的 pull_request 触发路径 ----
+# 2026-11-12 起清单在 scripts/ci/trigger-paths/ops-script-tests.txt (一行一个 glob, `#` 起注释,
+# 行尾 ` # ...` 也是注释), workflow 的 pull_request 不再带 paths。
+# ⚠️ push 那段刻意**不带 paths**(见该 workflow 注释), ⛔ 不要把「没有 paths」读成触发面 ——
+#    那在语义上等于「全部都在触发面里」, 会让这道闸恒绿。
+# 单条 sed、不过管道: 读不到文件时 rc 不会被管道尾吞掉。
+sed -E -e 's/\r$//' -e '/^[[:space:]]*(#|$)/d' -e 's/[[:space:]]+#.*$//' -e 's/^[[:space:]]+//' -e 's/[[:space:]]+$//' -e '/^$/d' "$TRIGGER" > "$TMP/paths.txt" \
+    || fail "读不了 $TRIGGER —— **没量到**"
+# ⚠️ 取反模式 (`!`) 本闸的覆盖判定不支持: 出现就判没量到, ⛔ 不静默当成正向模式。
+if grep -q '^!' "$TMP/paths.txt"; then
+    fail "触发路径清单里出现取反模式, 本闸的覆盖判定不支持 —— **没量到**, ⛔ 不当成没问题"
+fi
+# 接线: workflow 确实把这份清单交给 changes 作业判定 (否则清单与真实触发面脱钩, 下面的读数作废)。
+grep -qF 'scripts/ci/changed-paths.py --patterns scripts/ci/trigger-paths/ops-script-tests.txt' "$WF" \
+    || fail "ops-script-tests.yml 没有用 changed-paths.py 读 $TRIGGER —— 清单没接上"
 N_PATHS=$(wc -l < "$TMP/paths.txt")
 echo "READING: TRIGGER_PATHS=$N_PATHS"
 [ "$N_PATHS" -ge 5 ] \
@@ -108,7 +122,7 @@ if [ -s "$TMP/uncovered.txt" ]; then
     cat >&2 <<'EOF'
   ⇒ 只动那些路径的 PR **触发不到这道闸**, 而「没跑」与「跑了没问题」读数完全相同
     (2026-09-07 这个洞一天出现四次: #713 / #723 / #724 / 本闸自指)。
-  修法: 往 .github/workflows/ops-script-tests.yml 的 pull_request.paths 里加上它;
+  修法: 往 scripts/ci/trigger-paths/ops-script-tests.txt 里加上它;
        ⛔ 不要改小 GUARDS 声明来让这道闸变绿 —— 那是把仪器改坏, 不是把问题修好。
 EOF
     exit 1
@@ -184,7 +198,7 @@ if [ -n "$(printf '%s' "$lost" | tr -d ' ')" ]; then
     echo "FAIL: 这些用例登记过要声明 \`# GUARDS=\`, 现在却不声明了:$lost" >&2
     cat >&2 <<'EOF'
   ⇒ 删掉声明是让本闸「变绿」最便宜的做法, 而删完之后它对那些路径**完全失明**。
-  修法: 把 `# GUARDS=` 加回去(并把路径补进 ops-script-tests.yml 的 paths);
+  修法: 把 `# GUARDS=` 加回去(并把路径补进 scripts/ci/trigger-paths/ops-script-tests.txt);
        真要删掉这个用例, 就在**同一个 commit** 里把它从 guards-declaring-files.txt 里删掉,
        ⛔ 不要先删声明再说。
 EOF

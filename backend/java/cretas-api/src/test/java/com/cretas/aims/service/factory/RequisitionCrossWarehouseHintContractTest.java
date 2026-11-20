@@ -101,6 +101,10 @@ class RequisitionCrossWarehouseHintContractTest {
     @BeforeEach
     void setUp() {
         repository = mock(FactoryMaterialRequisitionRepository.class);
+        // 排查 C3: cancel / transferToFactory 改成加行锁读 (findByIdAndFactoryIdForUpdate); 桩照非锁版本作答
+        org.mockito.Mockito.lenient().when(repository.findByIdAndFactoryIdForUpdate(
+                        org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                .thenAnswer(inv -> repository.findByIdAndFactoryIdAndDeletedAtIsNull(inv.getArgument(0), inv.getArgument(1)));
         planRepository = mock(ProductionPlanRepository.class);
         warehouseRepository = mock(FactoryWarehouseRepository.class);
         batchRepository = mock(MaterialBatchRepository.class);

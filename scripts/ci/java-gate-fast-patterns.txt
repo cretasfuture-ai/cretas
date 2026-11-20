@@ -1,0 +1,48 @@
+# java-gate-pr.yml fast-contracts 的类名模式 (surefire 通配), 一行一个。分片脚本 scripts/ci/shard-tests.py 读它。
+# 新增闸类: 命名命中某个模式, 或在这里加一行 —— ⛔ 不要把模式写回 workflow。
+*ContractTest
+*ContractsTest
+*RepositoryQueryValidationTest
+FlywayVersionUniquenessTest
+*StartupGuardTest
+*RoleGateTest
+*RoleGateMvcTest
+*SecurityTest
+*VulnerabilityTest
+*AuthorizationTest
+*PermissionTest
+*PermissionGateTest
+PermissionServiceImpl*Test
+*ArchitectureTest
+*GuardTest
+*GateTest
+*RbacTest
+*IsolationTest
+*RedactionTest
+*TenantScopeTest
+ProcessSheetMultiOutputUnknownCostTest
+AttachmentSopSpringTest
+# 纪律排查 B1/B2/B11 本人审批开关与改价阈值的三态测试写在这三个类里, 原先不在 PR 选择范围 (#1580)
+ReportReversalServiceTest
+SalesPriceAdjustmentServiceTest
+WorkflowInstanceControllerTest
+# 交接单 11-11 二.1/二.2: 冻结工具不洗白、退料恢复与领料划出不洗白不合格批次的回归写在这三个类里
+InventoryFreezeToolTest
+FactoryMaterialRequisitionRestoreBatchStatusTest
+FactoryMaterialRequisitionTransferIntegrationTest
+# INTENT-DISTILL-20261111 F-pre: 每个注册工具必须声明读写 (缺失即红); 本地模型对只读意图直出的安全前提, 原先只在 nightly 跑
+ToolAccessModeDeclarationTest
+# INTENT-DISTILL-20261111 第二批任务状态: 「先看库存回头再报工」挂起/恢复跑在真实流式入口上的回归在这个类里
+SseStreamingServiceSlotContinuationTest
+# 工具清册漂移闸: 源码 ToolExecutor ↔ tool-descriptors.yaml 逐字段比对。原先只在 tool-inventory-gate.yml (合并后) 跑, #1580 起在 main 红了数天无人知; 纳入 PR 门禁 (#1625 已修清册)
+ToolDescriptorInventoryDriftTest
+# 清册统计/权限登记闸: 夜间全量自 11-10 起因 order_approval 红 3 次, 不在 PR 门禁所以无人拦; 纳入
+ToolDescriptorCatalogTest
+# #1590 遗留出库闸 / 过账提示 (#1689): 盐化扣量、小结、结单、通用扣减原语拦已挡投产批次的回归写在这四个类里, 原先不在 PR 选择范围
+SaltedWarehouseServiceImplTest
+InterimSettleServiceTest
+ProductionPlanSettlementTest
+MaterialBatchServiceImplLowStockEventTest
+# 强制插单收尾 (并行网关按岗位推进节点): 并行分支用例写在引擎测试类里, 原先不在 PR 选择范围
+WorkflowEngineServiceImplTest
+PurchaseOrderPdfServiceImplTest

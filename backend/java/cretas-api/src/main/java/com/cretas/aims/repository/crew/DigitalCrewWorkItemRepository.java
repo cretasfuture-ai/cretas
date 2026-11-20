@@ -1,0 +1,123 @@
+package com.cretas.aims.repository.crew;
+
+import com.cretas.aims.entity.crew.DigitalCrewWorkItem;
+import com.cretas.aims.entity.crew.DigitalCrewWorkItem.Status;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+
+import java.time.LocalDateTime;
+import java.util.Collection;
+import java.util.List;
+import java.util.Optional;
+
+public interface DigitalCrewWorkItemRepository extends JpaRepository<DigitalCrewWorkItem, Long> {
+
+    Optional<DigitalCrewWorkItem> findByIdAndFactoryId(Long id, String factoryId);
+
+    List<DigitalCrewWorkItem> findByFactoryIdOrderByCreatedAtDesc(String factoryId, Pageable pageable);
+
+    List<DigitalCrewWorkItem> findByFactoryIdAndMemberKeyOrderByCreatedAtDesc(String factoryId, String memberKey,
+                                                                              Pageable pageable);
+
+    /** 某人在本厂挂着的某状态件数 (每人「已交办」上限用; 调用方先持有本人本厂的交办锁)。 */
+    @Query("SELECT COUNT(w) FROM DigitalCrewWorkItem w WHERE w.factoryId = :factoryId"
+            + " AND w.createdByUserId = :userId AND w.status = :status")
+    long countOpenByUser(@Param("factoryId") String factoryId, @Param("userId") Long userId,
+                         @Param("status") Status status);
+
+    /**
+     * 本厂某状态的事项里出现过的「权限码|意图码」(等我确认: 先逐组判登录人能不能确认 —— 登记码且执行时的工具门,
+     * #1816 终审 M1 —— 再按组在库里分页)。键的拼法与下面几条查询的 CONCAT 是同一个。
+     */
+    @Query("SELECT DISTINCT CONCAT(w.requiredPermission, '|', w.intentCode) FROM DigitalCrewWorkItem w WHERE w.factoryId = :factoryId AND w.status = :status")
+    List<String> findDistinctPermissionIntentKeys(@Param("factoryId") String factoryId, @Param("status") Status status);
+
+    /** 等我确认的一页: 本厂、该状态、「权限码|意图码」在「我能确认的」里; 总数来自同口径的 countQuery。 */
+    @Query(value = "SELECT w FROM DigitalCrewWorkItem w WHERE w.factoryId = :factoryId AND w.status = :status"
+            + " AND CONCAT(w.requiredPermission, '|', w.intentCode) IN :keys ORDER BY w.createdAt DESC, w.id DESC",
+            countQuery = "SELECT COUNT(w) FROM DigitalCrewWorkItem w WHERE w.factoryId = :factoryId AND w.status = :status"
+                    + " AND CONCAT(w.requiredPermission, '|', w.intentCode) IN :keys")
+    org.springframework.data.domain.Page<DigitalCrewWorkItem> findInboxPage(
+            @Param("factoryId") String factoryId, @Param("status") Status status,
+            @Param("keys") Collection<String> keys, Pageable pageable);
+
+    @Query("SELECT COUNT(w) FROM DigitalCrewWorkItem w WHERE w.factoryId = :factoryId AND w.status = :status"
+            + " AND CONCAT(w.requiredPermission, '|', w.intentCode) IN :keys")
+    long countByKeys(@Param("factoryId") String factoryId, @Param("status") Status status,
+                     @Param("keys") Collection<String> keys);
+
+    /**
+     * 预览落库, 比较后再写 (#1771 复审 中-C): 只有本厂、仍是已交办、且凭据行 id 仍是「我作废时看到的那张」(这里: 没有)
+     * 才记上我的凭据。两人并发预览时后落库的影响 0 行 —— 调用方作废自己刚铸的凭据并 409, 不覆盖前一张。
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE DigitalCrewWorkItem w SET w.previewedByUserId = :userId, w.previewedAt = :now, w.commandDigest = :digest,"
+            + " w.previewTokenId = :newTokenId, w.updatedAt = :now, w.version = w.version + 1"
+            + " WHERE w.id = :id AND w.factoryId = :factoryId AND w.status = :delegated AND w.previewTokenId IS NULL")
+    int stampPreviewIfNoToken(@Param("id") Long id, @Param("factoryId") String factoryId, @Param("userId") Long userId,
+                              @Param("digest") String digest, @Param("newTokenId") Long newTokenId,
+                              @Param("now") LocalDateTime now, @Param("delegated") Status delegated);
+
+    /**
+     * 同上, 「我作废时看到的那张」是 expectedOld。库里是 null 也算没人插队 (#1771 第 3 轮 N2): 我作废 expectedOld 之后、
+     * 落库之前, 读路径的对账会把这张已作废 (终态没写入) 的凭据行 id 清成 null —— 这不是别人预览过; 别人预览过时库里是
+     * 别人的非空行 id, 仍然影响 0 行。和 {@link #stampPreviewIfNoToken} 并发时谁先写谁赢, 恰好一方登记上。
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE DigitalCrewWorkItem w SET w.previewedByUserId = :userId, w.previewedAt = :now, w.commandDigest = :digest,"
+            + " w.previewTokenId = :newTokenId, w.updatedAt = :now, w.version = w.version + 1"
+            + " WHERE w.id = :id AND w.factoryId = :factoryId AND w.status = :delegated"
+            + " AND (w.previewTokenId = :expectedOld OR w.previewTokenId IS NULL)")
+    int stampPreviewReplacingToken(@Param("id") Long id, @Param("factoryId") String factoryId, @Param("userId") Long userId,
+                                   @Param("digest") String digest, @Param("newTokenId") Long newTokenId,
+                                   @Param("expectedOld") Long expectedOld, @Param("now") LocalDateTime now,
+                                   @Param("delegated") Status delegated);
+
+    @Query("SELECT DISTINCT w.module FROM DigitalCrewWorkItem w WHERE w.factoryId = :factoryId AND w.status = :status"
+            + " AND CONCAT(w.requiredPermission, '|', w.intentCode) IN :keys")
+    List<String> findDistinctModules(@Param("factoryId") String factoryId, @Param("status") Status status,
+                                     @Param("keys") Collection<String> keys);
+
+    /** 确认在途 (CONFIRMING) 超过时限的事项: 对账回收用。 */
+    List<DigitalCrewWorkItem> findByFactoryIdAndStatusAndConfirmedAtBefore(
+            String factoryId, Status status, LocalDateTime before);
+
+    /** 已交办、且有人预览过 (凭据可能已被别的入口用掉): 对账用。 */
+    List<DigitalCrewWorkItem> findByFactoryIdAndStatusAndPreviewTokenIdIsNotNull(String factoryId, Status status);
+
+    /**
+     * 本厂按员工 × 状态的件数与额度, 在库里聚合 (不截断、不按查看人过滤: 所有查看人看到同一个数)。
+     * 行 = [memberKey, status, count, sum(quotaCost)]。
+     */
+    @Query("SELECT w.memberKey, w.status, COUNT(w), COALESCE(SUM(w.quotaCost), 0) FROM DigitalCrewWorkItem w"
+            + " WHERE w.factoryId = :factoryId GROUP BY w.memberKey, w.status")
+    List<Object[]> countByMemberAndStatus(@Param("factoryId") String factoryId);
+
+    /** 本厂 [from, to] 之间 (北京时间真实日期) 消耗的额度, 可按员工; memberKey 传 null = 全部员工。 */
+    @Query("SELECT COALESCE(SUM(w.quotaCost), 0) FROM DigitalCrewWorkItem w WHERE w.factoryId = :factoryId"
+            + " AND w.resolvedDate >= :from AND w.resolvedDate <= :to"
+            + " AND (CAST(:memberKey AS string) IS NULL OR w.memberKey = :memberKey)")
+    long sumQuota(@Param("factoryId") String factoryId, @Param("from") java.time.LocalDate from,
+                  @Param("to") java.time.LocalDate to, @Param("memberKey") String memberKey);
+
+    /** 同一人对同一员工说的同一句话, 还在等确认的那件 (防重复交办)。 */
+    Optional<DigitalCrewWorkItem> findFirstByFactoryIdAndMemberKeyAndCreatedByUserIdAndUserInputAndStatus(
+            String factoryId, String memberKey, Long createdByUserId, String userInput, Status status);
+
+    /**
+     * 原子认领: 只有本厂、仍是已交办、由本人预览、凭据摘要相同、且登记的凭据行 id 仍是出示的那张的事项才转「办理中」。
+     * 返回 1 = 认领到。两个确认请求并发时只有一个拿到 1, 另一个 0 (不执行); 期间被重新预览换了凭据也是 0 (#1771 第 3 轮 N3)。
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE DigitalCrewWorkItem w SET w.status = :confirming, w.confirmedByUserId = :userId,"
+            + " w.confirmedByName = :userName, w.confirmedAt = :now, w.updatedAt = :now, w.version = w.version + 1"
+            + " WHERE w.id = :id AND w.factoryId = :factoryId AND w.status = :delegated"
+            + " AND w.previewedByUserId = :userId AND w.commandDigest = :digest AND w.previewTokenId = :tokenId")
+    int claimForConfirm(@Param("id") Long id, @Param("factoryId") String factoryId, @Param("userId") Long userId,
+                        @Param("userName") String userName, @Param("digest") String digest,
+                        @Param("tokenId") Long tokenId, @Param("now") LocalDateTime now,
+                        @Param("delegated") Status delegated, @Param("confirming") Status confirming);
+}

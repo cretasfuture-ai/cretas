@@ -12,7 +12,9 @@
 import { ref, computed, onMounted } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Refresh, Plus } from '@element-plus/icons-vue';
+import type { CsTableColumn as TableColumn } from '@/types/csTable';
+import { badgeColor } from '@/utils/csBadge';
+import iconReturns from '@/assets/quality/icon-returns.webp';
 import {
   listReturns,
   createReturn,
@@ -32,8 +34,8 @@ const factoryId = computed(() => authStore.factoryId);
 const loading = ref(false);
 const rows = ref<QualityReturnOrder[]>([]);
 const pagination = ref({ page: 1, size: 20, total: 0 });
-const filterStatus = ref<QualityReturnStatus | ''>('');
-const filterTarget = ref<QualityReturnTargetType | ''>('');
+const filterStatus = ref<QualityReturnStatus | undefined>(undefined);
+const filterTarget = ref<QualityReturnTargetType | undefined>(undefined);
 
 const showCreateDialog = ref(false);
 const showShipDialog = ref(false);
@@ -57,6 +59,25 @@ const shipForm = ref({
 
 const STATUS_OPTIONS: QualityReturnStatus[] = ['DRAFT', 'CONFIRMED', 'SHIPPED'];
 const TARGET_OPTIONS: QualityReturnTargetType[] = ['SUPPLIER', 'SUBCONTRACT'];
+const STATUS_ITEMS = STATUS_OPTIONS.map((s) => ({ label: RETURN_STATUS_LABELS[s], value: s }));
+const TARGET_ITEMS = TARGET_OPTIONS.map((t) => ({ label: RETURN_TARGET_LABELS[t], value: t }));
+const TARGET_RADIO_ITEMS = [
+  { label: '退回供应商', value: 'SUPPLIER' },
+  { label: '退回委外', value: 'SUBCONTRACT' },
+];
+const R = { class: { th: 'text-right', td: 'text-right' } };
+const columns: TableColumn<QualityReturnOrder>[] = [
+  { accessorKey: 'returnNumber', header: '单号' },
+  { id: 'targetType', header: '退回类型' },
+  { id: 'targetName', header: '接收方' },
+  { accessorKey: 'quantity', header: '数量', meta: R },
+  { accessorKey: 'unit', header: '单位' },
+  { accessorKey: 'reason', header: '原因' },
+  { id: 'status', header: '状态' },
+  { id: 'shippingTrackingNo', header: '物流单号' },
+  { accessorKey: 'createdAt', header: '创建时间' },
+  { id: 'actions', header: '操作' },
+];
 
 async function load() {
   if (!factoryId.value) {
@@ -80,7 +101,7 @@ async function load() {
   }
 }
 
-function statusTagType(s: QualityReturnStatus): string {
+function statusTagType(s: QualityReturnStatus): 'success' | 'warning' | 'info' {
   if (s === 'SHIPPED') return 'success';
   if (s === 'CONFIRMED') return 'warning';
   return 'info';
@@ -89,6 +110,12 @@ function statusTagType(s: QualityReturnStatus): string {
 function handlePageChange(page: number) {
   pagination.value.page = page;
   load();
+}
+
+function clearFilters() {
+  filterStatus.value = undefined;
+  filterTarget.value = undefined;
+  handleFilterChange();
 }
 
 function handleFilterChange() {
@@ -213,148 +240,117 @@ onMounted(load);
 
 <template>
   <div class="return-list">
-    <div class="page-header">
-      <div>
-        <h2 class="title">质检退回单</h2>
-        <p class="subtitle">退回供应商 / 委外加工厂 — 状态机 DRAFT → CONFIRMED → SHIPPED</p>
+    <div class="cs-page-head">
+      <div class="head-main">
+        <img :src="iconReturns" alt="" class="head-icon" width="56" height="56">
+        <div>
+          <h2>质检退回单</h2>
+          <p>退回供应商 / 委外加工厂 — 状态机 DRAFT → CONFIRMED → SHIPPED</p>
+        </div>
       </div>
-      <div class="actions">
-        <el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
-        <el-button type="primary" :icon="Plus" @click="openCreateDialog">新建退回单</el-button>
+      <div class="head-actions">
+        <UButton color="neutral" variant="outline" icon="i-lucide-refresh-cw" :loading="loading" @click="load">刷新</UButton>
+        <UButton icon="i-lucide-plus" @click="openCreateDialog">新建退回单</UButton>
       </div>
     </div>
 
-    <div class="filter-row">
-      <el-select v-model="filterStatus" placeholder="状态" clearable style="width: 160px" @change="handleFilterChange">
-        <el-option v-for="s in STATUS_OPTIONS" :key="s" :label="RETURN_STATUS_LABELS[s]" :value="s" />
-      </el-select>
-      <el-select v-model="filterTarget" placeholder="退回类型" clearable style="width: 180px" @change="handleFilterChange">
-        <el-option v-for="t in TARGET_OPTIONS" :key="t" :label="RETURN_TARGET_LABELS[t]" :value="t" />
-      </el-select>
-    </div>
-
-    <el-table v-loading="loading" :data="rows" stripe empty-text="暂无退回单" style="width: 100%">
-      <el-table-column prop="returnNumber" label="单号" min-width="160" />
-      <el-table-column label="退回类型" min-width="130">
-        <template #default="{ row }">
-          <el-tag :type="row.targetType === 'SUPPLIER' ? '' : 'warning'">
-            {{ RETURN_TARGET_LABELS[String(row.targetType) as QualityReturnTargetType] }}
-          </el-tag>
+    <section class="cs-card">
+      <div class="filters">
+        <USelect v-model="filterStatus" :items="STATUS_ITEMS" placeholder="状态" class="w-40" @update:model-value="handleFilterChange" />
+        <USelect v-model="filterTarget" :items="TARGET_ITEMS" placeholder="退回类型" class="w-44" @update:model-value="handleFilterChange" />
+        <UButton v-if="filterStatus || filterTarget" color="neutral" variant="link" size="xs" @click="clearFilters">清除筛选</UButton>
+      </div>
+      <UTable :data="rows" :columns="columns" :loading="loading" class="cs-table">
+        <template #empty><div class="cs-empty-art"><img :src="iconReturns" alt="" width="96"><span>还没有质检退回单，质检不合格的批次退回上游时会在这里登记</span></div></template>
+        <template #targetType-cell="{ row }">
+          <UBadge :color="row.original.targetType === 'SUPPLIER' ? 'primary' : 'warning'" variant="soft">
+            {{ RETURN_TARGET_LABELS[String(row.original.targetType) as QualityReturnTargetType] }}
+          </UBadge>
         </template>
-      </el-table-column>
-      <el-table-column prop="targetName" label="接收方" min-width="180">
-        <template #default="{ row }">{{ row.targetName || row.targetId }}</template>
-      </el-table-column>
-      <el-table-column prop="quantity" label="数量" min-width="100" align="right" />
-      <el-table-column prop="unit" label="单位" min-width="80" />
-      <el-table-column prop="reason" label="原因" min-width="160" show-overflow-tooltip />
-      <el-table-column label="状态" width="110" align="center">
-        <template #default="{ row }">
-          <el-tag :type="statusTagType(row.status)">{{ RETURN_STATUS_LABELS[String(row.status) as QualityReturnStatus] || row.status }}</el-tag>
+        <template #targetName-cell="{ row }">{{ row.original.targetName || row.original.targetId }}</template>
+        <template #status-cell="{ row }">
+          <UBadge :color="badgeColor(statusTagType(row.original.status))" variant="soft">{{ RETURN_STATUS_LABELS[String(row.original.status) as QualityReturnStatus] || row.original.status }}</UBadge>
         </template>
-      </el-table-column>
-      <el-table-column prop="shippingTrackingNo" label="物流单号" min-width="140">
-        <template #default="{ row }">{{ row.shippingTrackingNo || '-' }}</template>
-      </el-table-column>
-      <el-table-column prop="createdAt" label="创建时间" min-width="160" />
-      <el-table-column label="操作" width="220" align="center" fixed="right">
-        <template #default="{ row }">
-          <el-button v-if="row.status === 'DRAFT'" link type="primary" @click="handleConfirm(row)">确认</el-button>
-          <el-button v-if="row.status === 'DRAFT'" link type="danger" @click="handleCancel(row)">撤销</el-button>
-          <el-button v-if="row.status === 'CONFIRMED'" link type="success" @click="openShipDialog(row)">发出</el-button>
+        <template #shippingTrackingNo-cell="{ row }">{{ row.original.shippingTrackingNo || '-' }}</template>
+        <template #actions-cell="{ row }">
+          <UButton v-if="row.original.status === 'DRAFT'" color="primary" variant="link" size="xs" @click="handleConfirm(row.original)">确认</UButton>
+          <UButton v-if="row.original.status === 'DRAFT'" color="error" variant="link" size="xs" @click="handleCancel(row.original)">撤销</UButton>
+          <UButton v-if="row.original.status === 'CONFIRMED'" color="success" variant="link" size="xs" @click="openShipDialog(row.original)">发出</UButton>
         </template>
-      </el-table-column>
-    </el-table>
+      </UTable>
+      <div v-if="pagination.total > 0" class="pager">
+        <UPagination :page="pagination.page" :items-per-page="pagination.size" :total="pagination.total" show-edges :sibling-count="1" @update:page="handlePageChange" />
+      </div>
+    </section>
 
-    <el-pagination
-      v-if="pagination.total > 0"
-      class="pagination"
-      :current-page="pagination.page"
-      :page-size="pagination.size"
-      :total="pagination.total"
-      layout="total, prev, pager, next, jumper"
-      background
-      @current-change="handlePageChange"
-    />
-
-    <!-- 新建退回单 dialog -->
-    <el-dialog v-model="showCreateDialog" title="新建质检退回单" width="560px">
-      <el-form label-position="top">
-        <el-form-item label="关联质检记录 ID" required>
-          <el-input v-model="createForm.qualityInspectionId" placeholder="quality_inspections.id" />
-        </el-form-item>
-        <el-form-item label="退回类型" required>
-          <el-radio-group v-model="createForm.targetType">
-            <el-radio value="SUPPLIER">退回供应商</el-radio>
-            <el-radio value="SUBCONTRACT">退回委外</el-radio>
-          </el-radio-group>
-        </el-form-item>
-        <el-form-item label="接收方 ID" required>
-          <el-input v-model="createForm.targetId" placeholder="supplier id 或 subcontract id" />
-        </el-form-item>
-        <el-form-item label="接收方名称 (快照)">
-          <el-input v-model="createForm.targetName" placeholder="可选" />
-        </el-form-item>
-        <el-form-item label="物料 ID (可选)">
-          <el-input v-model="createForm.materialId" placeholder="raw_material_types.id" />
-        </el-form-item>
-        <el-form-item label="退回数量" required>
-          <el-input-number v-model="createForm.quantity" :min="0.0001" :precision="4" :step="1" style="width: 200px" />
-          <el-input v-model="createForm.unit" placeholder="单位 (kg / 件 / 箱)" style="width: 160px; margin-left: 12px" />
-        </el-form-item>
-        <el-form-item label="退回原因">
-          <el-input v-model="createForm.reason" type="textarea" :rows="2" maxlength="500" show-word-limit />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="showCreateDialog = false">取消</el-button>
-        <el-button type="primary" :loading="submitting" @click="handleCreateSubmit">创建草稿</el-button>
+    <!-- 新建退回单 -->
+    <UModal
+      v-model:open="showCreateDialog"
+      title="新建质检退回单"
+      description="填写退回对象与数量，创建后为草稿"
+      :ui="{ content: 'max-w-[560px]', description: 'sr-only' }"
+    >
+      <template #body>
+        <div class="form-grid">
+          <UFormField label="关联质检记录 ID" required>
+            <UInput v-model="createForm.qualityInspectionId" placeholder="quality_inspections.id" class="w-full" />
+          </UFormField>
+          <UFormField label="退回类型" required>
+            <URadioGroup v-model="createForm.targetType" orientation="horizontal" :items="TARGET_RADIO_ITEMS" />
+          </UFormField>
+          <UFormField label="接收方 ID" required>
+            <UInput v-model="createForm.targetId" placeholder="supplier id 或 subcontract id" class="w-full" />
+          </UFormField>
+          <UFormField label="接收方名称 (快照)">
+            <UInput v-model="createForm.targetName" placeholder="可选" class="w-full" />
+          </UFormField>
+          <UFormField label="物料 ID (可选)">
+            <UInput v-model="createForm.materialId" placeholder="raw_material_types.id" class="w-full" />
+          </UFormField>
+          <UFormField label="退回数量" required>
+            <div class="qty-row">
+              <UInputNumber v-model="createForm.quantity" :min="0" :step-snapping="false" :format-options="{ maximumFractionDigits: 4 }" :increment="false" :decrement="false" class="w-48" />
+              <UInput v-model="createForm.unit" placeholder="单位 (kg / 件 / 箱)" class="w-40" />
+            </div>
+          </UFormField>
+          <UFormField label="退回原因">
+            <UTextarea v-model="createForm.reason" :rows="2" :maxlength="500" class="w-full" />
+          </UFormField>
+        </div>
       </template>
-    </el-dialog>
-
-    <!-- 发出 dialog -->
-    <el-dialog v-model="showShipDialog" title="发出退回单" width="460px">
-      <el-form label-position="top">
-        <el-form-item label="物流单号 / 运单号" required>
-          <el-input v-model="shipForm.shippingTrackingNo" placeholder="必填" />
-        </el-form-item>
-      </el-form>
       <template #footer>
-        <el-button @click="showShipDialog = false">取消</el-button>
-        <el-button type="primary" :loading="submitting" @click="handleShipSubmit">确认发出</el-button>
+        <UButton color="neutral" variant="outline" @click="showCreateDialog = false">取消</UButton>
+        <UButton :loading="submitting" @click="handleCreateSubmit">创建草稿</UButton>
       </template>
-    </el-dialog>
+    </UModal>
+
+    <!-- 发出 -->
+    <UModal
+      v-model:open="showShipDialog"
+      title="发出退回单"
+      description="填写物流单号后发出"
+      :ui="{ content: 'max-w-[460px]', description: 'sr-only' }"
+    >
+      <template #body>
+        <UFormField label="物流单号 / 运单号" required>
+          <UInput v-model="shipForm.shippingTrackingNo" placeholder="必填" class="w-full" />
+        </UFormField>
+      </template>
+      <template #footer>
+        <UButton color="neutral" variant="outline" @click="showShipDialog = false">取消</UButton>
+        <UButton :loading="submitting" @click="handleShipSubmit">确认发出</UButton>
+      </template>
+    </UModal>
   </div>
 </template>
 
 <style scoped>
-.return-list {
-  padding: 20px;
-}
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: 16px;
-}
-.page-header .title {
-  font-size: 20px;
-  font-weight: 600;
-  margin: 0 0 4px;
-  color: #303133;
-}
-.page-header .subtitle {
-  font-size: 13px;
-  color: #909399;
-  margin: 0;
-}
-.filter-row {
-  display: flex;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-.pagination {
-  margin-top: 16px;
-  justify-content: flex-end;
-}
+.return-list { padding: var(--cs-space-4); }
+.head-main { flex: 1; min-width: 0; display: flex; gap: var(--cs-space-3); align-items: center; }
+.head-icon { flex: none; object-fit: contain; }
+.head-actions { display: flex; gap: var(--cs-space-2); }
+.filters { display: flex; gap: var(--cs-space-3); align-items: center; flex-wrap: wrap; padding: var(--cs-space-4) var(--cs-space-5); }
+.pager { display: flex; justify-content: flex-end; padding: var(--cs-space-4) var(--cs-space-5); }
+.form-grid { display: grid; gap: var(--cs-space-3); }
+.qty-row { display: flex; gap: var(--cs-space-3); }
 </style>

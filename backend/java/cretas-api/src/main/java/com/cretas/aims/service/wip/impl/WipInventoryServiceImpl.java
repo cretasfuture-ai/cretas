@@ -142,9 +142,6 @@ public class WipInventoryServiceImpl implements WipInventoryService {
     @Lazy
     private com.cretas.aims.service.foodsafety.ccp.CcpMonitoringService ccpMonitoringService;
 
-    @jakarta.persistence.PersistenceContext
-    private jakarta.persistence.EntityManager entityManager;
-
     /** 返工计划来源半成品的占用 (D-S315-01)。⚠️ @Lazy: 它反过来用本类还占用。 */
     @Autowired(required = false)
     @org.springframework.context.annotation.Lazy
@@ -1330,6 +1327,41 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                     .withSeverity("BLOCKING")
                     .withHintTarget(intermediateBatchNo);
         }
+        ClerkSemiRestore receipt = restoreLockedConsumption(factoryId, sfi, intermediateBatchNo, restoreQty,
+                sourceRef, operatorId);
+        log.info("[wip] restoreClerkSemiStrict SFI RESTORE: factory={}, batchNo={}, feedKg={}, restored={}{}, consumed={}, available={}",
+                factoryId, intermediateBatchNo, feedKg, restoreQty, sfi.getUnit() != null ? sfi.getUnit() : "",
+                sfi.getConsumedQuantity(), sfi.getAvailableQuantity());
+        return receipt;
+    }
+
+    @Override
+    @Transactional
+    public ClerkSemiRestore restoreClerkSemiExact(String factoryId, String intermediateBatchNo,
+                                                  BigDecimal quantityInSourceUnit, String sourceRef, Long operatorId) {
+        if (quantityInSourceUnit == null || quantityInSourceUnit.signum() <= 0) {
+            return new ClerkSemiRestore(BigDecimal.ZERO, null);
+        }
+        SemiFinishedInventory sfi = wipRepo
+                .findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(factoryId, intermediateBatchNo)
+                .orElse(null);
+        if (sfi == null) {
+            log.warn("[wip] restoreClerkSemiExact: no SFI row for batchNo={} (factory={}) — nothing to restore",
+                    intermediateBatchNo, factoryId);
+            return null;
+        }
+        ClerkSemiRestore receipt = restoreLockedConsumption(factoryId, sfi, intermediateBatchNo, quantityInSourceUnit,
+                sourceRef, operatorId);
+        log.info("[wip] restoreClerkSemiExact SFI RESTORE: factory={}, batchNo={}, restored={}{}, consumed={}, available={}",
+                factoryId, intermediateBatchNo, quantityInSourceUnit, sfi.getUnit() != null ? sfi.getUnit() : "",
+                sfi.getConsumedQuantity(), sfi.getAvailableQuantity());
+        return receipt;
+    }
+
+    /** 已持有行锁的那一行还回 {@code restoreQty} (原生单位) 的消耗, 并写一条正量 REVERSE 流水。 */
+    private ClerkSemiRestore restoreLockedConsumption(String factoryId, SemiFinishedInventory sfi,
+                                                     String intermediateBatchNo, BigDecimal restoreQty,
+                                                     String sourceRef, Long operatorId) {
         BigDecimal newConsumed = nz(sfi.getConsumedQuantity()).subtract(restoreQty);
         if (newConsumed.signum() < 0) {
             String u = com.cretas.aims.service.unit.UnitDisplayNames.display(sfi.getUnit());
@@ -1360,9 +1392,6 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                 .reportId(null)                         // ⛔ 不挂报工: 批次作用域校验对报工上每条流水都成立
                 .operatorId(operatorId)
                 .build());
-        log.info("[wip] restoreClerkSemiStrict SFI RESTORE: factory={}, batchNo={}, feedKg={}, restored={}{}, consumed={}, available={}",
-                factoryId, intermediateBatchNo, feedKg, restoreQty, sfi.getUnit() != null ? sfi.getUnit() : "",
-                sfi.getConsumedQuantity(), sfi.getAvailableQuantity());
         return new ClerkSemiRestore(restoreQty, revTxn.getId());
     }
 
@@ -2284,9 +2313,9 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         if (qty == null || qty.compareTo(BigDecimal.ZERO) <= 0) {
             throw new BusinessException(400, "扣减数量必须大于 0");
         }
-        // 悲观写锁防并发超扣
-        SemiFinishedInventory wip = refreshedAfterLock(wipRepo.findByIdForUpdate(wipId)
-                .orElseThrow(() -> new BusinessException(404, "半成品库存行不存在: id=" + wipId)));
+        // 悲观写锁防并发超扣 (锁到之后从库里重读, 见 SemiFinishedInventoryLockingRepository)
+        SemiFinishedInventory wip = wipRepo.findByIdForUpdate(wipId)
+                .orElseThrow(() -> new BusinessException(404, "半成品库存行不存在: id=" + wipId));
         if (!factoryId.equals(wip.getFactoryId())) {
             throw new BusinessException(403, "工厂 ID 不匹配，无权操作该 WIP");
         }
@@ -2329,17 +2358,6 @@ public class WipInventoryServiceImpl implements WipInventoryService {
     }
 
     /**
-     * 拿到行锁后强制读库。同一事务里先前读过这一行时, 锁查询返回的是持久化上下文里的旧值,
-     * 表又没有 @Version, 改完写回会覆盖别人已提交的余额。锁查询本身会先 flush, 这里不会丢本事务的改动。
-     */
-    private SemiFinishedInventory refreshedAfterLock(SemiFinishedInventory locked) {
-        if (entityManager != null) {
-            entityManager.refresh(locked);
-        }
-        return locked;
-    }
-
-    /**
      * 修1 (🔴) 二次加工反冲 — {@link #deductForSecondaryPlan} 的逆: 还回开工扣的半成品余量。
      *
      * <p>调用方必须持有 @Transactional。findByIdForUpdate 悲观写锁防并发 (与 deduct 对称)。
@@ -2349,9 +2367,9 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         if (qty == null || qty.compareTo(BigDecimal.ZERO) <= 0) {
             throw new BusinessException(400, "反冲数量必须大于 0");
         }
-        // 悲观写锁 (与 deductForSecondaryPlan 对称)
-        SemiFinishedInventory wip = refreshedAfterLock(wipRepo.findByIdForUpdate(wipId)
-                .orElseThrow(() -> new BusinessException(404, "半成品库存行不存在: id=" + wipId)));
+        // 悲观写锁 (与 deductForSecondaryPlan 对称; 锁到之后从库里重读)
+        SemiFinishedInventory wip = wipRepo.findByIdForUpdate(wipId)
+                .orElseThrow(() -> new BusinessException(404, "半成品库存行不存在: id=" + wipId));
         if (!factoryId.equals(wip.getFactoryId())) {
             throw new BusinessException(403, "工厂 ID 不匹配，无权操作该 WIP");
         }

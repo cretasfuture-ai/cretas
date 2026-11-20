@@ -1,11 +1,14 @@
 <script setup lang="ts">
+import ListEmptyExplain from '@/components/common/ListEmptyExplain.vue';
 import { ref, computed, onMounted } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post } from '@/api/request';
 import { PACKAGING_MISMATCH_CODE, confirmPackagingConversion, isPackagingMismatchError, mismatchConfirmLines } from '@/views/sales/packagingConversion';
 import { ElMessage } from 'element-plus';
-import { Search, Refresh, Check } from '@element-plus/icons-vue';
+import type { CsTableColumn as TableColumn, CsTabItem as TabsItem } from '@/types/csTable';
+import { badgeColor, type ElementTagType } from '@/utils/csBadge';
+/* 组件全部是 Nuxt UI (UTable / UTabs / UModal / USlideover / UInput / USelectMenu / UBadge / UPagination) + --cs-*；弹层里不放 Element 控件。提示仍用 ElMessage；规格换算确认仍是 ElMessageBox（见 confirmWithPackagingCheck 的收起/还原）。 */
 import { formatDateTime } from '@/utils/dateFormat';
 import { handleCatchError } from '@/utils/errorToast';
 import { emptyCell } from '@/utils/tableFormatters';
@@ -43,6 +46,75 @@ const confirmDialogVisible = ref(false);
 const confirmDialogLoading = ref(false);
 const confirmingDelivery = ref<TableRow | null>(null);
 const confirmItems = ref<Array<{ id: string; productName: string; plannedQty: number; actualQty: number; unit: string; productTypeId: string; sourceWarehouseCode: string; batches: string[] }>>([]);
+
+const R = { class: { th: 'text-right', td: 'text-right' } };
+const C = { class: { th: 'text-center', td: 'text-center' } };
+// 列很多（12 列）：操作列固定在右侧，不被横向滚动挤出视口（原 el-table fixed="right"）
+const STICKY = { class: { th: 'sticky right-0 bg-default text-center', td: 'sticky right-0 bg-default text-center' } };
+const dash = (v: unknown) => emptyCell(null, null, v);
+const DELIVERY_METHOD_TEXT: Record<string, string> = { LOGISTICS: '物流配送', SELF_DELIVERY: '自送', SELF_PICKUP: '客户自提' };
+const deliveryMethodText = (m: unknown) => DELIVERY_METHOD_TEXT[String(m)] || '历史未记录';
+const pendingColumns = computed<TableColumn<TableRow>[]>(() => [
+  { accessorKey: 'deliveryNumber', header: '发货单号' },
+  { id: 'customer', header: '客户' },
+  { accessorKey: 'deliveryDate', header: '计划发货日期' },
+  { id: 'nextStep', header: '下一步' },
+  { id: 'creator', header: '销售创建人' },
+  { id: 'method', header: '配送方式' },
+  { accessorKey: 'logisticsCompany', header: '物流公司' },
+  { accessorKey: 'trackingNumber', header: '运单号' },
+  { id: 'order', header: '销售订单' },
+  ...(canViewPrice.value ? [{ id: 'amount', header: '金额', meta: R }] : []),
+  { id: 'status', header: '状态', meta: C },
+  { id: 'createdAt', header: '销售创建时间' },
+  { id: 'actions', header: '操作', meta: STICKY },
+]);
+const legacyColumns = computed<TableColumn<TableRow>[]>(() => [
+  { accessorKey: 'shipmentNumber', header: '出货单号' },
+  { id: 'customerName', header: '客户名称' },
+  { id: 'product', header: '产品' },
+  { id: 'quantity', header: '数量', meta: R },
+  { id: 'logistics', header: '物流/车牌' },
+  ...(canViewPrice.value ? [{ id: 'amount', header: '单价/金额', meta: R }] : []),
+  { id: 'status', header: '状态', meta: C },
+  { id: 'createdAt', header: '创建时间' },
+  { id: 'actions', header: '操作', meta: C },
+]);
+const confirmColumns: TableColumn<(typeof confirmItems.value)[number]>[] = [
+  { accessorKey: 'productName', header: '产品' },
+  { id: 'plannedQty', header: '计划数量', meta: R },
+  { id: 'actualQty', header: '实际数量', meta: C },
+  { id: 'batches', header: '分配批次' },
+];
+const pendingCount = computed(() => pendingPagination.value.total);
+const tabItems = computed<TabsItem[]>(() => [
+  { label: pendingCount.value > 0 ? `销售发货单待确认 ${pendingCount.value > 99 ? '99+' : pendingCount.value}` : '销售发货单待确认', value: 'pending-sales' },
+  { label: '历史出货记录 (只读)', value: 'legacy' },
+]);
+const sizeItems = [10, 20, 50, 100].map((v) => ({ label: `${v} 条/页`, value: v }));
+// Nuxt UI 选项值不能是空串：ALL 表示「全部状态」，回写 searchForm.status 仍是 ''
+const legacyStatusItems = [
+  { label: '全部状态', value: 'ALL' },
+  { label: '待发货', value: 'pending' },
+  { label: '运输中', value: 'shipped' },
+  { label: '已送达', value: 'delivered' },
+  { label: '已退货', value: 'returned' },
+  { label: '已取消', value: 'cancelled' },
+];
+const legacyStatusModel = computed({
+  get: () => searchForm.value.status || 'ALL',
+  set: (v: string) => { searchForm.value.status = v === 'ALL' ? '' : v; },
+});
+const pendingPageModel = computed({ get: () => pendingPagination.value.page, set: (v: number) => handlePendingPageChange(v) });
+const pendingSizeModel = computed({ get: () => pendingPagination.value.size, set: (v: number) => handlePendingSizeChange(v) });
+const pageModel = computed({ get: () => pagination.value.page, set: (v: number) => handlePageChange(v) });
+const sizeModel = computed({ get: () => pagination.value.size, set: (v: number) => handleSizeChange(v) });
+// el-input-number 原本会把实发数量夹在 [0, 计划数量]；原生数字框不夹，失焦时补上
+function clampActualQty(it: { actualQty: number; plannedQty: number }) {
+  const v = Number(it.actualQty);
+  if (!Number.isFinite(v)) { it.actualQty = it.plannedQty; return; }
+  it.actualQty = Math.min(Math.max(v, 0), it.plannedQty);
+}
 
 onMounted(() => {
   // Issue #740: 默认加载销售待确认 queue
@@ -159,6 +231,8 @@ async function submitConfirmDelivery() {
     console.error('发货确认失败:', e);
   } finally {
     confirmDialogLoading.value = false;
+    // 成功会把 confirmingDelivery 置空；没成功（取消换算确认 / 分配或确认失败）就把弹窗还给用户
+    if (confirmingDelivery.value) confirmDialogVisible.value = true;
   }
 }
 
@@ -226,6 +300,8 @@ async function confirmWithPackagingCheck(actualQuantities: Record<string, number
     ElMessage.error('库存已变动，请关闭后重新打开这一单');
     return null;
   }
+  // 模态 UModal 打开时 body 不可点，ElMessageBox 会点不了：先收起确认弹窗，问完（或取消）后由 submitConfirmDelivery 的 finally 按需还原
+  confirmDialogVisible.value = false;
   if (!(await confirmPackagingConversion(lines))) return null;
   for (const { item, rows } of plans) {
     await post(`/${factoryId.value}/sales-deliveries/items/${item.id}/batch-allocations`, {
@@ -343,7 +419,7 @@ function getStatusText(status: string) {
 </script>
 
 <template>
-  <div class="page-wrapper">
+  <div class="page-wrapper" data-testid="warehouse-shipments">
     <ConceptDisambiguationAlert
       here-name="出货管理"
       here="把成品发给客户的物流操作（车牌号、司机、批次分配）"
@@ -351,330 +427,209 @@ function getStatusText(status: string) {
       other="客户下的销售订单（金额、收款）。出货是销售订单的物流执行环节"
       other-path="/sales/orders"
     />
-    <el-card class="page-card" shadow="never">
-      <template #header>
-        <div class="card-header">
-          <div class="header-left">
-            <span class="page-title">出货管理</span>
-            <span v-if="activeTab === 'legacy'" class="data-count">共 {{ pagination.total }} 条记录</span>
-            <span v-else class="data-count">共 {{ pendingPagination.total }} 条待确认</span>
-          </div>
-        </div>
-      </template>
+    <section class="cs-card">
+      <header class="cs-card-head">
+        <span class="page-title">出货管理</span>
+        <span v-if="activeTab === 'legacy'" class="data-count">共 {{ pagination.total }} 条记录</span>
+        <span v-else class="data-count">共 {{ pendingPagination.total }} 条待确认</span>
+      </header>
 
       <!--
         Issue #740 (六扇门 May10): 仓库出货管理重构为两 tab.
           tab 1 (default):  销售推过来的待确认发货单 → 填实发数量 + 扣库存
           tab 2 (legacy):   老 /shipments endpoint 历史数据，只读
       -->
-      <el-tabs v-model="activeTab" style="margin-bottom: 12px;">
-        <el-tab-pane name="pending-sales">
-          <template #label>
-            <span style="display: inline-flex; align-items: center; gap: 6px;">
-              销售发货单待确认
-              <el-badge v-if="pendingPagination.total > 0" :value="pendingPagination.total" :max="99" />
-            </span>
-          </template>
+      <UTabs v-model="activeTab" :items="tabItems" :content="false" variant="link" class="px-4" data-testid="shipments-tabs" />
 
-          <el-alert
-            type="info"
-            :closable="false"
-            show-icon
-            style="margin-bottom: 12px;"
-          >
-            <template #title>
-              <span style="font-size: 13px;">
-                销售创建的发货任务列在这里。仓管只需核对实发数量并确认出库；客户已有库存会自动匹配本销售订单预留的精确批次。
-              </span>
+      <div class="tab-body">
+        <template v-if="activeTab === 'pending-sales'">
+          <UAlert
+            color="info"
+            variant="subtle"
+            icon="i-lucide-info"
+            title="销售创建的发货任务列在这里。仓管只需核对实发数量并确认出库；客户已有库存会自动匹配本销售订单预留的精确批次。"
+            class="mb-3"
+          />
+
+          <UTable :data="pendingData" :columns="pendingColumns" :loading="pendingLoading" class="cs-table" data-testid="shipments-pending-table">
+            <template #empty><ListEmptyExplain empty-title="没有待确认的发货单" empty-hint="销售订单发货后生成的发货单会在这里等待确认；全部确认完毕时为空。" /></template>
+            <template #deliveryNumber-cell="{ row }">{{ dash(row.original.deliveryNumber) }}</template>
+            <template #customer-cell="{ row }">{{ row.original.customer?.name || row.original.customerName || row.original.customerId || '-' }}</template>
+            <template #deliveryDate-cell="{ row }">{{ dash(row.original.deliveryDate) }}</template>
+            <template #nextStep-cell>仓管核量并出库</template>
+            <template #creator-cell="{ row }">用户 #{{ row.original.shippedBy || '-' }}</template>
+            <template #method-cell="{ row }">{{ deliveryMethodText(row.original.deliveryMethod) }}</template>
+            <template #logisticsCompany-cell="{ row }">{{ dash(row.original.logisticsCompany) }}</template>
+            <template #trackingNumber-cell="{ row }">{{ dash(row.original.trackingNumber) }}</template>
+            <template #order-cell="{ row }">{{ row.original.orderNumber || row.original.salesOrder?.orderNumber || row.original.salesOrderId || '-' }}</template>
+            <template #amount-cell="{ row }"><span class="num">{{ row.original.totalAmount ? `¥${row.original.totalAmount}` : '-' }}</span></template>
+            <template #status-cell="{ row }">
+              <UBadge :color="badgeColor(getDeliveryStatusType(row.original.status) as ElementTagType)" variant="soft">
+                {{ getDeliveryStatusText(row.original.status) }}
+              </UBadge>
             </template>
-          </el-alert>
-
-          <el-table :data="pendingData" v-loading="pendingLoading" empty-text="暂无待确认发货单" stripe border style="width: 100%">
-            <el-table-column prop="deliveryNumber" label="发货单号" width="180" :formatter="emptyCell" />
-            <el-table-column label="客户" min-width="150" show-overflow-tooltip>
-              <template #default="{ row }">{{ row.customer?.name || row.customerName || row.customerId || '-' }}</template>
-            </el-table-column>
-            <el-table-column prop="deliveryDate" label="计划发货日期" width="130" :formatter="emptyCell" />
-            <el-table-column label="下一步" width="130"><template #default>仓管核量并出库</template></el-table-column>
-            <el-table-column label="销售创建人" width="120"><template #default="{ row }">用户 #{{ row.shippedBy || '-' }}</template></el-table-column>
-            <el-table-column label="配送方式" width="110"><template #default="{ row }">{{ ({ LOGISTICS: '物流配送', SELF_DELIVERY: '自送', SELF_PICKUP: '客户自提' } as Record<string, string>)[row.deliveryMethod] || '历史未记录' }}</template></el-table-column>
-            <el-table-column prop="logisticsCompany" label="物流公司" width="130" :formatter="emptyCell" />
-            <el-table-column prop="trackingNumber" label="运单号" width="150" :formatter="emptyCell" />
-            <el-table-column label="销售订单" width="170" show-overflow-tooltip>
-              <template #default="{ row }">{{ row.orderNumber || row.salesOrder?.orderNumber || row.salesOrderId || '-' }}</template>
-            </el-table-column>
-            <el-table-column v-if="canViewPrice" prop="totalAmount" label="金额" width="120" align="right">
-              <template #default="{ row }">{{ row.totalAmount ? `¥${row.totalAmount}` : '-' }}</template>
-            </el-table-column>
-            <el-table-column prop="status" label="状态" width="120" align="center">
-              <template #default="{ row }">
-                <el-tag :type="getDeliveryStatusType(row.status)" size="small">
-                  {{ getDeliveryStatusText(row.status) }}
-                </el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column prop="createdAt" label="销售创建时间" width="180">
-              <template #default="{ row }">{{ formatDateTime(row.createdAt) }}</template>
-            </el-table-column>
-            <el-table-column label="操作" width="180" fixed="right" align="center">
-              <template #default="{ row }">
-                <el-button
-                  v-if="canWrite"
-                  type="primary"
-                  size="small"
-                  :icon="Check"
-                  @click="openConfirmDialog(row)"
-                >确认并出库</el-button>
-              </template>
-            </el-table-column>
-          </el-table>
+            <template #createdAt-cell="{ row }">{{ formatDateTime(row.original.createdAt) }}</template>
+            <template #actions-cell="{ row }">
+              <div class="row-actions">
+                <UButton v-if="canWrite" size="xs" icon="i-lucide-check" data-testid="shipments-open-confirm" @click="openConfirmDialog(row.original)">确认并出库</UButton>
+              </div>
+            </template>
+          </UTable>
 
           <div class="pagination-wrapper">
-            <el-pagination
-              v-model:current-page="pendingPagination.page"
-              v-model:page-size="pendingPagination.size"
-              :page-sizes="[10, 20, 50, 100]"
-              :total="pendingPagination.total"
-              layout="total, sizes, prev, pager, next, jumper"
-              @current-change="handlePendingPageChange"
-              @size-change="handlePendingSizeChange"
-            />
+            <span class="data-count">共 {{ pendingPagination.total }} 条</span>
+            <USelectMenu v-model="pendingSizeModel" value-key="value" :items="sizeItems" :search-input="false" class="w-28" />
+            <UPagination v-model:page="pendingPageModel" :items-per-page="pendingPagination.size" :total="pendingPagination.total" show-edges :sibling-count="1" />
           </div>
-        </el-tab-pane>
+        </template>
 
-        <el-tab-pane name="legacy" label="历史出货记录 (只读)">
+        <template v-else>
+          <UAlert
+            color="warning"
+            variant="subtle"
+            icon="i-lucide-triangle-alert"
+            title="旧出货台账已冻结，仅供历史查询；新发货流程：① 在销售订单中创建发货单 → ② 点「新建分批发运」生成子发运单 → ③ 在左侧「销售发货单待确认」页完成仓库确认。"
+            class="mb-3"
+          />
 
-      <el-alert
-        title="旧出货台账已冻结，仅供历史查询；新发货流程：① 在销售订单中创建发货单 → ② 点「新建分批发运」生成子发运单 → ③ 在左侧「销售发货单待确认」页完成仓库确认。"
-        type="warning"
-        :closable="false"
-        show-icon
-        style="margin-bottom: 12px"
-      />
+          <div class="search-bar">
+            <UInput v-model="searchForm.keyword" icon="i-lucide-search" placeholder="搜索出货单号/客户名称" class="w-70" data-testid="shipments-keyword" @keyup.enter="handleSearch">
+              <template v-if="searchForm.keyword" #trailing>
+                <UButton color="neutral" variant="link" size="xs" icon="i-lucide-x" aria-label="清空" @click="searchForm.keyword = ''" />
+              </template>
+            </UInput>
+            <USelectMenu v-model="legacyStatusModel" value-key="value" :items="legacyStatusItems" :search-input="false" class="w-40" data-testid="shipments-status" />
+            <UButton icon="i-lucide-search" @click="handleSearch">搜索</UButton>
+            <UButton color="neutral" variant="outline" icon="i-lucide-refresh-cw" @click="handleRefresh">重置</UButton>
+          </div>
 
-      <div class="search-bar">
-        <el-input
-          v-model="searchForm.keyword"
-          placeholder="搜索出货单号/客户名称"
-          :prefix-icon="Search"
-          clearable
-          style="width: 280px"
-          @keyup.enter="handleSearch"
-        />
-        <el-select v-model="searchForm.status" placeholder="全部状态" clearable style="width: 150px">
-          <el-option label="待发货" value="pending" />
-          <el-option label="运输中" value="shipped" />
-          <el-option label="已送达" value="delivered" />
-          <el-option label="已退货" value="returned" />
-          <el-option label="已取消" value="cancelled" />
-        </el-select>
-        <el-button type="primary" :icon="Search" @click="handleSearch">搜索</el-button>
-        <el-button :icon="Refresh" @click="handleRefresh">重置</el-button>
+          <UTable :data="tableData" :columns="legacyColumns" :loading="loading" class="cs-table" data-testid="shipments-legacy-table">
+            <template #empty><ListEmptyExplain empty-title="还没有出货记录" empty-hint="在销售订单里点「发货」后，出货记录会出现在这里。" /></template>
+            <template #shipmentNumber-cell="{ row }">{{ dash(row.original.shipmentNumber) }}</template>
+            <template #customerName-cell="{ row }">{{ row.original.customerName || row.original.customerId || '-' }}</template>
+            <template #product-cell="{ row }">{{ row.original.productName || row.original.productBatchNumber || '-' }}</template>
+            <template #quantity-cell="{ row }"><span class="num">{{ dash(row.original.quantity) }}</span></template>
+            <template #logistics-cell="{ row }">{{ row.original.logisticsCompany || row.original.vehicleNumber || row.original.trackingNumber || '-' }}</template>
+            <template #amount-cell="{ row }"><span class="num">{{ row.original.totalAmount ? `¥${row.original.totalAmount}` : row.original.unitPrice ? `¥${row.original.unitPrice}/${row.original.unit || ''}` : '-' }}</span></template>
+            <template #status-cell="{ row }">
+              <UBadge :color="badgeColor(getStatusType(row.original.status) as ElementTagType)" variant="soft">
+                {{ getStatusText(row.original.status) }}
+              </UBadge>
+            </template>
+            <template #createdAt-cell="{ row }">{{ formatDateTime(row.original.createdAt) }}</template>
+            <template #actions-cell="{ row }">
+              <div class="row-actions">
+                <UButton size="xs" variant="link" @click="showDetail(row.original)">查看</UButton>
+              </div>
+            </template>
+          </UTable>
+
+          <div class="pagination-wrapper">
+            <span class="data-count">共 {{ pagination.total }} 条</span>
+            <USelectMenu v-model="sizeModel" value-key="value" :items="sizeItems" :search-input="false" class="w-28" />
+            <UPagination v-model:page="pageModel" :items-per-page="pagination.size" :total="pagination.total" show-edges :sibling-count="1" />
+          </div>
+        </template>
       </div>
-
-      <el-table :data="tableData" v-loading="loading" empty-text="暂无数据" stripe border style="width: 100%">
-        <el-table-column prop="shipmentNumber" label="出货单号" width="160" :formatter="emptyCell" />
-        <el-table-column label="客户名称" min-width="150" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.customerName || row.customerId || '-' }}</template>
-        </el-table-column>
-        <el-table-column label="产品" width="160" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.productName || row.productBatchNumber || '-' }}</template>
-        </el-table-column>
-        <el-table-column prop="quantity" label="数量" width="100" align="right" :formatter="emptyCell" />
-        <el-table-column label="物流/车牌" width="140" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.logisticsCompany || row.vehicleNumber || row.trackingNumber || '-' }}</template>
-        </el-table-column>
-        <el-table-column v-if="canViewPrice" label="单价/金额" width="120" align="right">
-          <template #default="{ row }">{{ row.totalAmount ? `¥${row.totalAmount}` : row.unitPrice ? `¥${row.unitPrice}/${row.unit || ''}` : '-' }}</template>
-        </el-table-column>
-        <el-table-column prop="status" label="状态" width="100" align="center">
-          <template #default="{ row }">
-            <el-tag :type="getStatusType(row.status)" size="small">
-              {{ getStatusText(row.status) }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="createdAt" label="创建时间" width="180">
-          <template #default="{ row }">{{ formatDateTime(row.createdAt) }}</template>
-        </el-table-column>
-        <el-table-column label="操作" width="90" fixed="right" align="center">
-          <template #default="{ row }">
-            <el-button type="primary" link size="small" @click="showDetail(row)">查看</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-
-      <div class="pagination-wrapper">
-        <el-pagination
-          v-model:current-page="pagination.page"
-          v-model:page-size="pagination.size"
-          :page-sizes="[10, 20, 50, 100]"
-          :total="pagination.total"
-          layout="total, sizes, prev, pager, next, jumper"
-          @current-change="handlePageChange"
-          @size-change="handleSizeChange"
-        />
-      </div>
-        </el-tab-pane>
-      </el-tabs>
-    </el-card>
+    </section>
 
     <!--
       Issue #740: 仓库 confirm 弹窗 — 填实发数量, 确认后扣库存 + 转 SHIPPED.
       客户原话: "比如说我可能计划发发一版, 那但是可能车或者是没装下什么的, 各种各样的因素,
                 然后他可能就发了八十, 然后他确认以后呢, 他就可以直接点打印"
+      规格不一致要弹 ElMessageBox 确认（见 confirmWithPackagingCheck）：模态 UModal 会让 body 不可点，
+      所以那一步先收起本弹窗，确认完再按需打开。
     -->
-    <el-dialog v-model="confirmDialogVisible" title="确认发货 (填实际数量)" width="600px" :close-on-click-modal="false">
-      <template v-if="confirmingDelivery">
-        <el-descriptions :column="2" border size="small" style="margin-bottom: 12px;">
-          <el-descriptions-item label="发货单号">{{ confirmingDelivery.deliveryNumber }}</el-descriptions-item>
-          <el-descriptions-item label="客户">{{ confirmingDelivery.customer?.name || confirmingDelivery.customerName || confirmingDelivery.customerId || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="销售订单">{{ confirmingDelivery.orderNumber || confirmingDelivery.salesOrder?.orderNumber || confirmingDelivery.salesOrderId || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="计划日期">{{ confirmingDelivery.deliveryDate || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="销售创建人">用户 #{{ confirmingDelivery.shippedBy || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="配送方式">{{ ({ LOGISTICS: '物流配送', SELF_DELIVERY: '自送', SELF_PICKUP: '客户自提' } as Record<string, string>)[confirmingDelivery.deliveryMethod] || '历史未记录' }}</el-descriptions-item>
-          <el-descriptions-item label="物流公司">{{ confirmingDelivery.logisticsCompany || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="运单号">{{ confirmingDelivery.trackingNumber || '-' }}</el-descriptions-item>
-        </el-descriptions>
+    <UModal v-model:open="confirmDialogVisible" title="确认发货 (填实际数量)" description="核对每行实际发货数量后确认出库" :dismissible="false" :ui="{ content: 'max-w-[680px]', description: 'sr-only', footer: 'justify-end' }">
+      <template #body>
+        <template v-if="confirmingDelivery">
+          <dl class="summary">
+            <div><dt>发货单号</dt><dd>{{ confirmingDelivery.deliveryNumber }}</dd></div>
+            <div><dt>客户</dt><dd>{{ confirmingDelivery.customer?.name || confirmingDelivery.customerName || confirmingDelivery.customerId || '-' }}</dd></div>
+            <div><dt>销售订单</dt><dd>{{ confirmingDelivery.orderNumber || confirmingDelivery.salesOrder?.orderNumber || confirmingDelivery.salesOrderId || '-' }}</dd></div>
+            <div><dt>计划日期</dt><dd>{{ confirmingDelivery.deliveryDate || '-' }}</dd></div>
+            <div><dt>销售创建人</dt><dd>用户 #{{ confirmingDelivery.shippedBy || '-' }}</dd></div>
+            <div><dt>配送方式</dt><dd>{{ deliveryMethodText(confirmingDelivery.deliveryMethod) }}</dd></div>
+            <div><dt>物流公司</dt><dd>{{ confirmingDelivery.logisticsCompany || '-' }}</dd></div>
+            <div><dt>运单号</dt><dd>{{ confirmingDelivery.trackingNumber || '-' }}</dd></div>
+          </dl>
 
-        <el-alert
-          type="warning"
-          :closable="false"
-          show-icon
-          style="margin-bottom: 12px;"
-        >
-          <template #title>
-            <span style="font-size: 13px;">
-              请填写每行实际发货数量 (默认 = 计划数量, 可少填以记录短发). 确认后系统将按已提前分配的批次
-              扣减成品库存; 未提前分配的, 由系统按 FIFO 自动选择批次并记录, 无需先去手动分配。
-            </span>
-          </template>
-        </el-alert>
+          <UAlert
+            color="warning"
+            variant="subtle"
+            icon="i-lucide-triangle-alert"
+            title="请填写每行实际发货数量 (默认 = 计划数量, 可少填以记录短发). 确认后系统将按已提前分配的批次扣减成品库存; 未提前分配的, 由系统按 FIFO 自动选择批次并记录, 无需先去手动分配。"
+            class="my-3"
+          />
 
-        <el-table :data="confirmItems" border size="small">
-          <el-table-column prop="productName" label="产品" min-width="160" />
-          <el-table-column label="计划数量" width="120" align="right">
-            <template #default="{ row }">{{ row.plannedQty }} {{ row.unit }}</template>
-          </el-table-column>
-          <el-table-column label="实际数量" width="180" align="center">
-            <template #default="{ row }">
-              <el-input-number
-                v-model="row.actualQty"
-                :min="0"
-                :max="row.plannedQty"
-                :precision="2"
-                size="small"
-                style="width: 130px;"
-              />
-              <span style="margin-left: 4px;">{{ row.unit }}</span>
+          <UTable :data="confirmItems" :columns="confirmColumns" class="cs-table" data-testid="shipments-confirm-items">
+            <template #plannedQty-cell="{ row }"><span class="num">{{ row.original.plannedQty }} {{ row.original.unit }}</span></template>
+            <template #actualQty-cell="{ row }">
+              <div class="qty-cell">
+                <UInput
+                  v-model.number="row.original.actualQty"
+                  type="number"
+                  :min="0"
+                  :max="row.original.plannedQty"
+                  step="0.01"
+                  size="sm"
+                  class="w-28"
+                  data-testid="shipments-actual-qty"
+                  @blur="clampActualQty(row.original)"
+                />
+                <span>{{ row.original.unit }}</span>
+              </div>
             </template>
-          </el-table-column>
-          <el-table-column label="分配批次" min-width="220">
-            <template #default="{ row }">
-              <div v-if="row.batches.length"><div v-for="batch in row.batches" :key="batch">{{ batch }}</div></div>
+            <template #batches-cell="{ row }">
+              <div v-if="row.original.batches.length"><div v-for="batch in row.original.batches" :key="batch">{{ batch }}</div></div>
               <span v-else>确认时按 FIFO 自动记录</span>
             </template>
-          </el-table-column>
-        </el-table>
+          </UTable>
+        </template>
       </template>
       <template #footer>
-        <el-button @click="confirmDialogVisible = false">取消</el-button>
-        <el-button data-testid="warehouse-confirm-delivery" type="primary" :loading="confirmDialogLoading" @click="submitConfirmDelivery">
+        <UButton color="neutral" variant="outline" @click="confirmDialogVisible = false">取消</UButton>
+        <UButton data-testid="warehouse-confirm-delivery" :loading="confirmDialogLoading" @click="submitConfirmDelivery">
           确认并扣库存
-        </el-button>
+        </UButton>
       </template>
-    </el-dialog>
+    </UModal>
 
     <!-- 出货详情抽屉 -->
-    <el-drawer v-model="detailVisible" title="出货详情" size="420px">
-      <template v-if="detailRow">
-        <el-descriptions :column="1" border>
-          <el-descriptions-item label="出货单号">{{ detailRow.shipmentNumber || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="客户名称">{{ detailRow.customerName || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="产品批次">{{ detailRow.productBatchNumber || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="数量">{{ detailRow.quantity ?? '-' }}</el-descriptions-item>
-          <el-descriptions-item label="状态">
-            <el-tag :type="getStatusType(detailRow.status)" size="small">
-              {{ getStatusText(detailRow.status) }}
-            </el-tag>
-          </el-descriptions-item>
-          <el-descriptions-item label="车牌号">{{ detailRow.vehicleNumber || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="司机">{{ detailRow.driverName || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="司机电话">{{ detailRow.driverPhone || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="创建时间">{{ formatDateTime(detailRow.createdAt) }}</el-descriptions-item>
-          <el-descriptions-item label="备注">{{ detailRow.notes || '-' }}</el-descriptions-item>
-        </el-descriptions>
+    <USlideover v-model:open="detailVisible" side="right" title="出货详情" description="历史出货记录详情（只读）" :ui="{ content: 'cs-slide', description: 'sr-only' }">
+      <template #body>
+        <dl v-if="detailRow" class="detail-list">
+          <div><dt>出货单号</dt><dd>{{ detailRow.shipmentNumber || '-' }}</dd></div>
+          <div><dt>客户名称</dt><dd>{{ detailRow.customerName || '-' }}</dd></div>
+          <div><dt>产品批次</dt><dd>{{ detailRow.productBatchNumber || '-' }}</dd></div>
+          <div><dt>数量</dt><dd>{{ detailRow.quantity ?? '-' }}</dd></div>
+          <div>
+            <dt>状态</dt>
+            <dd><UBadge :color="badgeColor(getStatusType(detailRow.status) as ElementTagType)" variant="soft">{{ getStatusText(detailRow.status) }}</UBadge></dd>
+          </div>
+          <div><dt>车牌号</dt><dd>{{ detailRow.vehicleNumber || '-' }}</dd></div>
+          <div><dt>司机</dt><dd>{{ detailRow.driverName || '-' }}</dd></div>
+          <div><dt>司机电话</dt><dd>{{ detailRow.driverPhone || '-' }}</dd></div>
+          <div><dt>创建时间</dt><dd>{{ formatDateTime(detailRow.createdAt) }}</dd></div>
+          <div><dt>备注</dt><dd>{{ detailRow.notes || '-' }}</dd></div>
+        </dl>
       </template>
-    </el-drawer>
-
+    </USlideover>
   </div>
 </template>
 
-<style lang="scss" scoped>
-.page-wrapper {
-  height: 100%;
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-}
-
-.page-card {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-
-  :deep(.el-card__header) {
-    padding: 16px 20px;
-    border-bottom: 1px solid var(--border-color-lighter, #ebeef5);
-  }
-
-  :deep(.el-card__body) {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    padding: 20px;
-  }
-}
-
-.card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-
-  .header-left {
-    display: flex;
-    align-items: baseline;
-    gap: 12px;
-
-    .page-title {
-      font-size: 16px;
-      font-weight: 600;
-      color: var(--text-color-primary, #303133);
-    }
-
-    .data-count {
-      font-size: 13px;
-      color: var(--text-color-secondary, #909399);
-    }
-  }
-}
-
-.search-bar {
-  display: flex;
-  gap: 12px;
-  margin-bottom: 16px;
-  flex-wrap: wrap;
-}
-
-.el-table {
-  flex: 1;
-}
-
-.pagination-wrapper {
-  display: flex;
-  justify-content: flex-end;
-  padding-top: 16px;
-  border-top: 1px solid var(--border-color-lighter, #ebeef5);
-  margin-top: 16px;
-}
+<style scoped>
+.page-wrapper { display: flex; flex-direction: column; gap: var(--cs-space-3); padding: var(--cs-space-4); width: 100%; }
+.cs-card-head { padding-block: var(--cs-space-4); align-items: baseline; }
+.page-title { font-size: var(--cs-type-title); font-weight: 650; color: var(--cs-text); }
+.data-count { font-size: var(--cs-font-small); color: var(--cs-muted); font-weight: 400; }
+.tab-body { padding: var(--cs-space-3) var(--cs-space-5) var(--cs-space-4); }
+.search-bar { display: flex; gap: var(--cs-space-3); align-items: center; flex-wrap: wrap; margin-bottom: var(--cs-space-3); }
+.row-actions { display: flex; justify-content: center; gap: var(--cs-space-1); }
+.pagination-wrapper { display: flex; justify-content: flex-end; align-items: center; gap: var(--cs-space-3); padding-top: var(--cs-space-4); }
+.qty-cell { display: flex; align-items: center; gap: var(--cs-space-1); justify-content: center; }
+.summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--cs-space-3); margin: 0; padding: var(--cs-space-3) var(--cs-space-4); background: var(--cs-surface-subtle); border: 1px solid var(--cs-border); border-radius: var(--cs-radius-sm); }
+.summary dt, .detail-list dt { font-size: var(--cs-font-small); color: var(--cs-muted); }
+.summary dd, .detail-list dd { margin: 2px 0 0; color: var(--cs-text); }
+.detail-list { display: flex; flex-direction: column; gap: var(--cs-space-3); margin: 0; }
 </style>

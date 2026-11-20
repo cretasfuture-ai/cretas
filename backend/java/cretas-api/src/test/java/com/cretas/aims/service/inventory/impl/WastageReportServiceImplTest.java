@@ -69,6 +69,9 @@ class WastageReportServiceImplTest {
     @Mock private MaterialBatchRepository materialBatchRepo;
     @Mock private MaterialBatchAdjustmentRepository adjustmentRepo;
     @Mock private InventoryLowStockEventPublisher inventoryLowStockEventPublisher;
+    @Mock private com.cretas.aims.service.PermissionService permissionService;
+    /** 本工厂「报损审批」权限当前放行的角色 (B9: 默认只有厂长; 这里模拟工厂另配了财务经理 + 生产主管)。 */
+    private java.util.Set<String> wastageApprovers;
 
     @InjectMocks private WastageReportServiceImpl service;
 
@@ -79,6 +82,12 @@ class WastageReportServiceImplTest {
     @BeforeEach
     void setUp() {
         ReflectionTestUtils.setField(service, "inventoryLowStockEventPublisher", inventoryLowStockEventPublisher);
+        wastageApprovers = new java.util.HashSet<>(java.util.Set.of(
+                "factory_super_admin", "finance_manager", "production_manager"));
+        org.mockito.Mockito.lenient().when(permissionService.roleHasConfiguredPermission(
+                any(), any(), eq(com.cretas.aims.service.PermissionService.WASTAGE_APPROVE_PERMISSION)))
+                .thenAnswer(inv -> inv.getArgument(1) != null
+                        && wastageApprovers.contains(((String) inv.getArgument(1)).toLowerCase()));
     }
 
     // -------------------------------------------------------
@@ -157,15 +166,55 @@ class WastageReportServiceImplTest {
     // 5. FACTORY 轨 + finance_manager 角色 approve → 403 (错轨)
     // -------------------------------------------------------
     @Test
-    @DisplayName("T5: FACTORY 轨 + finance_manager 角色 approve → 403 (finance_manager 只能审 WAREHOUSE 轨)")
+    @DisplayName("T5: FACTORY 轨 + 没有「报损审批」权限的角色 (默认只有厂长) approve → 403, 且不动库存")
     void approve_factoryTrack_wrongRole_throws403() {
+        wastageApprovers = new java.util.HashSet<>(java.util.Set.of("factory_super_admin"));
         WastageReport report = buildReport(WastageReport.TrackType.FACTORY, WastageReport.Status.PENDING_APPROVAL);
         when(wastageReportRepo.findById(any())).thenReturn(Optional.of(report));
 
-        assertThatThrownBy(() -> service.approve(report.getId(), FACTORY_ID, USER_ID, "finance_manager"))
+        assertThatThrownBy(() -> service.approve(report.getId(), FACTORY_ID, USER_ID, "production_manager"))
                 .isInstanceOf(BusinessException.class)
                 .extracting(ex -> ((BusinessException) ex).getCode())
                 .isEqualTo(403);
+        verify(wastageReportRepo, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("B9: 默认配置下(只有厂长)财务经理 / 生产主管审批 WAREHOUSE 轨也是 403; 厂长可以")
+    void approve_defaultConfig_onlyFactoryHead() {
+        wastageApprovers = new java.util.HashSet<>(java.util.Set.of("factory_super_admin"));
+        WastageReport report = buildReport(WastageReport.TrackType.WAREHOUSE, WastageReport.Status.PENDING_APPROVAL);
+        when(wastageReportRepo.findById(any())).thenReturn(Optional.of(report));
+
+        for (String role : new String[]{"finance_manager", "production_manager"}) {
+            assertThatThrownBy(() -> service.approve(report.getId(), FACTORY_ID, USER_ID, role))
+                    .isInstanceOf(BusinessException.class)
+                    .extracting(ex -> ((BusinessException) ex).getCode())
+                    .isEqualTo(403);
+        }
+        assertThatThrownBy(() -> service.reject(report.getId(), FACTORY_ID, "不合格", USER_ID, "finance_manager"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getCode())
+                .isEqualTo(403);
+        verify(wastageReportRepo, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("B9: 无权限者看不到待审列表 (空 Page, 不查库); 被配了权限的角色两条轨道都看得到")
+    void listPending_followsPermission() {
+        Pageable pageable = PageRequest.of(0, 20);
+        wastageApprovers = new java.util.HashSet<>(java.util.Set.of("factory_super_admin"));
+        assertThat(service.listPending(FACTORY_ID, "finance_manager", pageable).isEmpty()).isTrue();
+        verify(wastageReportRepo, never()).findByFactoryIdAndStatusAndTrackTypeInOrderBySubmittedAtAsc(any(), any(), any(), any());
+
+        wastageApprovers.add("finance_manager");
+        List<WastageReport.TrackType> both = List.of(WastageReport.TrackType.WAREHOUSE, WastageReport.TrackType.FACTORY);
+        when(wastageReportRepo.findByFactoryIdAndStatusAndTrackTypeInOrderBySubmittedAtAsc(
+                eq(FACTORY_ID), eq(WastageReport.Status.PENDING_APPROVAL), eq(both), eq(pageable)))
+                .thenReturn(new PageImpl<>(Collections.emptyList()));
+        service.listPending(FACTORY_ID, "finance_manager", pageable);
+        verify(wastageReportRepo).findByFactoryIdAndStatusAndTrackTypeInOrderBySubmittedAtAsc(
+                eq(FACTORY_ID), eq(WastageReport.Status.PENDING_APPROVAL), eq(both), eq(pageable));
     }
 
     // -------------------------------------------------------
@@ -344,7 +393,7 @@ class WastageReportServiceImplTest {
         Pageable pageable = PageRequest.of(0, 20);
         when(wastageReportRepo.findByFactoryIdAndStatusAndTrackTypeInOrderBySubmittedAtAsc(
                 eq(FACTORY_ID), eq(WastageReport.Status.PENDING_APPROVAL),
-                eq(List.of(WastageReport.TrackType.WAREHOUSE)),
+                eq(List.of(WastageReport.TrackType.WAREHOUSE, WastageReport.TrackType.FACTORY)),
                 eq(pageable)))
                 .thenReturn(new PageImpl<>(Collections.emptyList()));
 
@@ -352,7 +401,7 @@ class WastageReportServiceImplTest {
 
         verify(wastageReportRepo).findByFactoryIdAndStatusAndTrackTypeInOrderBySubmittedAtAsc(
                 eq(FACTORY_ID), eq(WastageReport.Status.PENDING_APPROVAL),
-                eq(List.of(WastageReport.TrackType.WAREHOUSE)),
+                eq(List.of(WastageReport.TrackType.WAREHOUSE, WastageReport.TrackType.FACTORY)),
                 eq(pageable));
     }
 
@@ -365,7 +414,7 @@ class WastageReportServiceImplTest {
         Pageable pageable = PageRequest.of(0, 20);
         when(wastageReportRepo.findByFactoryIdAndStatusAndTrackTypeInOrderBySubmittedAtAsc(
                 eq(FACTORY_ID), eq(WastageReport.Status.PENDING_APPROVAL),
-                eq(List.of(WastageReport.TrackType.FACTORY)),
+                eq(List.of(WastageReport.TrackType.WAREHOUSE, WastageReport.TrackType.FACTORY)),
                 eq(pageable)))
                 .thenReturn(new PageImpl<>(Collections.emptyList()));
 
@@ -373,7 +422,7 @@ class WastageReportServiceImplTest {
 
         verify(wastageReportRepo).findByFactoryIdAndStatusAndTrackTypeInOrderBySubmittedAtAsc(
                 eq(FACTORY_ID), eq(WastageReport.Status.PENDING_APPROVAL),
-                eq(List.of(WastageReport.TrackType.FACTORY)),
+                eq(List.of(WastageReport.TrackType.WAREHOUSE, WastageReport.TrackType.FACTORY)),
                 eq(pageable));
     }
 
@@ -413,7 +462,7 @@ class WastageReportServiceImplTest {
     // 16. submit 设置 approverRole 为小写真实码
     // -------------------------------------------------------
     @Test
-    @DisplayName("T16: submit WAREHOUSE 轨 → approverRole 存 'finance_manager' 非旧 'FINANCE'")
+    @DisplayName("T16: submit → approverRole 展示标签存默认审批角色 factory_super_admin")
     void submit_setsRealLowercaseApproverRole() {
         WastageReport report = buildReport(WastageReport.TrackType.WAREHOUSE, WastageReport.Status.DRAFT);
         when(wastageReportRepo.findById(any())).thenReturn(Optional.of(report));
@@ -423,7 +472,7 @@ class WastageReportServiceImplTest {
 
         ArgumentCaptor<WastageReport> captor = ArgumentCaptor.forClass(WastageReport.class);
         verify(wastageReportRepo).save(captor.capture());
-        assertThat(captor.getValue().getApproverRole()).isEqualTo("finance_manager");
+        assertThat(captor.getValue().getApproverRole()).isEqualTo("factory_super_admin");
     }
 
     // -------------------------------------------------------

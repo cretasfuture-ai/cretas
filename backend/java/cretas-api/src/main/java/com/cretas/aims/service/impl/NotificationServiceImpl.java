@@ -10,6 +10,8 @@ import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.NotificationRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.service.NotificationService;
+import com.cretas.aims.service.canvas.ThresholdKeys;
+import com.cretas.aims.service.canvas.ThresholdResolverService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -20,6 +22,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -39,6 +42,7 @@ public class NotificationServiceImpl implements NotificationService {
 
     private final NotificationRepository notificationRepository;
     private final UserRepository userRepository;
+    private final ThresholdResolverService thresholdResolverService;
 
     // ==================== 发送通知 ====================
 
@@ -87,22 +91,50 @@ public class NotificationServiceImpl implements NotificationService {
     @Transactional
     public List<Notification> sendToRole(String factoryId, FactoryUserRole role, String title,
                                           String content, NotificationType type, String source, String sourceId) {
-        log.info("发送角色通知: factoryId={}, role={}, title={}", factoryId, role, title);
+        return sendToRoles(factoryId, List.of(role), title, content, type, source, sourceId);
+    }
 
-        // 查询该角色的所有用户 (使用 role.name() 转换为字符串)
-        List<User> users = userRepository.findByFactoryIdAndRoleCode(factoryId, role.name());
+    /**
+     * 发给一组角色: 按用户去重 (一个人身兼多个角色只收一条); 这些角色一个人都没有时改发厂长, 不静默丢弃
+     * (一人厂只有厂长时, 所有通知都落到厂长; 厂长也没有人才会丢, 并打 ERROR 日志)。
+     */
+    @Override
+    @Transactional
+    public List<Notification> sendToRoles(String factoryId, List<FactoryUserRole> roles, String title,
+                                           String content, NotificationType type, String source, String sourceId) {
+        log.info("发送角色通知: factoryId={}, roles={}, title={}", factoryId, roles, title);
 
-        if (users.isEmpty()) {
-            log.warn("该角色没有用户: factoryId={}, role={}", factoryId, role);
+        Map<Long, User> recipients = new LinkedHashMap<>();
+        for (FactoryUserRole role : roles) {
+            for (User user : userRepository.findByFactoryIdAndRoleCode(factoryId, role.name())) {
+                recipients.putIfAbsent(user.getId(), user);
+            }
+        }
+
+        String finalContent = content;
+        if (recipients.isEmpty() && !roles.contains(FactoryUserRole.factory_super_admin)) {
+            for (User user : userRepository.findByFactoryIdAndRoleCode(
+                    factoryId, FactoryUserRole.factory_super_admin.name())) {
+                recipients.putIfAbsent(user.getId(), user);
+            }
+            if (!recipients.isEmpty()) {
+                finalContent = content + "\n(原定接收岗位 " + roles.stream().map(Enum::name)
+                        .collect(Collectors.joining("/")) + " 没有人, 已转发给厂长)";
+                log.warn("通知找不到接收人, 改发厂长: factoryId={}, roles={}, title={}", factoryId, roles, title);
+            }
+        }
+        if (recipients.isEmpty()) {
+            log.error("通知无人可发 (厂长也没有): factoryId={}, roles={}, title={}", factoryId, roles, title);
             return new ArrayList<>();
         }
 
-        List<Notification> notifications = users.stream()
+        String body = finalContent;
+        List<Notification> notifications = recipients.values().stream()
                 .map(user -> Notification.builder()
                         .factoryId(factoryId)
                         .userId(user.getId())
                         .title(title)
-                        .content(content)
+                        .content(body)
                         .type(type)
                         .source(source)
                         .sourceId(sourceId)
@@ -111,6 +143,44 @@ public class NotificationServiceImpl implements NotificationService {
                 .collect(Collectors.toList());
 
         return notificationRepository.saveAll(notifications);
+    }
+
+    /**
+     * 每类通知发给谁由工厂配置 (factory_thresholds, key 见 ThresholdKeys 的 *_NOTIFY_*), 值是逗号分隔的角色码;
+     * 没配或一个角色都认不出时用 defaultRoles。
+     */
+    @Override
+    @Transactional
+    public List<Notification> sendByPolicy(String factoryId, String policyKey, List<FactoryUserRole> defaultRoles,
+                                            String title, String content, NotificationType type,
+                                            String source, String sourceId) {
+        List<FactoryUserRole> roles = resolveRecipientRoles(factoryId, policyKey, defaultRoles);
+        return sendToRoles(factoryId, roles, title, content, type, source, sourceId);
+    }
+
+    private List<FactoryUserRole> resolveRecipientRoles(String factoryId, String policyKey,
+                                                         List<FactoryUserRole> defaultRoles) {
+        String raw = thresholdResolverService.getString(factoryId, policyKey, null);
+        if (raw == null || raw.isBlank()) {
+            return defaultRoles;
+        }
+        List<FactoryUserRole> roles = new ArrayList<>();
+        for (String code : raw.split(",")) {
+            String trimmed = code.trim().toLowerCase();
+            if (trimmed.isEmpty()) {
+                continue;
+            }
+            try {
+                FactoryUserRole role = FactoryUserRole.valueOf(trimmed);
+                if (!roles.contains(role)) {
+                    roles.add(role);
+                }
+            } catch (IllegalArgumentException unknown) {
+                log.warn("通知接收角色配置里有不认识的角色码, 已忽略: factoryId={}, key={}, code={}",
+                        factoryId, policyKey, code);
+            }
+        }
+        return roles.isEmpty() ? defaultRoles : roles;
     }
 
     @Override
@@ -143,11 +213,10 @@ public class NotificationServiceImpl implements NotificationService {
         String title = "新调度计划已创建";
         String content = buildScheduleCreatedContent(planDetails);
 
-        // 发送给调度员和厂长
-        sendToRole(factoryId, FactoryUserRole.dispatcher, title, content,
-                NotificationType.INFO, "SCHEDULING", scheduleId);
-        sendToRole(factoryId, FactoryUserRole.factory_super_admin, title, content,
-                NotificationType.INFO, "SCHEDULING", scheduleId);
+        // 默认调度员 + 厂长, 工厂可配置
+        sendByPolicy(factoryId, ThresholdKeys.PRODUCTION_NOTIFY_SCHEDULE_CREATED,
+                List.of(FactoryUserRole.dispatcher, FactoryUserRole.factory_super_admin),
+                title, content, NotificationType.INFO, "SCHEDULING", scheduleId);
 
         log.info("调度计划创建通知已发送: scheduleId={}", scheduleId);
     }
@@ -158,9 +227,10 @@ public class NotificationServiceImpl implements NotificationService {
         String title = "调度计划已确认";
         String content = String.format("调度计划 %s 已由 %s 确认执行。", scheduleId, confirmedBy);
 
-        // 发送给车间主任
-        sendToRole(factoryId, FactoryUserRole.workshop_supervisor, title, content,
-                NotificationType.SUCCESS, "SCHEDULING", scheduleId);
+        // 默认车间主任, 工厂可配置
+        sendByPolicy(factoryId, ThresholdKeys.PRODUCTION_NOTIFY_SCHEDULE_CONFIRMED,
+                List.of(FactoryUserRole.workshop_supervisor),
+                title, content, NotificationType.SUCCESS, "SCHEDULING", scheduleId);
 
         log.info("调度计划确认通知已发送: scheduleId={}", scheduleId);
     }
@@ -173,13 +243,11 @@ public class NotificationServiceImpl implements NotificationService {
                 "调度计划 %s 出现延期风险。\n原因: %s\n当前效率: %.1f%%\n请及时采取措施。",
                 scheduleId, delayReason, efficiency * 100);
 
-        // 发送给调度员、厂长和车间主任
-        sendToRole(factoryId, FactoryUserRole.dispatcher, title, content,
-                NotificationType.WARNING, "SCHEDULING", scheduleId);
-        sendToRole(factoryId, FactoryUserRole.factory_super_admin, title, content,
-                NotificationType.WARNING, "SCHEDULING", scheduleId);
-        sendToRole(factoryId, FactoryUserRole.workshop_supervisor, title, content,
-                NotificationType.WARNING, "SCHEDULING", scheduleId);
+        // 默认调度员、厂长和车间主任, 工厂可配置
+        sendByPolicy(factoryId, ThresholdKeys.PRODUCTION_NOTIFY_SCHEDULE_DELAYED,
+                List.of(FactoryUserRole.dispatcher, FactoryUserRole.factory_super_admin,
+                        FactoryUserRole.workshop_supervisor),
+                title, content, NotificationType.WARNING, "SCHEDULING", scheduleId);
 
         log.info("调度计划延期通知已发送: scheduleId={}, efficiency={}", scheduleId, efficiency);
     }
@@ -192,13 +260,11 @@ public class NotificationServiceImpl implements NotificationService {
                 "紧急插单已执行，计划ID: %s\n影响评估: %s",
                 scheduleId, impactSummary);
 
-        // 发送给所有相关角色
-        sendToRole(factoryId, FactoryUserRole.dispatcher, title, content,
-                NotificationType.ALERT, "SCHEDULING", scheduleId);
-        sendToRole(factoryId, FactoryUserRole.factory_super_admin, title, content,
-                NotificationType.ALERT, "SCHEDULING", scheduleId);
-        sendToRole(factoryId, FactoryUserRole.workshop_supervisor, title, content,
-                NotificationType.ALERT, "SCHEDULING", scheduleId);
+        // 默认调度员、厂长和车间主任, 工厂可配置
+        sendByPolicy(factoryId, ThresholdKeys.PRODUCTION_NOTIFY_URGENT_INSERT,
+                List.of(FactoryUserRole.dispatcher, FactoryUserRole.factory_super_admin,
+                        FactoryUserRole.workshop_supervisor),
+                title, content, NotificationType.ALERT, "SCHEDULING", scheduleId);
 
         log.info("紧急插单通知已发送: scheduleId={}", scheduleId);
     }

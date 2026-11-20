@@ -26,6 +26,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { get } from '@/api/request'
 import type { PrintEntityType } from '../utils/printSchemaTypes'
 
 interface FieldNode {
@@ -57,18 +58,15 @@ async function fetchFromBackend(entityType: string, factoryId: string) {
   if (!entityType || !factoryId) return
   loadingSchema.value = true
   try {
-    const token = localStorage.getItem('access_token') || ''
-    const res = await fetch(
-      `/api/mobile/${factoryId}/entity-metadata/${entityType}`,
-      { headers: { Authorization: `Bearer ${token}` } }
+    // 统一请求封装自带真实 token (cretas_access_token / 工厂查看凭证); _silent: 端点未实现时不弹错, 退回静态 schema
+    const res = await get<FieldNode[]>(
+      `/${factoryId}/entity-metadata/${entityType}`,
+      { _silent: true }
     )
-    if (res.ok) {
-      const json = await res.json()
-      // backend should return { success: true, data: FieldNode[] }
-      const nodes: FieldNode[] = json?.data ?? json
-      if (Array.isArray(nodes) && nodes.length > 0) {
-        dynamicSchema.value = nodes
-      }
+    // backend should return { success: true, data: FieldNode[] }
+    const nodes: unknown = Array.isArray(res) ? res : res?.data
+    if (Array.isArray(nodes) && nodes.length > 0) {
+      dynamicSchema.value = nodes as FieldNode[]
     }
     // 404 / 501 = endpoint not implemented yet → fall through to FIELD_SCHEMA_FALLBACK
   } catch {

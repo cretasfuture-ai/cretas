@@ -1,7 +1,9 @@
 import { flushPromises, mount } from '@vue/test-utils';
 import { reactive } from 'vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import ElementPlus from 'element-plus';
+import { nuxtUiStubs } from '@/__tests__/helpers/nuxtUiStubs';
+const stubs = { ...nuxtUiStubs, UIcon: { template: '<i />' } };
+const tabBtn = (w: { findAll: (s: string) => { text: () => string; trigger: (e: string) => Promise<void> }[] }, label: string) => w.findAll('button').find(b => b.text() === label)!;
 import Ledger from '../index.vue';
 
 const api = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), push: vi.fn(), refundByRequest: vi.fn() }));
@@ -42,14 +44,14 @@ beforeEach(() => {
 
 describe('应收流水客户退款类型中文映射', () => {
   it('refreshes the overview when returning from receivable transactions', async () => {
-    const wrapper = mount(Ledger, { global: { plugins: [ElementPlus] } });
+    const wrapper = mount(Ledger, { global: { stubs } });
     await flushPromises();
-    await wrapper.get('#tab-receivable').trigger('click');
+    await tabBtn(wrapper, '应收账款').trigger('click');
     await flushPromises();
     api.get.mockClear();
     api.get.mockResolvedValueOnce({ success: true, data: { totalReceivable: 525 } });
 
-    await wrapper.get('#tab-overview').trigger('click');
+    await tabBtn(wrapper, '财务概览').trigger('click');
     await flushPromises();
 
     expect(api.get).toHaveBeenCalledWith('/F001/finance/overview');
@@ -65,7 +67,7 @@ describe('应收流水客户退款类型中文映射', () => {
       if (url.endsWith('/finance/overview')) return overviewCalls++ === 0 ? oldOverview.promise : newOverview.promise;
       return Promise.resolve({ success: true, data: { content: [], totalElements: 0 } });
     });
-    const wrapper = mount(Ledger, { global: { plugins: [ElementPlus] } });
+    const wrapper = mount(Ledger, { global: { stubs } });
     await flushPromises();
     identity.factoryId = 'F002';
     await flushPromises();
@@ -88,7 +90,7 @@ describe('应收流水客户退款类型中文映射', () => {
       if (url.endsWith('/finance/overview')) return overviewCalls++ === 0 ? oldOverview.promise : newOverview.promise;
       return Promise.resolve({ success: true, data: { content: [], totalElements: 0 } });
     });
-    const wrapper = mount(Ledger, { global: { plugins: [ElementPlus] } });
+    const wrapper = mount(Ledger, { global: { stubs } });
     await flushPromises();
     identity.user.id = 2;
     await flushPromises();
@@ -108,7 +110,7 @@ describe('应收流水客户退款类型中文映射', () => {
       if (url.endsWith('/finance/overview')) return Promise.resolve({ success: true, data: { totalReceivable: 100 } });
       return Promise.resolve({ success: true, data: { content: [], totalElements: 0 } });
     });
-    const wrapper = mount(Ledger, { global: { plugins: [ElementPlus] } });
+    const wrapper = mount(Ledger, { global: { stubs } });
     await flushPromises();
     expect(wrapper.text()).toContain('100.00');
     api.get.mockImplementation((url: string) => {
@@ -132,9 +134,9 @@ describe('应收流水客户退款类型中文映射', () => {
       if (url.endsWith('/finance/aging')) return agingCalls++ === 0 ? oldAging.promise : newAging.promise;
       return Promise.resolve({ success: true, data: { content: [], totalElements: 0 } });
     });
-    const wrapper = mount(Ledger, { global: { plugins: [ElementPlus] } });
+    const wrapper = mount(Ledger, { global: { stubs } });
     await flushPromises();
-    await wrapper.get('#tab-aging').trigger('click');
+    await tabBtn(wrapper, '账龄分析').trigger('click');
     await flushPromises();
     identity.factoryId = 'F002';
     await flushPromises();
@@ -158,9 +160,9 @@ describe('应收流水客户退款类型中文映射', () => {
       if (url.endsWith('/finance/aging')) return agingCalls++ === 0 ? oldAging.promise : newAging.promise;
       return Promise.resolve({ success: true, data: { content: [], totalElements: 0 } });
     });
-    const wrapper = mount(Ledger, { global: { plugins: [ElementPlus] } });
+    const wrapper = mount(Ledger, { global: { stubs } });
     await flushPromises();
-    await wrapper.get('#tab-aging').trigger('click');
+    await tabBtn(wrapper, '账龄分析').trigger('click');
     await flushPromises();
     identity.user.id = 2;
     await flushPromises();
@@ -187,9 +189,9 @@ describe('应收流水客户退款类型中文映射', () => {
       }
       return Promise.resolve({ success: true, data: { content: [], totalElements: 0 } });
     });
-    const wrapper = mount(Ledger, { global: { plugins: [ElementPlus] } });
+    const wrapper = mount(Ledger, { global: { stubs } });
     await flushPromises();
-    await wrapper.get('#tab-aging').trigger('click');
+    await tabBtn(wrapper, '账龄分析').trigger('click');
     await flushPromises();
     expect(wrapper.text()).toContain('已缓存客户');
 
@@ -206,9 +208,9 @@ describe('应收流水客户退款类型中文映射', () => {
     api.get.mockImplementation((url: string) => Promise.resolve({ success: true, data: url.endsWith('/finance/aging')
       ? [{ counterpartyName: '真实接口口径客户', total: 321, current: 101, days1_30: 102, days31_60: 103,
         days61_90: 104, days91_120: 105, days120plus: 106 }] : {} }));
-    const wrapper = mount(Ledger, { global: { plugins: [ElementPlus] } });
+    const wrapper = mount(Ledger, { global: { stubs } });
     await flushPromises();
-    await wrapper.get('#tab-aging').trigger('click');
+    await tabBtn(wrapper, '账龄分析').trigger('click');
     await flushPromises();
     for (const amount of ['321.00','101.00','102.00','103.00','104.00','105.00','106.00']) {
       expect(wrapper.text()).toContain(amount);
@@ -230,21 +232,21 @@ describe('应收流水客户退款类型中文映射', () => {
       } });
       return Promise.resolve({ success: true, data: [] });
     });
-    const wrapper = mount(Ledger, { global: { plugins: [ElementPlus] } });
+    const wrapper = mount(Ledger, { global: { stubs } });
     await flushPromises();
 
     expect(wrapper.text()).toContain('15.00');
     expect(wrapper.text()).toContain('3 笔');
-    await wrapper.get('#tab-receivable').trigger('click');
+    await tabBtn(wrapper, '应收账款').trigger('click');
     await flushPromises();
     expect(wrapper.text()).toContain('交易后余额（历史快照）');
-    await wrapper.get('#tab-aging').trigger('click');
+    await tabBtn(wrapper, '账龄分析').trigger('click');
     expect(wrapper.text()).toContain('账龄按发票剩余未清金额统计；与含退款及撤销的净应收不同');
     wrapper.unmount();
   });
 
   it('renders AR_REFUND as 客户退款结清 in the mounted transaction table', async () => {
-    const wrapper = mount(Ledger, { global: { plugins: [ElementPlus] } });
+    const wrapper = mount(Ledger, { global: { stubs } });
     const vm = wrapper.vm as unknown as { activeTab: string };
     vm.activeTab = 'receivable';
     await flushPromises();
@@ -266,7 +268,7 @@ describe('应收流水客户退款类型中文映射', () => {
       returnOrderId: 'return-a',
       request: { id: 'RF-1', arapTransactionId: 'OTHER-AR', ledger: { id: 'OTHER-LEDGER' } },
     });
-    const wrapper = mount(Ledger, { global: { plugins: [ElementPlus] } });
+    const wrapper = mount(Ledger, { global: { stubs } });
     const vm = wrapper.vm as unknown as { activeTab: string };
     vm.activeTab = 'receivable';
     await flushPromises();
@@ -297,7 +299,7 @@ describe('应收流水客户退款类型中文映射', () => {
         reversal: { status: 'PENDING', ledger: { id: 'REV-LEDGER-1' } },
       },
     });
-    const wrapper = mount(Ledger, { global: { plugins: [ElementPlus] } });
+    const wrapper = mount(Ledger, { global: { stubs } });
     const vm = wrapper.vm as unknown as { activeTab: string };
     vm.activeTab = 'receivable';
     await flushPromises();

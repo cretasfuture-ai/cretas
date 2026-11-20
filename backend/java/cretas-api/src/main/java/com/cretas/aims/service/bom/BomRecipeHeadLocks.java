@@ -1,0 +1,313 @@
+package com.cretas.aims.service.bom;
+
+import com.cretas.aims.entity.bom.BomRecipe;
+import com.cretas.aims.entity.bom.BomRecipeItem;
+import com.cretas.aims.entity.bom.BomSeasoningItem;
+import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.bom.BomRecipeRepository;
+import jakarta.persistence.EntityManager;
+import org.hibernate.engine.spi.EntityEntry;
+import org.hibernate.engine.spi.SessionImplementor;
+import org.hibernate.engine.spi.Status;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.IdentityHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
+
+/**
+ * 写 BOM Family 成本的锁序唯一入口 (N1 2026-11-11; 红线 3 2026-11-13 扩到全部重算调用方)。
+ *
+ * <p>成本重算 ({@code BomRecipeServiceImpl#recomputeFamilyCosts}) 会读同一 BOM Family 所有成员的明细行,
+ * 再改写全族的配方头 (联产品共享投入按比例分摊)。配方头没有乐观锁、Hibernate 整行 UPDATE, 所以:
+ * 只锁自己那个头会互等成环 (PG 判死锁回滚一方); 不锁则用并发前读到的行算成本, 再整行写回, 盖掉别人刚提交的成本。</p>
+ *
+ * <p><b>全局锁序</b> (所有写配方族的路径都按这个方向, 不会成环):</p>
+ * <ol>
+ *   <li>产品行 {@code products FOR UPDATE} —— 只有分配版本 / 激活 / 整表更新的路径拿; 激活 / 整表更新拿多个时按产品 id 升序。
+ *       ⚠️ <b>还不是全局升序</b>: {@code initializeFamilyAndInputSkeletons} 与 {@code rebindDraftFamilyToExactRevision}
+ *       在已持有请求产品 P (+ 头锁) 之后, 才为新增的联产 SKU Q 锁产品行 —— 联产输出要先按 P 解析工艺图才知道,
+ *       没法低成本提前一次性收集。若另一事务同时激活一个含 P、Q 且 Q &lt; P 的族 (先锁 Q 再等 P), 两边可成环,
+ *       PG 判死锁回滚其中一方 (整个事务回滚, 不写坏数据, 用户重试即可)。窗口很窄: 两处在锁 Q 之前都先查
+ *       「Q 已有草稿」并 409 (BOM_FAMILY_EXISTING_DRAFT_CONFLICT), 而激活 / 整表更新只作用于草稿族 ——
+ *       成环要求含 Q 的草稿族恰好在这次检查之后才提交、并在本事务锁 Q 之前被另一事务激活。
+ *       收敛办法 (未做, 已登记): 先解析工艺图拿到全部输出 SKU, 再按 id 升序一次锁全部产品。</li>
+ *   <li>物料 → 调价建议 (调价批准; 与确认入库同向)。</li>
+ *   <li><b>整族配方头</b>, 按配方 id 升序一次锁住 ({@link #lockWithFamily})。</li>
+ *   <li>明细行 {@code bom_recipe_items FOR UPDATE}。</li>
+ *   <li>激活时被替换的旧 ACTIVE 版本配方头, 按 id 升序 (见 {@code BomRecipeServiceImpl#archiveCompetingVersions})。</li>
+ * </ol>
+ * <p>⛔ 不要先锁明细行再锁头 (2026-11-11 的 N1 是「行 → 头」, 2026-11-13 统一改成「头 → 行」: 整表更新 / 激活 /
+ * 升级会在持有头之后改写明细行, 两个方向并存就会成环)。</p>
+ *
+ * <p><b>本事务持有登记</b>: 每次加锁 / 本事务新建一个族, 都记进当前事务的资源里;
+ * 重算入口用 {@link #requireHeld} 检查 —— 新加一个重算调用方却忘了先加锁, 在真实事务里会直接失败,
+ * 而不是静默地用旧数据算成本。没有事务同步的场合 (纯 Mockito 单测) 不登记也不检查。</p>
+ *
+ * <p><b>加锁前已读进来的对象</b>: FOR UPDATE 查询不会刷新持久化上下文里已有的托管对象。外层事务在加锁前
+ * 无锁读过同族配方 (如发布收编的 preflight 先读草稿族头、再进 activateRecipe), 那份对象就是旧值, 重算再整行写回
+ * 会盖掉别人刚提交的改动。所以本事务<b>第一次</b>拿到某族的锁时, 把加锁前就已托管的同族配方头、明细行、调料行
+ * 逐个 {@code refresh} 成加锁后的已提交值 (先 flush 本事务自己的改动, 不丢)。已持有再次加锁时不刷新 ——
+ * 那之后读到的都是锁内的值, 刷新反而会丢本事务未 flush 的改动。入口仍应尽量先锁再读; 刷新是兜底。</p>
+ */
+public final class BomRecipeHeadLocks {
+
+    private static final Object HELD_KEY = new Object();
+
+    /** 重算时本事务没有持有该族的锁 (多为加锁前后被并发改绑): 409, 用户刷新重试。 */
+    public static final String FAMILY_LOCK_STALE = "BOM_FAMILY_LOCK_STALE";
+
+    private BomRecipeHeadLocks() {
+    }
+
+    /**
+     * 锁住目标配方所在 Family 的全部配方头 (按 id 升序), 返回目标配方; 不存在则为空。
+     * 本事务第一次拿这一族时, 把加锁前已托管的同族头 / 行 / 调料行刷新成加锁后的值 (见类注释)。
+     * {@code entityManager} 为 null (纯 Mockito 单测) 时只加锁不刷新。
+     */
+    public static Optional<BomRecipe> lockWithFamily(EntityManager entityManager, BomRecipeRepository recipes,
+                                                     String factoryId, String recipeId) {
+        // ⛔ 必须在任何查询之前: 下面的 JPQL 会先 auto-flush 本事务改脏的配方头, 之后就看不出它曾是脏的了
+        List<Candidate> managedBeforeLock = managedFamilyCandidates(entityManager);
+        Optional<String> familyId = recipes.findBomFamilyIdByIdAndFactoryId(recipeId, factoryId);
+        if (familyId.isEmpty() || familyId.get().isBlank()) {
+            boolean firstAcquisition = !isHeld(recipeKey(factoryId, recipeId));
+            Optional<BomRecipe> alone = recipes.lockByIdAndFactoryId(recipeId, factoryId);
+            alone.ifPresent(recipe -> {
+                registerHeld(recipe);
+                if (firstAcquisition) refreshStale(entityManager, managedBeforeLock, List.of(recipe));
+            });
+            return alone;
+        }
+        boolean firstAcquisition = !isHeld(familyKey(factoryId, familyId.get()));
+        List<BomRecipe> family = recipes.lockFamilyByFactoryIdAndBomFamilyIdOrderById(factoryId, familyId.get());
+        registerHeldFamily(factoryId, familyId.get());
+        if (firstAcquisition) {
+            refreshStale(entityManager, managedBeforeLock, family);
+        }
+        Optional<BomRecipe> target = family.stream()
+                .filter(member -> recipeId.equals(member.getId()))
+                .findFirst();
+        if (target.isPresent()) {
+            return target;
+        }
+        // 读 family id 与加锁之间配方被并发改绑到别的 family: 退回只锁它自己 (族锁仍按序持有, 不会成环);
+        // 登记的是它自己, 不是它的新族 —— 重算整族时 requireHeld 会拒绝, 让调用方重试。
+        Optional<BomRecipe> moved = recipes.lockByIdAndFactoryId(recipeId, factoryId);
+        moved.ifPresent(recipe -> {
+            register(recipeKey(factoryId, recipe.getId()));
+            refreshStale(entityManager, managedBeforeLock, List.of(recipe));
+        });
+        return moved;
+    }
+
+    /** 加锁查询之前就已托管的配方头 / 明细行 / 调料行, 以及它当时是否已被本事务改脏。 */
+    private record Candidate(Object entity, boolean dirty) {
+    }
+
+    /** 加锁查询之前就已在持久化上下文里的配方头 / 明细行 / 调料行 (按对象身份记)。 */
+    private static List<Candidate> managedFamilyCandidates(EntityManager entityManager) {
+        if (entityManager == null) {
+            return List.of();
+        }
+        SessionImplementor session = entityManager.unwrap(SessionImplementor.class);
+        List<Candidate> managed = new ArrayList<>();
+        for (Map.Entry<Object, EntityEntry> entry : session.getPersistenceContextInternal().reentrantSafeEntityEntries()) {
+            Object entity = entry.getKey();
+            if (entry.getValue().getStatus() == Status.MANAGED
+                    && (entity instanceof BomRecipe || entity instanceof BomRecipeItem
+                        || entity instanceof BomSeasoningItem)) {
+                managed.add(new Candidate(entity, isDirty(session, entry.getValue(), entity)));
+            }
+        }
+        return managed;
+    }
+
+    private static boolean isDirty(SessionImplementor session, EntityEntry entry, Object entity) {
+        Object[] loaded = entry.getLoadedState();
+        if (loaded == null) {
+            return false; // 只读加载, 不会被写回
+        }
+        int[] dirty = entry.getPersister().findDirty(entry.getPersister().getValues(entity), loaded, entity, session);
+        return dirty != null && dirty.length > 0;
+    }
+
+    /**
+     * 把加锁前就托管着、且属于刚锁住的这些配方的对象刷新成已提交值。
+     *
+     * <ul>
+     *   <li>加锁前就被本事务改脏的同族对象: 拒绝 (IllegalStateException, 程序错误)。它在加锁查询前已被
+     *       auto-flush 写出 —— 写的是加锁前读到的旧快照加上改动, 盖掉别人在这之间提交的列; 刷新救不回来,
+     *       调用方必须改成先锁再读再改。⚠️ <b>这只是兜底, 抓不全</b>: 加锁前已经 flush 过的改动 (本事务早先的
+     *       查询触发的 auto-flush、显式 flush) 之后看起来是干净的; 集合的增删 (如 {@code recipe.getItems().add})
+     *       不在逐字段脏检查里。真正的约束仍是「入口最前面先锁」。</li>
+     *   <li>刷新时行已被别的事务删掉: 409 {@link #FAMILY_LOCK_STALE}。Hibernate 在 refresh 找不到行时
+     *       已把事务标成只能回滚, 不能吞掉继续 (提交时会变成 UnexpectedRollbackException → 500)。</li>
+     * </ul>
+     */
+    private static void refreshStale(EntityManager entityManager, List<Candidate> managedBeforeLock,
+                                     List<BomRecipe> locked) {
+        if (entityManager == null || managedBeforeLock.isEmpty() || locked.isEmpty()) {
+            return;
+        }
+        Set<String> lockedIds = locked.stream().map(BomRecipe::getId).collect(Collectors.toSet());
+        Set<Object> stale = Collections.newSetFromMap(new IdentityHashMap<>());
+        for (Candidate candidate : managedBeforeLock) {
+            Object entity = candidate.entity();
+            String owner = entity instanceof BomRecipe recipe ? recipe.getId()
+                    : entity instanceof BomRecipeItem item ? item.getRecipeId()
+                    : ((BomSeasoningItem) entity).getRecipeId();
+            if (owner == null || !lockedIds.contains(owner)) {
+                continue;
+            }
+            if (candidate.dirty()) {
+                throw new IllegalStateException("BOM 配方族在加锁前已被本事务改动, 不能再按锁序写回: "
+                        + entity.getClass().getSimpleName() + " of recipe=" + owner
+                        + " (先调用 BomRecipeHeadLocks.lockWithFamily 再读再改, 见类注释)");
+            }
+            if (entityManager.contains(entity)) {
+                stale.add(entity);
+            }
+        }
+        if (stale.isEmpty()) {
+            return;
+        }
+        entityManager.flush();
+        for (Object entity : stale) {
+            if (!entityManager.contains(entity)) {
+                continue; // 刷新配方头时已级联刷新过
+            }
+            try {
+                entityManager.refresh(entity);
+            } catch (jakarta.persistence.EntityNotFoundException deletedMeanwhile) {
+                throw new BusinessException(409, "配方已被别人改动，请刷新后重试", deletedMeanwhile)
+                        .withCode(FAMILY_LOCK_STALE)
+                        .withHint("刷新配方页面后重新操作；若反复出现，请联系管理员");
+            }
+        }
+    }
+
+    /**
+     * 锁住若干配方头 (只锁这些行本身, 按配方 id 升序), 并把加锁前已托管的它们刷新成已提交值。
+     * 给只改配方头自身、不重算整族的写入口用 (如标准出成率应用): 配方头没有乐观锁、Hibernate 整行 UPDATE,
+     * 不锁就会把并发重算刚提交的成本列用旧值写回。返回 id → 已锁配方 (不存在 / 不属于本厂的不在其中)。
+     */
+    public static Map<String, BomRecipe> lockHeadsInIdOrder(EntityManager entityManager, BomRecipeRepository recipes,
+                                                           String factoryId, java.util.Collection<String> recipeIds) {
+        List<Candidate> managedBeforeLock = managedFamilyCandidates(entityManager);
+        List<String> ids = recipeIds.stream().filter(java.util.Objects::nonNull).distinct().toList();
+        Map<String, BomRecipe> locked = new java.util.LinkedHashMap<>();
+        if (ids.isEmpty()) {
+            return locked;
+        }
+        // 一条 FOR UPDATE, 顺序由 PG 的 ORDER BY 决定 (与族锁同一比较规则), 不在 Java 里排序
+        for (BomRecipe recipe : recipes.lockByFactoryIdAndIdInOrderById(factoryId, ids)) {
+            locked.put(recipe.getId(), recipe);
+        }
+        refreshStale(entityManager, managedBeforeLock, List.copyOf(locked.values()));
+        return locked;
+    }
+
+    /**
+     * 本事务刚新建的族 (新 UUID, 别的事务看不见这些行, 无从争用): 登记为已持有。
+     * ⛔ 只能用在本事务生成的 family id 上, 不能拿来给已存在的族「免锁」。
+     */
+    public static void registerCreatedFamily(String factoryId, String familyId) {
+        registerHeldFamily(factoryId, familyId);
+    }
+
+    /**
+     * 重算入口的守卫: 被重算的族必须已在本事务里按上面的锁序拿到 (或是本事务新建的)。
+     * 没有事务同步 (单测) 时不检查。
+     */
+    public static void requireHeld(BomRecipe changed) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            return;
+        }
+        Set<String> held = heldSet(false);
+        String key = keyOf(changed);
+        if (held == null || !held.contains(key)) {
+            // 运行时最常见的成因是加锁前后配方被并发改绑到别的族 (见 lockWithFamily 的回退分支): 对用户是
+            // 「别人刚改过, 重试即可」, 所以给 409 而不是通用 500。技术细节留在 cause 里进日志。
+            IllegalStateException detail = new IllegalStateException(
+                    "BOM 成本重算前没有按锁序锁住整族配方头: recipe=" + changed.getId()
+                    + ", family=" + changed.getBomFamilyId()
+                    + " (先调用 BomRecipeHeadLocks.lockWithFamily, 见类注释)");
+            throw new BusinessException(409, "配方已被别人改动，请刷新后重试", detail)
+                    .withCode(FAMILY_LOCK_STALE)
+                    .withHint("刷新配方页面后重新操作；若反复出现，请联系管理员");
+        }
+    }
+
+    private static boolean isHeld(String key) {
+        Set<String> held = heldSet(false);
+        return held != null && held.contains(key);
+    }
+
+    private static void registerHeld(BomRecipe recipe) {
+        register(keyOf(recipe));
+    }
+
+    private static void registerHeldFamily(String factoryId, String familyId) {
+        register(familyKey(factoryId, familyId));
+    }
+
+    private static String keyOf(BomRecipe recipe) {
+        String familyId = recipe.getBomFamilyId();
+        return familyId == null || familyId.isBlank()
+                ? recipeKey(recipe.getFactoryId(), recipe.getId())
+                : familyKey(recipe.getFactoryId(), familyId);
+    }
+
+    private static String familyKey(String factoryId, String familyId) {
+        return factoryId + "|F|" + familyId;
+    }
+
+    private static String recipeKey(String factoryId, String recipeId) {
+        return factoryId + "|R|" + recipeId;
+    }
+
+    private static void register(String key) {
+        Set<String> held = heldSet(true);
+        if (held != null) {
+            held.add(key);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Set<String> heldSet(boolean create) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            return null;
+        }
+        Set<String> held = (Set<String>) TransactionSynchronizationManager.getResource(HELD_KEY);
+        if (held == null && create) {
+            Set<String> fresh = new HashSet<>();
+            TransactionSynchronizationManager.bindResource(HELD_KEY, fresh);
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void suspend() {
+                    TransactionSynchronizationManager.unbindResourceIfPossible(HELD_KEY);
+                }
+
+                @Override
+                public void resume() {
+                    TransactionSynchronizationManager.bindResource(HELD_KEY, fresh);
+                }
+
+                @Override
+                public void afterCompletion(int status) {
+                    TransactionSynchronizationManager.unbindResourceIfPossible(HELD_KEY);
+                }
+            });
+            held = fresh;
+        }
+        return held;
+    }
+}

@@ -3,7 +3,8 @@ import { ref, computed, onMounted } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { get } from '@/api/request';
 import { ElMessage } from 'element-plus';
-import { Refresh } from '@element-plus/icons-vue';
+import type { CsTableColumn as TableColumn } from '@/types/csTable';
+import { badgeColor } from '@/utils/csBadge';
 
 /**
  * C3: 半成品库存视图 (只读, 仅重量字段)
@@ -66,6 +67,32 @@ function handleFilterReset() {
   filterStatus.value = '';
 }
 
+// USelect 的选项值不能是空串: 页面内用 ALL 表示不筛
+const ALL = 'ALL';
+const productTypeItems = computed(() => [{ label: '全部产品类型', value: ALL }, ...productTypeOptions.value.map(pt => ({ label: pt, value: pt }))]);
+const statusItems = computed(() => [{ label: '全部状态', value: ALL }, ...statusOptions.value.map(o => ({ label: o.label, value: o.value }))]);
+const productTypeSelect = computed({
+  get: () => filterProductType.value || ALL,
+  set: (v: string) => { filterProductType.value = v === ALL ? '' : v; },
+});
+const statusSelect = computed({
+  get: () => filterStatus.value || ALL,
+  set: (v: string) => { filterStatus.value = v === ALL ? '' : v; },
+});
+
+const R = { class: { th: 'text-right', td: 'text-right' } };
+const C = { class: { th: 'text-center', td: 'text-center' } };
+const columns: TableColumn<WipRow>[] = [
+  { id: 'productType', header: '产品类型' },
+  { id: 'batchId', header: '批次', meta: C },
+  { id: 'batchNo', header: '中间批次号' },
+  { id: 'processOrder', header: '工序', meta: C },
+  { id: 'produced', header: '产出量', meta: R },
+  { id: 'consumed', header: '已消耗', meta: R },
+  { id: 'available', header: '可用量', meta: R },
+  { id: 'status', header: '状态', meta: C },
+];
+
 onMounted(() => {
   loadData();
 });
@@ -114,154 +141,48 @@ function formatKg(val: number | null | undefined): string {
 
 <template>
   <div class="semi-finished-inventory-page">
-    <div class="page-header">
+    <div class="cs-page-head">
       <h2>半成品库存</h2>
       <div class="page-actions">
-        <el-button :icon="Refresh" :loading="loading" @click="loadData">刷新</el-button>
+        <UButton icon="i-lucide-refresh-cw" color="neutral" variant="outline" :loading="loading" @click="loadData">刷新</UButton>
       </div>
     </div>
 
-    <!-- 筛选: 按当前数据里实际存在的 产品类型/状态 生成选项, 非固定枚举 -->
-    <div class="filter-bar">
-      <el-select v-model="filterProductType" placeholder="全部产品类型" clearable style="width: 180px">
-        <el-option v-for="pt in productTypeOptions" :key="pt" :label="pt" :value="pt" />
-      </el-select>
-      <el-select v-model="filterStatus" placeholder="全部状态" clearable style="width: 140px">
-        <el-option v-for="opt in statusOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
-      </el-select>
-      <el-button :icon="Refresh" @click="handleFilterReset">重置</el-button>
-    </div>
+    <section class="cs-card">
+      <!-- 筛选: 按当前数据里实际存在的 产品类型/状态 生成选项, 非固定枚举 -->
+      <div class="filter-bar">
+        <USelect v-model="productTypeSelect" :items="productTypeItems" class="w-48" data-testid="semi-filter-product-type" />
+        <USelect v-model="statusSelect" :items="statusItems" class="w-36" data-testid="semi-filter-status" />
+        <UButton icon="i-lucide-rotate-ccw" color="neutral" variant="outline" @click="handleFilterReset">重置</UButton>
+      </div>
 
-    <el-table
-      :data="filteredData"
-      v-loading="loading"
-      border
-      stripe
-      row-key="intermediateBatchNo"
-      default-expand-all
-    >
-      <!-- 产品类型 -->
-      <el-table-column prop="productTypeName" label="产品类型" min-width="140">
-        <template #default="{ row }">
-          <span>{{ row.productTypeName || row.productTypeId || '-' }}</span>
+      <UTable :data="filteredData" :columns="columns" :loading="loading" class="cs-table" data-testid="semi-finished-table">
+        <template #empty>
+          {{ tableData.length === 0 ? '暂无半成品库存记录' : '没有符合筛选条件的记录' }}
         </template>
-      </el-table-column>
-
-      <!-- 批次 ID -->
-      <el-table-column prop="batchId" label="批次" width="90" align="center">
-        <template #default="{ row }">
-          <span>{{ row.batchId ?? '-' }}</span>
+        <template #productType-cell="{ row }">{{ row.original.productTypeName || row.original.productTypeId || '-' }}</template>
+        <template #batchId-cell="{ row }">{{ row.original.batchId ?? '-' }}</template>
+        <template #batchNo-cell="{ row }"><span class="mono">{{ row.original.intermediateBatchNo || '-' }}</span></template>
+        <template #processOrder-cell="{ row }">{{ row.original.processOrder ?? '-' }}</template>
+        <template #produced-cell="{ row }"><span class="qty-cell num">{{ formatKg(row.original.producedQuantity) }}</span></template>
+        <template #consumed-cell="{ row }"><span class="qty-cell consumed num">{{ formatKg(row.original.consumedQuantity) }}</span></template>
+        <template #available-cell="{ row }">
+          <span class="qty-cell available num" :class="{ zero: row.original.availableQuantity === 0 }">{{ formatKg(row.original.availableQuantity) }}</span>
         </template>
-      </el-table-column>
-
-      <!-- 中间批次号 -->
-      <el-table-column prop="intermediateBatchNo" label="中间批次号" min-width="160">
-        <template #default="{ row }">
-          <span class="mono">{{ row.intermediateBatchNo || '-' }}</span>
+        <template #status-cell="{ row }">
+          <UBadge :color="badgeColor(statusType(row.original.status) || undefined)" variant="soft">{{ statusLabel(row.original.status) }}</UBadge>
         </template>
-      </el-table-column>
-
-      <!-- 工序顺序 -->
-      <el-table-column prop="processOrder" label="工序" width="70" align="center">
-        <template #default="{ row }">
-          <span>{{ row.processOrder ?? '-' }}</span>
-        </template>
-      </el-table-column>
-
-      <!-- 已产出 -->
-      <el-table-column prop="producedQuantity" label="产出量" width="110" align="right">
-        <template #default="{ row }">
-          <span class="qty-cell">{{ formatKg(row.producedQuantity) }}</span>
-        </template>
-      </el-table-column>
-
-      <!-- 已消耗 -->
-      <el-table-column prop="consumedQuantity" label="已消耗" width="110" align="right">
-        <template #default="{ row }">
-          <span class="qty-cell consumed">{{ formatKg(row.consumedQuantity) }}</span>
-        </template>
-      </el-table-column>
-
-      <!-- 可用量 (重点列) -->
-      <el-table-column prop="availableQuantity" label="可用量" width="120" align="right">
-        <template #default="{ row }">
-          <span
-            class="qty-cell available"
-            :class="{ 'zero': row.availableQuantity === 0 }"
-          >{{ formatKg(row.availableQuantity) }}</span>
-        </template>
-      </el-table-column>
-
-      <!-- 状态 -->
-      <el-table-column prop="status" label="状态" width="90" align="center">
-        <template #default="{ row }">
-          <el-tag :type="statusType(row.status)" size="small">
-            {{ statusLabel(row.status) }}
-          </el-tag>
-        </template>
-      </el-table-column>
-    </el-table>
-
-    <div v-if="!loading && tableData.length === 0" class="empty-tip">
-      暂无半成品库存记录
-    </div>
-    <div v-else-if="!loading && filteredData.length === 0" class="empty-tip">
-      没有符合筛选条件的记录
-    </div>
+      </UTable>
+    </section>
   </div>
 </template>
 
 <style scoped>
-.semi-finished-inventory-page {
-  padding: 20px;
-}
-
-.page-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 16px;
-}
-
-.page-header h2 {
-  margin: 0;
-  font-size: 20px;
-}
-
-.filter-bar {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 16px;
-  flex-wrap: wrap;
-}
-
-.mono {
-  font-family: 'Courier New', monospace;
-  font-size: 12px;
-}
-
-.qty-cell {
-  font-weight: 500;
-}
-
-.qty-cell.available {
-  color: #409eff;
-  font-weight: 600;
-}
-
-.qty-cell.available.zero {
-  color: #909399;
-  font-weight: 400;
-}
-
-.qty-cell.consumed {
-  color: #909399;
-}
-
-.empty-tip {
-  text-align: center;
-  color: #909399;
-  padding: 40px 0;
-  font-size: 14px;
-}
+.semi-finished-inventory-page { padding: var(--cs-space-4); }
+.filter-bar { display: flex; gap: var(--cs-space-2); flex-wrap: wrap; padding: var(--cs-space-4) var(--cs-space-5); }
+.mono { font-family: var(--cs-font-mono, ui-monospace, monospace); font-size: 12px; }
+.qty-cell { font-weight: 500; }
+.qty-cell.available { color: var(--cs-primary); font-weight: 600; }
+.qty-cell.available.zero { color: var(--cs-muted); font-weight: 400; }
+.qty-cell.consumed { color: var(--cs-muted); }
 </style>

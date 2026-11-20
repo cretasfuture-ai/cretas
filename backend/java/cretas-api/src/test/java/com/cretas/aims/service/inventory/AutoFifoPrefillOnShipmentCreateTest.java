@@ -9,6 +9,7 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.inventory.SalesDeliveryRecordRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.service.inventory.impl.SalesServiceImpl;
+import com.cretas.aims.service.sales.AutoAllocationOutcome;
 import com.cretas.aims.service.sales.SalesDeliveryBatchAllocationService;
 import com.cretas.aims.service.sales.SellableLineDomainResolver;
 import org.junit.jupiter.api.BeforeEach;
@@ -35,6 +36,7 @@ import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -141,16 +143,17 @@ class AutoFifoPrefillOnShipmentCreateTest {
         SalesDeliveryRecord parent = masterWithItems(item(100L, 1L, "PT-1", "10", "kg"));
         when(deliveryRecordRepository.findById("M1")).thenReturn(Optional.of(parent));
         stubOrderLookup(parent, new ArrayList<>(List.of(parent)));
-        when(batchAllocationService.autoAllocateFifo(
+        when(batchAllocationService.prefillFifo(
                 eq(FID), anyString(), eq("PT-1"), eq(new BigDecimal("10")), eq("kg"), any()))
-                .thenReturn(true);
+                .thenReturn(AutoAllocationOutcome.done());
 
         SalesDeliveryRecord child = service.createDeliveryShipment(
                 FID, "M1", requestFor("k1", lineReq(100L, "10")), 1309L);
 
         assertNotNull(child);
-        verify(batchAllocationService).autoAllocateFifo(
+        verify(batchAllocationService).prefillFifo(
                 eq(FID), anyString(), eq("PT-1"), eq(new BigDecimal("10")), eq("kg"), any());
+        assertEquals(0, child.getAllocationNotices().size(), "分配成功的行没有说明");
     }
 
     @Test
@@ -161,33 +164,43 @@ class AutoFifoPrefillOnShipmentCreateTest {
         stubOrderLookup(parent, new ArrayList<>(List.of(parent)));
         // ⚠️ 阳性对照证明"调用了"; 这里返回 false 模拟"全厂无可用批次"(与
         // SalesDeliveryBatchAllocationServiceImpl.autoAllocateFifo "凑不够就一个都不写" 一致)。
-        when(batchAllocationService.autoAllocateFifo(
+        when(batchAllocationService.prefillFifo(
                 eq(FID), anyString(), eq("PT-NOSTOCK"), any(), eq("kg"), any()))
-                .thenReturn(false);
+                .thenReturn(AutoAllocationOutcome.notAllocated(AutoAllocationOutcome.CODE_STOCK_SHORTFALL,
+                        "可用成品库存不够本行数量（需要 5公斤），没有自动分配批次", "补货或调拨后在「分配批次」里分配"));
 
         SalesDeliveryRecord result = assertDoesNotThrow(() -> service.createDeliveryShipment(
                 FID, "M1", requestFor("k2", lineReq(100L, "5")), 1309L));
 
         assertNotNull(result, "零库存不该让子发运单创建本身失败");
         assertEquals("SHIPMENT", result.getRecordRole());
-        verify(batchAllocationService).autoAllocateFifo(
+        verify(batchAllocationService).prefillFifo(
                 eq(FID), anyString(), eq("PT-NOSTOCK"), any(), eq("kg"), any());
+        assertEquals("FIFO_STOCK_SHORTFALL", result.getAllocationNotices().get(0).get("code"));
     }
 
     @Test
-    @DisplayName("🔴 阴性对照(FIFO预填抛异常): 预填是便利功能不是硬闸, 抛异常也不能拖垮子发运单创建")
-    void createShipment_fifoPrefillThrows_stillSucceeds() {
-        SalesDeliveryRecord parent = masterWithItems(item(100L, 1L, "PT-BAD-UNIT", "5", "kg"));
+    @DisplayName("🔴 Q3: 只剩规格不一致的货 —— 预填按值带回原因 (不抛异常), 子单建成且响应里有这条说明")
+    void createShipment_packagingMismatch_isReportedNotThrown() {
+        // ⚠️ 旧用例 createShipment_fifoPrefillThrows_stillSucceeds 让桩直接抛异常再看「没抛出来」——
+        //    没有事务代理, 测不到 rollback-only, 生产上整单回滚它照样绿。真实事务边界见
+        //    ShipmentPrefillPackagingMismatchTransactionContractTest; 这里只钉「原因进了响应」。
+        SalesDeliveryRecord parent = masterWithItems(item(100L, 1L, "PT-SPEC", "5", "kg"));
         when(deliveryRecordRepository.findById("M1")).thenReturn(Optional.of(parent));
         stubOrderLookup(parent, new ArrayList<>(List.of(parent)));
-        when(batchAllocationService.autoAllocateFifo(
-                eq(FID), anyString(), eq("PT-BAD-UNIT"), any(), eq("kg"), any()))
-                .thenThrow(new BusinessException(409, "单位换算冲突"));
+        when(batchAllocationService.prefillFifo(
+                eq(FID), anyString(), eq("PT-SPEC"), any(), eq("kg"), any()))
+                .thenReturn(AutoAllocationOutcome.notAllocated("BATCH_PACKAGING_SPEC_MISMATCH",
+                        "成品批次 FG-1 的规格（1箱=10袋）与发货行规格（1箱=12袋）不一致，系统不会自动换算",
+                        "请到电脑端核对换算"));
 
         SalesDeliveryRecord result = assertDoesNotThrow(() -> service.createDeliveryShipment(
                 FID, "M1", requestFor("k3", lineReq(100L, "5")), 1309L));
 
-        assertNotNull(result, "FIFO 预填内部抛异常, 子发运单创建仍应成功, 缺口留给手工分配");
+        assertNotNull(result);
+        assertEquals(1, result.getAllocationNotices().size());
+        assertEquals("BATCH_PACKAGING_SPEC_MISMATCH", result.getAllocationNotices().get(0).get("code"));
+        assertEquals("产品-PT-SPEC", result.getAllocationNotices().get(0).get("productName"));
     }
 
     @Test
@@ -200,8 +213,8 @@ class AutoFifoPrefillOnShipmentCreateTest {
 
         service.createDeliveryShipment(FID, "M1", requestFor("k4", lineReq(100L, "3")), 1309L);
 
-        verify(batchAllocationService, never()).autoAllocateFifo(
-                anyString(), anyString(), anyString(), any(), anyString(), any());
+        // 不用 never().某个方法: 预填换了方法名时它会假绿 —— 物料行和分配服务一次交互都不该有
+        verifyNoInteractions(batchAllocationService);
     }
 
     @Test
@@ -211,8 +224,8 @@ class AutoFifoPrefillOnShipmentCreateTest {
         List<SalesDeliveryRecord> liveRecords = new ArrayList<>(List.of(parent));
         when(deliveryRecordRepository.findById("M1")).thenReturn(Optional.of(parent));
         stubOrderLookup(parent, liveRecords);
-        when(batchAllocationService.autoAllocateFifo(
-                eq(FID), anyString(), eq("PT-1"), any(), eq("kg"), any())).thenReturn(true);
+        when(batchAllocationService.prefillFifo(
+                eq(FID), anyString(), eq("PT-1"), any(), eq("kg"), any())).thenReturn(AutoAllocationOutcome.done());
 
         SalesDeliveryRecord first = service.createDeliveryShipment(
                 FID, "M1", requestFor("first", lineReq(100L, "6")), 1309L);
@@ -228,7 +241,7 @@ class AutoFifoPrefillOnShipmentCreateTest {
 
         assertNotNull(second);
         assertEquals(2, second.getShipmentSequence(), "第二张子单序号应递增, 证明两张都真的建出来了");
-        verify(batchAllocationService, times(2)).autoAllocateFifo(
+        verify(batchAllocationService, times(2)).prefillFifo(
                 eq(FID), anyString(), eq("PT-1"), any(), eq("kg"), any());
     }
 }

@@ -11,7 +11,8 @@
 #   · 按脚本 (= 文件) 分组, 产出一段纯文本
 #   · 投递函数可插拔: ALERT_SINK=stdout (默认) | webhook (要 ALERT_WEBHOOK_URL)
 #
-# ⛔ NOT_SCHEDULED: 未接 crontab, 等渠道 (inventory 里登记)。接的那天 crontab 行的重定向**必须**叫
+# 已排 crontab (2026-11-12, Steve: 先排上, 渠道后补): 每日 09:00, sink 仍是 stdout, 首跑把 14 个文件 1897 行积压读完。
+#    crontab 行的重定向**必须**叫
 #    `alert-digest.cron.log` —— 任何含 "alert" 的别的名字 (如 alert-digest.log / digest-alerts.log)
 #    会被本脚本的 *alert* 自动发现吃进去, 变成自己读自己 (#681 终审指出)。
 #    示例: 0 9 * * * bash /www/wwwroot/cretas/code/scripts/cron/alert-digest.sh >> /www/wwwroot/cretas/logs/alert-digest.cron.log 2>&1

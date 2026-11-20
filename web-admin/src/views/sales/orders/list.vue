@@ -1,5 +1,7 @@
 <script setup lang="ts">
+import { useAiEntryLink } from '@/composables/useAiEntryLink';
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue';
+import { SALES_PIN_MIN_WIDTH, salesColumnPinning } from './salesColumnPinning';
 import { useRouter, useRoute } from 'vue-router';
 import OrderDeliveryDatePicker from './components/OrderDeliveryDatePicker.vue';
 const deliveryDatePicker = ref<InstanceType<typeof OrderDeliveryDatePicker>>();
@@ -10,7 +12,10 @@ import { useBusinessMode } from '@/composables/useBusinessMode';
 import { get, post, put, del } from '@/api/request';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { showSingletonNotification } from '@/utils/singletonNotification';
-import { Plus, Refresh, Search, ChatDotRound, QuestionFilled } from '@element-plus/icons-vue';
+import { Plus } from '@element-plus/icons-vue';
+import CsDateField from '@/components/cs/CsDateField.vue';
+import { badgeColor } from '@/utils/csBadge';
+import type { CsTableColumn as TableColumn } from '@/types/csTable';
 import AiEntryDrawer from '@/components/ai-entry/AiEntryDrawer.vue';
 import AuditLogDrawer from '@/components/AuditLogDrawer.vue';
 import { SALES_ORDER_CONFIG } from '@/components/ai-entry/types';
@@ -98,6 +103,8 @@ import {
 } from './salesOrderListUx';
 import { toDateString } from '@/utils/dateFormat';
 import { createAutoFullChildShipment, isFullQuickDeliveryPlan } from './deliveryAutoChild';
+import { buildQuickDeliveryItems, knownUnitPrice, withKnownUnitPrice } from './deliveryPricePayload';
+import { allocationNoticeLines } from './shipmentAllocationNotices';
 
 // Quick action dialogs
 const deliveryDialogVisible = ref(false);
@@ -131,11 +138,11 @@ const canViewPrice = computed(() => permissionStore.canViewPrice);
 const canWriteFinance = computed(() => permissionStore.canWrite('finance'));
 // 开票待办在订单全部发货完成后自动生成；销售列表不再提供手工开票入口。
 const FINANCE_WRITE_ACTIONS = new Set(['quick-payment']);
+// W6（销售订单精简，DECISIONS 第十八节 / 迁移 P7）：默认 8–9 列。
+// 固定列 订单编号、客户、订单状态、出库状态、收款状态、下一步 = 6，再加默认 3 个可选列 = 9（无看价权限时 8）。
+// 其余列仍可在列选择器里加回，不删任何一列。
 const SALES_DEFAULT_COLUMNS = [
   'productSummary',
-  'processingMode',
-  'materialSupply',
-  'salesperson',
   'orderDate',
   'totalAmount',
 ];
@@ -145,7 +152,7 @@ const {
   isVisible: salesColumnVisible,
   reset: resetSalesColumns,
 } = useBusinessTableColumns({
-  storageKey: 'cretas:sales-orders:visible-columns:v1',
+  storageKey: 'cretas:sales-orders:visible-columns:v2',
   columns: () => [
     { key: 'processingMode', label: '加工方式' },
     { key: 'materialSupply', label: '物料供应' },
@@ -183,10 +190,28 @@ function goConfigureProduct(_productTypeId?: string) {
 
 // U-VIEW-1 (Sprint 4 Wave 2 Chat L) — view-mode switcher (5 modes).
 // Persistence handled by ViewModeSwitcher via route.name + localStorage.
+// W6：视图只留「表格｜看板」。
+const SALES_VIEW_MODES: ViewMode[] = ['table', 'kanban'];
 const viewMode = ref<ViewMode>('table');
 const kanbanColumns = computed(() =>
   Object.entries(statusMap).map(([status, v]: [string, { text: string }]) => ({ status, label: v.text }))
 );
+
+/**
+ * 财务已批准的订单能不能取消: 本厂开了 sales.order.cancel_after_approval 且当前用户有权限 (后端判, 2026-11-11)。
+ * 读不到就当不能 —— 不给一个必然 409 的按钮。
+ */
+const canCancelApproved = ref(false);
+async function loadCancelPolicy() {
+  if (!factoryId.value) return;
+  try {
+    const res = await get<{ canCancelApproved: boolean }>(`/${factoryId.value}/sales/orders/cancel-policy`);
+    canCancelApproved.value = !!(res?.success && res.data?.canCancelApproved);
+  } catch (error) {
+    console.error('[SalesOrders] load cancel policy failed:', error);
+    canCancelApproved.value = false;
+  }
+}
 
 /** UX-A2: secondary-action dropdown ("操作 ▾") shown last in row toolbar. */
 function rowActionsFor(row: TableRow) {
@@ -201,7 +226,7 @@ function rowActionsFor(row: TableRow) {
   if (status === 'DRAFT') {
     secondaryActions.push({ id: 'edit', icon: '✎', label: '编辑订单', aiHint: '修改这张销售订单' });
   }
-  if (['DRAFT', 'CONFIRMED'].includes(status)) {
+  if (['DRAFT', 'CONFIRMED'].includes(status) || (status === 'FINANCE_APPROVED' && canCancelApproved.value)) {
     secondaryActions.push({
       id: 'cancel', icon: '×', label: '取消订单', danger: true,
       requiresConfirm: true, aiHint: '取消这张销售订单',
@@ -244,7 +269,7 @@ const returnDialogItems = computed(() => {
       materialTypeId: null as string | null,
       productTypeId: it.productTypeId ? String(it.productTypeId) : null,
       itemName: String(it.productName || it.productTypeName || '-'),
-      unitPrice: Number(it.unitPrice) || 0,
+      unitPrice: knownUnitPrice(it.unitPrice),
       // Cap at delivered qty (can't refund what was never shipped) — same
       // rule as detail.vue's openReturnDialog.
       maxQuantity: delivered,
@@ -430,7 +455,7 @@ const hasBatchDeletable = computed(() =>
 const summaryRequest = computed<ListSummaryRequest>(() => ({
   filterConditions: statusFilter.value ? { status: statusFilter.value } : {},
 }));
-const { summary: footerSummary, loading: footerLoading } = useListSummary('salesOrder', summaryRequest);
+const { summary: footerSummary, loading: footerLoading, refresh: refreshFooter } = useListSummary('salesOrder', summaryRequest);
 
 // Apr 20 Bug BR-07 fix: 客户报告"未见检索功能", 补 keyword 搜索 (订单号/客户名)
 const searchKeyword = ref('');
@@ -915,6 +940,136 @@ function compareCustomer(left: TableRow, right: TableRow): number {
   );
 }
 
+// ── Nuxt UI 版列表: 选项 / 列定义 / 排序 / 展开 / 勾选 ──────────────────────────────
+type SelectItem = { label: string; value: string };
+const lifecycleItems = computed<{ label: string; value: SalesOrderLifecycle }[]>(() =>
+  lifecycleTabs.map((tab) => ({ label: `${tab.label}（${lifecycleTabCount(tab.key)}）`, value: tab.key })),
+);
+const SHIPMENT_FILTER_ITEMS: { label: string; value: SalesOrderShipmentState }[] = [
+  { label: '全部出库状态', value: 'all' },
+  { label: '未出库', value: 'UNSHIPPED' },
+  { label: '部分出库', value: 'PARTIAL' },
+  { label: '已出库', value: 'SHIPPED' },
+];
+const PAYMENT_FILTER_ITEMS: { label: string; value: SalesOrderPaymentState }[] = [
+  { label: '全部收款状态', value: 'all' },
+  { label: '未收款', value: 'UNPAID' },
+  { label: '部分收款', value: 'PARTIAL' },
+  { label: '已收款', value: 'PAID' },
+];
+const PAGE_SIZE_ITEMS: { label: string; value: number }[] = [10, 20, 50].map((n) => ({ label: `${n} 条/页`, value: n }));
+const DELIVERY_METHOD_ITEMS = [
+  { label: '物流配送', value: 'LOGISTICS' },
+  { label: '自送', value: 'SELF_DELIVERY' },
+  { label: '客户自提', value: 'SELF_PICKUP' },
+];
+const PAYMENT_METHOD_ITEMS: SelectItem[] = [
+  { label: '银行转账', value: 'BANK_TRANSFER' },
+  { label: '现金', value: 'CASH' },
+  { label: '支票', value: 'CHECK' },
+];
+
+// 原 el-table 表头筛选 → 工具栏下拉: 只筛当前已加载的这一页, 不改分页总数 (与旧行为一致)。
+const columnFilters = ref({ processingMode: 'all', materialSupplyMode: 'all', invoiceStatus: 'all', status: 'all' });
+const processingModeFilterItems: SelectItem[] = [{ label: '全部加工方式', value: 'all' }, ...processingModeFilters.map((f) => ({ label: f.text, value: f.value }))];
+const materialSupplyFilterItems: SelectItem[] = [{ label: '全部物料供应', value: 'all' }, ...materialSupplyModeFilters.map((f) => ({ label: f.text, value: f.value }))];
+const invoiceStatusFilterItems: SelectItem[] = [{ label: '全部开票状态', value: 'all' }, ...invoiceStatusFilters.map((f) => ({ label: f.text, value: f.value }))];
+const orderStatusFilterItems: SelectItem[] = [{ label: '全部订单状态', value: 'all' }, ...salesStatusFilters.map((f) => ({ label: f.text, value: f.value }))];
+const visibleRows = computed<TableRow[]>(() => {
+  const f = columnFilters.value;
+  return displayedTableData.value.filter((row) =>
+    (f.processingMode === 'all' || String(row.processingMode ?? '') === f.processingMode)
+    && (f.materialSupplyMode === 'all' || String(row.materialSupplyMode ?? '') === f.materialSupplyMode)
+    && (f.invoiceStatus === 'all' || String(row.invoiceStatus ?? '') === f.invoiceStatus)
+    && (f.status === 'all' || String(row.status ?? '') === f.status),
+  );
+});
+
+function orderStatusColor(status: unknown) {
+  // statusMap 里 type 为 '' 的是默认蓝(已确认), 在 Nuxt UI 里落到 primary
+  return badgeColor((statusMap[String(status ?? '')]?.type || 'primary') as Parameters<typeof badgeColor>[0]);
+}
+function customerNameOf(row: TableRow): string {
+  return String(row.customerName || row.customer?.name || row.customerId || '—');
+}
+function productDetailTitle(row: TableRow): string {
+  const items = orderItemsFor(row);
+  if (!items.length) return '暂无产品明细';
+  return items
+    .map((item) => `${item.productName || item.productTypeName || item.productTypeId || '未命名产品'} · ${Number(item.quantity || 0)} ${displayUnit(item.unit || '')}`)
+    .join('\n');
+}
+function orderRowId(row: TableRow, index: number): string {
+  return String(row.id ?? row.orderNumber ?? index);
+}
+
+const SORTABLE_COLUMN_LABELS: Record<string, string> = {
+  orderNumber: '订单编号', customer: '客户', processingMode: '加工方式', materialSupply: '物料供应', salesperson: '业务员',
+  orderDate: '下单日期', totalAmount: '总金额', shippingFee: '运费', discountAmount: '折扣', invoiceStatus: '开票状态',
+  commissionPreview: '提成(预估)', commissionRatePct: '提成率', status: '订单状态',
+};
+const SORTABLE_COLUMN_IDS = Object.keys(SORTABLE_COLUMN_LABELS);
+const sorting = ref<{ id: string; desc: boolean }[]>([]);
+const expanded = ref<Record<string, boolean>>({});
+const viewportWidth = ref(typeof window === 'undefined' ? SALES_PIN_MIN_WIDTH : window.innerWidth);
+const onSalesResize = () => { viewportWidth.value = window.innerWidth; };
+onMounted(() => window.addEventListener('resize', onSalesResize));
+onBeforeUnmount(() => window.removeEventListener('resize', onSalesResize));
+const columnPinning = computed({
+  get: () => salesColumnPinning(viewportWidth.value),
+  set: () => { /* 固定列由视口宽度决定，不接受表格回写 */ },
+});
+
+const R = { class: { th: 'text-right', td: 'text-right' } };
+const sortText = (a: { getValue: (id: string) => unknown }, b: { getValue: (id: string) => unknown }, id: string) =>
+  compareText(a.getValue(id), b.getValue(id));
+const salesTableColumns = computed<TableColumn<TableRow>[]>(() => {
+  const price = canViewPrice.value;
+  const vis = salesColumnVisible;
+  const cols: (TableColumn<TableRow> | false)[] = [
+    salesBatchMode.value && { id: 'select' },
+    { id: 'expand' },
+    { id: 'orderNumber', accessorKey: 'orderNumber', header: '订单编号', sortingFn: sortText },
+    { id: 'customer', accessorFn: customerNameOf, header: '客户', sortingFn: sortText },
+    vis('productSummary') && { id: 'productSummary', header: '产品', enableSorting: false },
+    vis('processingMode') && { id: 'processingMode', accessorFn: (r) => processingModeLabel(r.processingMode), header: '加工方式', sortingFn: sortText },
+    vis('materialSupply') && { id: 'materialSupply', accessorFn: (r) => String(r.materialSupplyMode ?? ''), header: '物料供应', sortingFn: sortText },
+    vis('salesperson') && { id: 'salesperson', accessorKey: 'salesperson', header: '业务员', sortingFn: sortText },
+    vis('orderDate') && { id: 'orderDate', accessorKey: 'orderDate', header: '下单日期', sortingFn: sortText },
+    price && vis('totalAmount') && { id: 'totalAmount', accessorFn: (r) => (r.totalAmount == null ? null : Number(r.totalAmount)), header: '总金额', meta: R },
+    price && vis('shippingFee') && { id: 'shippingFee', accessorFn: (r) => Number(r.shippingFee || 0), header: '运费', meta: R },
+    price && vis('discountAmount') && { id: 'discountAmount', accessorFn: (r) => Number(r.discountAmount || 0), header: '折扣', meta: R },
+    vis('invoiceStatus') && { id: 'invoiceStatus', accessorFn: (r) => String(r.invoiceStatus ?? ''), header: '开票状态', sortingFn: sortText },
+    price && vis('commissionPreview') && { id: 'commissionPreview', accessorFn: (r) => (r.commissionPreview == null ? null : Number(r.commissionPreview)), header: '提成(预估)', meta: R },
+    price && vis('commissionRate') && { id: 'commissionRatePct', accessorFn: (r) => (r.commissionRatePct == null ? null : Number(r.commissionRatePct)), header: '提成率', meta: R },
+    { id: 'status', accessorFn: (r) => statusMap[String(r.status ?? '')]?.text ?? '', header: '订单状态', sortingFn: sortText },
+    { id: 'shipment', header: '出库状态', enableSorting: false },
+    { id: 'payment', header: '收款状态', enableSorting: false },
+    vis('attachments') && { id: 'attachments', header: '附件', enableSorting: false },
+    { id: 'actions', header: '下一步', enableSorting: false, meta: { class: { th: 'text-center', td: 'text-center' } } },
+  ];
+  return cols.filter((c): c is TableColumn<TableRow> => c !== false);
+});
+
+// 批量勾选 (原 el-table type=selection): 只有 canSelectRow 通过的行可勾; 勾选结果写回 selectedRows。
+const selectableRows = computed(() => visibleRows.value.filter(canSelectRow));
+const allSelectableChecked = computed(() =>
+  selectableRows.value.length > 0 && selectableRows.value.every((r) => isRowChecked(r)),
+);
+function isRowChecked(row: TableRow): boolean {
+  return selectedRows.value.some((r) => r.id === row.id);
+}
+function toggleRowChecked(row: TableRow, checked: boolean): void {
+  if (!canSelectRow(row)) return;
+  const rest = selectedRows.value.filter((r) => r.id !== row.id);
+  handleSelectionChange(checked ? [...rest, row] : rest);
+}
+function toggleAllSelectable(checked: boolean): void {
+  const ids = new Set(selectableRows.value.map((r) => r.id));
+  const rest = selectedRows.value.filter((r) => !ids.has(r.id));
+  handleSelectionChange(checked ? [...rest, ...selectableRows.value] : rest);
+}
+
 // D13: Dirty form guard — warn user before leaving with unsaved changes
 const isDirty = ref(false);
 watch(dialogVisible, (val) => { isDirty.value = val; });
@@ -927,7 +1082,7 @@ function handleBeforeUnload(e: BeforeUnloadEvent) {
 const goldSummary = ref<FinanceSummary | null>(null);
 const goldSummaryRangeLabel = ref<string>('');
 async function loadGoldSummary() {
-  if (!factoryId.value || authStore.isFactoryViewReadOnly) return;
+  if (!isRestaurantTenant.value || !factoryId.value || authStore.isFactoryViewReadOnly) return;
   const year = new Date().getFullYear();
   const today = toDateString(new Date());
   const ranges: Array<{ start: string; end: string; label: string }> = [
@@ -951,13 +1106,14 @@ async function loadGoldSummary() {
 
 onMounted(() => {
   loadData(); loadCustomers(); loadProducts(); loadSalesEmployees();
-  loadGoldSummary(); loadWarehouses(); loadSuppliedMaterialOptions();
+  loadGoldSummary(); loadWarehouses(); loadSuppliedMaterialOptions(); loadCancelPolicy();
   window.addEventListener('beforeunload', handleBeforeUnload);
 });
 onBeforeUnmount(() => { window.removeEventListener('beforeunload', handleBeforeUnload); });
 
 async function loadData() {
   if (!factoryId.value) return;
+  void refreshFooter();
   loading.value = true;
   // T131 Part 3 — 每次刷新/翻页/筛选清空选择, 避免跨页 stale selection (mirror finance/adjustments).
   selectedRows.value = [];
@@ -969,18 +1125,12 @@ async function loadData() {
     const effectiveSize = hasClientSideFilters.value ? 200 : pagination.value.size;
     const params: TableRow = { page: pagination.value.page, size: effectiveSize };
     if (statusFilter.value) params.status = statusFilter.value;
+    // 关键词由服务端过滤 (订单号 / 客户 / 销售员 / 备注), 分页总数随之变化; 以前只在当前页 includes, 翻页后的单号搜不到
+    const kw = searchKeyword.value.trim();
+    if (kw) params.keyword = kw;
     const res = await get(url, { params });
     if (res.success && res.data) {
-      let rows = res.data.content || [];
-      // Apr 20 Bug BR-07 fix: 补 keyword 搜索 (订单号 / 客户名)
-      const kw = searchKeyword.value.trim();
-      if (kw) {
-        const lower = kw.toLowerCase();
-        rows = rows.filter((r: TableRow) =>
-          String(r.orderNumber || '').toLowerCase().includes(lower) ||
-          String(r.customerName || '').toLowerCase().includes(lower)
-        );
-      }
+      const rows = res.data.content || [];
       tableData.value = rows;
       pagination.value.total = res.data.totalElements || 0;
 
@@ -1237,7 +1387,7 @@ async function fetchPriceMemory(item: TableRow, productTypeId: string) {
       `/${factoryId.value}/customers/${form.value.customerId}/price-memory`,
       { params: { productTypeId } },
     );
-    item.priceMemoryHint = (res.success && res.data) ? res.data : null;
+    item.priceMemoryHint = (res.success && res.data && res.data.unitPrice != null) ? res.data : null;
   } catch {
     // 静默失败 — hint 是 UX nice-to-have, 不阻塞下单
     item.priceMemoryHint = null;
@@ -1822,6 +1972,11 @@ function openCancelDialog(ids: string[]) {
   cancelDialogVisible.value = true;
 }
 
+// 财务已批准的订单: 只有本厂开了「批准后可取消」且有权限才能取消, 会连带取消自动生成的生产计划和未开工排程 (2026-11-11)
+const pendingCancelHasApproved = computed(() =>
+  tableData.value.some((r) => pendingCancelIds.value.includes(String(r.id)) && String(r.status) === 'FINANCE_APPROVED')
+);
+
 // 最终原因: 选"其他"用 textarea 内容, 否则用 dropdown 选项.
 const resolvedCancelReason = computed<string>(() =>
   cancelReasonCode.value === '其他' ? cancelReasonOther.value.trim() : cancelReasonCode.value
@@ -1846,7 +2001,8 @@ async function submitCancel(): Promise<void> {
         undefined,
         { params: { reason } }
       );
-      if (res?.success) { ElMessage.success('取消成功'); }
+      // 后端说清连带取消了哪些生产计划 / 排程, 原样给用户看
+      if (res?.success) { ElMessage.success(res.message || '取消成功'); }
       else { ElMessage.error(res?.message || '取消失败'); return; }
     } else {
       const results = await Promise.allSettled(
@@ -2035,7 +2191,7 @@ async function handleSave() {
   }
 }
 
-async function openCreateDialog() {
+function resetNewOrderForm() {
   editingOrderId.value = null;
   // T130 Feature B — 新建时业务员未被用户碰过, 选客户后允许自动预填.
   salespersonTouched.value = false;
@@ -2057,6 +2213,10 @@ async function openCreateDialog() {
     contractFileName: null,
     version: null,
   };
+}
+
+async function openCreateDialog() {
+  resetNewOrderForm();
   // 张权 Apr 28 反馈: 新建对话框 dropdown 显示 onMounted 时的旧 cache.
   // 强制刷新让用户刚建的客户/产品立即可选.
   dialogVisible.value = true;
@@ -2101,6 +2261,7 @@ function handleRefresh() {
 
 // ==================== AI Entry ====================
 const aiEntryVisible = ref(false);
+const aiEntryInitialInput = useAiEntryLink(aiEntryVisible, canWrite, () => ({ factoryId: factoryId.value || '', actorId: String(authStore.user?.id || '') }));
 
 // ==================== Audit Log Drawer (PR #861) ====================
 // State for AuditLogDrawer — scoped to the row clicked via 审计 inline chip.
@@ -2115,6 +2276,7 @@ const forwardEntityId = ref('');
 const forwardEntityLabel = ref('');
 
 function handleAiFill(params: TableRow) {
+  resetNewOrderForm();
   // Match customerName to customerId
   const customerName = String(params.customerName || '');
   const customerResolution = resolveReferenceByName(customerName, customers.value);
@@ -2171,25 +2333,8 @@ function handleAiFill(params: TableRow) {
 async function handleQuickDelivery(row: TableRow) {
   const today = toDateString(new Date());
   // Build items from order items (each with productTypeId, deliveredQuantity, unit)
-  let items: TableRow[] = [];
-  if (row.items && row.items.length > 0) {
-    items = row.items
-      .filter((item: TableRow) => item.productTypeId || item.productType?.id)
-      .map((item: TableRow) => ({
-        salesOrderItemId: item.id,
-        productTypeId: item.productTypeId || item.productType?.id,
-        productName: item.productName || item.productType?.name,
-        deliveredQuantity: item.quantity || 0,
-        // 🔴 2026-08-13 真机 E2E: 计划数量输入框需要一个上限, 否则可以随手填出
-        // 后端必然 409 的数。后端真正的闸是 `下单量 - 已安排`, 前端拿不到「已安排」,
-        // 所以这里只兜「不超过下单量」这一层, 精确判定仍由后端
-        // DELIVERY_QUANTITY_EXCEEDS_REMAINING 负责。
-        maxQuantity: Number(item.quantity) > 0 ? Number(item.quantity) : undefined,
-        unit: item.unit || 'kg',
-        packagingSpecId: item.packagingSpecId,
-        unitPrice: Number(item.unitPrice || 0),
-      }));
-  }
+  // 单价被遮/缺失时不带 unitPrice (见 deliveryPricePayload.ts), ⛔ 不发假 0。
+  const items: TableRow[] = buildQuickDeliveryItems(row.items as TableRow[] | undefined);
   if (items.length === 0) {
     return ElMessage.warning('订单缺少产品信息，无法快速出库');
   }
@@ -2220,7 +2365,8 @@ async function submitQuickDelivery() {
       salesOrderId, customerId, deliveryDate, deliveryAddress, logisticsCompany, items, remark,
     } = deliveryForm.value;
     const res = await post(`/${factoryId.value}/sales/deliveries`, {
-      salesOrderId, customerId, deliveryDate, deliveryAddress, logisticsCompany, items, remark,
+      salesOrderId, customerId, deliveryDate, deliveryAddress, logisticsCompany,
+      items: (items as TableRow[]).map((it) => withKnownUnitPrice(it)), remark,
     });
     if (res.success) {
       // Issue #740: 文案改为"发货单已创建"明示后续等仓库 confirm
@@ -2245,6 +2391,14 @@ async function submitQuickDelivery() {
             logisticsCompany: deliveryForm.value.logisticsCompany,
             trackingNumber: deliveryForm.value.trackingNumber,
             deliveryAddress: deliveryForm.value.deliveryAddress,
+            // Q3: 子单建成但有行没自动分配批次 (如规格不一致要确认换算) —— 原因原样告诉用户, 并指到能确认的地方
+            onAllocationNotices: (notices) => ElMessage({
+              type: 'warning',
+              message: `子发运单已创建，下面这些行没有自动分配批次：\n${allocationNoticeLines(notices).join('\n')}\n`
+                + '请打开这张销售订单的详情，在「发货记录」里点「分配批次」确认换算。',
+              duration: 0,
+              showClose: true,
+            }),
           }).catch(() => false)
           : false;
         if (!created) {
@@ -2318,44 +2472,27 @@ function handleMergePurchase() {
   <!-- v1.2 Week 9: POS 交易概览 (restaurant tenants). Placed OUTSIDE CanvasAwareWrapper
        so it renders in both LEGACY and DYNAMIC/CANVAS rendering modes. Auto-hides
        when Silver empty (manufacturing tenants). -->
-  <el-card
-    v-show="goldSummary"
-    class="gold-pos-summary"
-    style="margin: 12px; border-top: 3px solid #67C23A;"
-    shadow="never"
-  >
-    <template #header>
-      <div style="display: flex; align-items: center; gap: 8px; font-weight: 600;">
- <span> POS 交易概览</span>
-        <el-tag size="small" type="success">Gold · finance_summary</el-tag>
-        <span v-if="goldSummaryRangeLabel" style="color: #909399; font-size: 12px; margin-left: auto;">
-          {{ goldSummaryRangeLabel }}
-        </span>
-      </div>
-    </template>
-    <el-row v-if="goldSummary" :gutter="16">
-      <el-col :span="6">
-        <el-statistic :value="goldSummary.totalRevenue" title="总营收" :precision="2" prefix="¥" />
-      </el-col>
-      <el-col :span="6">
-        <el-statistic :value="goldSummary.billCount" title="POS 账单数" />
-      </el-col>
-      <el-col :span="6">
-        <el-statistic :value="goldSummary.avgBillValue ?? 0" title="客单价" :precision="2" prefix="¥" />
-      </el-col>
-      <el-col :span="6">
-        <el-statistic :value="goldSummary.storeCount" title="门店数" />
-      </el-col>
-    </el-row>
-  </el-card>
+  <section v-show="goldSummary" class="cs-card gold-pos-summary">
+    <header class="cs-card-head">
+      <span>POS 交易概览</span>
+      <UBadge color="success" variant="soft">Gold · finance_summary</UBadge>
+      <span v-if="goldSummaryRangeLabel" class="gold-range">{{ goldSummaryRangeLabel }}</span>
+    </header>
+    <dl v-if="goldSummary" class="cs-card-body gold-stats">
+      <div><dt>总营收</dt><dd class="num">¥{{ Number(goldSummary.totalRevenue ?? 0).toFixed(2) }}</dd></div>
+      <div><dt>POS 账单数</dt><dd class="num">{{ goldSummary.billCount }}</dd></div>
+      <div><dt>客单价</dt><dd class="num">¥{{ Number(goldSummary.avgBillValue ?? 0).toFixed(2) }}</dd></div>
+      <div><dt>门店数</dt><dd class="num">{{ goldSummary.storeCount }}</dd></div>
+    </dl>
+  </section>
 
   <!-- P1-10: restaurant tenants 无 B2B SO,下面空表只是功能残留 -->
-  <el-alert
+  <UAlert
     v-if="isRestaurantTenant"
-    type="info"
-    :closable="false"
-    show-icon
-    style="margin: 0 12px 12px 12px;"
+    color="info"
+    variant="subtle"
+    icon="i-lucide-info"
+    class="restaurant-alert"
     title="餐饮门店的 POS 账单已在上方「POS 交易概览」汇总。销售订单 (B2B) 本页下方通常为空,如有企业订餐/团购/外送合同才需新建。"
   />
 
@@ -2377,65 +2514,61 @@ function handleMergePurchase() {
       other="我们向供应商下的订单（进货方向、应付账款）"
       other-path="/procurement/orders"
     />
-    <el-card class="page-card" shadow="never">
-      <template #header>
-        <div class="card-header">
-          <div class="header-left">
-            <span class="page-title">{{ label('salesOrder') }}管理</span>
-            <span class="data-count">共 {{ visibleOrderTotal }} 条记录</span>
-          </div>
-          <div class="header-right">
-            <el-button v-if="canWrite" type="success" :icon="ChatDotRound" @click="aiEntryVisible = true">
-              AI录入
-            </el-button>
-            <!-- Full-page create entry; legacy source contract: @click="openCreateDialog" remains available for compatibility. -->
-            <el-button v-if="canWrite" type="primary" :icon="Plus" @click="router.push('/sales/orders/new')">新建{{ label('salesOrder') }}</el-button>
-          </div>
-        </div>
-      </template>
+    <section class="cs-card page-card">
+      <header class="cs-card-head">
+        <h2 class="page-title">{{ label('salesOrder') }}管理</h2>
+        <span class="data-count">共 {{ visibleOrderTotal }} 条记录</span>
+        <span class="head-spacer" />
+        <UButton v-if="canWrite" color="success" variant="soft" icon="i-lucide-message-circle" @click="aiEntryVisible = true">AI录入</UButton>
+        <!-- Full-page create entry; legacy source contract: @click="openCreateDialog" remains available for compatibility. -->
+        <UButton v-if="canWrite" icon="i-lucide-plus" @click="router.push('/sales/orders/new')">新建{{ label('salesOrder') }}</UButton>
+      </header>
 
+      <div class="cs-card-body">
       <div class="lifecycle-filter-header">
-        <el-tabs v-model="activeLifecycle" class="sales-lifecycle-tabs" @tab-change="handleLifecycleTabChange">
-          <el-tab-pane v-for="tab in lifecycleTabs" :key="tab.key" :name="tab.key">
-            <template #label>
-              <span>{{ tab.label }}</span>
-              <span class="tab-count">{{ lifecycleTabCount(tab.key) }}</span>
-            </template>
-          </el-tab-pane>
-        </el-tabs>
-        <el-tooltip content="分页数字来自当前已加载的同一批订单，不会把出库和收款重复计入生命周期。" placement="top">
-          <span class="count-scope-note"><el-icon><QuestionFilled /></el-icon> 计数口径</span>
-        </el-tooltip>
+        <!-- W6：原 7 个状态页签改成一个下拉，计数留在选项里 -->
+        <USelectMenu
+          v-model="activeLifecycle"
+          class="sales-lifecycle-select"
+          aria-label="订单状态"
+          :items="lifecycleItems"
+          value-key="value"
+          :search-input="false"
+          @update:model-value="handleLifecycleTabChange"
+        />
+        <span class="count-scope-note" title="分页数字来自当前已加载的同一批订单，不会把出库和收款重复计入生命周期。">
+          <UIcon name="i-lucide-circle-help" /> 计数口径
+        </span>
       </div>
 
       <div class="search-bar">
         <!-- Apr 20 Bug BR-07 fix: 加 keyword 搜索 (订单号/客户名) -->
-        <el-input v-model="searchKeyword" placeholder="搜索 订单号/客户" clearable style="width: 240px" @keyup.enter="loadData" />
-        <el-select v-model="shipmentFilter" aria-label="出库状态" style="width: 140px" @change="handleLifecycleTabChange">
-          <el-option label="全部出库状态" value="all" />
-          <el-option label="未出库" value="UNSHIPPED" />
-          <el-option label="部分出库" value="PARTIAL" />
-          <el-option label="已出库" value="SHIPPED" />
-        </el-select>
-        <el-select v-model="paymentFilter" aria-label="收款状态" style="width: 140px" @change="handleLifecycleTabChange">
-          <el-option label="全部收款状态" value="all" />
-          <el-option label="未收款" value="UNPAID" />
-          <el-option label="部分收款" value="PARTIAL" />
-          <el-option label="已收款" value="PAID" />
-        </el-select>
-        <el-button type="primary" :icon="Search" @click="loadData">搜索</el-button>
-        <el-button :icon="Refresh" @click="handleRefresh">重置</el-button>
-        <el-tag v-if="statusFilter" closable type="info" @close="statusFilter = ''; loadData()">
-          流程概览筛选：{{ statusMap[statusFilter]?.text || statusFilter }}
-        </el-tag>
-        <el-button
+        <UInput v-model="searchKeyword" icon="i-lucide-search" placeholder="搜索 订单号/客户" class="w-60" data-testid="sales-order-keyword" @keyup.enter="loadData">
+          <template v-if="searchKeyword" #trailing>
+            <UButton color="neutral" variant="link" size="xs" icon="i-lucide-x" aria-label="清空" @click="searchKeyword = ''; loadData()" />
+          </template>
+        </UInput>
+        <USelectMenu v-model="shipmentFilter" :items="SHIPMENT_FILTER_ITEMS" value-key="value" :search-input="false" aria-label="出库状态" class="w-36" @update:model-value="handleLifecycleTabChange" />
+        <USelectMenu v-model="paymentFilter" :items="PAYMENT_FILTER_ITEMS" value-key="value" :search-input="false" aria-label="收款状态" class="w-36" @update:model-value="handleLifecycleTabChange" />
+        <!-- 原表头筛选 (加工方式/物料供应/开票状态/订单状态) 搬到这里: 仍只筛当前已加载这一页, 不影响分页总数 -->
+        <USelectMenu v-if="salesColumnVisible('processingMode')" v-model="columnFilters.processingMode" :items="processingModeFilterItems" value-key="value" :search-input="false" aria-label="加工方式" class="w-36" data-testid="sales-filter-processing-mode" />
+        <USelectMenu v-if="salesColumnVisible('materialSupply')" v-model="columnFilters.materialSupplyMode" :items="materialSupplyFilterItems" value-key="value" :search-input="false" aria-label="物料供应" class="w-36" data-testid="sales-filter-material-supply" />
+        <USelectMenu v-if="salesColumnVisible('invoiceStatus')" v-model="columnFilters.invoiceStatus" :items="invoiceStatusFilterItems" value-key="value" :search-input="false" aria-label="开票状态" class="w-36" data-testid="sales-filter-invoice-status" />
+        <USelectMenu v-model="columnFilters.status" :items="orderStatusFilterItems" value-key="value" :search-input="false" aria-label="订单状态筛选" class="w-36" data-testid="sales-filter-status" />
+        <UButton icon="i-lucide-search" @click="loadData">搜索</UButton>
+        <UButton color="neutral" variant="outline" icon="i-lucide-rotate-ccw" @click="handleRefresh">重置</UButton>
+        <UBadge v-if="statusFilter" color="neutral" variant="soft" class="status-filter-badge">
+          流程概览筛选：{{ statusMap[statusFilter]?.text || '未知状态' }}
+          <UButton color="neutral" variant="link" size="xs" icon="i-lucide-x" aria-label="清除流程概览筛选" @click="statusFilter = ''; loadData()" />
+        </UBadge>
+        <UButton
           v-if="viewMode === 'table' && canWrite"
-          :type="salesBatchMode ? 'primary' : 'default'"
-          :plain="salesBatchMode"
+          :color="salesBatchMode ? 'primary' : 'neutral'"
+          :variant="salesBatchMode ? 'soft' : 'outline'"
           @click="toggleSalesBatchMode"
         >
           {{ salesBatchMode ? '退出批量' : '批量操作' }}
-        </el-button>
+        </UButton>
         <ListColumnSelector
           v-if="viewMode === 'table'"
           v-model="salesVisibleColumns"
@@ -2445,8 +2578,8 @@ function handleMergePurchase() {
           @reset="resetSalesColumns"
         />
         <!-- U-VIEW-1 view-mode switcher (Sprint 4 Wave 2 Chat L) -->
-        <div style="margin-left: auto">
-          <ViewModeSwitcher v-model="viewMode" />
+        <div class="view-switch">
+          <ViewModeSwitcher v-model="viewMode" :modes="SALES_VIEW_MODES" />
         </div>
       </div>
 
@@ -2462,41 +2595,41 @@ function handleMergePurchase() {
           </template>
           <template v-else>请勾选要批量处理的订单</template>
         </span>
-        <el-button
-          type="primary" size="small"
+        <UButton
+          size="sm"
           :disabled="!hasBatchSubmittable || batchLoading"
           :loading="batchLoading"
           @click="handleBatchSubmitForReview"
-        >批量提交 OA 审批</el-button>
-        <el-button
-          type="success" size="small"
+        >批量提交 OA 审批</UButton>
+        <UButton
+          size="sm" color="success"
           :disabled="!hasBatchConfirmable || batchLoading"
           :loading="batchLoading"
           @click="handleBatchConfirm"
-        >批量确认</el-button>
-        <el-button
-          type="warning" size="small"
+        >批量确认</UButton>
+        <UButton
+          size="sm" color="warning"
           :disabled="!hasBatchCancellable || batchLoading"
           :loading="batchLoading"
           @click="handleBatchCancel"
-        >批量取消</el-button>
-        <el-button
-          type="danger" size="small"
+        >批量取消</UButton>
+        <UButton
+          size="sm" color="error"
           :disabled="!hasBatchDeletable || batchLoading"
           :loading="batchLoading"
           @click="handleBatchDelete"
-        >批量删除</el-button>
+        >批量删除</UButton>
         <!-- 转录行3650 — 多 SO 合并采购 (勾选多张 → 合并成一张采购单, 跨 SO 按物料聚合). -->
-        <el-button
-          type="primary" size="small" plain
+        <UButton
+          size="sm" variant="outline"
           :disabled="batchLoading"
           @click="handleMergePurchase"
-        >合并采购 ({{ selectedRows.length }})</el-button>
+        >合并采购 ({{ selectedRows.length }})</UButton>
       </div>
 
       <GridView
         v-if="viewMode === 'grid'"
-        :rows="displayedTableData"
+        :rows="visibleRows"
         title-field="orderNumber"
         subtitle-field="customerName"
         status-field="status"
@@ -2504,7 +2637,7 @@ function handleMergePurchase() {
       />
       <KanbanView
         v-else-if="viewMode === 'kanban'"
-        :rows="displayedTableData"
+        :rows="visibleRows"
         status-field="status"
         title-field="orderNumber"
         subtitle-field="customerName"
@@ -2513,272 +2646,151 @@ function handleMergePurchase() {
       />
       <TimelinePlaceholder v-else-if="viewMode === 'timeline'" />
       <CalendarPlaceholder v-else-if="viewMode === 'calendar'" />
-      <el-table
-        :key="salesBatchMode ? 'sales-batch-table' : 'sales-default-table'"
+      <UTable
         v-else
-        :data="displayedTableData"
-        v-loading="loading"
-        empty-text="暂无数据"
-        stripe
-        border
-        table-layout="fixed"
-        :scrollbar-always-on="true"
-        class="wide-table business-list-table"
-        style="width: 100%"
-        @selection-change="handleSelectionChange"
+        :key="salesBatchMode ? 'sales-batch-table' : 'sales-default-table'"
+        v-model:sorting="sorting"
+        v-model:expanded="expanded"
+        v-model:column-pinning="columnPinning"
+        :data="visibleRows"
+        :columns="salesTableColumns"
+        :loading="loading"
+        :get-row-id="orderRowId"
+        class="cs-table wide-table business-list-table"
+        data-testid="sales-order-table"
       >
-        <!-- T131 Part 3 — 多选列 (Element Plus 在 COLUMN 上用 :selectable, 非 table 的 rowSelectable). -->
-        <el-table-column v-if="salesBatchMode" type="selection" width="48" :selectable="canSelectRow" />
-        <el-table-column type="expand" width="44">
-          <template #default="{ row }">
-            <div class="order-trace-panel">
-              <section class="trace-section trace-items">
-                <div class="trace-section-title">订单明细</div>
-                <template v-if="orderItemsFor(row).length">
-                  <div v-for="item in orderItemsFor(row).slice(0, 4)" :key="String(item.id || item.productTypeId)" class="trace-item-line">
-                    <span>{{ item.productName || item.productTypeName || item.productTypeId || '未命名产品' }}</span>
-                    <strong>{{ Number(item.quantity || 0) }} {{ displayUnit(item.unit || '') }}</strong>
-                  </div>
-                  <div v-if="orderItemsFor(row).length > 4" class="trace-more">另有 {{ orderItemsFor(row).length - 4 }} 项，进入详情查看</div>
-                </template>
-                <el-empty v-else description="列表未返回明细，可进入订单详情查看" :image-size="44" />
-              </section>
-              <section class="trace-section">
-                <div class="trace-section-title">出库履约</div>
-                <el-tag :type="shipmentStateTagType(row)" effect="light">{{ shipmentStateLabel(row) }}</el-tag>
-                <div v-if="canViewPrice" class="trace-metric">
-                  已出库 {{ formatAmount(row.actualShippedAmount || 0) }} / 订单 {{ formatAmount(row.totalAmount || 0) }}
+        <template #empty>暂无数据</template>
+        <!-- 可排序列的表头: 点击切换 升序 → 降序 → 取消 -->
+        <template v-for="key in SORTABLE_COLUMN_IDS" :key="key" #[`${key}-header`]="{ column }">
+          <button type="button" class="sort-th" @click="column.toggleSorting(column.getIsSorted() === 'asc')">
+            {{ SORTABLE_COLUMN_LABELS[key] }}
+            <UIcon :name="column.getIsSorted() === 'asc' ? 'i-lucide-arrow-up' : column.getIsSorted() === 'desc' ? 'i-lucide-arrow-down' : 'i-lucide-arrow-up-down'" class="sort-icon" :class="{ active: !!column.getIsSorted() }" />
+          </button>
+        </template>
+        <!-- T131 Part 3 — 多选列 (selectable 判据 = canSelectRow: 写权限 + 至少能进入某个批量操作的状态). -->
+        <template #select-header>
+          <UCheckbox :model-value="allSelectableChecked" :disabled="!selectableRows.length" aria-label="全选当前页可选订单" @update:model-value="toggleAllSelectable(!!$event)" />
+        </template>
+        <template #select-cell="{ row }">
+          <UCheckbox :model-value="isRowChecked(row.original)" :disabled="!canSelectRow(row.original)" :aria-label="`选择订单 ${row.original.orderNumber || ''}`" @update:model-value="toggleRowChecked(row.original, !!$event)" />
+        </template>
+        <template #expand-cell="{ row }">
+          <UButton color="neutral" variant="ghost" size="xs" :icon="row.getIsExpanded() ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" :aria-label="row.getIsExpanded() ? '收起订单明细' : '展开订单明细'" data-testid="sales-order-expand" @click="row.toggleExpanded()" />
+        </template>
+        <template #expanded="{ row }">
+          <div class="order-trace-panel">
+            <section class="trace-section trace-items">
+              <div class="trace-section-title">订单明细</div>
+              <template v-if="orderItemsFor(row.original).length">
+                <div v-for="item in orderItemsFor(row.original).slice(0, 4)" :key="String(item.id || item.productTypeId)" class="trace-item-line">
+                  <span>{{ item.productName || item.productTypeName || item.productTypeId || '未命名产品' }}</span>
+                  <strong>{{ Number(item.quantity || 0) }} {{ displayUnit(item.unit || '') }}</strong>
                 </div>
-                <div class="trace-hint">销售创建发货单，仓储确认实发并扣减库存。</div>
-              </section>
-              <section class="trace-section">
-                <div class="trace-section-title">收款进度</div>
-                <el-tag :type="paymentStateTagType(row)" effect="light">{{ paymentStateLabel(row) }}</el-tag>
-                <div v-if="canViewPrice" class="trace-metric">
-                  已收 {{ formatAmount(row.paidAmount || 0) }} / 应收 {{ formatAmount(row.totalAmount || 0) }}
-                </div>
-                <div class="trace-hint">收款状态独立追踪，不改变订单生命周期分类。</div>
-              </section>
-            </div>
-          </template>
-        </el-table-column>
-        <el-table-column prop="orderNumber" label="订单编号" width="170" sortable min-width="120" />
-        <el-table-column label="客户" min-width="150" show-overflow-tooltip sortable :sort-method="compareCustomer">
-          <template #default="{ row }">{{ row.customerName || row.customer?.name || row.customerId || '-' }}</template>
-        </el-table-column>
-        <el-table-column v-if="salesColumnVisible('productSummary')" label="产品" min-width="190">
-          <template #default="{ row }">
-            <el-popover placement="top-start" :visible="openProductPopoverKey === productPopoverKey(row)" width="320">
-              <template #reference><button type="button" class="product-summary-trigger" :aria-label="`查看${row.orderNumber || ''}的完整产品明细`" :aria-expanded="openProductPopoverKey === productPopoverKey(row)" @mouseenter="showProductPopover(row)" @mouseleave="hideProductPopover(row)" @focus="showProductPopover(row)" @blur="hideProductPopover(row)">{{ productSummaryFor(row) }}</button></template>
-              <div class="product-summary-popover" role="list" aria-label="完整产品明细">
-                <div v-for="item in orderItemsFor(row)" :key="String(item.id || item.productTypeId)" role="listitem">
-                  {{ item.productName || item.productTypeName || item.productTypeId || '未命名产品' }} · {{ Number(item.quantity || 0) }} {{ displayUnit(item.unit || '') }}
-                </div>
+                <div v-if="orderItemsFor(row.original).length > 4" class="trace-more">另有 {{ orderItemsFor(row.original).length - 4 }} 项，进入详情查看</div>
+              </template>
+              <UEmpty v-else icon="i-lucide-package" description="列表未返回明细，可进入订单详情查看" />
+            </section>
+            <section class="trace-section">
+              <div class="trace-section-title">出库履约</div>
+              <UBadge :color="badgeColor(shipmentStateTagType(row.original))" variant="soft">{{ shipmentStateLabel(row.original) }}</UBadge>
+              <div v-if="canViewPrice" class="trace-metric">
+                已出库 {{ formatAmount(row.original.actualShippedAmount || 0) }} / 订单 {{ formatAmount(row.original.totalAmount || 0) }}
               </div>
-            </el-popover>
-          </template>
-        </el-table-column>
-        <el-table-column
-          v-if="salesColumnVisible('processingMode')"
-          prop="processingMode"
-          label="加工方式"
-          width="110"
-          align="center"
-          sortable
-          :filters="processingModeFilters"
-          :filter-method="filterSalesColumn"
-        >
-          <template #default="{ row }">{{ processingModeLabel(row.processingMode) }}</template>
-        </el-table-column>
-        <el-table-column
-          v-if="salesColumnVisible('materialSupply')"
-          prop="materialSupplyMode"
-          label="物料供应"
-          width="140"
-          align="center"
-          sortable
-          :filters="materialSupplyModeFilters"
-          :filter-method="filterSalesColumn"
-        >
-          <template #default="{ row }">
-            <el-tag size="small" :type="row.materialSupplyMode === 'CUSTOMER_SUPPLIED' ? 'warning' : 'info'">
-              {{ materialSupplyModeLabel(row.materialSupplyMode) }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column v-if="salesColumnVisible('salesperson')" prop="salesperson" label="业务员" width="110" show-overflow-tooltip sortable />
-        <el-table-column v-if="salesColumnVisible('orderDate')" prop="orderDate" label="下单日期" width="130" sortable />
+              <div class="trace-hint">销售创建发货单，仓储确认实发并扣减库存。</div>
+            </section>
+            <section class="trace-section">
+              <div class="trace-section-title">收款进度</div>
+              <UBadge :color="badgeColor(paymentStateTagType(row.original))" variant="soft">{{ paymentStateLabel(row.original) }}</UBadge>
+              <div v-if="canViewPrice" class="trace-metric">
+                已收 {{ formatAmount(row.original.paidAmount || 0) }} / 应收 {{ formatAmount(row.original.totalAmount || 0) }}
+              </div>
+              <div class="trace-hint">收款状态独立追踪，不改变订单生命周期分类。</div>
+            </section>
+          </div>
+        </template>
+        <template #customer-cell="{ row }"><span class="cell-ellipsis" :title="customerNameOf(row.original)">{{ customerNameOf(row.original) }}</span></template>
+        <template #productSummary-header><span>产品</span></template>
+        <template #productSummary-cell="{ row }">
+          <!-- 完整明细放 title (原生提示, 不用 UTooltip: 它未包 UApp 会整页渲染失败) -->
+          <span class="product-summary-trigger" tabindex="0" role="note" :aria-label="`${row.original.orderNumber || ''}的完整产品明细`" :title="productDetailTitle(row.original)">{{ productSummaryFor(row.original) }}</span>
+        </template>
+        <template #processingMode-cell="{ row }">{{ processingModeLabel(row.original.processingMode) }}</template>
+        <template #materialSupply-cell="{ row }">
+          <UBadge :color="row.original.materialSupplyMode === 'CUSTOMER_SUPPLIED' ? 'warning' : 'neutral'" variant="soft">{{ materialSupplyModeLabel(row.original.materialSupplyMode) }}</UBadge>
+        </template>
+        <template #salesperson-cell="{ row }">{{ row.original.salesperson || '—' }}</template>
         <!--
           RBAC defense-in-depth (PR #415 Option B 2026-05-12 + P3 column-hide fix):
           backend PriceFieldResponseAdvice strips totalAmount / discountAmount /
           taxAmount / shippingFee to null for roles lacking procurement:price:view.
-          v-if on the column itself hides BOTH the header and cells for
-          non-whitelisted roles (warehouse_manager etc). Without v-if on
-          <el-table-column>, Element Plus still renders 总金额 / 运费 / 折扣
-          headers even when all cells are null/blank — E2E flagged misleading UX.
+          价格列在 salesTableColumns 里受 canViewPrice 控制: 无权限时整列 (表头 + 单元格) 不进列定义,
+          与旧版 el-table-column 上的 v-if 等价 (没有看价权限就不渲染总金额 / 运费 / 折扣等表头)。
         -->
-        <el-table-column
-          v-if="canViewPrice && salesColumnVisible('totalAmount')"
-          prop="totalAmount"
-          label="总金额"
-          width="130"
-          align="right"
-          sortable
-        >
-          <template #default="{ row }">
-            <span v-if="row.totalAmount != null">{{ formatAmount(row.totalAmount) }}</span>
-            <span v-else class="price-masked">—</span>
-          </template>
-        </el-table-column>
-        <el-table-column
-          v-if="canViewPrice && salesColumnVisible('shippingFee')"
-          prop="shippingFee"
-          label="运费"
-          width="100"
-          align="right"
-          sortable
-        >
-          <template #default="{ row }">{{ row.shippingFee ? formatAmount(row.shippingFee) : '-' }}</template>
-        </el-table-column>
-        <el-table-column
-          v-if="canViewPrice && salesColumnVisible('discountAmount')"
-          prop="discountAmount"
-          label="折扣"
-          width="100"
-          align="right"
-          sortable
-        >
-          <template #default="{ row }">
-            <span v-if="row.discountAmount != null && row.discountAmount">{{ formatAmount(row.discountAmount) }}</span>
-            <span v-else>-</span>
-          </template>
-        </el-table-column>
+        <template #totalAmount-cell="{ row }">
+          <span v-if="row.original.totalAmount != null" class="num">{{ formatAmount(row.original.totalAmount) }}</span>
+          <span v-else class="price-masked">—</span>
+        </template>
+        <template #shippingFee-cell="{ row }"><span class="num">{{ row.original.shippingFee ? formatAmount(row.original.shippingFee) : '—' }}</span></template>
+        <template #discountAmount-cell="{ row }">
+          <span v-if="row.original.discountAmount != null && row.original.discountAmount" class="num">{{ formatAmount(row.original.discountAmount) }}</span>
+          <span v-else>—</span>
+        </template>
         <!-- U-SP5: 开票状态列 (NOT @PriceSensitive — 所有角色可见) -->
-        <el-table-column
-          v-if="salesColumnVisible('invoiceStatus')"
-          prop="invoiceStatus"
-          label="开票状态"
-          width="120"
-          align="center"
-          sortable
-          :filters="invoiceStatusFilters"
-          :filter-method="filterSalesColumn"
-        >
-          <template #default="{ row }">
-            <el-tag
-              v-if="row.invoiceStatus"
-              :type="row.invoiceStatus === 'FULLY_INVOICED' ? 'success' : row.invoiceStatus === 'PARTIAL_INVOICED' ? 'warning' : 'info'"
-              size="small"
-            >
-              {{ row.invoiceStatus === 'FULLY_INVOICED' ? '已开票' : row.invoiceStatus === 'PARTIAL_INVOICED' ? '部分开票' : '未开票' }}
-            </el-tag>
-            <span v-else class="price-masked">—</span>
-          </template>
-        </el-table-column>
+        <template #invoiceStatus-cell="{ row }">
+          <UBadge
+            v-if="row.original.invoiceStatus"
+            :color="row.original.invoiceStatus === 'FULLY_INVOICED' ? 'success' : row.original.invoiceStatus === 'PARTIAL_INVOICED' ? 'warning' : 'neutral'"
+            variant="soft"
+          >
+            {{ row.original.invoiceStatus === 'FULLY_INVOICED' ? '已开票' : row.original.invoiceStatus === 'PARTIAL_INVOICED' ? '部分开票' : '未开票' }}
+          </UBadge>
+          <span v-else class="price-masked">—</span>
+        </template>
         <!-- U-SP5: 提成预览 (@PriceSensitive — null→"—" when canViewPrice=false) -->
-        <el-table-column
-          v-if="canViewPrice && salesColumnVisible('commissionPreview')"
-          prop="commissionPreview"
-          label="提成(预估)"
-          width="110"
-          align="right"
-          sortable
-        >
-          <template #default="{ row }">
-            <span v-if="row.commissionPreview != null">{{ formatAmount(row.commissionPreview) }}</span>
-            <span v-else class="price-masked">—</span>
-          </template>
-        </el-table-column>
-        <el-table-column
-          v-if="canViewPrice && salesColumnVisible('commissionRate')"
-          prop="commissionRatePct"
-          label="提成率"
-          width="90"
-          align="right"
-          sortable
-        >
-          <template #default="{ row }">
-            <span v-if="row.commissionRatePct != null">{{ Number(row.commissionRatePct).toFixed(2) }}%</span>
-            <span v-else class="price-masked">—</span>
-          </template>
-        </el-table-column>
-        <el-table-column
-          prop="status"
-          label="订单状态"
-          width="120"
-          align="center"
-          sortable
-          :filters="salesStatusFilters"
-          :filter-method="filterSalesColumn"
-        >
-          <template #default="{ row }">
-            <el-tag :type="(statusMap[row.status]?.type) || 'info'" size="small">
-              {{ statusMap[row.status]?.text || row.status }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="出库状态" width="110" align="center">
-          <template #default="{ row }">
-            <el-tag :type="shipmentStateTagType(row)" size="small" effect="light">
-              {{ shipmentStateLabel(row) }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="收款状态" width="110" align="center">
-          <template #default="{ row }">
-            <el-tag :type="paymentStateTagType(row)" size="small" effect="light">
-              {{ paymentStateLabel(row) }}
-            </el-tag>
-          </template>
-        </el-table-column>
+        <template #commissionPreview-cell="{ row }">
+          <span v-if="row.original.commissionPreview != null" class="num">{{ formatAmount(row.original.commissionPreview) }}</span>
+          <span v-else class="price-masked">—</span>
+        </template>
+        <template #commissionRatePct-cell="{ row }">
+          <span v-if="row.original.commissionRatePct != null" class="num">{{ Number(row.original.commissionRatePct).toFixed(2) }}%</span>
+          <span v-else class="price-masked">—</span>
+        </template>
+        <template #status-cell="{ row }">
+          <UBadge :color="orderStatusColor(row.original.status)" variant="soft">{{ statusMap[row.original.status]?.text || '未知状态' }}</UBadge>
+        </template>
+        <template #shipment-cell="{ row }">
+          <UBadge :color="badgeColor(shipmentStateTagType(row.original))" variant="soft">{{ shipmentStateLabel(row.original) }}</UBadge>
+        </template>
+        <template #payment-cell="{ row }">
+          <UBadge :color="badgeColor(paymentStateTagType(row.original))" variant="soft">{{ paymentStateLabel(row.original) }}</UBadge>
+        </template>
         <!--
           Sprint 6 W3-A — 行内 3-chip 链接计数 (文件 / 图片 / 合同).
           数据源: POST /attachments/batch-3chip-counts (batch, 避免 N+1).
-          替代 Sprint 5 PR #58 unified `链:N` chip per HJ baseline (Round 12 §B.6 X2).
           EntityType=SALES_ORDER 由 useLinkChipCounts composable 锁定.
         -->
-        <el-table-column v-if="salesColumnVisible('attachments')" label="附件" width="200" align="center">
-          <template #header>
-            <span style="display: inline-flex; align-items: center; gap: 4px;">
-              附件
-              <el-tooltip placement="top">
-                <template #content>
-                  <div style="line-height: 1.6;">
-                    <div><b>文件</b>: 通用文档 (PDF / Word / Excel / OTHER)</div>
-                    <div><b>图片</b>: 照片 / 视频 (PHOTO / VIDEO)</div>
-                    <div><b>合同</b>: 销售合同 / 法律文件 (CONTRACT)</div>
-                    <div style="margin-top: 4px; color: var(--text-color-secondary);">点详情查看附件清单</div>
-                  </div>
-                </template>
-                <el-icon style="cursor: help; color: var(--text-color-secondary, #909399); font-size: 12px;"><QuestionFilled /></el-icon>
-              </el-tooltip>
-            </span>
-          </template>
-          <template #default="{ row }">
-            <LinkChipCell :counts="linkCountsFor(row.id)" />
-          </template>
-        </el-table-column>
-        <el-table-column label="下一步" width="250" fixed="right" align="center" class-name="business-list-table__actions">
-          <template #default="{ row }">
-            <div class="business-action-row">
-            <el-button
-              type="primary"
-              size="small"
-              :loading="submittingIds.has(row.id)"
-              :disabled="submittingIds.has(row.id)"
-              @click="handlePrimaryAction(row)"
-            >{{ primaryActionLabel(row) }}</el-button>
-            <el-button type="primary" link size="small" @click="goDetail(row.id)">详情</el-button>
+        <template #attachments-header>
+          <span class="attach-th" title="文件: 通用文档 (PDF / Word / Excel / OTHER)；图片: 照片 / 视频；合同: 销售合同 / 法律文件。点详情查看附件清单">附件 <UIcon name="i-lucide-circle-help" class="attach-hint" /></span>
+        </template>
+        <template #attachments-cell="{ row }"><LinkChipCell :counts="linkCountsFor(row.original.id)" /></template>
+        <template #actions-cell="{ row }">
+          <div class="business-action-row">
+            <UButton
+              size="xs"
+              :loading="submittingIds.has(row.original.id)"
+              :disabled="submittingIds.has(row.original.id)"
+              @click="handlePrimaryAction(row.original)"
+            >{{ primaryActionLabel(row.original) }}</UButton>
+            <UButton variant="link" size="xs" @click="goDetail(row.original.id)">详情</UButton>
             <RowActionMenu
-              :actions="rowActionsFor(row)"
+              :actions="rowActionsFor(row.original)"
               button-label="更多"
-              @action-click="(id: string) => handleRowActionClick(id, row)"
-              @ai-trigger="() => openAiForRow(row)"
+              @action-click="(id: string) => handleRowActionClick(id, row.original)"
+              @ai-trigger="() => openAiForRow(row.original)"
             />
-            </div>
-          </template>
-        </el-table-column>
-      </el-table>
+          </div>
+        </template>
+      </UTable>
 
       <TableFooter
         :stats="footerSummary?.stats ?? []"
@@ -2788,106 +2800,97 @@ function handleMergePurchase() {
       />
 
       <div class="pagination-wrapper">
-        <el-pagination v-model:current-page="pagination.page" v-model:page-size="pagination.size"
-          :page-sizes="[10, 20, 50]" :total="visibleOrderTotal"
-          layout="total, sizes, prev, pager, next, jumper"
-          @current-change="handlePageChange" @size-change="handleSizeChange" />
+        <span class="pager-total">共 {{ visibleOrderTotal }} 条</span>
+        <USelectMenu v-model="pagination.size" :items="PAGE_SIZE_ITEMS" value-key="value" :search-input="false" aria-label="每页条数" class="w-28" @update:model-value="handleSizeChange" />
+        <UPagination :page="pagination.page" :items-per-page="pagination.size" :total="visibleOrderTotal" show-edges :sibling-count="1" @update:page="handlePageChange" />
       </div>
-    </el-card>
+      </div>
+    </section>
 
     <!--
       Issue #740: 销售创建发货单对话框 (不扣库存, 等仓库 confirm).
       标题改为"创建发货单" + 提示文案让销售员明白此步只是创建任务单.
     -->
-    <el-dialog v-model="deliveryDialogVisible" title="创建发货单" width="540px">
-      <el-alert
-        type="info"
-        :closable="false"
-        show-icon
-        style="margin-bottom: 12px;"
-      >
-        <template #title>
-          <span style="font-size: 13px;">
-            销售创建发货单 (任务单, 不扣库存), 仓库收到后填写实际发货数量并扣库存.
-            若本次覆盖订单剩余全部数量, 会自动建立一张全量子发运单 (缺陷40).
-          </span>
-        </template>
-      </el-alert>
-      <el-form :model="deliveryForm" label-width="100px">
-        <el-form-item label="发货日期" required>
-          <el-date-picker v-model="deliveryForm.deliveryDate" type="date" value-format="YYYY-MM-DD" style="width: 100%" />
-        </el-form-item>
-        <el-form-item label="发货地址">
-          <el-input v-model="deliveryForm.deliveryAddress" placeholder="收货地址 (默认取销售订单)" />
-        </el-form-item>
-        <el-form-item label="配送方式">
-          <el-radio-group v-model="deliveryForm.deliveryMethod">
-            <el-radio value="LOGISTICS">物流配送</el-radio>
-            <el-radio value="SELF_DELIVERY">自送</el-radio>
-            <el-radio value="SELF_PICKUP">客户自提</el-radio>
-          </el-radio-group>
-        </el-form-item>
-        <el-form-item v-if="deliveryForm.deliveryMethod === 'LOGISTICS'" label="物流公司">
-          <el-input v-model="deliveryForm.logisticsCompany" placeholder="如：顺丰冷链 (可选, 仓库 confirm 时也可补填)" />
-        </el-form-item>
-        <el-form-item v-if="deliveryForm.deliveryMethod === 'LOGISTICS'" label="运单号">
-          <el-input v-model="deliveryForm.trackingNumber" placeholder="填写物流运单号 (留空时仍能建母单, 但不会自动建全量子发运单)" />
-        </el-form-item>
-        <el-form-item label="计划发货数量">
-          <div v-for="(item, idx) in deliveryForm.items" :key="idx" style="margin-bottom: 4px">
-            {{ Number(idx) + 1 }}. {{ item.productName || '产品' }} —
-            <!--
-              🔴 2026-08-13 真机 E2E 抓到的死结: 这里原本是 :min="1"。
-              el-input-number 会把模型值【向上钳到 min】—— 0.5kg 的订单行一打开
-              就被改写成 1, 手动再填 0.5 也会被弹回 1。而后端只接受 ≤ 剩余可安排量,
-              于是 0.5 的行【永远发不出货】: 界面把唯一合法的值变成填不进去的值。
-              下单量按 kg 计小数是这门生意的常态, 成品行同样中招 (物料开卖后更高频)。
-              口径与仓库端「确认发货」的实际数量输入保持一致 (min 0 / max 计划量 / 小数)。
-            -->
-            <el-input-number
-              v-model="item.deliveredQuantity"
-              :min="0"
-              :max="item.maxQuantity"
-              :precision="3"
-              :step="0.1"
-              size="small"
-              style="width: 140px"
-            /> {{ displayUnit(item.unit) }}
-          </div>
-        </el-form-item>
-        <el-form-item label="备注">
-          <el-input v-model="deliveryForm.remark" type="textarea" :rows="2" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="deliveryDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="submitQuickDelivery">创建发货单</el-button>
+    <UModal v-model:open="deliveryDialogVisible" title="创建发货单" description="销售创建发货任务单，不扣库存" :ui="{ content: 'max-w-[560px]', description: 'sr-only', footer: 'justify-end' }">
+      <template #body>
+        <div class="form-stack">
+          <UAlert
+            color="info"
+            variant="subtle"
+            icon="i-lucide-info"
+            title="销售创建发货单 (任务单, 不扣库存), 仓库收到后填写实际发货数量并扣库存. 若本次覆盖订单剩余全部数量, 会自动建立一张全量子发运单 (缺陷40)."
+          />
+          <UFormField label="发货日期" required>
+            <CsDateField v-model="deliveryForm.deliveryDate" />
+          </UFormField>
+          <UFormField label="发货地址">
+            <UInput v-model="deliveryForm.deliveryAddress" placeholder="收货地址 (默认取销售订单)" class="w-full" />
+          </UFormField>
+          <UFormField label="配送方式">
+            <URadioGroup v-model="deliveryForm.deliveryMethod" orientation="horizontal" :items="DELIVERY_METHOD_ITEMS" />
+          </UFormField>
+          <UFormField v-if="deliveryForm.deliveryMethod === 'LOGISTICS'" label="物流公司">
+            <UInput v-model="deliveryForm.logisticsCompany" placeholder="如：顺丰冷链 (可选, 仓库 confirm 时也可补填)" class="w-full" />
+          </UFormField>
+          <UFormField v-if="deliveryForm.deliveryMethod === 'LOGISTICS'" label="运单号">
+            <UInput v-model="deliveryForm.trackingNumber" placeholder="填写物流运单号 (留空时仍能建母单, 但不会自动建全量子发运单)" class="w-full" />
+          </UFormField>
+          <UFormField label="计划发货数量">
+            <div v-for="(item, idx) in deliveryForm.items" :key="idx" class="delivery-qty-row">
+              {{ Number(idx) + 1 }}. {{ item.productName || '产品' }} —
+              <!--
+                🔴 2026-08-13 真机 E2E 抓到的死结: 这里原本是 :min="1"。
+                数字输入框会把模型值【向上钳到 min】—— 0.5kg 的订单行一打开
+                就被改写成 1, 手动再填 0.5 也会被弹回 1。而后端只接受 ≤ 剩余可安排量,
+                于是 0.5 的行【永远发不出货】: 界面把唯一合法的值变成填不进去的值。
+                下单量按 kg 计小数是这门生意的常态, 成品行同样中招 (物料开卖后更高频)。
+                口径与仓库端「确认发货」的实际数量输入保持一致 (min 0 / max 计划量 / 小数)。
+              -->
+              <UInputNumber
+                v-model="item.deliveredQuantity"
+                :min="0"
+                :max="item.maxQuantity"
+                :step="0.1"
+                :format-options="{ minimumFractionDigits: 0, maximumFractionDigits: 3 }"
+                :increment="false"
+                :decrement="false"
+                size="sm"
+                class="w-36" :step-snapping="false" /> {{ displayUnit(item.unit) }}
+            </div>
+          </UFormField>
+          <UFormField label="备注">
+            <UTextarea v-model="deliveryForm.remark" :rows="2" class="w-full" />
+          </UFormField>
+        </div>
       </template>
-    </el-dialog>
+      <template #footer>
+        <UButton color="neutral" variant="outline" @click="deliveryDialogVisible = false">取消</UButton>
+        <UButton @click="submitQuickDelivery">创建发货单</UButton>
+      </template>
+    </UModal>
 
     <!-- 收款对话框 -->
-    <el-dialog v-model="paymentDialogVisible" title="快速收款" width="400px">
-      <el-form :model="paymentForm" label-width="80px">
-        <el-form-item label="收款金额">
-          <el-input-number v-model="paymentForm.amount" :min="0" :precision="2" style="width: 100%" />
-        </el-form-item>
-        <el-form-item label="收款方式">
-          <el-select v-model="paymentForm.paymentMethod" style="width: 100%">
-            <el-option label="银行转账" value="BANK_TRANSFER" />
-            <el-option label="现金" value="CASH" />
-            <el-option label="支票" value="CHECK" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="备注">
-          <el-input v-model="paymentForm.notes" type="textarea" :rows="2" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="paymentDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="submitQuickPayment">确认收款</el-button>
+    <UModal v-model:open="paymentDialogVisible" title="快速收款" description="登记一笔收款" :ui="{ content: 'max-w-[440px]', description: 'sr-only', footer: 'justify-end' }">
+      <template #body>
+        <div class="form-stack">
+          <UFormField label="收款金额">
+            <UInputNumber v-model="paymentForm.amount" :min="0" :format-options="{ minimumFractionDigits: 2, maximumFractionDigits: 2 }" :increment="false" :decrement="false" class="w-full" :step-snapping="false" />
+          </UFormField>
+          <UFormField label="收款方式">
+            <USelectMenu v-model="paymentForm.paymentMethod" :items="PAYMENT_METHOD_ITEMS" value-key="value" :search-input="false" class="w-full" />
+          </UFormField>
+          <UFormField label="备注">
+            <UTextarea v-model="paymentForm.notes" :rows="2" class="w-full" />
+          </UFormField>
+        </div>
       </template>
-    </el-dialog>
+      <template #footer>
+        <UButton color="neutral" variant="outline" @click="paymentDialogVisible = false">取消</UButton>
+        <UButton @click="submitQuickPayment">确认收款</UButton>
+      </template>
+    </UModal>
 
+    <!-- 新建/编辑订单: 高密度行内编辑明细 + Element 专有子组件 (CanvasDynamicFields / OrderDeliveryDatePicker / el-upload), 整弹层保留 Element, 不与 Nuxt UI 混用 -->
     <el-dialog v-model="dialogVisible" :title="editingOrderId ? `编辑${label('salesOrder')}` : `新建${label('salesOrder')}`" width="80%" destroy-on-close>
       <el-alert
         v-if="createOptionsLoading && !editingOrderId"
@@ -3257,6 +3260,7 @@ function handleMergePurchase() {
     <AiEntryDrawer
       v-model="aiEntryVisible"
       :config="SALES_ORDER_CONFIG"
+      :initial-input="aiEntryInitialInput"
       @fill-form="handleAiFill"
     />
 
@@ -3305,103 +3309,91 @@ function handleMergePurchase() {
     />
 
     <!-- E-FP-2 取消原因采集 dialog (fool-proof Rule 3): 标准原因 dropdown + "其他"展 textarea -->
-    <el-dialog
-      v-model="cancelDialogVisible"
+    <UModal
+      v-model:open="cancelDialogVisible"
       :title="pendingCancelIds.length > 1 ? `批量取消 ${pendingCancelIds.length} 个销售订单` : '取消销售订单'"
-      width="460px"
-      destroy-on-close
+      description="选择取消原因后确认取消"
+      :ui="{ content: 'max-w-[480px]', description: 'sr-only', footer: 'justify-end' }"
     >
-      <el-form label-width="90px">
-        <el-form-item label="取消原因" required>
-          <el-select v-model="cancelReasonCode" placeholder="请选择取消原因" style="width:100%">
-            <el-option v-for="r in CANCEL_REASONS" :key="r" :label="r" :value="r" />
-          </el-select>
-        </el-form-item>
-        <el-form-item v-if="cancelReasonCode === '其他'" label="补充说明" required>
-          <el-input
-            v-model="cancelReasonOther"
-            type="textarea"
-            :rows="2"
-            placeholder="请填写具体取消原因"
-            maxlength="200"
-            show-word-limit
+      <template #body>
+        <div class="form-stack">
+          <UAlert
+            v-if="pendingCancelHasApproved"
+            color="warning"
+            variant="subtle"
+            icon="i-lucide-triangle-alert"
+            title="订单已经财务批准：取消后会一并取消它自动生成的生产计划和未开工的排程；已开工、已发货或已有收款的订单不能这样取消。本厂需在「业务阈值」开启 sales.order.cancel_after_approval，且你有对应权限。"
           />
-        </el-form-item>
-      </el-form>
+          <UFormField label="取消原因" required>
+            <USelectMenu v-model="cancelReasonCode" :items="CANCEL_REASONS" :search-input="false" placeholder="请选择取消原因" class="w-full" />
+          </UFormField>
+          <UFormField v-if="cancelReasonCode === '其他'" label="补充说明" required>
+            <UTextarea v-model="cancelReasonOther" :rows="2" placeholder="请填写具体取消原因" :maxlength="200" class="w-full" />
+          </UFormField>
+        </div>
+      </template>
       <template #footer>
-        <el-button @click="cancelDialogVisible = false">返回</el-button>
-        <el-button
-          type="danger"
+        <UButton color="neutral" variant="outline" @click="cancelDialogVisible = false">返回</UButton>
+        <UButton
+          color="error"
           :loading="cancelSubmitting"
           :disabled="!cancelReasonCode || (cancelReasonCode === '其他' && !cancelReasonOther.trim())"
           @click="submitCancel"
-        >确认取消</el-button>
+        >确认取消</UButton>
       </template>
-    </el-dialog>
+    </UModal>
   </div>
   </CanvasAwareWrapper>
 </template>
 
 <style lang="scss" scoped>
 .page-wrapper { height: 100%; width: 100%; display: flex; flex-direction: column; }
+.gold-pos-summary { margin: 12px; border-top: 3px solid var(--cs-success); }
+.gold-range { margin-left: auto; color: var(--cs-muted); font-size: var(--cs-font-small); font-weight: 400; }
+.gold-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--cs-space-4); margin: 0; }
+.gold-stats dt { font-size: var(--cs-font-small); color: var(--cs-muted); }
+.gold-stats dd { margin: 4px 0 0; font-size: 20px; font-weight: 600; color: var(--cs-text); }
+.restaurant-alert { margin: 0 12px 12px; }
 .product-summary-trigger {
-  border: 0;
-  padding: 0;
-  background: transparent;
-  color: var(--el-color-primary);
-  cursor: pointer;
+  display: inline-block;
+  color: var(--cs-primary);
+  cursor: default;
   text-align: left;
   max-width: 180px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  vertical-align: bottom;
 }
-.product-summary-trigger:focus-visible { outline: 2px solid var(--el-color-primary); outline-offset: 2px; }
-.product-summary-popover { line-height: 1.8; }
-.page-card { flex: 1; display: flex; flex-direction: column;
-  :deep(.el-card__header) { padding: 16px 20px; border-bottom: 1px solid #ebeef5; }
-  :deep(.el-card__body) { flex: 1; display: flex; flex-direction: column; padding: 20px; }
-}
-.card-header { display: flex; justify-content: space-between; align-items: center;
-  .header-left { display: flex; align-items: baseline; gap: 12px;
-    .page-title { font-size: 16px; font-weight: 600; color: #303133; }
-    .data-count { font-size: 13px; color: #909399; }
-  }
-}
-.lifecycle-filter-header {
-  display: flex;
-  align-items: flex-start;
-  gap: 16px;
-  border-bottom: 1px solid var(--el-border-color-lighter);
-  margin: -4px 0 12px;
-}
-.sales-lifecycle-tabs {
-  flex: 1;
-  min-width: 0;
-  :deep(.el-tabs__header) { margin: 0; }
-  :deep(.el-tabs__nav-wrap::after) { display: none; }
-  :deep(.el-tabs__item) { min-height: 48px; padding: 0 18px; }
-}
-.tab-count {
-  display: inline-flex;
-  min-width: 18px;
-  justify-content: center;
-  margin-left: 5px;
-  color: var(--el-text-color-placeholder);
-  font-size: 12px;
-}
-:deep(.el-tabs__item.is-active) .tab-count { color: var(--el-color-primary); }
+.product-summary-trigger:focus-visible { outline: 2px solid var(--cs-primary); outline-offset: 2px; }
+.cell-ellipsis { display: inline-block; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+.page-card { flex: 1; display: flex; flex-direction: column; }
+.page-card .cs-card-body { flex: 1; display: flex; flex-direction: column; }
+.page-title { margin: 0; font-size: var(--cs-type-title); font-weight: 650; color: var(--cs-text); }
+.data-count { font-size: var(--cs-font-small); color: var(--cs-muted); font-weight: 400; }
+.head-spacer { flex: 1; }
+.sales-lifecycle-select { width: 208px; }
+.lifecycle-filter-header { display: flex; align-items: center; gap: 16px; margin-bottom: 12px; }
 .count-scope-note {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  margin-top: 17px;
-  color: var(--el-text-color-secondary);
+  color: var(--cs-muted);
   font-size: 12px;
   white-space: nowrap;
   cursor: help;
 }
 .search-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
+.view-switch { margin-left: auto; }
+.status-filter-badge { gap: 4px; }
+.form-stack { display: flex; flex-direction: column; gap: var(--cs-space-4); }
+.delivery-qty-row { margin-bottom: 6px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.sort-th { border: 0; background: transparent; padding: 0; display: inline-flex; align-items: center; gap: 4px; font: inherit; color: inherit; cursor: pointer; }
+.sort-icon { width: 12px; height: 12px; color: var(--cs-muted); opacity: 0.6; }
+.sort-icon.active { color: var(--cs-primary); opacity: 1; }
+.attach-th { display: inline-flex; align-items: center; gap: 4px; cursor: help; }
+.attach-hint { width: 12px; height: 12px; color: var(--cs-muted); }
+.price-masked { color: var(--cs-muted); }
 .order-trace-panel {
   position: sticky;
   left: 0;
@@ -3411,27 +3403,23 @@ function handleMergePurchase() {
   box-sizing: border-box;
   width: min(1180px, calc(100vw - 280px));
   padding: 14px 18px 16px 62px;
-  background: var(--el-fill-color-extra-light);
-  border-top: 1px solid var(--el-border-color-lighter);
-  border-bottom: 1px solid var(--el-border-color-lighter);
+  background: var(--cs-surface-subtle);
 }
 .trace-section {
   min-width: 0;
   padding: 13px 14px;
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 8px;
-  background: var(--el-bg-color);
+  border: 1px solid var(--cs-border);
+  border-radius: var(--cs-radius);
+  background: var(--cs-surface);
 }
-.trace-section-title { margin-bottom: 10px; color: var(--el-text-color-primary); font-weight: 600; }
-.trace-item-line { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; color: var(--el-text-color-regular); }
+.trace-section-title { margin-bottom: 10px; color: var(--cs-text); font-weight: 600; }
+.trace-item-line { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; color: var(--cs-text); }
 .trace-item-line span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .trace-item-line strong { flex-shrink: 0; font-weight: 500; }
-.trace-more, .trace-hint { margin-top: 8px; color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.5; }
-.trace-metric { margin-top: 10px; color: var(--el-text-color-regular); line-height: 1.5; }
-.trace-items :deep(.el-empty) { padding: 2px 0 0; }
-.business-action-row { justify-content: center; flex-wrap: nowrap; }
+.trace-more, .trace-hint { margin-top: 8px; color: var(--cs-muted); font-size: 12px; line-height: 1.5; }
+.trace-metric { margin-top: 10px; color: var(--cs-text); line-height: 1.5; }
+.business-action-row { display: flex; align-items: center; justify-content: center; gap: 4px; flex-wrap: nowrap; }
 @media (max-width: 1366px) {
-  .sales-lifecycle-tabs :deep(.el-tabs__item) { padding: 0 11px; }
   .order-trace-panel { grid-template-columns: 1fr 1fr; padding-left: 54px; }
   .trace-items { grid-column: 1 / -1; }
 }
@@ -3443,10 +3431,12 @@ function handleMergePurchase() {
 .supplied-unit { margin-left: 6px; color: var(--el-text-color-secondary); }
 /* T131 Part 3 — 多选批量操作栏 */
 .bulk-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-  margin-bottom: 12px; padding: 8px 12px; background: #ecf5ff; border: 1px solid #d9ecff; border-radius: 4px;
-  .bulk-bar-count { font-size: 13px; color: #606266; margin-right: 4px; strong { color: #409eff; } }
+  margin-bottom: 12px; padding: 8px 12px; background: var(--cs-primary-soft); border: 1px solid var(--cs-border); border-radius: var(--cs-radius-sm);
+  .bulk-bar-count { font-size: 13px; color: var(--cs-text); margin-right: 4px; strong { color: var(--cs-primary); } }
 }
-.pagination-wrapper { display: flex; justify-content: flex-end; padding-top: 16px; border-top: 1px solid #ebeef5; margin-top: 16px; }
+.pagination-wrapper { display: flex; justify-content: flex-end; align-items: center; gap: 12px; padding-top: 16px; border-top: 1px solid var(--cs-border); margin-top: 16px; }
+.pager-total { color: var(--cs-muted); font-size: var(--cs-font-small); }
+:deep(.cs-table td:has(.order-trace-panel)) { padding: 0; height: auto; }
 .order-items-scroll {
   width: 100%;
   overflow-x: auto;

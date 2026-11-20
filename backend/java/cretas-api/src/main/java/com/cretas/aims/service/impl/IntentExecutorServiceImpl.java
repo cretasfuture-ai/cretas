@@ -9,10 +9,14 @@ import com.cretas.aims.service.IntentExecutorService;
 import com.cretas.aims.service.execution.IntentExecutionOrchestrator;
 import com.cretas.aims.service.execution.MultiIntentExecutionService;
 import com.cretas.aims.service.execution.SseStreamingService;
+import com.cretas.aims.service.execution.StreamTurnCollector;
 import com.cretas.aims.service.execution.DemoConversationScope;
 import com.cretas.aims.security.AuthenticatedActor;
 import com.cretas.aims.security.AuthenticatedActorType;
 import com.cretas.aims.service.agentops.FactoryAgentTraceRecorder;
+import com.cretas.aims.entity.intent.IntentFlywheelTurn;
+import com.cretas.aims.service.intent.flywheel.IntentFlywheelRecorder;
+import com.cretas.aims.service.intent.flywheel.IntentFlywheelTurnContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -49,14 +53,54 @@ public class IntentExecutorServiceImpl implements IntentExecutorService {
     @Autowired(required = false)
     private FactoryAgentTraceRecorder factoryTraceRecorder;
 
+    /**
+     * /execute 走流式管线的适配层 (PR-2b; PR-3 起识别 / 执行只有这一条管线, 回退杆已删)。
+     * null 只出现在部分上下文 / 单测直接构造: 那时只有带意图码的显式路径可用 (见 {@link #runTurn})。
+     */
+    @Autowired(required = false)
+    private StreamTurnCollector streamTurnCollector;
+
+    /** 意图飞轮 (INTENT-DISTILL-20261111): 每轮一条记录; null = 不记 (部分上下文 / 单测直接构造)。 */
+    @Autowired(required = false)
+    private IntentFlywheelRecorder flywheelRecorder;
+
     @Override
     public IntentExecuteResponse execute(String factoryId, IntentExecuteRequest request,
                                          Long userId, String userRole) {
         long startedNanos = System.nanoTime();
-        IntentExecuteResponse response = orchestrator.execute(factoryId, request, userId, userRole);
+        IntentExecuteResponse response;
+        try (IntentFlywheelTurnContext.Scope flywheel = IntentFlywheelTurnContext.open()) {
+            response = runTurn(factoryId, request, userId, userRole);
+            // 飞轮 entry 仍记 NORMAL (两条路都是普通入口)
+            recordFlywheel(factoryId, userId, request, response, flywheel.turn(), startedNanos);
+        }
         populateConversationRound(factoryId, userId, request, response);
         recordFactoryTrace(factoryId, userId, userRole, response, startedNanos);
         return response;
+    }
+
+    /**
+     * 一轮 = 流式管线 (同线程收集最后一个 result, 见 {@link StreamTurnCollector});
+     * 只有带显式意图码的请求走编排器的显式意图路径 (预览 / 确认共用的写确认收敛点)。
+     */
+    private IntentExecuteResponse runTurn(String factoryId, IntentExecuteRequest request, Long userId, String userRole) {
+        StreamTurnCollector.Route route = streamTurnCollector == null
+                ? StreamTurnCollector.Route.EXPLICIT_INTENT
+                : streamTurnCollector.route(request);
+        log.debug("[execute] route={} factoryId={}", route, factoryId);
+        return route.viaStream()
+                ? streamTurnCollector.collect(factoryId, request, userId, userRole)
+                : orchestrator.execute(factoryId, request, userId, userRole);
+    }
+
+    private void recordFlywheel(String factoryId, Long userId, IntentExecuteRequest request,
+                                IntentExecuteResponse response, IntentFlywheelTurnContext.Turn turn,
+                                long startedNanos) {
+        if (flywheelRecorder == null || (request != null && Boolean.TRUE.equals(request.getPreviewOnly()))) {
+            return;
+        }
+        flywheelRecorder.recordTurn(IntentFlywheelTurn.Entry.NORMAL, factoryId, userId, request, response, turn,
+                (System.nanoTime() - startedNanos) / 1_000_000L);
     }
 
     /** S6-07: every real factory run leaves a trace; failures never change the answer. */
@@ -73,7 +117,8 @@ public class IntentExecutorServiceImpl implements IntentExecutorService {
     public IntentExecuteResponse preview(String factoryId, IntentExecuteRequest request,
                                          Long userId, String userRole) {
         request.setPreviewOnly(true);
-        IntentExecuteResponse response = orchestrator.execute(factoryId, request, userId, userRole);
+        // 带意图码 (按钮 / 数字班组): 编排器显式意图路径的预览; 不带: 流式管线识别后按 previewOnly 只预览 (PR-3)
+        IntentExecuteResponse response = runTurn(factoryId, request, userId, userRole);
         populateConversationRound(factoryId, userId, request, response);
         return response;
     }
@@ -137,6 +182,11 @@ public class IntentExecutorServiceImpl implements IntentExecutorService {
                                           Long userId, String userRole) {
         long startedNanos = System.nanoTime();
         IntentExecuteResponse response = orchestrator.confirm(factoryId, confirmationProof, userId, userRole);
+        // 只在确认后真的办成了才回填 CONFIRMED (失败 / 过期 / 被拦的不算)
+        if (flywheelRecorder != null && confirmationProof != null && response != null
+                && IntentFlywheelRecorder.CONFIRMED_STATUSES.contains(response.getStatus())) {
+            flywheelRecorder.recordConfirm(factoryId, confirmationProof.commandDigest());
+        }
         recordFactoryTrace(factoryId, userId, userRole, response, startedNanos);
         return response;
     }
@@ -150,6 +200,11 @@ public class IntentExecutorServiceImpl implements IntentExecutorService {
     @Override
     public IntentExecuteResponse executeMultiIntent(String factoryId, IntentExecuteRequest request,
                                                      Long userId, String userRole) {
-        return multiIntentExecutionService.executeMultiIntent(factoryId, request, userId, userRole);
+        long startedNanos = System.nanoTime();
+        try (IntentFlywheelTurnContext.Scope flywheel = IntentFlywheelTurnContext.open()) {
+            IntentExecuteResponse response = multiIntentExecutionService.executeMultiIntent(factoryId, request, userId, userRole);
+            recordFlywheel(factoryId, userId, request, response, flywheel.turn(), startedNanos);
+            return response;
+        }
     }
 }

@@ -15,6 +15,7 @@ vi.mock('@/api/request', () => ({
   post: (...args: unknown[]) => state.post(...args),
 }));
 import Page from '../index.vue';
+import { nuxtUiStubs } from '@/__tests__/helpers/nuxtUiStubs';
 
 const ok = (data: unknown) => ({ success: true, data });
 const openRow = {
@@ -35,7 +36,7 @@ beforeEach(() => {
 
 describe('CCP 监控记录页', () => {
   it('列出未处理偏离; 纠偏措施为空不能提交; 点规定措施后提交 handle', async () => {
-    const wrapper = mount(Page, { global: { plugins: [ElementPlus] }, attachTo: document.body });
+    const wrapper = mount(Page, { global: { plugins: [ElementPlus], stubs: nuxtUiStubs }, attachTo: document.body });
     await flushPromises();
     expect(state.get).toHaveBeenCalledWith('/F-CCP/ccp/deviations/open');
     expect(wrapper.text()).toContain('CLK-W-9');
@@ -55,7 +56,7 @@ describe('CCP 监控记录页', () => {
 
   it('路由带 batchNumber → 切到按批次页签并查询', async () => {
     state.query = { batchNumber: 'CLK-B-1' };
-    const wrapper = mount(Page, { global: { plugins: [ElementPlus] }, attachTo: document.body });
+    const wrapper = mount(Page, { global: { plugins: [ElementPlus], stubs: nuxtUiStubs }, attachTo: document.body });
     await flushPromises();
     expect(state.get).toHaveBeenCalledWith('/F-CCP/ccp/records', { params: { batchNumber: 'CLK-B-1' } });
     wrapper.unmount();

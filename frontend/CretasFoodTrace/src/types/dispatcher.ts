@@ -131,6 +131,8 @@ export interface ProductionPlanDTO {
   requiresApproval?: boolean;
   approvalStatus?: 'PENDING' | 'APPROVED' | 'REJECTED';
   forceInsertReason?: string;
+  /** 走审批画布的待审批强制插单对应的 OA 实例 ID; 非空 = 只能走 OA 动作入口批准/驳回 */
+  approvalWorkflowInstanceId?: string | null;
   forceInsertBy?: number;
   forceInsertedAt?: string;
   approverId?: number;
@@ -206,6 +208,9 @@ export interface LineSchedule {
 
   // 工人分配
   workerAssignments?: WorkerAssignment[];
+
+  /** 乐观锁版本号: 改排程时原样回传, 别人先改过就返回 409。 */
+  version?: number;
 
   createdAt: string;
   updatedAt: string;

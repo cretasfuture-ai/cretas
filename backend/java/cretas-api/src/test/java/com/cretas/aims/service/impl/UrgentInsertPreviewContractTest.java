@@ -97,7 +97,7 @@ class UrgentInsertPreviewContractTest {
                 .productTypeId(PRODUCT).previewQuantity(new BigDecimal("5.00")).quantityUnit("PIECE")
                 .plannedUnit("件").productionLineId("LINE-1").windowStart(slot.getStartTime())
                 .windowEnd(slot.getEndTime()).slotUpdatedAt(slot.getUpdatedAt())
-                .impactLevel("none").requiresApproval(false).affectedPlanCount(0).candidateNumber(1).build();
+                .impactLevel("none").requiresApproval(false).affectedPlanCount(0).candidateNumber(1).materialFingerprint(UrgentInsertTestSupport.MATERIAL_FP).impactFingerprint(UrgentInsertServiceImpl.impactFingerprint(null)).scheduleFingerprint(UrgentInsertTestSupport.SCHEDULE_FP).build();
         currentPreview.setCreatedAt(LocalDateTime.now());
         when(previews.findByIdAndFactoryId("PV1", FACTORY)).thenReturn(Optional.of(currentPreview));
 
@@ -159,7 +159,7 @@ class UrgentInsertPreviewContractTest {
     void kilogramUnitsRemainKgWithoutConversion(String productUnit) {
         product(productUnit);
 
-        Map<String, Object> result = service.createInsertPreview(FACTORY, SLOT, request("KG"));
+        Map<String, Object> result = service.createInsertPreview(FACTORY, 1L, SLOT, request("KG"));
 
         assertThat(result.get("previewId")).isNotNull();
         assertThat(result).containsEntry("quantityUnit", "KG")
@@ -171,7 +171,7 @@ class UrgentInsertPreviewContractTest {
     void mismatchedPieceAndKgCannotIssuePreview() {
         product("件");
 
-        Map<String, Object> result = service.createInsertPreview(FACTORY, SLOT, request("KG"));
+        Map<String, Object> result = service.createInsertPreview(FACTORY, 1L, SLOT, request("KG"));
 
         assertThat(result).containsEntry("previewId", null)
                 .containsEntry("feasibilityStatus", "UNVERIFIED");
@@ -182,7 +182,7 @@ class UrgentInsertPreviewContractTest {
     void mismatchedKgAndPieceCannotIssuePreview() {
         product("kg");
 
-        Map<String, Object> result = service.createInsertPreview(FACTORY, SLOT, request("PIECE"));
+        Map<String, Object> result = service.createInsertPreview(FACTORY, 1L, SLOT, request("PIECE"));
 
         assertThat(result).containsEntry("previewId", null)
                 .containsEntry("feasibilityStatus", "UNVERIFIED");
@@ -193,7 +193,7 @@ class UrgentInsertPreviewContractTest {
     void batchUsesBatchWithoutConversion() {
         product("批");
 
-        Map<String, Object> result = service.createInsertPreview(FACTORY, SLOT, request("BATCH"));
+        Map<String, Object> result = service.createInsertPreview(FACTORY, 1L, SLOT, request("BATCH"));
 
         assertThat(result.get("previewId")).isNotNull();
         assertThat(result).containsEntry("quantityUnit", "BATCH")
@@ -211,7 +211,7 @@ class UrgentInsertPreviewContractTest {
         when(capacityConfigs.findEffectiveForProduct(eq(FACTORY), eq(PRODUCT), any()))
                 .thenReturn(List.of(generic));
 
-        Map<String, Object> result = service.createInsertPreview(FACTORY, SLOT, request("PIECE"));
+        Map<String, Object> result = service.createInsertPreview(FACTORY, 1L, SLOT, request("PIECE"));
 
         assertThat(result).containsEntry("previewId", null)
                 .containsEntry("feasibilityStatus", "UNVERIFIED");
@@ -228,7 +228,7 @@ class UrgentInsertPreviewContractTest {
         when(capacityConfigs.findEffectiveForProduct(eq(FACTORY), eq(PRODUCT), any()))
                 .thenReturn(List.of(specific));
 
-        Map<String, Object> result = service.createInsertPreview(FACTORY, SLOT, request("PIECE"));
+        Map<String, Object> result = service.createInsertPreview(FACTORY, 1L, SLOT, request("PIECE"));
 
         assertThat(result.get("previewId")).isNotNull();
         assertThat(result).containsEntry("quantityUnit", "PIECE")
@@ -313,7 +313,7 @@ class UrgentInsertPreviewContractTest {
         when(previews.findByFactoryIdAndCreatedAtAfterOrderByCreatedAtDesc(eq(FACTORY), any()))
                 .thenReturn(List.of(currentPreview));
 
-        Map<String, Object> result = service.createInsertPreview(FACTORY, SLOT, request("PIECE"));
+        Map<String, Object> result = service.createInsertPreview(FACTORY, 1L, SLOT, request("PIECE"));
 
         assertThat(result).containsEntry("previewId", "PV1")
                 .containsEntry("plannedUnit", "件");
@@ -326,7 +326,7 @@ class UrgentInsertPreviewContractTest {
         when(impact.calculateChainImpact(anyString(), any(), any(), any(), any()))
                 .thenReturn(ChainImpactResult.builder().impactLevel("none").build());
 
-        assertThatThrownBy(() -> service.createInsertPreview(FACTORY, SLOT, request("PIECE")))
+        assertThatThrownBy(() -> service.createInsertPreview(FACTORY, 1L, SLOT, request("PIECE")))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("影响分析未完成");
         verify(previews, never()).save(any());
@@ -354,6 +354,104 @@ class UrgentInsertPreviewContractTest {
         verify(slots, never()).claimAvailableSlot(anyString(), anyString(), any());
     }
 
+    private ConfirmUrgentInsertRequest recheckFailureRequest(ResourceCheckResult equipment, ResourceCheckResult capacity) {
+        product("件");
+        LineCapacityEquipmentCheck lineChecks = mock(LineCapacityEquipmentCheck.class);
+        when(lineChecks.checkEquipment(anyString(), anyString())).thenReturn(equipment);
+        when(lineChecks.checkCapacity(anyString(), anyString(), any(), anyString(), anyString(), any(), any()))
+                .thenReturn(capacity);
+        service = UrgentInsertTestSupport.construct(UrgentInsertServiceImpl.class, Map.of(
+                InsertSlotRepository.class, slots, InsertSlotPreviewRepository.class, previews,
+                ProductTypeRepository.class, products, ProductionLineCapacityConfigRepository.class, capacityConfigs,
+                LineCapacityEquipmentCheck.class, lineChecks, SchedulingResourceWriteLock.class, factoryLock,
+                ObjectMapper.class, new ObjectMapper()));
+        return confirmRequest();
+    }
+
+    private Map<String, Object> previewWithResources(ResourceCheckResult equipment, ResourceCheckResult capacity) {
+        product("kg");
+        LineCapacityEquipmentCheck lineChecks = mock(LineCapacityEquipmentCheck.class);
+        when(lineChecks.checkEquipment(anyString(), anyString())).thenReturn(equipment);
+        when(lineChecks.checkCapacity(anyString(), anyString(), any(), anyString(), anyString(), any(), any()))
+                .thenReturn(capacity);
+        service = UrgentInsertTestSupport.construct(UrgentInsertServiceImpl.class, Map.of(
+                InsertSlotRepository.class, slots, InsertSlotPreviewRepository.class, previews,
+                ProductTypeRepository.class, products, ProductionLineCapacityConfigRepository.class, capacityConfigs,
+                ImpactAnalysisService.class, impact, LineCapacityEquipmentCheck.class, lineChecks,
+                SchedulingResourceWriteLock.class, factoryLock, ObjectMapper.class, new ObjectMapper()));
+        return service.createInsertPreview(FACTORY, 1L, SLOT, request("KG"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void noPreviewIsIssuedWhenConfirmWouldRejectTheEquipmentOrCapacityRecheck() {
+        ResourceCheckResult ok = ResourceCheckResult.available("X", BigDecimal.TEN, BigDecimal.ONE);
+
+        // 产品没配设备 (未验证): 预览不给 previewId, 原因写明; 之前预览放行、确认 409「复核未通过」
+        Map<String, Object> noDevice = previewWithResources(ResourceCheckResult.unverified("EQUIPMENT",
+                "设备未验证: 该产品没有配置所需设备, 请在工厂配置或对话建厂里补上", BigDecimal.ONE), ok);
+        assertThat(noDevice).containsEntry("previewId", null).containsEntry("feasibilityStatus", "UNVERIFIED");
+        assertThat((List<String>) noDevice.get("unverifiedReasons")).anyMatch(r -> r.contains("没有配置所需设备"));
+        assertThat((String) noDevice.get("infeasibleReason")).contains("没有配置所需设备");
+
+        // 设备检修 (不可用): 同样不给
+        Map<String, Object> down = previewWithResources(ResourceCheckResult.unavailable("EQUIPMENT",
+                "设备不可用: 绞肉机 (E-01) maintenance", BigDecimal.ZERO, BigDecimal.ONE), ok);
+        assertThat(down).containsEntry("previewId", null).containsEntry("feasibilityStatus", "INFEASIBLE");
+
+        // 产能没配 / 不足: 同样不给
+        Map<String, Object> noCapacity = previewWithResources(ok, ResourceCheckResult.unverified("CAPACITY",
+                "产能未验证: 指定产线配置该产品按千克计的每小时产能", BigDecimal.ONE));
+        assertThat(noCapacity).containsEntry("previewId", null).containsEntry("feasibilityStatus", "UNVERIFIED");
+        Map<String, Object> tooSmall = previewWithResources(ok, ResourceCheckResult.unavailable("CAPACITY",
+                "产能不足: 需要 5 千克", BigDecimal.ONE, BigDecimal.TEN));
+        assertThat(tooSmall).containsEntry("previewId", null).containsEntry("feasibilityStatus", "INFEASIBLE");
+
+        verify(previews, never()).save(any());
+    }
+
+    @Test
+    void whenEquipmentAndCapacityAreVerifiedAndEnoughThePreviewIsStillIssued() {
+        ResourceCheckResult ok = ResourceCheckResult.available("X", BigDecimal.TEN, BigDecimal.ONE);
+
+        Map<String, Object> out = previewWithResources(ok, ok);
+
+        assertThat(out.get("previewId")).as("资源都过时照常签发 (阴性对照)").isNotNull();
+        assertThat(out).containsEntry("quantityUnit", "KG");
+    }
+
+    @Test
+    void recheckFailureSaysWhichResourceFailedAndWhy() {
+        ResourceCheckResult available = ResourceCheckResult.available("X", BigDecimal.TEN, BigDecimal.ONE);
+
+        // 只有设备不可用: 文案里是设备的原因, 不提产能
+        ConfirmUrgentInsertRequest down = recheckFailureRequest(ResourceCheckResult.unavailable("EQUIPMENT",
+                "设备不可用: 绞肉机 (E-01) maintenance", BigDecimal.ZERO, BigDecimal.ONE), available);
+        assertThatThrownBy(() -> service.confirmInsert(FACTORY, 1L, down))
+                .isInstanceOfSatisfying(BusinessException.class, e -> {
+                    assertThat(e.getErrorCode()).isEqualTo("INSERT_RESOURCE_RECHECK_FAILED");
+                    assertThat(e.getMessage()).contains("复核未通过").contains("设备不可用: 绞肉机 (E-01) maintenance")
+                            .doesNotContain("产能未验证");
+                });
+
+        // 只有产能没配 (或配置还没生效): 文案里是产能的原因, 不提设备
+        ConfirmUrgentInsertRequest noCapacity = recheckFailureRequest(available, ResourceCheckResult.unverified("CAPACITY",
+                "产能未验证: 指定产线配置该产品按千克计的每小时产能 (已配置的产能要到 2026-11-04 08:00 才生效, 晚于本时段开始 2026-11-03 08:00)",
+                BigDecimal.ONE));
+        assertThatThrownBy(() -> service.confirmInsert(FACTORY, 1L, noCapacity))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThat(e.getMessage()).contains("才生效").doesNotContain("设备未验证").doesNotContain("设备不可用"));
+
+        // 两项都不过: 两个原因都在
+        ConfirmUrgentInsertRequest both = recheckFailureRequest(
+                ResourceCheckResult.unverified("EQUIPMENT", "设备未验证: 该产品没有配置所需设备", BigDecimal.ONE),
+                ResourceCheckResult.unavailable("CAPACITY", "产能不足: 需要 50 件", BigDecimal.TEN, BigDecimal.valueOf(50)));
+        assertThatThrownBy(() -> service.confirmInsert(FACTORY, 1L, both))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThat(e.getMessage()).contains("设备未验证: 该产品没有配置所需设备").contains("产能不足: 需要 50 件"));
+        verify(slots, never()).claimAvailableSlot(anyString(), anyString(), any());
+    }
+
     @Test
     void confirmationUsesPreviewImpactInsteadOfGenericSlotImpact() {
         product("件");
@@ -363,7 +461,7 @@ class UrgentInsertPreviewContractTest {
                 .productTypeId(PRODUCT).previewQuantity(new BigDecimal("5.00")).quantityUnit("PIECE")
                 .plannedUnit("件").productionLineId("LINE-1").windowStart(slot.getStartTime())
                 .windowEnd(slot.getEndTime()).slotUpdatedAt(slot.getUpdatedAt())
-                .impactLevel("high").requiresApproval(true).affectedPlanCount(0).candidateNumber(1)
+                .impactLevel("high").requiresApproval(true).affectedPlanCount(0).candidateNumber(1).materialFingerprint(UrgentInsertTestSupport.MATERIAL_FP).impactFingerprint(UrgentInsertServiceImpl.impactFingerprint(null)).scheduleFingerprint(UrgentInsertTestSupport.SCHEDULE_FP)
                 .build();
         currentPreview.setCreatedAt(LocalDateTime.now());
         when(previews.findByIdAndFactoryId("PV1", FACTORY)).thenReturn(Optional.of(currentPreview));
@@ -385,7 +483,7 @@ class UrgentInsertPreviewContractTest {
                 .productTypeId(PRODUCT).previewQuantity(new BigDecimal("5.00")).quantityUnit("PIECE")
                 .plannedUnit("件").productionLineId("LINE-1").windowStart(slot.getStartTime())
                 .windowEnd(slot.getEndTime()).slotUpdatedAt(slot.getUpdatedAt())
-                .impactLevel("low").requiresApproval(true).affectedPlanCount(0).candidateNumber(1)
+                .impactLevel("low").requiresApproval(true).affectedPlanCount(0).candidateNumber(1).materialFingerprint(UrgentInsertTestSupport.MATERIAL_FP).impactFingerprint(UrgentInsertServiceImpl.impactFingerprint(null)).scheduleFingerprint(UrgentInsertTestSupport.SCHEDULE_FP)
                 .build();
         currentPreview.setCreatedAt(LocalDateTime.now());
         when(previews.findByIdAndFactoryId("PV1", FACTORY)).thenReturn(Optional.of(currentPreview));

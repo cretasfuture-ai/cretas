@@ -1,292 +1,252 @@
 <template>
   <div class="profile-collections">
-    <el-alert
-      type="info"
-      :closable="false"
-      show-icon
+    <UAlert :ui="alertUi"
+      color="info"
+      variant="subtle"
+      icon="i-lucide-info"
       class="mirror-note"
       title="标记为「主」的联系人 / 地址 / 银行账户会同步到基本资料，采购单、打印和出纳付款都以它为准。"
     />
 
     <!-- ─────────────────────────── 联系人 ─────────────────────────── -->
-    <section class="collection">
+    <section class="collection" data-testid="supplier-contacts">
       <div class="collection-head">
         <h4>联系人<span class="count">（{{ contacts.length }}）</span></h4>
-        <el-button v-if="canWrite" type="primary" plain size="small" @click="openContact()">
+        <UButton v-if="canWrite" size="xs" color="neutral" variant="outline" icon="i-lucide-plus" @click="openContact()">
           新增联系人
-        </el-button>
+        </UButton>
       </div>
-      <el-empty
+      <UEmpty
         v-if="!contacts.length"
-        :image-size="72"
+        icon="i-lucide-user-round"
         description="还没有联系人。至少维护一位，采购单和打印才有人可联系。"
+        class="collection-empty"
       >
-        <el-button v-if="canWrite" type="primary" @click="openContact()">新增联系人</el-button>
-      </el-empty>
-      <el-table v-else :data="contacts" border stripe size="small">
-        <el-table-column label="姓名" min-width="130">
-          <template #default="{ row }">
-            <el-tag v-if="row.isPrimary" type="success" size="small" effect="dark" class="primary-tag">主</el-tag>
-            {{ row.name }}
-          </template>
-        </el-table-column>
-        <el-table-column label="类型" width="110">
-          <template #default="{ row }">{{ contactTypeLabel(row) }}</template>
-        </el-table-column>
-        <el-table-column label="职务" width="120">
-          <template #default="{ row }">{{ row.position || '-' }}</template>
-        </el-table-column>
-        <el-table-column label="电话" width="150">
-          <template #default="{ row }">{{ row.phone || '-' }}</template>
-        </el-table-column>
-        <el-table-column label="邮箱" min-width="160" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.email || '-' }}</template>
-        </el-table-column>
-        <el-table-column v-if="canWrite" label="操作" width="180" fixed="right">
-          <template #default="{ row }">
-            <el-button type="primary" link @click="openContact(row)">编辑</el-button>
-            <el-button v-if="!row.isPrimary" type="primary" link @click="makeContactPrimary(row)">设为主</el-button>
-            <el-button type="danger" link @click="removeContact(row)">删除</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+        <template v-if="canWrite" #actions>
+          <UButton @click="openContact()">新增联系人</UButton>
+        </template>
+      </UEmpty>
+      <UTable v-else :data="contacts" :columns="contactColumns" class="cs-table">
+        <template #name-cell="{ row }">
+          <UBadge v-if="row.original.isPrimary" color="success" variant="soft" class="primary-tag">主</UBadge>
+          {{ row.original.name }}
+        </template>
+        <template #type-cell="{ row }">{{ contactTypeLabel(row.original) }}</template>
+        <template #position-cell="{ row }">{{ row.original.position || '-' }}</template>
+        <template #phone-cell="{ row }">{{ row.original.phone || '-' }}</template>
+        <template #email-cell="{ row }">{{ row.original.email || '-' }}</template>
+        <template #actions-cell="{ row }">
+          <div class="row-actions">
+            <UButton size="xs" variant="link" @click="openContact(row.original)">编辑</UButton>
+            <UButton v-if="!row.original.isPrimary" size="xs" variant="link" @click="makeContactPrimary(row.original)">设为主</UButton>
+            <UButton size="xs" variant="link" color="error" @click="removeContact(row.original)">删除</UButton>
+          </div>
+        </template>
+      </UTable>
     </section>
 
     <!-- ──────────────────────────── 地址 ──────────────────────────── -->
-    <section class="collection">
+    <section class="collection" data-testid="supplier-addresses">
       <div class="collection-head">
         <h4>地址<span class="count">（{{ addresses.length }}）</span></h4>
-        <el-button v-if="canWrite" type="primary" plain size="small" @click="openAddress()">
+        <UButton v-if="canWrite" size="xs" color="neutral" variant="outline" icon="i-lucide-plus" @click="openAddress()">
           新增地址
-        </el-button>
+        </UButton>
       </div>
-      <el-empty
+      <UEmpty
         v-if="!addresses.length"
-        :image-size="72"
+        icon="i-lucide-map-pin"
         description="还没有地址。注册地、发货地、开票地不同时，分开维护可避免采购单印错。"
+        class="collection-empty"
       >
-        <el-button v-if="canWrite" type="primary" @click="openAddress()">新增地址</el-button>
-      </el-empty>
-      <el-table v-else :data="addresses" border stripe size="small">
-        <el-table-column label="标签" width="130">
-          <template #default="{ row }">
-            <el-tag v-if="row.isPrimary" type="success" size="small" effect="dark" class="primary-tag">主</el-tag>
-            {{ row.label || addressTypeLabel(row) }}
-          </template>
-        </el-table-column>
-        <el-table-column label="类型" width="130">
-          <template #default="{ row }">{{ addressTypeLabel(row) }}</template>
-        </el-table-column>
-        <el-table-column label="地址" min-width="220" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.address }}</template>
-        </el-table-column>
-        <el-table-column label="收货联系人" width="160">
-          <template #default="{ row }">
-            {{ row.contactName || '-' }}<template v-if="row.contactPhone"> · {{ row.contactPhone }}</template>
-          </template>
-        </el-table-column>
-        <el-table-column v-if="canWrite" label="操作" width="180" fixed="right">
-          <template #default="{ row }">
-            <el-button type="primary" link @click="openAddress(row)">编辑</el-button>
-            <el-button v-if="!row.isPrimary" type="primary" link @click="makeAddressPrimary(row)">设为主</el-button>
-            <el-button type="danger" link @click="removeAddress(row)">删除</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+        <template v-if="canWrite" #actions>
+          <UButton @click="openAddress()">新增地址</UButton>
+        </template>
+      </UEmpty>
+      <UTable v-else :data="addresses" :columns="addressColumns" class="cs-table">
+        <template #label-cell="{ row }">
+          <UBadge v-if="row.original.isPrimary" color="success" variant="soft" class="primary-tag">主</UBadge>
+          {{ row.original.label || addressTypeLabel(row.original) }}
+        </template>
+        <template #type-cell="{ row }">{{ addressTypeLabel(row.original) }}</template>
+        <template #address-cell="{ row }"><span :title="row.original.address">{{ row.original.address }}</span></template>
+        <template #contact-cell="{ row }">
+          {{ row.original.contactName || '-' }}<template v-if="row.original.contactPhone"> · {{ row.original.contactPhone }}</template>
+        </template>
+        <template #actions-cell="{ row }">
+          <div class="row-actions">
+            <UButton size="xs" variant="link" @click="openAddress(row.original)">编辑</UButton>
+            <UButton v-if="!row.original.isPrimary" size="xs" variant="link" @click="makeAddressPrimary(row.original)">设为主</UButton>
+            <UButton size="xs" variant="link" color="error" @click="removeAddress(row.original)">删除</UButton>
+          </div>
+        </template>
+      </UTable>
     </section>
 
     <!-- ────────────────────────── 银行账户 ────────────────────────── -->
-    <section class="collection">
+    <section class="collection" data-testid="supplier-bank-accounts">
       <div class="collection-head">
         <h4>银行账户<span class="count">（{{ bankAccounts.length }}）</span></h4>
-        <el-button v-if="canWrite" type="primary" plain size="small" @click="openBank()">
+        <UButton v-if="canWrite" size="xs" color="neutral" variant="outline" icon="i-lucide-plus" @click="openBank()">
           新增银行账户
-        </el-button>
+        </UButton>
       </div>
-      <el-empty
+      <UEmpty
         v-if="!bankAccounts.length"
-        :image-size="72"
+        icon="i-lucide-landmark"
         description="还没有银行账户。出纳付款时会以「主」账户为默认收款账号。"
+        class="collection-empty"
       >
-        <el-button v-if="canWrite" type="primary" @click="openBank()">新增银行账户</el-button>
-      </el-empty>
-      <el-table v-else :data="bankAccounts" border stripe size="small">
-        <el-table-column label="户名" min-width="170" show-overflow-tooltip>
-          <template #default="{ row }">
-            <el-tag v-if="row.isPrimary" type="success" size="small" effect="dark" class="primary-tag">主</el-tag>
-            {{ row.accountName }}
-          </template>
-        </el-table-column>
-        <el-table-column label="开户行" min-width="180" show-overflow-tooltip>
-          <template #default="{ row }">
-            {{ row.bankName }}<template v-if="row.branchName"> · {{ row.branchName }}</template>
-          </template>
-        </el-table-column>
-        <el-table-column label="账号" min-width="190">
-          <template #default="{ row }">{{ row.accountNumber }}</template>
-        </el-table-column>
-        <el-table-column label="币种" width="80">
-          <template #default="{ row }">{{ row.currency || 'CNY' }}</template>
-        </el-table-column>
-        <el-table-column v-if="canWrite" label="操作" width="180" fixed="right">
-          <template #default="{ row }">
-            <el-button type="primary" link @click="openBank(row)">编辑</el-button>
-            <el-button v-if="!row.isPrimary" type="primary" link @click="makeBankPrimary(row)">设为主</el-button>
-            <el-button type="danger" link @click="removeBank(row)">删除</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+        <template v-if="canWrite" #actions>
+          <UButton @click="openBank()">新增银行账户</UButton>
+        </template>
+      </UEmpty>
+      <UTable v-else :data="bankAccounts" :columns="bankColumns" class="cs-table">
+        <template #accountName-cell="{ row }">
+          <UBadge v-if="row.original.isPrimary" color="success" variant="soft" class="primary-tag">主</UBadge>
+          {{ row.original.accountName }}
+        </template>
+        <template #bank-cell="{ row }">
+          {{ row.original.bankName }}<template v-if="row.original.branchName"> · {{ row.original.branchName }}</template>
+        </template>
+        <template #accountNumber-cell="{ row }">{{ row.original.accountNumber }}</template>
+        <template #currency-cell="{ row }">{{ row.original.currency || 'CNY' }}</template>
+        <template #actions-cell="{ row }">
+          <div class="row-actions">
+            <UButton size="xs" variant="link" @click="openBank(row.original)">编辑</UButton>
+            <UButton v-if="!row.original.isPrimary" size="xs" variant="link" @click="makeBankPrimary(row.original)">设为主</UButton>
+            <UButton size="xs" variant="link" color="error" @click="removeBank(row.original)">删除</UButton>
+          </div>
+        </template>
+      </UTable>
     </section>
 
     <!-- ─────────────────────────── 联系人弹窗 ─────────────────────────── -->
-    <el-dialog
-      v-model="contactDialogVisible"
+    <UModal
+      v-model:open="contactDialogVisible"
       :title="`${contactForm.id ? '编辑' : '新增'}联系人 — ${supplierName}`"
-      width="520px"
-      destroy-on-close
-      :close-on-click-modal="false"
+      description="维护供应商联系人"
+      :dismissible="false"
+      :ui="modalUi('max-w-[520px]')"
     >
-      <el-form ref="contactFormRef" :model="contactForm" :rules="contactRules" label-width="100px">
-        <el-form-item label="姓名" prop="name">
-          <el-input v-model="contactForm.name" maxlength="100" />
-        </el-form-item>
-        <el-form-item label="类型" prop="contactType">
-          <el-select v-model="contactForm.contactType" class="full-width">
-            <el-option
-              v-for="option in SUPPLIER_CONTACT_TYPE_OPTIONS"
-              :key="option.value"
-              :label="option.label"
-              :value="option.value"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="职务">
-          <el-input v-model="contactForm.position" maxlength="100" placeholder="选填，例如「销售经理」" />
-        </el-form-item>
-        <el-form-item label="电话" prop="phone">
-          <el-input v-model="contactForm.phone" maxlength="40" placeholder="大陆手机号或带区号座机，可含分机" />
-        </el-form-item>
-        <el-form-item label="邮箱" prop="email">
-          <el-input v-model="contactForm.email" maxlength="100" />
-        </el-form-item>
-        <el-form-item label="设为主联系人">
-          <el-switch v-model="contactForm.isPrimary" :disabled="isOnlyPrimary(contactForm, contacts)" />
-          <div class="field-hint">
-            {{ primaryHint(contactForm, contacts, '主联系人会同步到基本资料，采购单和打印都用它。') }}
-          </div>
-        </el-form-item>
-        <el-form-item label="备注">
-          <el-input v-model="contactForm.notes" type="textarea" maxlength="500" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="contactDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="submitContact">保存</el-button>
+      <template #body>
+        <UForm ref="contactFormRef" :state="contactForm" :validate="validateContact" class="collection-form" @submit="submitContact">
+          <UFormField label="姓名" name="name" required><UInput v-model="contactForm.name" :maxlength="100" class="w-full" /></UFormField>
+          <UFormField label="类型" name="contactType">
+            <USelect v-model="contactForm.contactType" :items="SUPPLIER_CONTACT_TYPE_OPTIONS" class="w-full" />
+          </UFormField>
+          <UFormField label="职务" name="position">
+            <UInput v-model="contactForm.position" :maxlength="100" placeholder="选填，例如「销售经理」" class="w-full" />
+          </UFormField>
+          <UFormField label="电话" name="phone">
+            <UInput v-model="contactForm.phone" :maxlength="40" placeholder="大陆手机号或带区号座机，可含分机" class="w-full" />
+          </UFormField>
+          <UFormField label="邮箱" name="email"><UInput v-model="contactForm.email" :maxlength="100" class="w-full" /></UFormField>
+          <UFormField
+            label="设为主联系人"
+            name="isPrimary"
+            :help="primaryHint(contactForm, contacts, '主联系人会同步到基本资料，采购单和打印都用它。')"
+          >
+            <USwitch v-model="contactForm.isPrimary" :disabled="isOnlyPrimary(contactForm, contacts)" />
+          </UFormField>
+          <UFormField label="备注" name="notes"><UTextarea v-model="contactForm.notes" :maxlength="500" :rows="2" class="w-full" /></UFormField>
+        </UForm>
       </template>
-    </el-dialog>
+      <template #footer>
+        <UButton color="neutral" variant="outline" @click="contactDialogVisible = false">取消</UButton>
+        <UButton :loading="saving" @click="contactFormRef?.submit()">保存</UButton>
+      </template>
+    </UModal>
 
     <!-- ──────────────────────────── 地址弹窗 ──────────────────────────── -->
-    <el-dialog
-      v-model="addressDialogVisible"
+    <UModal
+      v-model:open="addressDialogVisible"
       :title="`${addressForm.id ? '编辑' : '新增'}地址 — ${supplierName}`"
-      width="520px"
-      destroy-on-close
-      :close-on-click-modal="false"
+      description="维护供应商地址"
+      :dismissible="false"
+      :ui="modalUi('max-w-[520px]')"
     >
-      <el-form ref="addressFormRef" :model="addressForm" :rules="addressRules" label-width="100px">
-        <el-form-item label="类型" prop="addressType">
-          <el-select v-model="addressForm.addressType" class="full-width">
-            <el-option
-              v-for="option in SUPPLIER_ADDRESS_TYPE_OPTIONS"
-              :key="option.value"
-              :label="option.label"
-              :value="option.value"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="标签">
-          <el-input v-model="addressForm.label" maxlength="60" placeholder="选填，例如「昆山仓」" />
-        </el-form-item>
-        <el-form-item label="地址" prop="address">
-          <el-input v-model="addressForm.address" type="textarea" maxlength="500" show-word-limit />
-        </el-form-item>
-        <el-form-item label="收货联系人">
-          <el-input v-model="addressForm.contactName" maxlength="100" />
-        </el-form-item>
-        <el-form-item label="联系电话" prop="contactPhone">
-          <el-input v-model="addressForm.contactPhone" maxlength="40" />
-        </el-form-item>
-        <el-form-item label="设为主地址">
-          <el-switch v-model="addressForm.isPrimary" :disabled="isOnlyPrimary(addressForm, addresses)" />
-          <div class="field-hint">
-            {{ primaryHint(addressForm, addresses, '主地址会同步到基本资料，也是溯源产地的来源。') }}
-          </div>
-        </el-form-item>
-        <el-form-item label="备注">
-          <el-input v-model="addressForm.notes" type="textarea" maxlength="500" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="addressDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="submitAddress">保存</el-button>
+      <template #body>
+        <UForm ref="addressFormRef" :state="addressForm" :validate="validateAddress" class="collection-form" @submit="submitAddress">
+          <UFormField label="类型" name="addressType">
+            <USelect v-model="addressForm.addressType" :items="SUPPLIER_ADDRESS_TYPE_OPTIONS" class="w-full" />
+          </UFormField>
+          <UFormField label="标签" name="label">
+            <UInput v-model="addressForm.label" :maxlength="60" placeholder="选填，例如「昆山仓」" class="w-full" />
+          </UFormField>
+          <UFormField label="地址" name="address" required><UTextarea v-model="addressForm.address" :maxlength="500" :rows="2" class="w-full" /></UFormField>
+          <UFormField label="收货联系人" name="contactName"><UInput v-model="addressForm.contactName" :maxlength="100" class="w-full" /></UFormField>
+          <UFormField label="联系电话" name="contactPhone"><UInput v-model="addressForm.contactPhone" :maxlength="40" class="w-full" /></UFormField>
+          <UFormField
+            label="设为主地址"
+            name="isPrimary"
+            :help="primaryHint(addressForm, addresses, '主地址会同步到基本资料，也是溯源产地的来源。')"
+          >
+            <USwitch v-model="addressForm.isPrimary" :disabled="isOnlyPrimary(addressForm, addresses)" />
+          </UFormField>
+          <UFormField label="备注" name="notes"><UTextarea v-model="addressForm.notes" :maxlength="500" :rows="2" class="w-full" /></UFormField>
+        </UForm>
       </template>
-    </el-dialog>
+      <template #footer>
+        <UButton color="neutral" variant="outline" @click="addressDialogVisible = false">取消</UButton>
+        <UButton :loading="saving" @click="addressFormRef?.submit()">保存</UButton>
+      </template>
+    </UModal>
 
     <!-- ─────────────────────────── 银行账户弹窗 ─────────────────────────── -->
-    <el-dialog
-      v-model="bankDialogVisible"
+    <UModal
+      v-model:open="bankDialogVisible"
       :title="`${bankForm.id ? '编辑' : '新增'}银行账户 — ${supplierName}`"
-      width="520px"
-      destroy-on-close
-      :close-on-click-modal="false"
+      description="维护供应商银行账户"
+      :dismissible="false"
+      :ui="modalUi('max-w-[520px]')"
     >
-      <el-alert
-        type="warning"
-        :closable="false"
-        show-icon
-        class="bank-warning"
-        title="出纳付款单默认打到「主」账户，请核对户名与账号后再保存。"
-      />
-      <el-form ref="bankFormRef" :model="bankForm" :rules="bankRules" label-width="100px">
-        <el-form-item label="户名" prop="accountName">
-          <el-input v-model="bankForm.accountName" maxlength="200" :placeholder="`留空默认用「${supplierName}」`" />
-        </el-form-item>
-        <el-form-item label="开户行" prop="bankName">
-          <el-input v-model="bankForm.bankName" maxlength="100" placeholder="例如「中国工商银行」" />
-        </el-form-item>
-        <el-form-item label="支行/网点">
-          <el-input v-model="bankForm.branchName" maxlength="200" placeholder="选填，例如「北京朝阳支行」" />
-        </el-form-item>
-        <el-form-item label="账号" prop="accountNumber">
-          <el-input v-model="bankForm.accountNumber" maxlength="32" placeholder="只填数字，不要带开户行名称或空格" />
-        </el-form-item>
-        <el-form-item label="币种" prop="currency">
-          <el-select v-model="bankForm.currency" class="full-width">
-            <el-option v-for="c in CURRENCIES" :key="c" :label="c" :value="c" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="设为主账户">
-          <el-switch v-model="bankForm.isPrimary" :disabled="isOnlyPrimary(bankForm, bankAccounts)" />
-          <div class="field-hint">
-            {{ primaryHint(bankForm, bankAccounts, '主账户是出纳付款单的默认收款账号。') }}
-          </div>
-        </el-form-item>
-        <el-form-item label="备注">
-          <el-input v-model="bankForm.notes" type="textarea" maxlength="500" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="bankDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="submitBank">保存</el-button>
+      <template #body>
+        <UAlert :ui="alertUi"
+          color="warning"
+          variant="subtle"
+          icon="i-lucide-triangle-alert"
+          class="bank-warning"
+          title="出纳付款单默认打到「主」账户，请核对户名与账号后再保存。"
+        />
+        <UForm ref="bankFormRef" :state="bankForm" :validate="validateBank" class="collection-form" @submit="submitBank">
+          <UFormField label="户名" name="accountName">
+            <UInput v-model="bankForm.accountName" :maxlength="200" :placeholder="`留空默认用「${supplierName}」`" class="w-full" />
+          </UFormField>
+          <UFormField label="开户行" name="bankName" required>
+            <UInput v-model="bankForm.bankName" :maxlength="100" placeholder="例如「中国工商银行」" class="w-full" />
+          </UFormField>
+          <UFormField label="支行/网点" name="branchName">
+            <UInput v-model="bankForm.branchName" :maxlength="200" placeholder="选填，例如「北京朝阳支行」" class="w-full" />
+          </UFormField>
+          <UFormField label="账号" name="accountNumber" required>
+            <UInput v-model="bankForm.accountNumber" :maxlength="32" placeholder="只填数字，不要带开户行名称或空格" class="w-full" />
+          </UFormField>
+          <UFormField label="币种" name="currency">
+            <USelect v-model="bankForm.currency" :items="CURRENCIES" class="w-full" />
+          </UFormField>
+          <UFormField
+            label="设为主账户"
+            name="isPrimary"
+            :help="primaryHint(bankForm, bankAccounts, '主账户是出纳付款单的默认收款账号。')"
+          >
+            <USwitch v-model="bankForm.isPrimary" :disabled="isOnlyPrimary(bankForm, bankAccounts)" />
+          </UFormField>
+          <UFormField label="备注" name="notes"><UTextarea v-model="bankForm.notes" :maxlength="500" :rows="2" class="w-full" /></UFormField>
+        </UForm>
       </template>
-    </el-dialog>
+      <template #footer>
+        <UButton color="neutral" variant="outline" @click="bankDialogVisible = false">取消</UButton>
+        <UButton :loading="saving" @click="bankFormRef?.submit()">保存</UButton>
+      </template>
+    </UModal>
   </div>
 </template>
 
 <script setup lang="ts">
-import { reactive, ref, watch } from 'vue';
+import { computed, reactive, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import type { FormInstance, FormItemRule } from 'element-plus';
+import type { CsTableColumn as TableColumn } from '@/types/csTable';
 import {
   SUPPLIER_ADDRESS_TYPE_OPTIONS,
   SUPPLIER_CONTACT_TYPE_OPTIONS,
@@ -304,6 +264,7 @@ import {
   type SupplierContact,
 } from '@/api/supplierManagement';
 import { isValidSupplierPhone, isReadableSupplierAddress, normalizeText } from './supplierModel';
+import { alertUi, modalUi } from './supplierOverlayUi';
 
 const props = defineProps<{
   factoryId: string;
@@ -324,13 +285,39 @@ const saving = ref(false);
 const contactDialogVisible = ref(false);
 const addressDialogVisible = ref(false);
 const bankDialogVisible = ref(false);
-const contactFormRef = ref<FormInstance>();
-const addressFormRef = ref<FormInstance>();
-const bankFormRef = ref<FormInstance>();
+// UForm 校验在 @submit 之前由 :validate 完成；footer 里的保存按钮只负责触发 submit()
+type FormHandle = { submit: () => Promise<void> };
+const contactFormRef = ref<FormHandle | null>(null);
+const addressFormRef = ref<FormHandle | null>(null);
+const bankFormRef = ref<FormHandle | null>(null);
 
 const contactForm = reactive<SupplierContact>(emptyContact());
 const addressForm = reactive<SupplierAddress>(emptyAddress());
 const bankForm = reactive<SupplierBankAccount>(emptyBank());
+
+const actionsColumn = <T,>(): TableColumn<T> => ({ id: 'actions', header: '操作' });
+const contactColumns = computed<TableColumn<SupplierContact>[]>(() => [
+  { id: 'name', header: '姓名' },
+  { id: 'type', header: '类型' },
+  { id: 'position', header: '职务' },
+  { id: 'phone', header: '电话' },
+  { id: 'email', header: '邮箱' },
+  ...(props.canWrite ? [actionsColumn<SupplierContact>()] : []),
+]);
+const addressColumns = computed<TableColumn<SupplierAddress>[]>(() => [
+  { id: 'label', header: '标签' },
+  { id: 'type', header: '类型' },
+  { id: 'address', header: '地址' },
+  { id: 'contact', header: '收货联系人' },
+  ...(props.canWrite ? [actionsColumn<SupplierAddress>()] : []),
+]);
+const bankColumns = computed<TableColumn<SupplierBankAccount>[]>(() => [
+  { id: 'accountName', header: '户名' },
+  { id: 'bank', header: '开户行' },
+  { id: 'accountNumber', header: '账号' },
+  { id: 'currency', header: '币种' },
+  ...(props.canWrite ? [actionsColumn<SupplierBankAccount>()] : []),
+]);
 
 function emptyContact(): SupplierContact {
   return {
@@ -351,56 +338,42 @@ function emptyBank(): SupplierBankAccount {
   };
 }
 
-const optionalPhoneRule: FormItemRule = {
-  validator: (_rule, value, callback) => {
-    if (!normalizeText(value) || isValidSupplierPhone(value)) {
-      callback();
-      return;
-    }
-    callback(new Error('请输入大陆手机号或带区号座机，可带分机'));
-  },
-  trigger: ['blur', 'change'],
-};
+type FormError = { name: string; message: string };
+const PHONE_MESSAGE = '请输入大陆手机号或带区号座机，可带分机';
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-const contactRules: Record<string, FormItemRule[]> = {
-  name: [{ required: true, whitespace: true, message: '请输入联系人姓名', trigger: ['blur', 'change'] }],
-  phone: [optionalPhoneRule],
-  email: [{ type: 'email', message: '邮箱格式不正确', trigger: ['blur', 'change'] }],
-};
+/** 与原 Element rules 同一组判据与文案（UForm :validate 用）。 */
+function validateContact(state: Partial<SupplierContact>): FormError[] {
+  const errors: FormError[] = [];
+  if (!normalizeText(state.name)) errors.push({ name: 'name', message: '请输入联系人姓名' });
+  if (normalizeText(state.phone) && !isValidSupplierPhone(state.phone)) errors.push({ name: 'phone', message: PHONE_MESSAGE });
+  if (normalizeText(state.email) && !EMAIL_PATTERN.test(normalizeText(state.email))) {
+    errors.push({ name: 'email', message: '邮箱格式不正确' });
+  }
+  return errors;
+}
 
-const addressRules: Record<string, FormItemRule[]> = {
-  address: [
-    { required: true, whitespace: true, message: '请输入地址', trigger: ['blur', 'change'] },
-    {
-      validator: (_rule, value, callback) => {
-        if (isReadableSupplierAddress(value)) {
-          callback();
-          return;
-        }
-        callback(new Error('请输入可识别的地址（不超过 500 字，不能只填符号）'));
-      },
-      trigger: ['blur', 'change'],
-    },
-  ],
-  contactPhone: [optionalPhoneRule],
-};
+function validateAddress(state: Partial<SupplierAddress>): FormError[] {
+  const errors: FormError[] = [];
+  if (!normalizeText(state.address)) errors.push({ name: 'address', message: '请输入地址' });
+  else if (!isReadableSupplierAddress(state.address)) {
+    errors.push({ name: 'address', message: '请输入可识别的地址（不超过 500 字，不能只填符号）' });
+  }
+  if (normalizeText(state.contactPhone) && !isValidSupplierPhone(state.contactPhone)) {
+    errors.push({ name: 'contactPhone', message: PHONE_MESSAGE });
+  }
+  return errors;
+}
 
-const bankRules: Record<string, FormItemRule[]> = {
-  bankName: [{ required: true, whitespace: true, message: '请输入开户行', trigger: ['blur', 'change'] }],
-  accountNumber: [
-    { required: true, whitespace: true, message: '请输入银行账号', trigger: ['blur', 'change'] },
-    {
-      validator: (_rule, value, callback) => {
-        if (/^[0-9]{8,32}$/.test(normalizeText(value))) {
-          callback();
-          return;
-        }
-        callback(new Error('账号只能是 8-32 位数字，请勿包含空格、开户行名称或其他符号'));
-      },
-      trigger: ['blur', 'change'],
-    },
-  ],
-};
+function validateBank(state: Partial<SupplierBankAccount>): FormError[] {
+  const errors: FormError[] = [];
+  if (!normalizeText(state.bankName)) errors.push({ name: 'bankName', message: '请输入开户行' });
+  if (!normalizeText(state.accountNumber)) errors.push({ name: 'accountNumber', message: '请输入银行账号' });
+  else if (!/^[0-9]{8,32}$/.test(normalizeText(state.accountNumber))) {
+    errors.push({ name: 'accountNumber', message: '账号只能是 8-32 位数字，请勿包含空格、开户行名称或其他符号' });
+  }
+  return errors;
+}
 
 watch(
   () => [props.factoryId, props.supplierId],
@@ -455,8 +428,6 @@ function openContact(row?: SupplierContact): void {
 }
 
 async function submitContact(): Promise<void> {
-  if (!contactFormRef.value) return;
-  await contactFormRef.value.validate();
   saving.value = true;
   try {
     contacts.value = await saveSupplierContact(props.factoryId, props.supplierId, { ...contactForm });
@@ -500,8 +471,6 @@ function openAddress(row?: SupplierAddress): void {
 }
 
 async function submitAddress(): Promise<void> {
-  if (!addressFormRef.value) return;
-  await addressFormRef.value.validate();
   saving.value = true;
   try {
     addresses.value = await saveSupplierAddress(props.factoryId, props.supplierId, { ...addressForm });
@@ -545,8 +514,6 @@ function openBank(row?: SupplierBankAccount): void {
 }
 
 async function submitBank(): Promise<void> {
-  if (!bankFormRef.value) return;
-  await bankFormRef.value.validate();
   saving.value = true;
   try {
     bankAccounts.value = await saveSupplierBankAccount(props.factoryId, props.supplierId, { ...bankForm });
@@ -589,19 +556,20 @@ async function removeBank(row: SupplierBankAccount): Promise<void> {
 defineExpose({ reload });
 </script>
 
-<style scoped lang="scss">
-.profile-collections { display: flex; flex-direction: column; gap: 20px; }
-.mirror-note { margin-bottom: 4px; }
+<style scoped>
+.profile-collections { display: flex; flex-direction: column; gap: var(--cs-space-5); }
+.mirror-note { margin-bottom: var(--cs-space-1); }
 .collection-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 10px;
+  margin-bottom: var(--cs-space-2);
 }
-.collection-head h4 { margin: 0; font-size: 15px; }
-.collection-head .count { font-weight: 400; color: var(--el-text-color-secondary); }
+.collection-head h4 { margin: 0; font-size: var(--cs-type-section); font-weight: 600; color: var(--cs-text); }
+.collection-head .count { font-weight: 400; color: var(--cs-muted); }
+.collection-empty { border: 1px dashed var(--cs-border); border-radius: var(--cs-radius-sm); }
 .primary-tag { margin-right: 6px; }
-.field-hint { font-size: 12px; color: var(--el-text-color-secondary); line-height: 1.6; }
-.bank-warning { margin-bottom: 14px; }
-.full-width { width: 100%; }
+.row-actions { display: flex; align-items: center; gap: var(--cs-space-1); }
+.collection-form { display: flex; flex-direction: column; gap: var(--cs-space-3); }
+.bank-warning { margin-bottom: var(--cs-space-3); }
 </style>

@@ -1,0 +1,161 @@
+{
+  "task_id": "BLACKLAKE-AI-QUEUE-20261104",
+  "base_sha": "8001020537b1a7cdd6d70c13b388bf01f5b8362f",
+  "source_hashes": {
+    "backend/python/blacklake/period_drain.py": "623cc34e053e84ad0a660d6ac8bc9aff82f5c5f602692baac8e03ed02cc98717",
+    "backend/python/blacklake/period_runtime.py": "416cb4dbd9602814014dd4f6e5285749d37a35f57f64a3bb5a2277960d78df4e",
+    "backend/python/blacklake/test_local.py": "6da856082a3afc7d15f89899346d5b71e71186c8f8246534c6f11202dc5dd2e9",
+    "backend/python/smartbi/services/alert_ai_coordination.py": "12e5ab9fc5f08625139bdc937a27619549918b02c6436b5625a1f60e5e9fc6f2",
+    "backend/python/smartbi/services/alert_local_ai.py": "a450e987bf5848f0f4538a307a9e78c38d4bb75139341bb779b29d7c4e3d9b6e",
+    "backend/python/smartbi/services/period_reports.py": "fb504be302fd6a5a415ca17dad5e73dce0692d1fd0b6481879b8c6fa4bbfedf6",
+    "backend/python/tests/test_smartbi_ai_queue.py": "d050ac1badf602de6166ba6ff9f05c991d3d881bfde94bb0a722e94d039c8659",
+    "backend/python/tests/test_smartbi_period_reports.py": "77a3dca1747d22ff27d0ba3140be6521d910cae2775b1e945583599468da71b9",
+    "backend/python/tests/test_smartbi_shared_alerts.py": "a85fca7926f039c9991aa947155c9d2f612f03169bc9039809b3756bf314a141",
+    "web-admin/src/api/smartbi/blacklake.ts": "f85991ea1ef500d080aba4b5ec9f09ffd8cbf16ea75dd444d62aac4fc353c30c",
+    "web-admin/src/views/smart-bi/__tests__/BlacklakePeriodAnalysis.spec.ts": "61233db102e51952b06b54caedef5aeb5f5428cd16d995cee9216ee2efa4daa4",
+    "web-admin/src/views/smart-bi/BlacklakePeriodAnalysis.vue": "4610ce8a577ec496a9641f4a7a109a1963d2fbedcf14df3a7918f43f25c85bad"
+  },
+  "policy": {
+    "blacklake_api_limits_unchanged": true,
+    "period_retry_seconds": 15,
+    "single_inference": true,
+    "legacy_attempts_retained": true,
+    "fifo": true,
+    "hourly_call_limit": null,
+    "wait_seconds_before_durable_defer": 120
+  },
+  "target_backend": {
+    "exit_code": 0,
+    "passed": 45,
+    "log": "validation/ai-queue-target.log"
+  },
+  "queue_resume_tests": {
+    "exit_code": 0,
+    "passed": 15,
+    "log": "validation/ai-queue-resume.log"
+  },
+  "full_backend": {
+    "first_run_failed": 1,
+    "first_run_log": "validation/ai-queue-first-full.log",
+    "fix": "Move schema fsync before FIFO concurrency assertions; allow scheduling startup time; keep ordering/mutual-exclusion/usage assertions",
+    "first_run_passed": 318,
+    "status": "passed",
+    "log": "validation/pytest-sections-final.log",
+    "passed": 319,
+    "skipped": 0,
+    "exit_code": 0
+  },
+  "frontend": {
+    "exit_code": 0,
+    "passed": 20,
+    "files": 4,
+    "log": "validation/ai-queue-ui.log"
+  },
+  "typecheck": {
+    "log": "validation/ai-queue-typecheck.log",
+    "exit_code": 0
+  },
+  "build": {
+    "exit_code": 0,
+    "mode": "blacklake",
+    "production_runtime_frontend_unchanged": true,
+    "elapsed": "2m44s",
+    "log": "validation/ai-queue-build.log"
+  },
+  "actual_drain": {
+    "success": true,
+    "completedAt": "2026-11-04T13:50:06.073802+08:00",
+    "initialCurrentReady": 11,
+    "resumed": 1,
+    "pendingAtStart": 1,
+    "checks": [
+      {
+        "reportId": "afb03e798f5342d6a1b49f8d1b979e0b",
+        "startDate": "2026-10-29",
+        "endDate": "2026-11-03",
+        "status": "ready",
+        "aiStatus": "complete",
+        "usage": {
+          "durationSeconds": 32.440545083,
+          "estimated": false,
+          "inputTokens": 1199,
+          "outputTokens": 666,
+          "requestId": "532737cc762e4ac49373be69787a6432",
+          "source": "ollama_response",
+          "totalTokens": 1865
+        },
+        "sections": 7
+      }
+    ],
+    "preservedReady": 23,
+    "modelCalls": 1,
+    "usageRows": [
+      {
+        "request_id": "532737cc762e4ac49373be69787a6432",
+        "model": "qwen3.8:27b",
+        "started_at": 1793771371.7220917,
+        "finished_at": 1793771405.1291559,
+        "outcome": "returned",
+        "input_tokens": 1199,
+        "output_tokens": 666,
+        "total_tokens": 1865,
+        "provider_duration_seconds": 32.440545083
+      }
+    ],
+    "inputTokens": 1199,
+    "outputTokens": 666,
+    "totalTokens": 1865,
+    "usageUnknownCalls": 0,
+    "sourceBusinessWrites": 0,
+    "sourceRefreshed": false
+  },
+  "authorized_api_readback": {
+    "success": true,
+    "currentReports": 12,
+    "states": {
+      "queued": 0,
+      "running": 0,
+      "ready": 12,
+      "failed": 0
+    },
+    "aiStates": {
+      "complete": 11,
+      "partial": 0,
+      "not_applicable": 1,
+      "unavailable": 0,
+      "rate_limited": 0
+    },
+    "reportsWithUsage": [
+      {
+        "reportId": "afb03e798f5342d6a1b49f8d1b979e0b",
+        "usage": {
+          "durationSeconds": 32.440545083,
+          "estimated": false,
+          "inputTokens": 1199,
+          "outputTokens": 666,
+          "requestId": "532737cc762e4ac49373be69787a6432",
+          "source": "ollama_response",
+          "totalTokens": 1865
+        }
+      }
+    ],
+    "sourceBusinessWrites": 0
+  },
+  "browser": {
+    "private_evidence": "outputs/ai-queue-20261104/browser-acceptance.json",
+    "direct_entry_password_inputs": 0,
+    "success": true,
+    "private_screenshot": "outputs/ai-queue-20261104/completed-token-usage.jpg",
+    "report_reused": true,
+    "actual_token_counts_visible": true
+  },
+  "delivery": {
+    "draft": true,
+    "source_business_writes": 0,
+    "production_deployed": false,
+    "source_refreshed": false,
+    "source_snapshot_beijing": "2026-11-03 17:21:49",
+    "merged": false,
+    "pr": 1390
+  }
+}

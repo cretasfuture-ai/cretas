@@ -128,12 +128,51 @@ public class BomReverseQueryTool extends AbstractBusinessTool {
                         }
                     }
                 }
+                // 成本差额 / 单价与 web 物料替换分析同一判定 (MaterialReplacementImpact 上 @PriceSensitive 的口径):
+                // 看不到 ⇒ 字段置空 (不是 0)、文字不写, 不靠下游遮挡 (结果也会直接进给大模型的上下文)
+                if (!replyShowsPriceSpec(context, COST_DELTA_SPEC)) {
+                    hideCostFields(impact);
+                    return buildSimpleResult("替换影响: " + impact.getAffectedRecipeCount() + " BOM 受影响；"
+                            + COST_HIDDEN_NOTE, impact);
+                }
                 return buildSimpleResult("替换影响: " + impact.getAffectedRecipeCount() + " BOM 受影响, "
                         + "totalCostDelta=" + impact.getTotalCostDelta(), impact);
             }
             default:
                 throw new IllegalArgumentException("无效 mode: " + mode
                         + " (限 RECIPES / USAGE / REPLACE_ANALYSIS)");
+        }
+    }
+
+    /** web 物料替换分析 ({@link MaterialReplacementImpact#getTotalCostDelta()}) 上 {@code @PriceSensitive} 的口径, 直接读注解。 */
+    static final String COST_DELTA_SPEC = webCostDeltaSpec();
+
+    static final String COST_HIDDEN_NOTE = "成本差额与物料单价按当前账号的权限配置不显示（与 web 物料替换分析同一判定，需要价格查看权限）。";
+
+    private static String webCostDeltaSpec() {
+        try {
+            com.cretas.aims.security.PriceSensitive annotation = MaterialReplacementImpact.class
+                    .getDeclaredField("totalCostDelta").getAnnotation(com.cretas.aims.security.PriceSensitive.class);
+            if (annotation == null) {
+                throw new IllegalStateException("MaterialReplacementImpact.totalCostDelta 没有 @PriceSensitive");
+            }
+            return annotation.permission();
+        } catch (NoSuchFieldException e) {
+            throw new IllegalStateException("MaterialReplacementImpact.totalCostDelta 不存在", e);
+        }
+    }
+
+    /** 看不到价格时: 单价、成本差额、各配方新旧成本一律置空 (未知 ≠ 0)。 */
+    private static void hideCostFields(MaterialReplacementImpact impact) {
+        impact.setOldUnitPrice(null);
+        impact.setNewUnitPrice(null);
+        impact.setTotalCostDelta(null);
+        if (impact.getRecipeBreakdown() != null) {
+            for (MaterialReplacementImpact.RecipeImpact ri : impact.getRecipeBreakdown()) {
+                ri.setOldRecipeMaterialCost(null);
+                ri.setNewRecipeMaterialCost(null);
+                ri.setCostDelta(null);
+            }
         }
     }
 

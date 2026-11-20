@@ -112,6 +112,15 @@ public interface FactoryStocktakeService {
     void approve(String stocktakeId, String factoryId, Long approverId, String requestRole, Long expectedVersion);
 
     /**
+     * 同上, 带本人审批原因 (纪律排查 B2): 有盘盈亏且审批人是发起/录入/提交人时, 只有工厂开了
+     * 「允许本人审批」且原因非空才放行, 盘点任务上标 {@code selfApproved} 并保存原因。
+     */
+    default void approve(String stocktakeId, String factoryId, Long approverId, String requestRole,
+                         Long expectedVersion, String selfApprovalReason) {
+        approve(stocktakeId, factoryId, approverId, requestRole, expectedVersion);
+    }
+
+    /**
      * 驳回 (PENDING_APPROVAL → REJECTED).
      *
      * @param stocktakeId 盘点任务 ID

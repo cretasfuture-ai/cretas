@@ -262,6 +262,18 @@ public interface MaterialBatchService {
                                               String productionPlanId, Long operatorId, String notes) {
         return useBatchMaterial(factoryId, batchId, quantity, productionPlanId, operatorId);
     }
+
+    /**
+     * AI 出库工具专用的数据范围检查 (#1606 审查 L8): 当前账号的数据范围 (只能看自己 / 本部门 …) 里没有这批料就拒绝。
+     *
+     * <p>⚠️ 不能复用 {@code DataScopeResolver.requireRecordAccess}: 它只在路由被拦截器标成
+     * {@code material_batches} 资源时才判, AI 对话的路由不是, 那道检查在 AI 路径上从来没生效过。
+     * 这里按调用身份直接判: HTTP 请求里的身份, 或 AI 异步线程上绑定的可信身份; 两者都没有就拒绝 (fail-closed)。
+     * 默认实现拒绝, 只有真实现覆写 —— 测试桩没实现时不会被当成放行。
+     */
+    default void assertToolRecordAccess(String factoryId, String batchId) {
+        throw new com.cretas.aims.exception.BusinessException(503, "数据范围检查未实现，访问已停止");
+    }
      /**
      * 设置批次数量到绝对值 (newQuantity = param, NOT current + param).
      *
@@ -309,10 +321,27 @@ public interface MaterialBatchService {
                 "correctUnitPrice 未实现 —— 这条路径必须留痕, 不允许桩实现静默放行");
     }
 
+    /**
+     * 解除批次与来源个体的挂载 (#1844 终审 L-d)。
+     *
+     * <p>编辑批次 (PUT) 里 {@code sourceIndividualId} 的 null = 不改、空白 = 400, 这一语义不动;
+     * 解除走这条独立入口: 原因必填 (≤255), 带 factoryId 与数据范围校验, 同一事务写操作日志
+     * (old/new 值 + 原因), 日志写不进去就一起回滚。
+     */
+    default MaterialBatchDTO unlinkSourceIndividual(String factoryId, String batchId, String reason,
+                                                    Long operatorId, String callerRole) {
+        throw new UnsupportedOperationException(
+                "unlinkSourceIndividual 未实现 —— 这条路径必须留痕, 不允许桩实现静默放行");
+    }
+
      /**
-     * 更新批次状态
-      */
-    MaterialBatchDTO updateBatchStatus(String factoryId, String batchId, MaterialBatchStatus status);
+     * 更新批次状态 (仓库页 / AI 手动改状态)。
+     *
+     * <p>纪律排查 A3: 改动构成放行 (不可投产 → 可投产) 时按本厂放行规则判 (默认只能质检放行),
+     * 放行成功必写放行台账。故意没有不带 {@code change} 的重载 —— 新入口必须说清是谁、为什么改。
+     */
+    MaterialBatchDTO updateBatchStatus(String factoryId, String batchId, MaterialBatchStatus status,
+                                       com.cretas.aims.service.discipline.MaterialBatchReleaseGuard.ManualChange change);
      /**
      * 预留批次材料
       */

@@ -185,6 +185,10 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     @Autowired(required = false)
     private com.cretas.aims.service.workprocess.WorkflowStepUnlockGuard unlockGuard;
 
+    /** 工序首检闸 (V20261115_62), 与工序任务完工同一判据。字段注入 (required=false) 不改构造器; 没注入 = 不查首检。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.quality.firstarticle.FirstArticleGate firstArticleGate;
+
     /** 返工计划的来源半成品: 超量闸与「被自己占用的来源不算领空」(D-S315-01)。 */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.production.SecondaryPlanFeedService secondaryPlanFeedService;
@@ -276,6 +280,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         assertColumnLimits(req);
         // 缺口 04: 同理放在最前面 —— 下面的端口校验 / 领料分配都不该在上游没料时先跑。
         assertWorkflowUpstreamReady(factoryId, planId, req);
+        assertFirstArticleAllowsWorkflowRow(factoryId, planId, req);
         assertSecondaryFeedWithinPlan(factoryId, planId, req);
         if (req.getProcessDate() == null) {
             throw new BusinessException(400, "正式报工必须填写生产日期")
@@ -1221,6 +1226,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         // 1b. 缺口 04: 按工艺图解锁。有正数产出的行会把这道工序记成已报 (WorkflowTaskProgressWriter),
         //     所以上游产出的料还没到时在这里拒绝; 草稿 (saveDraft) 不走本方法, 照常可存。
         assertWorkflowUpstreamReady(factoryId, planId, req);
+        assertFirstArticleAllowsWorkflowRow(factoryId, planId, req);
         assertSecondaryFeedWithinPlan(factoryId, planId, req);
 
         // 1c. 缺口 14: 工序间 / 投料时限。放在多产出分支之前。正式提交已在扣回料之前判过 (见 submitRow)。
@@ -1736,11 +1742,57 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 .isPresent();
     }
 
+    /**
+     * 工序首检 (工厂开关 = 拦截): 有正数产出的正式行会把这道工序记成完成, 首检没合格 → 409。
+     * 放在写入前 (与上面的上游解冻闸同位置)。开关关 / 提示时只问一次开关, 不读 Workflow 快照、不找任务。
+     */
+    private void assertFirstArticleAllowsWorkflowRow(String factoryId, String planId, ProcessSheetRowRequest req) {
+        if (firstArticleGate == null || workflowClerkSheetService == null || req.getProcessOrder() == null) {
+            return;
+        }
+        boolean positiveOutput = req.getOutputs() != null && !req.getOutputs().isEmpty()
+                ? req.getOutputs().stream().anyMatch(o -> o.getQuantity() != null && o.getQuantity().signum() > 0)
+                : req.getOutputQuantity() != null && req.getOutputQuantity().signum() > 0;
+        if (!positiveOutput || !firstArticleGate.isBlocking(factoryId)) {
+            return;
+        }
+        assertFirstArticleForWorkflowTask(factoryId, req.getProcessOrder(),
+                workflowClerkSheetService.getWorkflowSheetConfig(factoryId, planId));
+    }
+
+    /** 按 Workflow 快照找到这道工序的任务并过首检闸 (调用方已确认开关是拦截)。 */
+    private void assertFirstArticleForWorkflowTask(String factoryId, Integer processOrder,
+                                                   WorkflowClerkSheetConfigDTO config) {
+        if (config == null || config.getWorkflowInstanceId() == null || config.getProcesses() == null
+                || processOrder == null) {
+            return;
+        }
+        String nodeId = config.getProcesses().stream()
+                .filter(p -> processOrder.equals(p.getProcessOrder()))
+                .map(WorkflowClerkSheetConfigDTO.ProcessDescriptor::getWorkflowNodeId)
+                .filter(Objects::nonNull)
+                .findFirst()
+                .orElse(null);
+        if (nodeId == null) {
+            return;
+        }
+        taskRepo.findByFactoryIdAndWorkflowInstanceIdOrderByProcessOrderAsc(factoryId, config.getWorkflowInstanceId())
+                .stream()
+                .filter(t -> nodeId.equals(t.getWorkflowNodeId()))
+                .findFirst()
+                .ifPresent(task -> firstArticleGate.assertCanComplete(factoryId, task));
+    }
+
     private void stampWorkflowTaskIfApplicable(
             String factoryId,
             String planId,
             ProcessSheetRowRequest req,
             WorkflowClerkSheetConfigDTO config) {
+        // 工序首检兜底: 改行 / 多产出 / 重新物化等不经过上面前置闸的路径, 在发「记成完成」之前再判一次;
+        // 抛出时整次保存在同一事务里回滚。开关关 / 提示时只问一次开关。
+        if (firstArticleGate != null && config != null && firstArticleGate.isBlocking(factoryId)) {
+            assertFirstArticleForWorkflowTask(factoryId, req.getProcessOrder(), config);
+        }
         publishWorkflowTaskProgress(factoryId, planId, req.getProcessOrder(), req.getOutputQuantity(),
                 config, true);
     }
@@ -1932,6 +1984,11 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         // 不能删完旧组后才发现单位/端口错误。
         WorkflowClerkSheetConfigDTO workflowConfig =
                 validateMultiOutputAgainstWorkflow(factoryId, planId, req);
+        // 2a. 回料不得承载投入 (14c 2026-11-14): 首产出行承载全部投入并物化成 WIP material_batch;
+        //     回料要进 semi_finished_inventory(is_rework=true) 才能被下一道当回料选到。回料的 rework
+        //     角色此时已由 Workflow 快照裁定 (上一步), 按它重排。
+        outs = carrierFirstOutputs(outs);
+        req.setOutputs(outs);
 
         // 2b. 重存 (B2): base#* 组已存在 → 先删旧组 (级联反物化), 再建新组。整组无小结/无下游消耗才可删。
         deleteMultiOutputGroupIfPresent(factoryId, planId, req.getClientRowId(), userId);
@@ -1986,6 +2043,31 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 false, true, warnings);
         result.setOutputs(outputResults);
         return result;
+    }
+
+    /**
+     * 把非回料产出排到最前, 让它承载本组全部投入 (首产出行 = 投入承载行, 见 saveMultiOutputRow 第 3 步)。
+     *
+     * <p>回料若排在首位, 会带着投入走 WIP material_batch 物化, 不产生 is_rework 的半成品库存,
+     * 下一道的回料下拉永远看不到它 —— 报工却显示成功 (14c F006 PLAN-1794591097738-82F4762E)。
+     * 只有回料、没有主产出时没有合法的承载行, 明确拒绝而不是错记。非回料之间、回料之间保持原相对顺序。
+     */
+    static List<ProcessSheetRowRequest.OutputLine> carrierFirstOutputs(
+            List<ProcessSheetRowRequest.OutputLine> outs) {
+        List<ProcessSheetRowRequest.OutputLine> main = outs.stream()
+                .filter(o -> !Boolean.TRUE.equals(o.getRework()))
+                .toList();
+        if (main.isEmpty()) {
+            throw new BusinessException(400, "本次报工只填了回料产出，没有主产出，回料无法单独入账")
+                    .withCode("PROCESS_SHEET_REWORK_ONLY_OUTPUT")
+                    .withHint("请同时填写本工序的主产出数量，回料随主产出一起报工");
+        }
+        if (main.size() == outs.size()) {
+            return outs;
+        }
+        List<ProcessSheetRowRequest.OutputLine> ordered = new ArrayList<>(main);
+        outs.stream().filter(o -> Boolean.TRUE.equals(o.getRework())).forEach(ordered::add);
+        return List.copyOf(ordered);
     }
 
     /**
@@ -4144,6 +4226,16 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     // Edge resolution (factory-scoped 🔒)
     // ─────────────────────────────────────────────────────────────
 
+    private void assertRawSourceOwnership(String factoryId, String planId, MaterialBatch rawMb) {
+        com.cretas.aims.entity.ProductionPlan plan = productionPlanRepository.findByIdAndFactoryId(planId, factoryId)
+                .orElseThrow(() -> new BusinessException(404, "生产计划不存在: " + planId));
+        String mainCategory = rawMaterialTypeRepository == null || rawMb.getMaterialTypeId() == null ? null
+                : rawMaterialTypeRepository.findByIdAndFactoryId(rawMb.getMaterialTypeId(), factoryId)
+                        .map(com.cretas.aims.entity.RawMaterialType::getMainCategory).orElse(null);
+        com.cretas.aims.service.processentry.ProductionInventoryOwnershipGuard.assertRawSourceAllowed(
+                plan, rawMb, mainCategory, "原料批次");
+    }
+
     private List<ResolvedEdge> resolveEdges(String factoryId, String planId, ProcessSheetRowRequest req) {
         List<ResolvedEdge> edges = new ArrayList<>();
 
@@ -4161,6 +4253,11 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                         rawMb.getQuantityUnit(),
                         "原料批次");
                 ensureRawMaterialWarehouse(factoryId, planId, rawMb);
+                // 排查 2026-11-10 A4 (清点补出的同类入口): 报工原料来源不许是待检 / 报废 / 不良品
+                // (事后补录: 领出后才过期的不拦, 见 assertReportable)
+                com.cretas.aims.service.gate.MaterialBatchStateGate.assertReportable(rawMb);
+                // #1606 审查 M4: 原料来源的归属与领料同一口径 (客户料只进该客户订单的计划, 公司计划不吃客户料)
+                assertRawSourceOwnership(factoryId, planId, rawMb);
                 edges.add(new ResolvedEdge(
                         rawMb,
                         storageQuantity,

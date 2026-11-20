@@ -24,8 +24,8 @@
  * 每一行都要人自己敲数字再保存 —— 那正是本次改动要恢复的东西。
  */
 import { ref, computed, onMounted } from 'vue';
-import { ElMessage, ElMessageBox } from 'element-plus';
-import { Refresh, EditPen } from '@element-plus/icons-vue';
+import { ElMessage } from 'element-plus';
+import type { CsTableColumn as TableColumn } from '@/types/csTable';
 import { useAuthStore } from '@/store/modules/auth';
 import { PROCESS_SECRET_LABEL, isProcessSecretRow, processSecretMessage } from '@/utils/processSecretField';
 import {
@@ -81,6 +81,14 @@ const YIELD_RATE_MAX_PERCENT = 300;
 const canEdit = computed(() => WRITE_ROLES.includes(String(authStore.currentRole ?? '')));
 const factoryId = computed(() => authStore.factoryId);
 
+const columns: TableColumn<RecalculatePreviewRow>[] = [
+  { accessorKey: 'productName', header: '成品' },
+  { accessorKey: 'materialName', header: '主原料' },
+  { id: 'current', header: '标准出成率' },
+  { id: 'suggestion', header: '系统实测 (参考)' },
+  { id: 'actions', header: '操作' },
+];
+
 const loading = ref(false);
 const rows = ref<RecalculatePreviewRow[]>([]);
 const saving = ref<Record<string, boolean>>({});
@@ -122,45 +130,45 @@ function suggestionText(row: RecalculatePreviewRow): string {
   return `${row.suggestedYieldRate}%  (${row.sampleCount} 批)`;
 }
 
-async function handleEdit(row: RecalculatePreviewRow) {
+/** 编辑弹窗(UModal)的状态: 打开时预填的是「当前值」, ⛔ 不是系统建议。 */
+const editVisible = ref(false);
+const edit = ref<{ row: RecalculatePreviewRow; hint: string; inputValue: string } | null>(null);
+const editError = computed(() => {
+  const value = edit.value?.inputValue ?? '';
+  if (!edit.value || value === '') return '';
+  const v = Number(value);
+  if (Number.isNaN(v)) return '请输入数字';
+  if (v <= 0) return '出成率必须大于 0';
+  // 🔴 2026-09-06 (RECON-LEGAL-VALUE-SENTINEL-20260906): 放开 >100 与 ===100 两条拒绝。
+  //    · 100% 现在是**合法**的零损耗值 —— 后端已不再把它当「未配置」哨兵。
+  //    · 保水/腌制工序出成率天然 >100 (六膳门猪舌 105–126%)。
+  // ⚠️ 三层同一条规则, 改这里必须同时改另外两处(形态 D):
+  //    BomYieldApplyRequest 的 @DecimalMin/@DecimalMax、
+  //    BomYieldEstimateServiceImpl#assertYieldRateInRange、
+  //    DB 的 bom_recipes.chk_br_yield (V20261101_32 放宽到 300)。
+  if (v > YIELD_RATE_MAX_PERCENT) {
+    return `出成率不能超过 ${YIELD_RATE_MAX_PERCENT}%（超过通常是小数点点错了，请核对）`;
+  }
+  return '';
+});
+const editInvalid = computed(() => !edit.value?.inputValue || !!editError.value);
+
+function handleEdit(row: RecalculatePreviewRow) {
   const hint = row.suggestedYieldRate == null
     ? '这个成品还没有足够的生产数据，请按研发标准填写。'
     : `系统按 ${row.sampleCount} 个批次实测的中位数是 ${row.suggestedYieldRate}%，仅供参考。`;
+  edit.value = {
+    row,
+    hint,
+    inputValue: row.currentYieldRate == null ? '' : String(row.currentYieldRate),
+  };
+  editVisible.value = true;
+}
 
-  let input: string;
-  try {
-    const result = await ElMessageBox.prompt(
-      `${hint}\n\n标准出成率是备料计算的基准线，改动会影响之后所有计划的用料估算。`,
-      `设置标准出成率 — ${row.productName}`,
-      {
-        confirmButtonText: '保存',
-        cancelButtonText: '取消',
-        inputValue: row.currentYieldRate == null ? '' : String(row.currentYieldRate),
-        inputPlaceholder: '例如 60 表示 60%',
-        inputValidator: (value: string) => {
-          const v = Number(value);
-          if (!value || Number.isNaN(v)) return '请输入数字';
-          if (v <= 0) return '出成率必须大于 0';
-          // 🔴 2026-09-06 (RECON-LEGAL-VALUE-SENTINEL-20260906): 放开 >100 与 ===100 两条拒绝。
-          //    · 100% 现在是**合法**的零损耗值 —— 后端已不再把它当「未配置」哨兵
-          //      (ProductionPlanServiceImpl#resolveEffectiveProductYieldRate 那道
-          //       isMainMaterialCandidate 闸已删除)。旧提示教用户填 99.99 是在教一个错误的绕法。
-          //    · 保水/腌制工序出成率天然 >100 (六膳门猪舌 105–126%), 原来的 ≤100 把它们挡死了。
-          // ⚠️ 三层同一条规则, 改这里必须同时改另外两处(形态 D):
-          //    BomYieldApplyRequest 的 @DecimalMin/@DecimalMax、
-          //    BomYieldEstimateServiceImpl#assertYieldRateInRange、
-          //    DB 的 bom_recipes.chk_br_yield (V20261101_32 放宽到 300)。
-          if (v > YIELD_RATE_MAX_PERCENT) {
-            return `出成率不能超过 ${YIELD_RATE_MAX_PERCENT}%（超过通常是小数点点错了，请核对）`;
-          }
-          return true;
-        },
-      },
-    ) as { value: string };
-    input = result.value;
-  } catch {
-    return; // 用户取消
-  }
+async function confirmEdit() {
+  if (!edit.value || editInvalid.value) return;
+  const { row, inputValue: input } = edit.value;
+  editVisible.value = false;
 
   saving.value[row.recipeId] = true;
   try {
@@ -198,90 +206,99 @@ onMounted(loadData);
 
 <template>
   <div class="page-wrapper">
-    <el-card class="page-card" shadow="never">
-      <template #header>
-        <div class="card-header">
-          <span class="page-title">标准出成率维护</span>
-          <el-button :icon="Refresh" :loading="loading" @click="loadData">刷新</el-button>
-        </div>
-      </template>
+    <div class="cs-page-head">
+      <h2>标准出成率维护</h2>
+      <UButton icon="i-lucide-refresh-cw" color="neutral" variant="outline" :loading="loading" @click="loadData">刷新</UButton>
+    </div>
 
-      <el-alert type="info" :closable="false" show-icon class="intro">
-        <template #title>标准出成率只能人工填写，不会被生产结果自动改掉</template>
+    <UAlert color="info" variant="subtle" icon="i-lucide-info" class="intro" title="标准出成率只能人工填写，不会被生产结果自动改掉">
+      <template #description>
         <div class="intro-body">
           它是<b>报价、备料、成本对账共同的基准线</b>：填了之后，新建生产计划时才能按
           「计划量 ÷ 出成率」算出要投多少主料 —— 哪怕这个成品<b>一次都还没生产过</b>。
           实际生产的波动记在报工里，与这条线分开看，用来发现偏差。
         </div>
-      </el-alert>
+      </template>
+    </UAlert>
 
-      <el-alert
-        v-if="!canEdit"
-        type="warning"
-        :closable="false"
-        show-icon
-        class="intro"
-        title="你的账号只能查看"
-      >
+    <UAlert
+      v-if="!canEdit"
+      color="warning"
+      variant="subtle"
+      icon="i-lucide-triangle-alert"
+      class="intro"
+      title="你的账号只能查看"
+    >
+      <template #description>
         <div class="intro-body">标准出成率的修改权限限工厂超管 / 平台管理员。需要修改请联系张权。</div>
-      </el-alert>
+      </template>
+    </UAlert>
 
-      <el-table v-loading="loading" :data="rows" border stripe class="yield-table">
-        <el-table-column prop="productName" label="成品" min-width="200" show-overflow-tooltip />
-        <el-table-column prop="materialName" label="主原料" min-width="150" show-overflow-tooltip />
-        <el-table-column label="标准出成率" width="150" align="center">
-          <template #default="{ row }">
-            <el-tooltip v-if="isProcessSecretRow(row)" :content="processSecretMessage(row)">
-              <el-tag type="info" effect="plain">{{ PROCESS_SECRET_LABEL }}</el-tag>
-            </el-tooltip>
-            <el-tag v-else-if="row.currentYieldRate == null" type="danger" effect="plain">未填</el-tag>
-            <span v-else class="current-value">{{ currentText(row) }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="系统实测 (参考)" width="200" align="center">
-          <template #default="{ row }">
-            <span v-if="isProcessSecretRow(row)" class="suggestion">{{ PROCESS_SECRET_LABEL }}</span>
-            <span v-else class="suggestion">{{ suggestionText(row) }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="140" align="center" fixed="right">
-          <template #default="{ row }">
-            <!-- 工艺保密: 标准出成率对当前账号隐藏的行不给修改入口 (会把「已保密」当成「未填」去填) -->
-            <el-tooltip v-if="isProcessSecretRow(row)" :content="processSecretMessage(row)">
-              <el-tag type="info" effect="plain" size="small">需授权才能修改</el-tag>
-            </el-tooltip>
-            <el-button
-              v-else
-              link
-              type="primary"
-              :icon="EditPen"
-              :disabled="!canEdit"
-              :loading="saving[row.recipeId]"
-              @click="handleEdit(row)"
-            >
-              {{ row.currentYieldRate == null ? '填写' : '修改' }}
-            </el-button>
-          </template>
-        </el-table-column>
+    <section class="cs-card">
+      <UTable :data="rows" :columns="columns" :loading="loading" class="cs-table">
+        <template #current-cell="{ row }">
+          <span v-if="isProcessSecretRow(row.original)" :title="processSecretMessage(row.original)">
+            <UBadge color="neutral" variant="outline">{{ PROCESS_SECRET_LABEL }}</UBadge>
+          </span>
+          <UBadge v-else-if="row.original.currentYieldRate == null" color="error" variant="outline">未填</UBadge>
+          <span v-else class="current-value">{{ currentText(row.original) }}</span>
+        </template>
+        <template #suggestion-cell="{ row }">
+          <span v-if="isProcessSecretRow(row.original)" class="suggestion">{{ PROCESS_SECRET_LABEL }}</span>
+          <span v-else class="suggestion">{{ suggestionText(row.original) }}</span>
+        </template>
+        <template #actions-cell="{ row }">
+          <!-- 工艺保密: 标准出成率对当前账号隐藏的行不给修改入口 (会把「已保密」当成「未填」去填) -->
+          <span v-if="isProcessSecretRow(row.original)" :title="processSecretMessage(row.original)">
+            <UBadge color="neutral" variant="outline">需授权才能修改</UBadge>
+          </span>
+          <UButton
+            v-else
+            variant="link"
+            icon="i-lucide-pencil"
+            :disabled="!canEdit"
+            :loading="saving[row.original.recipeId]"
+            @click="handleEdit(row.original)"
+          >
+            {{ row.original.currentYieldRate == null ? '填写' : '修改' }}
+          </UButton>
+        </template>
         <template #empty>
           <div class="empty-hint">
             没有可维护的配方。<br />
             标准出成率挂在成品的 BOM 配方上 —— 若这里是空的，先确认该成品已经有 ACTIVE 配方且配了物料明细。
           </div>
         </template>
-      </el-table>
-    </el-card>
+      </UTable>
+    </section>
+
+    <UModal
+      v-model:open="editVisible"
+      :title="`设置标准出成率 — ${edit?.row.productName ?? ''}`"
+      description="标准出成率是备料计算的基准线"
+      :ui="{ content: 'max-w-[480px]', description: 'sr-only' }"
+    >
+      <template #body>
+        <p class="edit-hint">{{ edit?.hint }}</p>
+        <p class="edit-hint">标准出成率是备料计算的基准线，改动会影响之后所有计划的用料估算。</p>
+        <UFormField label="标准出成率 (%)" :error="editError || undefined">
+          <UInput v-if="edit" v-model="edit.inputValue" placeholder="例如 60 表示 60%" class="w-full" data-testid="yield-input" @keydown.enter="confirmEdit" />
+        </UFormField>
+      </template>
+      <template #footer>
+        <UButton color="neutral" variant="outline" @click="editVisible = false">取消</UButton>
+        <UButton :disabled="editInvalid" data-testid="yield-save" @click="confirmEdit">保存</UButton>
+      </template>
+    </UModal>
   </div>
 </template>
 
 <style scoped>
-.page-wrapper { padding: 16px; }
-.card-header { display: flex; align-items: center; justify-content: space-between; }
-.page-title { font-size: 16px; font-weight: 600; }
-.intro { margin-bottom: 12px; }
-.intro-body { line-height: 1.7; font-size: 13px; }
-.yield-table { margin-top: 8px; }
-.current-value { font-weight: 600; }
-.suggestion { color: #909399; font-size: 13px; }
-.empty-hint { padding: 24px; color: #909399; line-height: 1.8; }
+.page-wrapper { padding: var(--cs-space-4); }
+.intro { margin-bottom: var(--cs-space-3); }
+.intro-body { line-height: 1.7; font-size: var(--cs-font); }
+.current-value { font-weight: 600; font-variant-numeric: tabular-nums; }
+.suggestion { color: var(--cs-muted); font-size: 13px; }
+.empty-hint { padding: var(--cs-space-5); color: var(--cs-muted); line-height: 1.8; }
+.edit-hint { margin: 0 0 var(--cs-space-3); color: var(--cs-muted); line-height: 1.6; }
 </style>

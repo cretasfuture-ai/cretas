@@ -65,6 +65,13 @@ class MaterialConsumptionTraceContractTest {
         ReflectionTestUtils.setField(service, "inventoryLowStockEventPublisher",
                 mock(InventoryLowStockEventPublisher.class));
         ReflectionTestUtils.setField(service, "productionPlanRepository", planRepository);
+        // 排查 2026-11-10 A4/A5: 带计划的领料 / 消耗要核对归属 —— 桩成本厂的公司备料计划
+        org.mockito.Mockito.lenient().when(planRepository.findById(org.mockito.ArgumentMatchers.anyString())).thenAnswer(inv -> {
+            com.cretas.aims.entity.ProductionPlan p = new com.cretas.aims.entity.ProductionPlan();
+            p.setId(inv.getArgument(0));
+            p.setFactoryId("F006");
+            return java.util.Optional.of(p);
+        });
     }
 
     private MaterialBatch batch() {

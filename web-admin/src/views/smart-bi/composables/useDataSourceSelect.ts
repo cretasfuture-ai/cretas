@@ -102,3 +102,26 @@ export function pickDefaultDataSource(deduped: UploadHistoryItem[]): UploadHisto
 
 // re-export baseName for potential reuse / testability without widening default API surface
 export { baseName as _baseNameForTest };
+
+/**
+ * 「全部数据」选项 (味美 11-19 B3): 下拉值用 0 表示没选具体表，请求里不带 uploadId，
+ * 由后端按问题自动选表 (backend/python/smartbi/services/upload_auto_select.py)。
+ */
+export const ALL_DATA_SOURCE_ID = 0;
+export const ALL_DATA_SOURCE_LABEL = '全部数据（按问题自动选表）';
+
+/** 只保留保存成功的上传 (status=COMPLETED)；后端过滤之外前端再兜一道。 */
+export function onlyCompletedUploads(list: UploadHistoryItem[]): UploadHistoryItem[] {
+  if (!Array.isArray(list)) return [];
+  return list.filter(d => !d.status || d.status.toUpperCase() === 'COMPLETED');
+}
+
+/**
+ * 进入问数据页时的默认数据源。
+ * 工厂 / 总部：默认「全部数据」，不再落到最新一份上传 (味美实测默认落到错表)。
+ * 餐饮：保持原来的 pickDefaultDataSource (#8 评价文件规避逻辑)。
+ */
+export function pickInitialDataSourceId(deduped: UploadHistoryItem[], isRestaurant: boolean): number | null {
+  if (!isRestaurant) return ALL_DATA_SOURCE_ID;
+  return pickDefaultDataSource(deduped)?.id ?? null;
+}

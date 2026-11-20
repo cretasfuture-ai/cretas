@@ -45,42 +45,42 @@ class BackdateWindowValidatorTest {
     @Test
     @DisplayName("T (今天) → 放行")
     void today_allowed() {
-        assertThatCode(() -> validator.assertWithinWindow(TODAY, "报工", TODAY))
+        assertThatCode(() -> validator.assertWithinWindow("F001", TODAY, "报工", TODAY))
                 .doesNotThrowAnyException();
     }
 
     @Test
     @DisplayName("T-1 (昨天) → 放行")
     void yesterday_allowed() {
-        assertThatCode(() -> validator.assertWithinWindow(TODAY.minusDays(1), "报工", TODAY))
+        assertThatCode(() -> validator.assertWithinWindow("F001", TODAY.minusDays(1), "报工", TODAY))
                 .doesNotThrowAnyException();
     }
 
     @Test
     @DisplayName("T-2 (前天) 边界 → 放行")
     void dayBeforeYesterday_boundary_allowed() {
-        assertThatCode(() -> validator.assertWithinWindow(TODAY.minusDays(2), "报工", TODAY))
+        assertThatCode(() -> validator.assertWithinWindow("F001", TODAY.minusDays(2), "报工", TODAY))
                 .doesNotThrowAnyException();
     }
 
     @Test
     @DisplayName("T+1 (明天 / 未来) → 放行 (未来不拦)")
     void future_allowed() {
-        assertThatCode(() -> validator.assertWithinWindow(TODAY.plusDays(1), "原料入库", TODAY))
+        assertThatCode(() -> validator.assertWithinWindow("F001", TODAY.plusDays(1), "原料入库", TODAY))
                 .doesNotThrowAnyException();
     }
 
     @Test
     @DisplayName("T+30 (远未来) → 放行")
     void farFuture_allowed() {
-        assertThatCode(() -> validator.assertWithinWindow(TODAY.plusDays(30), "原料入库", TODAY))
+        assertThatCode(() -> validator.assertWithinWindow("F001", TODAY.plusDays(30), "原料入库", TODAY))
                 .doesNotThrowAnyException();
     }
 
     @Test
     @DisplayName("null businessDate → 放行 (系统取今天)")
     void nullDate_allowed() {
-        assertThatCode(() -> validator.assertWithinWindow(null, "报工", TODAY))
+        assertThatCode(() -> validator.assertWithinWindow("F001", null, "报工", TODAY))
                 .doesNotThrowAnyException();
     }
 
@@ -92,7 +92,7 @@ class BackdateWindowValidatorTest {
     @DisplayName("T-3 (大前天) → 拒绝 409 BACKDATE_WINDOW_EXCEEDED")
     void threeDaysAgo_rejected() {
         LocalDate t3 = TODAY.minusDays(3);
-        assertThatThrownBy(() -> validator.assertWithinWindow(t3, "报工", TODAY))
+        assertThatThrownBy(() -> validator.assertWithinWindow("F001", t3, "报工", TODAY))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(ex -> {
                     BusinessException be = (BusinessException) ex;
@@ -109,7 +109,7 @@ class BackdateWindowValidatorTest {
     @DisplayName("T-30 (一个月前) → 拒绝")
     void thirtyDaysAgo_rejected() {
         LocalDate t30 = TODAY.minusDays(30);
-        assertThatThrownBy(() -> validator.assertWithinWindow(t30, "原料入库", TODAY))
+        assertThatThrownBy(() -> validator.assertWithinWindow("F001", t30, "原料入库", TODAY))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(ex -> {
                     BusinessException be = (BusinessException) ex;
@@ -127,7 +127,7 @@ class BackdateWindowValidatorTest {
 
         BusinessException thrown = null;
         try {
-            validator.assertWithinWindow(t3, "报工", TODAY);
+            validator.assertWithinWindow("F001", t3, "报工", TODAY);
         } catch (BusinessException e) {
             thrown = e;
         }
@@ -146,7 +146,7 @@ class BackdateWindowValidatorTest {
     @DisplayName("maxDays=1: T-1 → 放行 (边界)")
     void maxDaysOne_yesterdayAllowed() {
         ReflectionTestUtils.setField(validator, "maxDays", 1);
-        assertThatCode(() -> validator.assertWithinWindow(TODAY.minusDays(1), "报工", TODAY))
+        assertThatCode(() -> validator.assertWithinWindow("F001", TODAY.minusDays(1), "报工", TODAY))
                 .doesNotThrowAnyException();
     }
 
@@ -154,7 +154,7 @@ class BackdateWindowValidatorTest {
     @DisplayName("maxDays=1: T-2 → 拒绝")
     void maxDaysOne_twoDaysAgoRejected() {
         ReflectionTestUtils.setField(validator, "maxDays", 1);
-        assertThatThrownBy(() -> validator.assertWithinWindow(TODAY.minusDays(2), "报工", TODAY))
+        assertThatThrownBy(() -> validator.assertWithinWindow("F001", TODAY.minusDays(2), "报工", TODAY))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(ex -> assertThat(((BusinessException) ex).getCode()).isEqualTo(409));
     }
@@ -167,7 +167,7 @@ class BackdateWindowValidatorTest {
     @DisplayName("maxDays=0: T → 放行")
     void maxDaysZero_todayAllowed() {
         ReflectionTestUtils.setField(validator, "maxDays", 0);
-        assertThatCode(() -> validator.assertWithinWindow(TODAY, "报工", TODAY))
+        assertThatCode(() -> validator.assertWithinWindow("F001", TODAY, "报工", TODAY))
                 .doesNotThrowAnyException();
     }
 
@@ -175,7 +175,7 @@ class BackdateWindowValidatorTest {
     @DisplayName("maxDays=0: T-1 → 拒绝")
     void maxDaysZero_yesterdayRejected() {
         ReflectionTestUtils.setField(validator, "maxDays", 0);
-        assertThatThrownBy(() -> validator.assertWithinWindow(TODAY.minusDays(1), "报工", TODAY))
+        assertThatThrownBy(() -> validator.assertWithinWindow("F001", TODAY.minusDays(1), "报工", TODAY))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(ex -> assertThat(((BusinessException) ex).getErrorCode())
                         .isEqualTo("BACKDATE_WINDOW_EXCEEDED"));
@@ -188,7 +188,7 @@ class BackdateWindowValidatorTest {
     @Test
     @DisplayName("context 字符串正确出现在错误消息中")
     void contextAppearsInMessage() {
-        assertThatThrownBy(() -> validator.assertWithinWindow(TODAY.minusDays(3), "原料入库", TODAY))
+        assertThatThrownBy(() -> validator.assertWithinWindow("F001", TODAY.minusDays(3), "原料入库", TODAY))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(ex -> assertThat(ex.getMessage()).contains("原料入库"));
     }

@@ -1,154 +1,104 @@
 <template>
-  <div class="income-statement">
-    <el-card shadow="never">
-      <template #header>
-        <div class="header">
-          <div class="title">
-            <h3>利润表</h3>
-            <span v-if="validMonths" class="subtitle">
-              期间累计: {{ startYear }}-{{ String(startMonth).padStart(2, '0') }} 至
-              {{ endYear }}-{{ String(endMonth).padStart(2, '0') }}
-            </span>
-          </div>
-          <div class="actions">
-            <el-date-picker
-              v-model="dateRange"
-              type="monthrange"
-              format="YYYY-MM"
-              value-format="YYYY-MM"
-              range-separator="至"
-              start-placeholder="起始月"
-              end-placeholder="结束月"
-              :disabled-date="disabledFuture"
-              style="margin-right: 12px;"
-            />
-            <el-button type="primary" :loading="loading" @click="load">刷新</el-button>
-          </div>
-        </div>
-      </template>
-
-      <el-alert v-if="errorMessage" :title="errorMessage" type="error" show-icon :closable="false" data-testid="income-error" />
-      <el-alert v-if="data?.scopeApplied" type="info" :closable="false" show-icon
-        :title="data.scopeLabel" :description="data.scopeNote" style="margin-bottom: 16px;" />
-      <el-skeleton v-if="loading" :rows="10" animated />
-      <div v-else-if="!data" class="empty">
-        <el-empty description="暂无数据 — 请选择期间后点击刷新" />
+  <section class="rounded-lg border border-default bg-default" data-testid="income-statement">
+    <header class="flex flex-wrap items-center justify-between gap-3 border-b border-default px-4 py-3">
+      <div class="flex items-baseline gap-2">
+        <h3 class="text-lg font-semibold">利润表</h3>
+        <span v-if="validMonths" class="text-sm text-muted">
+          期间累计: {{ startYear }}-{{ String(startMonth).padStart(2, '0') }} 至
+          {{ endYear }}-{{ String(endMonth).padStart(2, '0') }}
+        </span>
       </div>
-      <div v-else class="statement-body">
-        <!-- F006 财务审计 Bug 6 (2026-07-04): 待过账提示 — 官方报表已切 POSTED-only. -->
-        <el-alert
-          v-if="(data.pendingDraftVoucherCount ?? 0) > 0"
-          type="info"
-          show-icon
-          :closable="false"
-          style="margin-bottom: 16px;"
-        >
-          <template #title>
-            本报表仅含已过账 (POSTED) 凭证; 另有 {{ data.pendingDraftVoucherCount }} 张凭证待过账 (未计入本报表)
-          </template>
-        </el-alert>
+      <div class="flex items-center gap-2">
+        <UInput v-model="startInput" type="month" :max="maxMonth" aria-label="起始月" data-testid="income-start" />
+        <span class="text-muted">至</span>
+        <UInput v-model="endInput" type="month" :max="maxMonth" aria-label="结束月" data-testid="income-end" />
+        <UButton :loading="loading" @click="load">刷新</UButton>
+      </div>
+    </header>
 
-        <el-alert
-          v-if="data.grossMarginStatus === 'MISSING_COST_DATA'"
-          type="warning"
-          show-icon
-          :closable="false"
-          style="margin-bottom: 16px;"
-          :title="data.grossMarginStatusMessage || '期间没有已过账营业成本，利润与毛利率不可计算'"
-          description="下方成本、毛利、营业利润和净利润显示为 —；请补录或同步成本凭证后重新生成。"
+    <div class="flex flex-col gap-4 p-4">
+      <UAlert v-if="errorMessage" color="error" variant="subtle" :title="errorMessage" data-testid="income-error" />
+      <UAlert v-if="data?.scopeApplied" color="info" variant="subtle" :title="data.scopeLabel">
+        <template #description>{{ data.scopeNote }}</template>
+      </UAlert>
+      <div v-if="loading" class="animate-pulse py-10 text-center text-muted">正在读取…</div>
+      <div v-else-if="!data" class="py-10 text-center text-muted">暂无数据 — 请选择期间后点击刷新</div>
+      <template v-else>
+        <!-- F006 财务审计 Bug 6 (2026-07-04): 待过账提示 — 官方报表已切 POSTED-only. -->
+        <UAlert
+          v-if="(data.pendingDraftVoucherCount ?? 0) > 0"
+          color="info"
+          variant="subtle"
+          :title="`本报表仅含已过账 (POSTED) 凭证; 另有 ${data.pendingDraftVoucherCount} 张凭证待过账 (未计入本报表)`"
         />
+        <UAlert
+          v-if="data.grossMarginStatus === 'MISSING_COST_DATA'"
+          color="warning"
+          variant="subtle"
+          :title="data.grossMarginStatusMessage || '期间没有已过账营业成本，利润与毛利率不可计算'"
+        >
+          <template #description>下方成本、毛利、营业利润和净利润显示为 —；请补录或同步成本凭证后重新生成。</template>
+        </UAlert>
 
         <!-- 4 张关键 KPI 卡片 -->
-        <el-row :gutter="16" class="kpi-row">
-          <el-col :span="6">
-            <el-card class="kpi-card">
-              <div class="kpi-label">营业收入</div>
-              <div class="kpi-value revenue">¥ {{ fmt(data.totalRevenue) }}</div>
-            </el-card>
-          </el-col>
-          <el-col :span="6">
-            <el-card class="kpi-card">
-              <div class="kpi-label">营业毛利</div>
-              <div class="kpi-value gross">¥ {{ fmt(displayGrossProfit) }}</div>
-            </el-card>
-          </el-col>
-          <el-col :span="6">
-            <el-card class="kpi-card">
-              <div class="kpi-label">营业利润</div>
-              <div class="kpi-value operating">¥ {{ fmt(displayOperatingProfit) }}</div>
-            </el-card>
-          </el-col>
-          <el-col :span="6">
-            <el-card class="kpi-card">
-              <div class="kpi-label">净利润</div>
-              <div class="kpi-value net" :class="netProfitClass">¥ {{ fmt(displayNetProfit) }}</div>
-            </el-card>
-          </el-col>
-        </el-row>
+        <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
+          <div class="rounded-lg border border-default p-4 text-center" data-testid="income-kpi-revenue">
+            <div class="mb-2 text-sm text-muted">营业收入</div>
+            <div class="font-mono text-xl font-bold text-primary">{{ money(data.totalRevenue) }}</div>
+          </div>
+          <div class="rounded-lg border border-default p-4 text-center">
+            <div class="mb-2 text-sm text-muted">营业毛利</div>
+            <div class="font-mono text-xl font-bold text-success">{{ money(displayGrossProfit) }}</div>
+          </div>
+          <div class="rounded-lg border border-default p-4 text-center">
+            <div class="mb-2 text-sm text-muted">营业利润</div>
+            <div class="font-mono text-xl font-bold text-warning">{{ money(displayOperatingProfit) }}</div>
+          </div>
+          <div class="rounded-lg border border-default p-4 text-center">
+            <div class="mb-2 text-sm text-muted">净利润</div>
+            <div class="font-mono text-xl font-bold" :class="netProfitClass ? 'text-error' : 'text-success'">{{ money(displayNetProfit) }}</div>
+          </div>
+        </div>
 
         <!-- 利润表明细 -->
-        <el-table :data="rows" border stripe size="default" class="statement-table">
-          <el-table-column label="项目" prop="label">
-            <template #default="{ row }">
-              <span :class="{ 'sub-item': row.indent, 'total-item': row.isTotal }">
-                {{ row.label }}
-              </span>
-            </template>
-          </el-table-column>
-          <el-table-column label="金额 (元)" prop="value" align="right" width="200">
-            <template #default="{ row }">
-              <span :class="{ 'total-item': row.isTotal }">
-                ¥ {{ fmt(row.value) }}
-              </span>
-            </template>
-          </el-table-column>
-        </el-table>
+        <UTable :data="rows" :columns="STATEMENT_COLUMNS" data-testid="income-statement-table">
+          <template #label-cell="{ row }">
+            <span :class="{ 'pl-6 text-muted': row.original.indent, 'font-bold text-primary': row.original.isTotal }">{{ row.original.label }}</span>
+          </template>
+          <template #value-cell="{ row }">
+            <span :class="{ 'font-bold text-primary': row.original.isTotal }">{{ money(row.original.value) }}</span>
+          </template>
+        </UTable>
 
         <!-- 明细展开 -->
-        <el-collapse style="margin-top: 16px;">
-          <el-collapse-item title="营业收入明细" name="revenues">
-            <DetailTable :items="data.revenues ?? []" />
-          </el-collapse-item>
-          <el-collapse-item title="营业成本明细" name="costs">
-            <DetailTable :items="data.costs ?? []" />
-          </el-collapse-item>
-          <el-collapse-item title="营业费用明细" name="expenses">
-            <DetailTable :items="data.expenses ?? []" />
-          </el-collapse-item>
-        </el-collapse>
-      </div>
-    </el-card>
-  </div>
+        <details v-for="sec in detailSections" :key="sec.key" class="rounded-lg border border-default" :data-testid="`income-detail-${sec.key}`">
+          <summary class="cursor-pointer px-4 py-3 font-medium">{{ sec.title }}</summary>
+          <UTable :data="sec.items" :columns="DETAIL_COLUMNS">
+            <template #amount-cell="{ row }">{{ fmt(row.original.amount) }}</template>
+          </UTable>
+        </details>
+      </template>
+    </div>
+  </section>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onBeforeUnmount, defineComponent, h } from 'vue';
+import { ref, computed, watch, onBeforeUnmount } from 'vue';
 import { useRoute } from 'vue-router';
-import { ElMessage, ElTable, ElTableColumn } from 'element-plus';
+import { ElMessage } from 'element-plus';
 import { useAuthStore } from '@/store/modules/auth';
-import { getIncomeStatement, type IncomeStatementDTO, type LineItem } from '@/api/financeReport';
+import { getIncomeStatement, type IncomeStatementDTO } from '@/api/financeReport';
 import { readIncomeMonthRange, readMonthRange } from '@/utils/financeReportPeriod';
 
-// Inline tiny detail-table component
-const DetailTable = defineComponent({
-  name: 'IncomeStatementDetailTable',
-  props: { items: { type: Array as () => LineItem[], required: true } },
-  setup(props) {
-    return () => h(ElTable, { data: props.items, size: 'small', border: true, stripe: true }, () => [
-      h(ElTableColumn, { label: '科目编码', prop: 'accountCode', width: 100 }),
-      h(ElTableColumn, { label: '科目名称', prop: 'accountName' }),
-      h(ElTableColumn, {
-        label: '金额 (元)',
-        prop: 'amount',
-        align: 'right',
-        width: 160,
-      }, {
-        default: ({ row }: { row: LineItem }) =>
-          h('span', (row.amount ?? 0).toLocaleString('zh-CN', { minimumFractionDigits: 2 })),
-      }),
-    ]);
-  },
-});
+const DETAIL_COLUMNS = [
+  { accessorKey: 'accountCode', header: '科目编码' },
+  { accessorKey: 'accountName', header: '科目名称' },
+  { id: 'amount', header: '金额 (元)', meta: { class: { th: 'text-right', td: 'text-right' } } },
+];
+const STATEMENT_COLUMNS = [
+  { id: 'label', header: '项目' },
+  { id: 'value', header: '金额 (元)', meta: { class: { th: 'text-right', td: 'text-right' } } },
+];
 
 const authStore = useAuthStore();
 const factoryId = computed(() => authStore.factoryId);
@@ -174,13 +124,31 @@ const startMonth = computed(() => validMonths.value?.[0].slice(5));
 const endYear = computed(() => validMonths.value?.[1].slice(0, 4));
 const endMonth = computed(() => validMonths.value?.[1].slice(5));
 
-function disabledFuture(d: Date) {
-  return d.getTime() > today.getTime();
-}
+// 原生月份输入的上限: 不能选未来月
+const maxMonth = defaultEnd;
+const startInput = computed({
+  get: () => dateRange.value?.[0] ?? '',
+  set: (v: string) => { dateRange.value = [v, dateRange.value?.[1] ?? '']; },
+});
+const endInput = computed({
+  get: () => dateRange.value?.[1] ?? '',
+  set: (v: string) => { dateRange.value = [dateRange.value?.[0] ?? '', v]; },
+});
+
+const detailSections = computed(() => [
+  { key: 'revenues', title: '营业收入明细', items: data.value?.revenues ?? [] },
+  { key: 'costs', title: '营业成本明细', items: data.value?.costs ?? [] },
+  { key: 'expenses', title: '营业费用明细', items: data.value?.expenses ?? [] },
+]);
 
 function fmt(v: number | null | undefined): string {
   if (v == null) return '—';
   return v.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+/** 金额展示: 缺值(无权限/后端没给)显示「—」, 不显示 0。 */
+function money(v: number | null | undefined): string {
+  return v == null ? '—' : `¥ ${fmt(v)}`;
 }
 
 interface Row {
@@ -253,80 +221,3 @@ watch(() => [route.query.periodStart, route.query.periodEnd], () => {
 watch(() => [factoryId.value, route.query.factoryId, ...(dateRange.value ?? [])], () => { void load(); }, { immediate: true });
 onBeforeUnmount(() => { requestSequence++; });
 </script>
-
-<style scoped>
-.income-statement {
-  padding: 16px;
-}
-
-.header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.title h3 {
-  margin: 0;
-  font-size: 18px;
-}
-
-.subtitle {
-  color: var(--el-text-color-secondary);
-  font-size: 13px;
-  margin-left: 8px;
-}
-
-.kpi-row {
-  margin-bottom: 20px;
-}
-
-.kpi-card {
-  text-align: center;
-}
-
-.kpi-label {
-  color: var(--el-text-color-secondary);
-  font-size: 13px;
-  margin-bottom: 8px;
-}
-
-.kpi-value {
-  font-size: 22px;
-  font-weight: 700;
-  font-family: 'Courier New', monospace;
-}
-
-.kpi-value.revenue {
-  color: #409eff;
-}
-
-.kpi-value.gross {
-  color: #67c23a;
-}
-
-.kpi-value.operating {
-  color: #e6a23c;
-}
-
-.kpi-value.net {
-  color: #67c23a;
-}
-
-.kpi-value.net.negative {
-  color: #f56c6c;
-}
-
-.statement-table .sub-item {
-  padding-left: 24px;
-  color: var(--el-text-color-regular);
-}
-
-.statement-table .total-item {
-  font-weight: 700;
-  color: var(--el-color-primary);
-}
-
-.empty {
-  padding: 40px 0;
-}
-</style>

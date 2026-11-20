@@ -144,6 +144,12 @@ public class ProductionBatchCreateTool extends AbstractBusinessTool {
         return true;
     }
 
+    /** 只新建记录、不改已有业务行 (确认前状态核对按新建型处理, 见 ToolExecutor#previewCreatesNewRecordOnly)。 */
+    @Override
+    public boolean previewCreatesNewRecordOnly() {
+        return true;
+    }
+
     // ==================== Preview (R1 max + R4 dedup probe) ====================
 
     @Override
@@ -182,6 +188,7 @@ public class ProductionBatchCreateTool extends AbstractBusinessTool {
         result.put("inProgressQuantity", vc.inProgress);
         result.put("scheduledDate", vc.scheduledDate.toString());
         result.put("productionLine", vc.productionLine);
+        result.put("productionLineName", ProductionLineLabels.display(vc.productionLine));
         result.put("unit", vc.unit);
         result.put("salesOrderId", vc.salesOrderId);
         result.put("salesOrderNumber", vc.salesOrderNumber);
@@ -194,7 +201,7 @@ public class ProductionBatchCreateTool extends AbstractBusinessTool {
                 vc.quantity.stripTrailingZeros().toPlainString(),
                 vc.unit,
                 vc.scheduledDate,
-                vc.productionLine,
+                ProductionLineLabels.display(vc.productionLine),
                 vc.netShortage.stripTrailingZeros().toPlainString(),
                 vc.inProgress.stripTrailingZeros().toPlainString());
         result.put("message", msg);
@@ -249,6 +256,8 @@ public class ProductionBatchCreateTool extends AbstractBusinessTool {
                 .productTypeId(vc.productTypeId)
                 .productName(vc.productName)
                 .plannedQuantity(vc.quantity)
+                // D-W-01: 计划量就是按这个批次的单位填的
+                .plannedUnit(vc.unit)
                 .quantity(vc.quantity)
                 .unit(vc.unit)
                 .status(ProductionBatchStatus.PLANNED)

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ListEmptyExplain from '@/components/common/ListEmptyExplain.vue';
 import { computed, onMounted, ref, watch } from 'vue';
 import { MODULE_LABELS } from './moduleLabels';
 import { useRoute, useRouter } from 'vue-router';
@@ -12,6 +13,7 @@ import { approverHint, currentNodeText } from './nodeLabel';
 import { usePermissionStore } from '@/store/modules/permission';
 import OrderPeekDrawer from '@/views/finance/components/OrderPeekDrawer.vue';
 import { isRouteReachable, PEEKABLE_BY_MODULE } from './approvalDocReach';
+import { scheduleOutcomeHtml, toForceInsertScheduleView } from './forceInsertScheduleOutcome';
 
 /**
  * 业务类型中文名 —— 筛选下拉和表格列共用同一份。
@@ -28,6 +30,8 @@ import { isRouteReachable, PEEKABLE_BY_MODULE } from './approvalDocReach';
  * 客户截图里的「未知状态（BUDGET）」就是这么来的。加在这里只会再漂一次。
  */
 import { handleCatchError } from '@/utils/errorToast';
+import { useSelfApprovalSwitch } from '@/composables/useSelfApprovalSwitch';
+import { validateSelfApprovalReason } from '@/utils/selfApproval';
 import { formatDateTime } from '@/utils/dateFormat';
 import { nativeDemoState, nativePurchaseApprovalContext, useNativeDemoAdapters } from '@/demo/f006NativeBridge';
 import { commerceAdapter, entityFromResponse } from '@/demo/nativeCommerceSteps';
@@ -78,6 +82,18 @@ const route = useRoute();
 const router = useRouter();
 const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
+// 本人审批 (纪律排查 B2): 盘点差异的发起 / 录入 / 提交人本人审批时, 审批意见即本人审批原因 (后端必填)
+const { allowSelfApproval } = useSelfApprovalSwitch(factoryId);
+/** 盘点审批在本厂允许本人审批时要给原因框; 本人是发起人时必填, 其余 (可能是录入/提交人) 由后端判。 */
+function stocktakeSelfApprovalMode(row: PendingApproval): 'none' | 'required' | 'optional' {
+  if (!allowSelfApproval.value) return 'none';
+  const me = authStore.user?.username;
+  const isInitiator = Boolean(me && row.initiatedByUsername && row.initiatedByUsername === me);
+  // 1551-11: 强制插单的提交人就是发起人; 不是本人时不需要原因框
+  if (row.moduleCode === 'FORCE_INSERT') return isInitiator ? 'required' : 'none';
+  if (row.moduleCode !== 'INVENTORY_ADJUSTMENT') return 'none';
+  return isInitiator ? 'required' : 'optional';
+}
 const loading = ref(false);
 const operatingId = ref('');
 const rows = ref<PendingApproval[]>([]);
@@ -90,6 +106,8 @@ const size = ref(20);
 const ACTIONABLE_MODULE_CODES = new Set([
   'PURCHASE_ORDER', 'SALES_ORDER', 'INVENTORY_TRANSFER', 'INVENTORY_ADJUSTMENT',
   'PRODUCTION_REPORT_CORRECTION',
+  // 1551-11: 强制插单 —— 后端 executeDomainAction 有 FORCE_INSERT 分支 (#1591)
+  'FORCE_INSERT',
 ]);
 const moduleCode = ref('');
 const focusedInstanceId = ref('');
@@ -162,15 +180,38 @@ async function act(row: PendingApproval, action: 'APPROVE' | 'REJECT') {
       // M-13 (2026-08-20, owner 原话:「点击通过的时候必须要浏览一下它整体的内容才可以点击
       // 通过」): 不能是一句空洞的"确定吗?" —— 财务在批几十万到几百万的采购单, 这一步的
       // 目的是让金额等关键信息在按下去之前真的被看到一次。
-      await ElMessageBox.confirm(
-        approveConfirmMessage(row),
-        '通过前请确认单据信息',
-        {
-          confirmButtonText: '审批通过',
-          cancelButtonText: '取消',
-          dangerouslyUseHTMLString: true,
-        },
-      );
+      const selfMode = stocktakeSelfApprovalMode(row);
+      if (selfMode === 'none') {
+        await ElMessageBox.confirm(
+          approveConfirmMessage(row),
+          '通过前请确认单据信息',
+          {
+            confirmButtonText: '审批通过',
+            cancelButtonText: '取消',
+            dangerouslyUseHTMLString: true,
+          },
+        );
+      } else {
+        const result = await ElMessageBox.prompt(
+          approveConfirmMessage(row)
+            + (selfMode === 'required' && row.moduleCode === 'FORCE_INSERT'
+              ? '<p style="margin-top:8px;color:#E6A23C">这张强制插单是你自己提交的。本厂已允许本人审批：必须写明本人审批原因，审批记录会标注为本人审批。</p>'
+              : selfMode === 'required'
+              ? '<p style="margin-top:8px;color:#E6A23C">这张盘点是你自己发起的。本厂已允许本人审批：有盘盈盘亏时必须写明本人审批原因，审批记录会标注为本人审批。</p>'
+              : '<p style="margin-top:8px;color:#909399">如果你是这张盘点的录入人或提交人且有盘盈盘亏，必须写明本人审批原因（本厂已允许本人审批）；不是本人可不填。</p>'),
+          '通过前请确认单据信息',
+          {
+            confirmButtonText: '审批通过',
+            cancelButtonText: '取消',
+            dangerouslyUseHTMLString: true,
+            inputPlaceholder: selfMode === 'required' ? '本人审批原因（必填），例如：本厂只有我一个人盘点和审批' : '本人审批原因（是本人时必填）',
+            inputValidator: value => selfMode === 'required'
+              ? (validateSelfApprovalReason(value) ?? true)
+              : ((value ?? '').trim().length <= 500 || '本人审批原因最多 500 字'),
+          },
+        );
+        notes = (result.value ?? '').trim();
+      }
     }
   } catch {
     return;
@@ -209,6 +250,18 @@ async function act(row: PendingApproval, action: 'APPROVE' | 'REJECT') {
      */
     workspace.invalidateModules(oaInvalidatedModules(row.moduleCode));
     await loadPending();
+    // 强制插单批准走完画布 = 这一刻才排入并顺延: 把排进哪条线、哪天、挤了谁摆给审批人看 (dag-17)
+    if (action === 'APPROVE' && row.moduleCode === 'FORCE_INSERT') {
+      const resultData = (res as { data?: Record<string, unknown> }).data;
+      const view = toForceInsertScheduleView(resultData);
+      if (view) {
+        await ElMessageBox.alert(
+          scheduleOutcomeHtml(view, typeof resultData?.planNumber === 'string' ? resultData.planNumber : null),
+          '插单排程结果',
+          { confirmButtonText: '知道了', dangerouslyUseHTMLString: true },
+        ).catch((): undefined => undefined);
+      }
+    }
     // 客户 2026-07-30「审核后 库存没有过来」: 调拨审批通过 ≠ 库存过账, 还要回单据点一次
     // 「确认调拨入库」。批完人停在 OA 列表, 这里不导航就是 dead-end (防呆 Rule 5) ——
     // 实测客户 3 张单卡在 APPROVED, 最早一张卡了 6 周。
@@ -597,8 +650,8 @@ onMounted(async () => {
         :row-class-name="rowClassName"
         border
         stripe
-        empty-text="暂无待您审批的任务"
       >
+        <template #empty><ListEmptyExplain empty-title="没有待您审批的任务" empty-hint="别人发起并轮到您审批的单据会出现在这里；没有则说明暂无需要您处理的审批。" /></template>
         <!-- 权威表在后端, moduleLabel 由 DTO 下发; MODULE_LABELS 仅兜底 (见其定义处注释) -->
         <el-table-column label="业务类型" width="120">
           <template #default="{ row }">{{ row.moduleLabel || enumLabel(row.moduleCode, MODULE_LABELS) }}</template>

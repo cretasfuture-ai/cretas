@@ -42,6 +42,8 @@ class ShortageCaseServiceContractTest {
     private final SalesOrderRepository orders = mock(SalesOrderRepository.class);
     private final UnitContractService units = mock(UnitContractService.class);
     private ShortageCaseService service;
+    /** 工厂开关: 缺口补到 0 后人工 / 自动关闭; 默认 = 迁移全局默认 (MANUAL)。 */
+    private final Map<String, String> discipline = new HashMap<>();
 
     private final Map<String, ShortageCase> caseStore = new HashMap<>();
     private final List<ShortageCaseLine> lineStore = new ArrayList<>();
@@ -55,7 +57,8 @@ class ShortageCaseServiceContractTest {
 
     @BeforeEach
     void setUp() {
-        service = new ShortageCaseService(analysis, cases, lines, events, supply, orders, units);
+        service = new ShortageCaseService(analysis, cases, lines, events, supply, orders, units,
+                com.cretas.aims.service.discipline.DisciplineFixtures.policy(discipline));
         // 单位契约桩: kg ≡ 千克 ≡ 公斤, 其余按字面 (够区分 kg / g / 箱)
         when(units.areEquivalent(eq("F1"), anyString(), anyString())).thenAnswer(i -> canon(i.getArgument(1)).equals(canon(i.getArgument(2))));
         SalesOrder so = new SalesOrder();
@@ -271,5 +274,139 @@ class ShortageCaseServiceContractTest {
         service.refreshForMaterial("F1", "M1", "PO_SUBMITTED");
 
         assertThat(c.getStage()).isEqualTo(Stage.PARTIALLY_RESOLVED);
+    }
+
+    /**
+     * D-S411-04 审查 M1: 质检放行里把质检中的原料判「不合格」—— 真的 QcReleaseService.decide → 共用翻转发事件 →
+     * 真的 ShortageCaseListener → 真的 ShortageCaseService 重算。「质检中数量」的桩按批次<b>实际状态</b>作答
+     * (INSPECTING 才算 6), 所以快照能不能清零取决于这条链有没有把重算触发出来。
+     */
+    @Test
+    void aQcRejectionOfTheInspectingBatchClearsInspectingQtyAndHandsTheGapBackToProcurement() {
+        com.cretas.aims.entity.MaterialBatch batch = new com.cretas.aims.entity.MaterialBatch();
+        batch.setId("MB-RAW");
+        batch.setFactoryId("F1");
+        batch.setMaterialTypeId("M1");
+        batch.setBatchNumber("MT-RAW-1");
+        batch.setReceiptQuantity(new BigDecimal("6"));
+        batch.setUsedQuantity(BigDecimal.ZERO);
+        batch.setReservedQuantity(BigDecimal.ZERO);
+        batch.setQuantityUnit("kg");
+        batch.setSourceDocType("PURCHASE_RECEIVE");
+        batch.setStatus(com.cretas.aims.entity.enums.MaterialBatchStatus.INSPECTING);
+        when(supply.sumInspectingQuantity(eq("F1"), anyString())).thenAnswer(i ->
+                batch.getStatus() == com.cretas.aims.entity.enums.MaterialBatchStatus.INSPECTING
+                        ? new BigDecimal("6") : BigDecimal.ZERO);
+
+        service.refreshForSalesOrder("F1", "SO-1", "SO_FINANCE_APPROVED");
+        ShortageCase c = caseStore.values().iterator().next();
+        assertThat(onlyLine().getInspectingQty()).isEqualByComparingTo("6");
+        assertThat(c.getOwnerRole()).isEqualTo(ShortageCaseService.ROLE_QUALITY);   // 阳性对照: 起点确实是「等质检」
+
+        ShortageCaseListener listener = new ShortageCaseListener(service);
+        List<Object> published = new ArrayList<>();
+        org.springframework.context.ApplicationEventPublisher publisher = event -> {
+            published.add(event);
+            if (event instanceof com.cretas.aims.event.MaterialBatchInspectionClosedEvent closed) {
+                listener.onMaterialBatchInspectionClosed(closed);
+            } else if (event instanceof com.cretas.aims.event.MaterialBatchReleasedEvent released) {
+                listener.onMaterialBatchReleased(released);
+            }
+        };
+        com.cretas.aims.repository.MaterialBatchRepository batches = mock(com.cretas.aims.repository.MaterialBatchRepository.class);
+        when(batches.findByIdAndFactoryIdForUpdate("MB-RAW", "F1")).thenReturn(Optional.of(batch));
+        when(batches.save(any())).thenAnswer(i -> i.getArgument(0));
+        com.cretas.aims.repository.quality.QcReleaseRecordRepository records =
+                mock(com.cretas.aims.repository.quality.QcReleaseRecordRepository.class);
+        when(records.save(any())).thenAnswer(i -> i.getArgument(0));
+        com.cretas.aims.service.quality.release.QcReleaseService release =
+                new com.cretas.aims.service.quality.release.QcReleaseService(
+                        mock(com.cretas.aims.repository.SemiFinishedInventoryRepository.class), batches,
+                        mock(com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository.class),
+                        mock(com.cretas.aims.repository.ProductTypeRepository.class), records);
+        release.setEventPublisher(publisher);
+
+        release.decide("F1", new com.cretas.aims.service.quality.release.QcReleaseService.DecisionCommand(
+                "RAW_MATERIAL_BATCH", "MB-RAW", "REJECTED", "感官异常"), 9L, "王质检");
+
+        assertThat(batch.getStatus()).isEqualTo(com.cretas.aims.entity.enums.MaterialBatchStatus.DEFECTIVE);
+        assertThat(published).as("判不合格只发「离开质检中」, 不发放行")
+                .singleElement().isInstanceOf(com.cretas.aims.event.MaterialBatchInspectionClosedEvent.class);
+        assertThat(onlyLine().getInspectingQty()).isEqualByComparingTo("0");
+        assertThat(onlyLine().getGapQty()).isEqualByComparingTo("6");
+        assertThat(c.getOwnerRole()).isEqualTo(ShortageCaseService.ROLE_PROCUREMENT);
+        assertThat(c.getLastRefreshReason()).isEqualTo(ShortageCaseListener.REASON_BATCH_QC_REJECTED);
+    }
+
+    // ------------------------------------------------ 工厂开关: 缺口补到 0 后人工 / 自动关闭 (2026-11-11)
+
+    private ShortageCase resolveTheGap() {
+        ShortageCase c = service.refreshForSalesOrder("F1", "SO-1", "SO_FINANCE_APPROVED").orElseThrow();
+        assertThat(c.getStage()).isEqualTo(Stage.DETECTED);
+        available = new BigDecimal("10");
+        return service.refreshForMaterial("F1", "M1", "MATERIAL_BATCH_RELEASED") == 1
+                ? caseStore.get(c.getId()) : null;
+    }
+
+    @Test
+    void closeModeManualDefaultStopsAtGapResolvedAndWaitsForAPerson() {
+        ShortageCase c = resolveTheGap();
+
+        assertThat(c.getStage()).isEqualTo(Stage.GAP_RESOLVED);
+        assertThat(c.getClosedAt()).isNull();
+        assertThat(eventStore).noneMatch(e -> "AUTO_CLOSE".equals(e.getTriggerReason()));
+    }
+
+    @Test
+    void closeModeManualWrittenExplicitlyBehavesLikeTheDefault() {
+        discipline.put(com.cretas.aims.service.canvas.ThresholdKeys.SHORTAGE_CASE_CLOSE_MODE, "MANUAL");
+        ShortageCase c = resolveTheGap();
+        assertThat(c.getStage()).isEqualTo(Stage.GAP_RESOLVED);
+        assertThat(c.getClosedAt()).isNull();
+    }
+
+    @Test
+    void closeModeAutoClosesTheCaseWhenTheGapReachesZeroAndLeavesATrail() {
+        discipline.put(com.cretas.aims.service.canvas.ThresholdKeys.SHORTAGE_CASE_CLOSE_MODE, "auto");
+        ShortageCase c = resolveTheGap();
+
+        assertThat(c.getStage()).isEqualTo(Stage.CLOSED);
+        assertThat(c.getClosedAt()).isNotNull();
+        assertThat(c.getGapResolvedAt()).isNotNull();
+        ShortageCaseEvent last = eventStore.get(eventStore.size() - 1);
+        assertThat(last.getFromStage()).isEqualTo(Stage.GAP_RESOLVED);
+        assertThat(last.getToStage()).isEqualTo(Stage.CLOSED);
+        assertThat(last.getTriggerReason()).isEqualTo("AUTO_CLOSE");
+        assertThat(last.getActorType()).isEqualTo("SYSTEM");
+        // 关了就不再是「未关闭实例」: 再来同一事件不会把它改回去, 也不再记留痕
+        int before = eventStore.size();
+        service.refreshForSalesOrder("F1", "SO-1", "MANUAL_REFRESH");
+        assertThat(eventStore).hasSize(before);
+    }
+
+    @Test
+    void closeModeAutoDoesNotCloseACaseThatStillHasAGap() {
+        discipline.put(com.cretas.aims.service.canvas.ThresholdKeys.SHORTAGE_CASE_CLOSE_MODE, "AUTO");
+        ShortageCase c = service.refreshForSalesOrder("F1", "SO-1", "SO_FINANCE_APPROVED").orElseThrow();
+        assertThat(c.getStage()).isEqualTo(Stage.DETECTED);
+        assertThat(c.getClosedAt()).isNull();
+    }
+
+    @Test
+    void switchingToAutoLaterClosesAnAlreadyResolvedCaseOnTheNextRefresh() {
+        ShortageCase c = resolveTheGap();
+        assertThat(c.getStage()).isEqualTo(Stage.GAP_RESOLVED);
+
+        discipline.put(com.cretas.aims.service.canvas.ThresholdKeys.SHORTAGE_CASE_CLOSE_MODE, "AUTO");
+        service.refreshForSalesOrder("F1", "SO-1", "MANUAL_REFRESH"); // 事实没变 (指纹相同)
+
+        assertThat(c.getStage()).isEqualTo(Stage.CLOSED);
+    }
+
+    @Test
+    void anUnrecognisedCloseModeStaysManual() {
+        discipline.put(com.cretas.aims.service.canvas.ThresholdKeys.SHORTAGE_CASE_CLOSE_MODE, "SOMETIMES");
+        ShortageCase c = resolveTheGap();
+        assertThat(c.getStage()).isEqualTo(Stage.GAP_RESOLVED);
     }
 }

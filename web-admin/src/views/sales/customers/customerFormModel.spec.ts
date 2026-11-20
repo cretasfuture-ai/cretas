@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import {
   countFilledCustomerAdvancedFields,
   customerTypeLabel,
@@ -37,5 +39,13 @@ describe('customer progressive-disclosure form model', () => {
     expect(isCustomerAdvancedField('notes')).toBe(false);
     expect(customerTypeLabel('RESTAURANT')).toBe('餐饮企业');
     expect(customerTypeLabel('')).toBe('未设置');
+    expect(customerTypeLabel('ENTERPRISE')).toBe('企业客户');
+    expect(customerTypeLabel('FOO_BAR')).toBe('未知类型');
+  });
+
+  it('客户详情头部用同一映射函数, 不直出原码', () => {
+    const src = readFileSync(resolve(__dirname, 'detail/CustomerHeader.vue'), 'utf-8');
+    expect(src).toContain('customerTypeLabel(customer.customerType || customer.type)');
+    expect(src).not.toMatch(/\{\{\s*customer\.customerType \|\| customer\.type\s*\}\}/);
   });
 });

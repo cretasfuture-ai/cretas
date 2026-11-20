@@ -7,67 +7,44 @@
   <div class="invoices-tab">
     <div class="toolbar">
       <span class="title">开票记录</span>
-      <el-button :icon="Refresh" @click="fetchList" :loading="state === 'loading'">刷新</el-button>
+      <UButton icon="i-lucide-refresh-cw" color="neutral" variant="outline" :loading="state === 'loading'" @click="fetchList">刷新</UButton>
     </div>
 
-    <el-skeleton v-if="state === 'loading'" :rows="5" animated />
-    <el-empty v-else-if="state === 'empty'" description="该客户暂无开票记录" :image-size="80" />
-    <div v-else-if="state === 'error'" class="error-panel">
-      <el-result icon="error" :title="errorMsg">
-        <template #extra>
-          <el-button type="primary" @click="fetchList">重试</el-button>
-        </template>
-      </el-result>
-    </div>
+    <div v-if="state === 'loading'" class="skeleton"><USkeleton v-for="i in 5" :key="i" class="h-9 w-full" /></div>
+    <UEmpty v-else-if="state === 'empty'" icon="i-lucide-receipt" description="该客户暂无开票记录" />
+    <UAlert v-else-if="state === 'error'" color="error" variant="subtle" :title="errorMsg" :actions="[{ label: '重试', color: 'error', variant: 'outline', onClick: fetchList }]" />
 
     <template v-else>
-      <el-table :data="invoices" border stripe size="small">
-        <el-table-column label="发票号" prop="invoiceNumber" width="180" />
-        <el-table-column label="类型" prop="invoiceType" width="110" />
-        <el-table-column label="状态" prop="status" width="110">
-          <template #default="{ row }">
-            <el-tag size="small">{{ row.status }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="不含税" align="right" width="130">
-          <template #default="{ row }">
-            <span v-if="canViewPrice">{{ formatMoney(row.amount) }}</span>
-            <span v-else class="masked">****</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="税额" align="right" width="120">
-          <template #default="{ row }">
-            <span v-if="canViewPrice">{{ formatMoney(row.taxAmount) }}</span>
-            <span v-else class="masked">****</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="价税合计" align="right" width="140">
-          <template #default="{ row }">
-            <span v-if="canViewPrice">{{ formatMoney(row.totalAmount) }}</span>
-            <span v-else class="masked">****</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="开票日期" width="120">
-          <template #default="{ row }">{{ row.issuedAt ? new Date(row.issuedAt).toLocaleDateString('zh-CN') : '—' }}</template>
-        </el-table-column>
-      </el-table>
+      <UTable :data="invoices" :columns="columns" class="cs-table" data-testid="customer-invoices-table">
+        <template #status-cell="{ row }"><UBadge :color="statusColor(row.original.status)" variant="soft">{{ invoiceStatusText(row.original.status) }}</UBadge></template>
+        <template #invoiceType-cell="{ row }">{{ invoiceTypeText(row.original.invoiceType) }}</template>
+        <template #amount-cell="{ row }">
+          <span v-if="canViewPrice" class="num">{{ formatMoney(row.original.amount) }}</span>
+          <span v-else class="masked">****</span>
+        </template>
+        <template #taxAmount-cell="{ row }">
+          <span v-if="canViewPrice" class="num">{{ formatMoney(row.original.taxAmount) }}</span>
+          <span v-else class="masked">****</span>
+        </template>
+        <template #totalAmount-cell="{ row }">
+          <span v-if="canViewPrice" class="num">{{ formatMoney(row.original.totalAmount) }}</span>
+          <span v-else class="masked">****</span>
+        </template>
+        <template #issuedAt-cell="{ row }">{{ row.original.issuedAt ? new Date(row.original.issuedAt).toLocaleDateString('zh-CN') : '—' }}</template>
+      </UTable>
 
-      <el-pagination
-        class="pagination"
-        background
-        layout="prev, pager, next, total"
-        :total="totalElements"
-        :page-size="pageSize"
-        :current-page="currentPage"
-        @current-change="onPageChange"
-      />
+      <div class="pager">
+        <span class="total">共 {{ totalElements }} 条</span>
+        <UPagination :page="currentPage" :items-per-page="pageSize" :total="totalElements" show-edges :sibling-count="1" @update:page="onPageChange" />
+      </div>
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
-import { Refresh } from '@element-plus/icons-vue';
+import type { CsTableColumn as TableColumn } from '@/types/csTable';
+import { invoiceStatusText, invoiceTypeText, statusColor } from './customerTabLabels';
 import { ElMessage } from 'element-plus';
 import { storeToRefs } from 'pinia';
 import { useAuthStore } from '@/store/modules/auth';
@@ -104,6 +81,16 @@ const invoices = ref<InvoiceRow[]>([]);
 const totalElements = ref(0);
 const currentPage = ref(1);
 const pageSize = 20;
+const R = { class: { th: 'text-right', td: 'text-right' } };
+const columns: TableColumn<InvoiceRow>[] = [
+  { accessorKey: 'invoiceNumber', header: '发票号' },
+  { id: 'invoiceType', header: '类型' },
+  { id: 'status', header: '状态' },
+  { id: 'amount', header: '不含税', meta: R },
+  { id: 'taxAmount', header: '税额', meta: R },
+  { id: 'totalAmount', header: '价税合计', meta: R },
+  { id: 'issuedAt', header: '开票日期' },
+];
 
 function formatMoney(v?: number | null): string {
   if (v == null) return '—';
@@ -148,10 +135,14 @@ onMounted(fetchList);
 </script>
 
 <style scoped>
-.invoices-tab { padding: 8px 0; }
+.invoices-tab { padding: 12px 0; }
 .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-.toolbar .title { font-size: 14px; color: var(--el-text-color-secondary); }
-.pagination { margin-top: 16px; justify-content: flex-end; display: flex; }
-.masked { color: var(--el-text-color-secondary); font-family: monospace; letter-spacing: 2px; user-select: none; }
-.error-panel { padding: 24px 0; }
+.toolbar .title { font-size: var(--cs-type-section); font-weight: 600; color: var(--cs-text); }
+.pager { display: flex; justify-content: flex-end; align-items: center; gap: 12px; margin-top: 16px; }
+.total { color: var(--cs-muted); font-size: var(--cs-font-small); }
+.masked { color: var(--cs-muted); font-family: monospace; letter-spacing: 2px; user-select: none; }
+.num { font-variant-numeric: tabular-nums; }
+.skeleton { display: grid; gap: 8px; }
+:deep(.cs-table th) { height: 32px; padding-block: 4px; font-size: var(--cs-font-small); font-weight: 500; color: var(--cs-muted); background: var(--cs-surface-subtle); white-space: nowrap; }
+:deep(.cs-table td) { font-size: 13px; padding-block: 0; height: var(--cs-row-height); color: var(--cs-text); border-color: var(--cs-border); }
 </style>

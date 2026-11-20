@@ -12,6 +12,13 @@ import type { ProductionPlanCustomerOption } from './productionPlanCustomerSelec
 import { get, post, put } from '@/api/request';
 import { ElMessage, ElMessageBox, ElSelect } from 'element-plus';
 import { pickPrefilled, readReadinessPrefill } from '@/views/factory-readiness/readinessPrefill';
+import {
+  DEFAULT_OVER_RECEIVE_RULE,
+  overReceiveBlockedMessage,
+  overReceiveExceeds,
+  overReceiveHelp,
+  overReceiveMax,
+} from '@/utils/overReceiveRule';
 import { Plus, Search, Refresh, VideoPause, CircleCheck, Download, ChatDotRound, Printer, Warning, ArrowDown } from '@element-plus/icons-vue';
 import { formatDateTimeCell } from '@/utils/tableFormatters';
 import { handleCatchError } from '@/utils/errorToast';
@@ -28,6 +35,8 @@ import {
   getProductionSettlement,
   recalculateSettledPlanCosts,
   confirmProductionWarehouseReceipt,
+  getOverReceiveRule,
+  type OverReceiveRule,
   clearProductionTransitLedger,
   interimSettle,
   repinPlanAuthority,
@@ -87,6 +96,7 @@ import WorkflowRoutePreview from './components/WorkflowRoutePreview.vue';
 import ProcessSheet from '../components/processSheet/ProcessSheet.vue';
 import ProductionSummaryDialog from '../components/ProductionSummaryDialog.vue';
 import PlanConcurrentReadiness from './components/PlanConcurrentReadiness.vue';
+import PlanOutsourceProcesses from './components/PlanOutsourceProcesses.vue';
 import {
   documentTraceTarget,
   traceDocumentLabel,
@@ -3095,6 +3105,17 @@ const receiptReportedQuantity = computed(() =>
   Number(receiptSettlement.value?.actualFinishedQuantity || 0)
 );
 const receiptHasOutputLines = computed(() => receiptForm.value.outputLines.length > 0);
+// 纪律排查 A11: 多收怎么处理由本厂配置; 读不到规则时按默认硬拦 (与服务端一致), ⛔ 不按宽处理
+const receiptOverReceiveRule = ref<OverReceiveRule>({ ...DEFAULT_OVER_RECEIVE_RULE });
+const receiptMaxQuantity = computed<number | undefined>(() =>
+  overReceiveMax(receiptReportedQuantity.value, receiptOverReceiveRule.value)
+);
+const receiptOverReceiveHelp = computed(() =>
+  overReceiveHelp(receiptReportedQuantity.value, receiptDisplayUnit.value, receiptOverReceiveRule.value)
+);
+const receiptExceedsAllowed = computed(() =>
+  overReceiveExceeds(receiptReportedQuantity.value, receiptReceivedQuantity.value, receiptOverReceiveRule.value)
+);
 const receiptReceivedQuantity = computed(() =>
   Number(receiptForm.value.receivedQuantity || 0)
 );
@@ -3132,7 +3153,11 @@ const receiptSubmitDisabledReason = computed(() => {
     return '';
   }
   if (!receiptReceivedQuantity.value || receiptReceivedQuantity.value <= 0) return '请输入仓库实际收到数量';
-  if (receiptReceivedQuantity.value > receiptReportedQuantity.value) return '仓库实收不能超过生产报产，请先让生产修正结单';
+  if (receiptExceedsAllowed.value) {
+    return overReceiveBlockedMessage(
+      receiptReportedQuantity.value, receiptDisplayUnit.value, receiptOverReceiveRule.value,
+    );
+  }
   if (receiptNeedsReason.value && !receiptForm.value.varianceReason) return '超出容差的差异必须选择原因';
   if (receiptNeedsReason.value && !receiptForm.value.responsibilitySide) return '超出容差的差异必须选择生产侧、仓库侧或称重误差';
   if (receiptNeedsReason.value && receiptForm.value.responsibilitySide === 'PENDING') return '责任侧不能为待核对，请先明确归属';
@@ -3196,6 +3221,13 @@ async function handleWarehouseReceipt(row: TableRow) {
       return;
     }
     receiptSettlement.value = res.data;
+    receiptOverReceiveRule.value = { ...DEFAULT_OVER_RECEIVE_RULE };
+    try {
+      const ruleRes = await getOverReceiveRule(factoryId.value);
+      if (ruleRes.success && ruleRes.data) receiptOverReceiveRule.value = ruleRes.data;
+    } catch {
+      // 读不到规则 → 按默认硬拦显示; 服务端仍按本厂配置判, 不会因此误放行
+    }
     const outputLines = (res.data.outputLines || []).map((line) => ({
       ...line,
       originalReceivedQuantity: Number(line.receivedQuantity ?? 0),
@@ -5265,6 +5297,13 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
           </div>
         </div>
 
+        <PlanOutsourceProcesses
+          v-if="factoryId && viewPlan.id"
+          :key="`outsource:${factoryId}:${viewPlan.id}`"
+          :factory-id="factoryId"
+          :plan-id="String(viewPlan.id)"
+        />
+
         <PlanConcurrentReadiness
           v-if="factoryId && viewPlan.id"
           :key="`${factoryId}:${viewPlan.id}`"
@@ -5296,7 +5335,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
           </el-radio-group>
           <div
             v-if="planForm.sourceType === 'SAFETY_STOCK'"
-            style="font-size: 12px; color: var(--text-color-secondary, #909399); margin-top: 4px;"
+            style="font-size: 12px; color: var(--text-color-secondary, var(--cs-muted)); margin-top: 4px;"
           >
             存货生产按实际报工推进，可多次执行“生产小结”；计划完成后从“更多”中停产关闭。
           </div>
@@ -5364,7 +5403,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
                 :value="String(so.id)"
               />
             </el-select>
-            <div style="font-size: 12px; color: var(--text-color-secondary, #909399); margin-top: 4px;">
+            <div style="font-size: 12px; color: var(--text-color-secondary, var(--cs-muted)); margin-top: 4px;">
               可追加多个销售订单合并为一张生产工单。产品类型由主订单行确定，追加订单需已财务审核。
             </div>
           </div>
@@ -5389,7 +5428,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
               :value="String(it.id)"
             />
           </el-select>
-          <div v-if="planForm.sourceOrderItemIds.length > 1" style="font-size:12px;color:#909399;margin-top:4px">
+          <div v-if="planForm.sourceOrderItemIds.length > 1" style="font-size:12px;color:var(--cs-muted);margin-top:4px">
             已选 {{ planForm.sourceOrderItemIds.length }} 个产品, 将各建一张生产计划 (产品类型/数量自动取自销售订单行)
           </div>
           <UpstreamMissingHint
@@ -5435,7 +5474,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
               :value="item.id"
             />
           </el-select>
-          <div v-if="resolvingWorkflow" style="font-size: 12px; color: var(--text-color-secondary, #909399); margin-top: 4px;">
+          <div v-if="resolvingWorkflow" style="font-size: 12px; color: var(--text-color-secondary, var(--cs-muted)); margin-top: 4px;">
             正在解析工序图…
           </div>
           <template v-else-if="planForm.targetFinishedGoodIds.length > 0">
@@ -5507,7 +5546,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
               <template #title>
                 这个成品由一张联产工艺图产出，同一批还会产出：{{ jointSupersetHint.extraNames.join('、') }}
               </template>
-              <div style="margin-top: 4px; color: #606266; font-size: 12px;">
+              <div style="margin-top: 4px; color: var(--cs-muted); font-size: 12px;">
                 联产图不能只为其中一个成品建计划（产出会对不上账）。把它们一起选上即可继续。
               </div>
               <div style="display: flex; gap: 8px; margin-top: 8px;">
@@ -5572,7 +5611,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
               {{ customerReadHint }}
               <el-button v-if="canRetryCustomers" link type="primary" @click="loadCustomers">重试</el-button>
             </div>
-            <div style="font-size: 12px; color: var(--text-color-secondary, #909399); margin-top: 4px;">
+            <div style="font-size: 12px; color: var(--text-color-secondary, var(--cs-muted)); margin-top: 4px;">
               选择客户不会自动改为客户供料。工厂供料的成品归公司库存；客户供料的成品归该客户。
             </div>
           </div>
@@ -5583,7 +5622,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
               <el-radio value="FACTORY_SUPPLIED">工厂自有原料</el-radio>
               <el-radio value="CUSTOMER_SUPPLIED">客户提供原料</el-radio>
             </el-radio-group>
-            <div style="font-size: 12px; color: var(--text-color-secondary, #909399); margin-top: 4px;">
+            <div style="font-size: 12px; color: var(--text-color-secondary, var(--cs-muted)); margin-top: 4px;">
               两种方式均通过仓储入库、调拨和领料。辅料、包材可使用工厂自有库存。
             </div>
             <el-alert
@@ -5606,9 +5645,9 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
               inactive-text="逐道报工"
               :active-value="true"
               :inactive-value="false"
-              style="--el-switch-on-color: var(--el-color-info, #909399);"
+              style="--el-switch-on-color: var(--el-color-info, var(--cs-muted));"
             />
-            <span style="font-size: 12px; color: var(--text-color-secondary, #909399);">
+            <span style="font-size: 12px; color: var(--text-color-secondary, var(--cs-muted));">
               <template v-if="planForm.skipProcessReporting">
                 操作员只报「领料入」+「产出」两个节点
               </template>
@@ -5627,15 +5666,15 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
         <!-- A3: 工序只读展示；免工序报工时隐藏，产品无工序时改提示 -->
         <el-form-item v-if="!planForm.skipProcessReporting" label="工序">
           <template v-if="!planForm.productTypeId">
-            <span style="color: var(--text-color-secondary, #909399); font-size: 13px;">请先选择产品类型</span>
+            <span style="color: var(--text-color-secondary, var(--cs-muted)); font-size: 13px;">请先选择产品类型</span>
           </template>
           <template v-else-if="hasActiveWorkflow">
-            <span style="color: var(--el-color-success, #67c23a); font-size: 13px;">
+            <span style="color: var(--el-color-success, var(--cs-success)); font-size: 13px;">
               本产品由「产品工序 Workflow」驱动，逐道报工按图逐工序执行（含分支/多产出）。转批次后在逐道录入抽屉逐道保存。
             </span>
           </template>
           <template v-else-if="productWorkProcessList.length === 0">
-            <span style="color: var(--el-color-warning, #e6a23c); font-size: 13px;">
+            <span style="color: var(--el-color-warning, var(--cs-warning)); font-size: 13px;">
               该产品尚未发布并启用画布工艺，无法建计划。请先到
               <el-link type="primary" underline="hover" @click="router.push('/system/product-processes')" style="font-size: 13px; vertical-align: baseline;">产品工艺画布</el-link>
               建立工艺并发布启用。
@@ -5655,7 +5694,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
         </el-form-item>
         <!-- Wave2: 免工序报工模式下的工序提示（产品已配工序但选了免工序） -->
         <el-form-item v-else-if="hasProcesses && planForm.productTypeId" label="工序">
-          <span style="color: var(--text-color-secondary, #909399); font-size: 13px;">
+          <span style="color: var(--text-color-secondary, var(--cs-muted)); font-size: 13px;">
             已跳过工序（共 {{ productWorkProcessList.length }} 道），操作员仅需报领料+产出
           </span>
         </el-form-item>
@@ -5670,7 +5709,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             style="width: 100%"
           />
           </div>
-          <div style="font-size: 12px; color: var(--text-color-secondary, #909399); margin-top: 2px;">
+          <div style="font-size: 12px; color: var(--text-color-secondary, var(--cs-muted)); margin-top: 2px;">
             批次日期 = 实际开工/转批次日；计划日期 = 预期完成生产日
           </div>
         </el-form-item>
@@ -5687,7 +5726,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
           <div v-if="planForm.aiRequestedUnit" class="ai-unit-preserved">
             AI 原始数量单位：{{ planForm.aiRequestedUnit }}；保存口径：{{ resolvedWorkflowCandidate?.plannedUnit || '等待 Workflow 解析' }}
           </div>
-          <div style="font-size: 12px; color: var(--text-color-secondary, #909399); margin-top: 2px;">
+          <div style="font-size: 12px; color: var(--text-color-secondary, var(--cs-muted)); margin-top: 2px;">
             <template v-if="hasResolvedWorkflowCandidate && planForm.resolutionMode === 'SHARED_MULTI_OUTPUT'">
               计划绑定整张共同 Workflow；逐道报工按图处理全部投入、半成品和产出，不裁剪其它分支。
             </template>
@@ -5711,7 +5750,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             placeholder="留空则按实际生产报工确定"
             style="width: 100%"
           />
-          <div style="font-size: 12px; color: var(--text-color-secondary, #909399); margin-top: 2px;">
+          <div style="font-size: 12px; color: var(--text-color-secondary, var(--cs-muted)); margin-top: 2px;">
             <template v-if="planForm.resolutionMode === 'SHARED_MULTI_OUTPUT'">
               可填写计划参考基准；留空时按完整 Workflow 逐道报工，并以实际产出结算。
             </template>
@@ -6467,12 +6506,12 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
           <el-input-number
             data-testid="native-receipt-quantity" v-model="receiptForm.receivedQuantity"
             :min="0"
-            :max="receiptReportedQuantity"
+            :max="receiptMaxQuantity"
             :precision="2"
             style="width: 100%"
           />
-          <div class="settlement-help">
-            上限为生产报产 {{ receiptReportedQuantity }} {{ receiptDisplayUnit }}，超过上限需先退回生产修正结单。
+          <div class="settlement-help" data-testid="receipt-over-receive-help">
+            {{ receiptOverReceiveHelp }}
           </div>
         </el-form-item>
 
@@ -6492,8 +6531,8 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
         </div>
 
         <el-alert
-          v-if="receiptReceivedQuantity > receiptReportedQuantity"
-          title="仓库实收不能超过生产报产，系统已禁止提交。"
+          v-if="receiptExceedsAllowed"
+          :title="`${receiptSubmitDisabledReason}。系统已禁止提交。`"
           type="error"
           show-icon
           :closable="false"
@@ -6805,7 +6844,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
               :label="`${wip.intermediateBatchNo} | 可用 ${wip.availableQuantity}${displayUnit(wip.unit)}`"
             >
               <span style="float: left; font-weight: 500;">{{ wip.intermediateBatchNo }}</span>
-              <span style="float: right; font-size: 12px; color: #909399; margin-left: 12px;">
+              <span style="float: right; font-size: 12px; color: var(--cs-muted); margin-left: 12px;">
                 可用 {{ wip.availableQuantity }}{{ displayUnit(wip.unit) }}
               </span>
             </el-option>
@@ -6831,7 +6870,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             :precision="2"
             style="width: 100%"
           />
-          <div v-if="selectedWip" style="font-size: 12px; color: var(--text-color-secondary, #909399); margin-top: 4px;">
+          <div v-if="selectedWip" style="font-size: 12px; color: var(--text-color-secondary, var(--cs-muted)); margin-top: 4px;">
             最大可用 {{ selectedWip.availableQuantity }} {{ displayUnit(selectedWip.unit) }}（超出将被后端拒绝）
           </div>
         </el-form-item>
@@ -6850,11 +6889,11 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
               :value="item.id"
             />
           </el-select>
-          <div v-if="selectedWip && !secondaryForm.productTypeId" style="margin-top: 4px; font-size: 12px; color: var(--text-color-secondary, #909399);">
+          <div v-if="selectedWip && !secondaryForm.productTypeId" style="margin-top: 4px; font-size: 12px; color: var(--text-color-secondary, var(--cs-muted));">
             请选择该半成品后续加工要产出的成品；系统不会将源半成品自动当作目标产品。
           </div>
           <!-- 防呆 Rule 2: 来源上下文 -->
-          <div v-if="selectedWip && secondaryForm.productTypeId" style="margin-top: 4px; font-size: 12px; color: var(--text-color-secondary, #909399);">
+          <div v-if="selectedWip && secondaryForm.productTypeId" style="margin-top: 4px; font-size: 12px; color: var(--text-color-secondary, var(--cs-muted));">
             源 WIP 批次: {{ selectedWip.intermediateBatchNo }}
           </div>
         </el-form-item>
@@ -6916,7 +6955,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
 
     <!-- 撤销小结审批 (STOCKTAKE_APPROVAL_ROLES: 财务经理/工厂超管) -->
     <el-dialog v-model="reversalApprovalVisible" title="撤销小结审批" width="760px" destroy-on-close>
-      <div style="margin-bottom:8px;color:#909399;font-size:13px;">
+      <div style="margin-bottom:8px;color:var(--cs-muted);font-size:13px;">
         待审批的撤销小结申请。审批通过将逆转该次小结的入库并还回被扣消耗；若相关半成品/成品已被下游领用/发货，执行时会拒绝（不绕过）。
       </div>
       <el-table :data="reversalRequests" v-loading="reversalApprovalLoading" size="small" border>
@@ -6954,21 +6993,21 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
   align-items: center;
   justify-content: space-between;
   padding: 10px 0;
-  border-bottom: 1px solid var(--border-color-lighter, #ebeef5);
+  border-bottom: 1px solid var(--border-color-lighter, var(--cs-border));
   &:last-child { border-bottom: none; }
 }
 .ai-unit-preserved { margin-top: 4px; color: var(--el-text-color-secondary); font-size: 12px; }
 // 校验失败字段红框锚定 (fool-proof-design Rule: 预先显示边界, 不只弹 toast 让用户自己找字段)。
 .field-error {
   :deep(.el-select__wrapper) {
-    box-shadow: 0 0 0 1px var(--el-color-danger, #f56c6c) inset !important;
+    box-shadow: 0 0 0 1px var(--el-color-danger, var(--cs-danger)) inset !important;
   }
 }
 
 .field-error-hint {
   margin-top: 4px;
   font-size: 12px;
-  color: var(--el-color-danger, #f56c6c);
+  color: var(--el-color-danger, var(--cs-danger));
 }
 
 .page-wrapper {
@@ -6985,7 +7024,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
 
   :deep(.el-card__header) {
     padding: 16px 20px;
-    border-bottom: 1px solid var(--border-color-lighter, #ebeef5);
+    border-bottom: 1px solid var(--border-color-lighter, var(--cs-border));
   }
 
   :deep(.el-card__body) {
@@ -7018,12 +7057,12 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
     .page-title {
       font-size: 16px;
       font-weight: 600;
-      color: var(--text-color-primary, #303133);
+      color: var(--text-color-primary, var(--cs-text));
     }
 
     .data-count {
       font-size: 13px;
-      color: var(--text-color-secondary, #909399);
+      color: var(--text-color-secondary, var(--cs-muted));
     }
   }
 }
@@ -7052,8 +7091,8 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
 }
 
 :deep(.el-table__body tr.plan-row-cancelled > td.el-table__cell) {
-  background: #f5f7fa !important;
-  color: var(--text-color-secondary, #909399);
+  background: var(--cs-surface-subtle) !important;
+  color: var(--text-color-secondary, var(--cs-muted));
 }
 
 :deep(.el-table__body tr.plan-row-exception > td.el-table__cell) {
@@ -7087,27 +7126,27 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
 }
 
 .plan-status-pending {
-  --el-tag-bg-color: #e6a23c;
+  --el-tag-bg-color: var(--cs-warning);
   --el-tag-text-color: #ffffff;
 }
 
 .plan-status-in-progress {
-  --el-tag-bg-color: #409eff;
+  --el-tag-bg-color: var(--cs-primary);
   --el-tag-text-color: #ffffff;
 }
 
 .plan-status-completed {
-  --el-tag-bg-color: #67c23a;
+  --el-tag-bg-color: var(--cs-success);
   --el-tag-text-color: #ffffff;
 }
 
 .plan-status-cancelled {
-  --el-tag-bg-color: #909399;
+  --el-tag-bg-color: var(--cs-muted);
   --el-tag-text-color: #ffffff;
 }
 
 .plan-status-exception {
-  --el-tag-bg-color: #f56c6c;
+  --el-tag-bg-color: var(--cs-danger);
   --el-tag-text-color: #ffffff;
 }
 
@@ -7115,7 +7154,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
   display: flex;
   justify-content: flex-end;
   padding-top: 16px;
-  border-top: 1px solid var(--border-color-lighter, #ebeef5);
+  border-top: 1px solid var(--border-color-lighter, var(--cs-border));
   margin-top: 16px;
 }
 
@@ -7170,10 +7209,10 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
   align-items: flex-start;
   min-height: 104px;
   padding: 16px;
-  border: 1px solid var(--border-color-lighter, #ebeef5);
+  border: 1px solid var(--border-color-lighter, var(--cs-border));
   border-radius: 10px;
-  background: var(--fill-color-lighter, #fafafa);
-  color: var(--text-color-primary, #303133);
+  background: var(--fill-color-lighter, var(--cs-surface-subtle));
+  color: var(--text-color-primary, var(--cs-text));
   text-align: left;
   cursor: pointer;
   transition: border-color 0.15s ease, background-color 0.15s ease;
@@ -7184,14 +7223,14 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
   }
 
   span {
-    color: var(--text-color-secondary, #909399);
+    color: var(--text-color-secondary, var(--cs-muted));
     font-size: 13px;
     line-height: 1.5;
   }
 
   &:hover:not(:disabled),
   &:focus-visible {
-    border-color: var(--el-color-primary, #409eff);
+    border-color: var(--el-color-primary, var(--cs-primary));
     background: var(--el-color-primary-light-9, #ecf5ff);
     outline: none;
   }
@@ -7234,7 +7273,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
   .detail-section-title {
     font-size: 13px;
     font-weight: 600;
-    color: var(--text-color-regular, #606266);
+    color: var(--text-color-regular, var(--cs-muted));
     margin-bottom: 8px;
     display: flex;
     align-items: center;
@@ -7243,7 +7282,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
     .detail-section-hint {
       font-size: 12px;
       font-weight: 400;
-      color: var(--text-color-secondary, #909399);
+      color: var(--text-color-secondary, var(--cs-muted));
     }
   }
 }
@@ -7254,14 +7293,14 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
   gap: 6px;
   padding: 12px 0;
   font-size: 13px;
-  color: var(--text-color-secondary, #909399);
+  color: var(--text-color-secondary, var(--cs-muted));
 }
 
 .process-list {
   margin: 0;
   padding: 0;
   list-style: none;
-  border: 1px solid var(--border-color-lighter, #ebeef5);
+  border: 1px solid var(--border-color-lighter, var(--cs-border));
   border-radius: 4px;
   overflow: hidden;
 
@@ -7278,18 +7317,18 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
     }
 
     &:nth-child(even) {
-      background: var(--fill-color-light, #f5f7fa);
+      background: var(--fill-color-light, var(--cs-surface-subtle));
     }
 
     .process-order {
-      color: var(--text-color-secondary, #909399);
+      color: var(--text-color-secondary, var(--cs-muted));
       min-width: 20px;
       flex-shrink: 0;
     }
 
     .process-name {
       flex: 1;
-      color: var(--text-color-primary, #303133);
+      color: var(--text-color-primary, var(--cs-text));
     }
 
     .process-assignee {
@@ -7305,16 +7344,16 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
 
 .process-list-empty {
   font-size: 13px;
-  color: var(--text-color-secondary, #909399);
+  color: var(--text-color-secondary, var(--cs-muted));
   padding: 8px 0;
 }
 
 .detail-notes {
   font-size: 13px;
-  color: var(--text-color-regular, #606266);
+  color: var(--text-color-regular, var(--cs-muted));
   line-height: 1.6;
   padding: 8px 12px;
-  background: var(--fill-color-light, #f5f7fa);
+  background: var(--fill-color-light, var(--cs-surface-subtle));
   border-radius: 4px;
 }
 
@@ -7327,14 +7366,14 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
 
 .next-step-hint {
   font-size: 12px;
-  color: var(--text-color-secondary, #909399);
+  color: var(--text-color-secondary, var(--cs-muted));
   line-height: 1.3;
 }
 
 .cancellation-audit {
   max-width: 100%;
   font-size: 12px;
-  color: var(--text-color-secondary, #909399);
+  color: var(--text-color-secondary, var(--cs-muted));
   line-height: 1.35;
 }
 
@@ -7361,7 +7400,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
   }
 
   .el-dialog__footer {
-    border-top: 1px solid var(--border-color-lighter, #ebeef5);
+    border-top: 1px solid var(--border-color-lighter, var(--cs-border));
     padding-top: 12px;
   }
 }
@@ -7376,20 +7415,20 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
 .settlement-context > div {
   min-width: 0;
   padding: 10px 12px;
-  border: 1px solid var(--border-color-lighter, #ebeef5);
+  border: 1px solid var(--border-color-lighter, var(--cs-border));
   border-radius: 8px;
-  background: #f8fafc;
+  background: var(--cs-surface-subtle);
 }
 
 .settlement-context-label {
   margin-bottom: 4px;
   font-size: 12px;
-  color: var(--text-color-secondary, #909399);
+  color: var(--text-color-secondary, var(--cs-muted));
 }
 
 .settlement-context-value {
   overflow: hidden;
-  color: var(--text-color-primary, #303133);
+  color: var(--text-color-primary, var(--cs-text));
   font-size: 14px;
   font-weight: 600;
   text-overflow: ellipsis;
@@ -7404,9 +7443,9 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
 
 .settlement-reconciliation-card,
 .settlement-reconciliation-section {
-  border: 1px solid var(--border-color-lighter, #ebeef5);
+  border: 1px solid var(--border-color-lighter, var(--cs-border));
   border-radius: 8px;
-  background: #f8fafc;
+  background: var(--cs-surface-subtle);
 }
 
 .settlement-reconciliation-card {
@@ -7416,12 +7455,12 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
   padding: 12px;
 
   span {
-    color: var(--text-color-secondary, #909399);
+    color: var(--text-color-secondary, var(--cs-muted));
     font-size: 12px;
   }
 
   strong {
-    color: var(--text-color-primary, #303133);
+    color: var(--text-color-primary, var(--cs-text));
     font-size: 16px;
   }
 }
@@ -7433,8 +7472,8 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
 
 .settlement-reconciliation-title {
   padding: 9px 12px;
-  border-bottom: 1px solid var(--border-color-lighter, #ebeef5);
-  color: var(--text-color-primary, #303133);
+  border-bottom: 1px solid var(--border-color-lighter, var(--cs-border));
+  color: var(--text-color-primary, var(--cs-text));
   font-size: 13px;
   font-weight: 600;
 }
@@ -7446,7 +7485,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
   gap: 16px;
   padding: 9px 12px;
   border-bottom: 1px solid var(--border-color-extra-light, #f2f6fc);
-  color: var(--text-color-regular, #606266);
+  color: var(--text-color-regular, var(--cs-muted));
   font-size: 13px;
 
   &:last-child {
@@ -7454,14 +7493,14 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
   }
 
   strong {
-    color: var(--text-color-primary, #303133);
+    color: var(--text-color-primary, var(--cs-text));
     white-space: nowrap;
   }
 }
 
 .settlement-help {
   margin-top: 4px;
-  color: var(--text-color-secondary, #909399);
+  color: var(--text-color-secondary, var(--cs-muted));
   font-size: 12px;
   line-height: 1.5;
 }
@@ -7480,7 +7519,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
   padding: 14px;
   border: 1px solid var(--border-color-lighter, #dfe6ef);
   border-radius: 10px;
-  background: #f8fafc;
+  background: var(--cs-surface-subtle);
 }
 
 .receipt-output-line__identity,
@@ -7492,13 +7531,13 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
 
   span,
   small {
-    color: var(--text-color-secondary, #909399);
+    color: var(--text-color-secondary, var(--cs-muted));
     font-size: 12px;
   }
 
   strong {
     overflow: hidden;
-    color: var(--text-color-primary, #303133);
+    color: var(--text-color-primary, var(--cs-text));
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -7515,7 +7554,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
 
 .receipt-output-line__unit {
   flex: 0 0 auto;
-  color: var(--text-color-regular, #606266);
+  color: var(--text-color-regular, var(--cs-muted));
 }
 
 @media (max-width: 760px) {
@@ -7525,7 +7564,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
 }
 
 .settlement-loss-guide {
-  color: var(--text-color-regular, #606266);
+  color: var(--text-color-regular, var(--cs-muted));
   font-size: 13px;
   line-height: 1.6;
 }
@@ -7551,7 +7590,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
   justify-content: space-between;
   gap: 12px;
   margin: 10px 0 8px;
-  color: var(--text-color-primary, #303133);
+  color: var(--text-color-primary, var(--cs-text));
   font-size: 14px;
   font-weight: 600;
 }
@@ -7559,9 +7598,9 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
 .settlement-empty {
   margin-bottom: 10px;
   padding: 10px 12px;
-  border: 1px dashed var(--border-color, #dcdfe6);
+  border: 1px dashed var(--border-color, var(--cs-border));
   border-radius: 6px;
-  color: var(--text-color-secondary, #909399);
+  color: var(--text-color-secondary, var(--cs-muted));
   font-size: 13px;
   line-height: 1.5;
 }
@@ -7576,7 +7615,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
 .plan-product-name {
   overflow: hidden;
   min-width: 0;
-  color: var(--text-color-primary, #303133);
+  color: var(--text-color-primary, var(--cs-text));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -7599,9 +7638,9 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
 .sales-order-quantity-readonly {
   width: 100%;
   overflow: hidden;
-  border: 1px solid var(--border-color-lighter, #ebeef5);
+  border: 1px solid var(--border-color-lighter, var(--cs-border));
   border-radius: 8px;
-  background: var(--fill-color-light, #f5f7fa);
+  background: var(--fill-color-light, var(--cs-surface-subtle));
 }
 
 .sales-order-quantity-row {
@@ -7610,18 +7649,18 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
   justify-content: space-between;
   gap: 16px;
   padding: 8px 12px;
-  border-bottom: 1px solid var(--border-color-lighter, #ebeef5);
+  border-bottom: 1px solid var(--border-color-lighter, var(--cs-border));
 }
 
 .sales-order-quantity-row strong {
   flex: 0 0 auto;
-  color: var(--text-color-primary, #303133);
+  color: var(--text-color-primary, var(--cs-text));
 }
 
 .sales-order-quantity-readonly small {
   display: block;
   padding: 7px 12px;
-  color: var(--text-color-secondary, #909399);
+  color: var(--text-color-secondary, var(--cs-muted));
 }
 
 .settlement-consumption-row {
@@ -7635,13 +7674,13 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
 .settlement-wip-boundary {
   grid-column: 1 / -1;
   margin-top: -2px;
-  color: var(--text-color-secondary, #909399);
+  color: var(--text-color-secondary, var(--cs-muted));
   font-size: 12px;
   line-height: 1.5;
 }
 
 .settlement-wip-boundary strong {
-  color: var(--text-color-primary, #303133);
+  color: var(--text-color-primary, var(--cs-text));
   font-weight: 600;
 }
 
@@ -7664,19 +7703,19 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
   flex-direction: column;
   gap: 4px;
   padding: 10px 12px;
-  border: 1px solid var(--border-color-lighter, #ebeef5);
+  border: 1px solid var(--border-color-lighter, var(--cs-border));
   border-radius: 8px;
   background: #ffffff;
 }
 
 .receipt-diff-panel span {
-  color: var(--text-color-secondary, #909399);
+  color: var(--text-color-secondary, var(--cs-muted));
   font-size: 12px;
 }
 
 .receipt-diff-panel strong {
   overflow: hidden;
-  color: var(--text-color-primary, #303133);
+  color: var(--text-color-primary, var(--cs-text));
   font-size: 14px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -7684,10 +7723,10 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
 
 .receipt-diff-panel .danger {
   border-color: var(--color-danger-light-5, #fab6b6);
-  background: var(--color-danger-light-9, #fef0f0);
+  background: var(--color-danger-light-9, var(--cs-danger-soft));
 
   strong {
-    color: var(--color-danger, #f56c6c);
+    color: var(--color-danger, var(--cs-danger));
   }
 }
 
@@ -7715,13 +7754,13 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
 
 .trace-document-number {
   margin: 10px 0 6px;
-  color: var(--text-color-primary, #303133);
+  color: var(--text-color-primary, var(--cs-text));
   font-size: 15px;
   font-weight: 600;
 }
 
 .trace-document-meta {
-  color: var(--text-color-secondary, #909399);
+  color: var(--text-color-secondary, var(--cs-muted));
   font-size: 12px;
 }
 
@@ -7740,14 +7779,14 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
 
 .document-pack-chapters {
   padding: 14px 16px;
-  border: 1px solid var(--border-color-lighter, #ebeef5);
+  border: 1px solid var(--border-color-lighter, var(--cs-border));
   border-radius: 8px;
-  background: var(--fill-color-lighter, #fafafa);
+  background: var(--fill-color-lighter, var(--cs-surface-subtle));
 }
 
 .document-pack-label {
   margin-bottom: 10px;
-  color: var(--text-color-primary, #303133);
+  color: var(--text-color-primary, var(--cs-text));
   font-size: 13px;
   font-weight: 600;
 }
@@ -7856,7 +7895,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
 }
 
 .workflow-candidate-card.is-selected {
-  border-color: var(--el-color-primary, #409eff);
+  border-color: var(--el-color-primary, var(--cs-primary));
   background: #f5f9ff;
   box-shadow: 0 0 0 2px rgba(64, 158, 255, 0.1);
 }

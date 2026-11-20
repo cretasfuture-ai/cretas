@@ -55,4 +55,10 @@ public class DispositionApproveRequest {
      * 附加条件（条件批准时使用）
      */
     private String conditions;
+
+    /**
+     * 本人审批原因 (纪律排查 B3): 审批人就是申请人、且工厂开了「允许本人审批」时必填;
+     * 不填时取审批意见 (comment)。
+     */
+    private String selfApprovalReason;
 }

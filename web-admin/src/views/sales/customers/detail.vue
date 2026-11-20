@@ -26,6 +26,7 @@
       :customer="customer"
       :loading="customerLoading"
       :assigned-sales-user-name="assignedSalesUserName"
+      :latest-order-salesperson="latestOrderSalesperson"
     />
 
     <el-tabs
@@ -70,6 +71,8 @@ import { useAuthStore } from '@/store/modules/auth';
 import { storeToRefs } from 'pinia';
 import { getCustomer, type Customer } from '@/api/customer';
 import CustomerHeader from './detail/CustomerHeader.vue';
+import { get } from '@/api/request';
+import { latestOrderSalesperson as pickLatestOrderSalesperson, type OrderSalespersonRow } from './detail/latestOrderSalesperson';
 import PlaceholderTab from './detail/tabs/PlaceholderTab.vue';
 
 interface TabDef {
@@ -107,6 +110,20 @@ const customer = ref<Customer | null>(null);
 const customerLoading = ref(false);
 // 业务员姓名占位 — Phase D9 wire to user lookup or backend join
 const assignedSalesUserName = ref<string>('');
+// 档案未分配业务员时的回退: 最近订单上的业务员 (另一套数据, 见 latestOrderSalesperson.ts)
+const latestOrderSalesperson = ref<string | null>(null);
+
+async function loadLatestOrderSalesperson() {
+  if (!factoryId.value || customer.value?.assignedSalesUserId) return;
+  try {
+    const res = await get<{ content: OrderSalespersonRow[] }>(`/${factoryId.value}/sales/orders/by-customer`, {
+      params: { customerId: customerId.value, page: 1, size: 20 },
+    });
+    latestOrderSalesperson.value = res.success && res.data ? pickLatestOrderSalesperson(res.data.content) : null;
+  } catch {
+    latestOrderSalesperson.value = null; // 读不到就保持「未分配」, 不凑数
+  }
+}
 
 // 21 tab matrix (spec §3) — Phase B wires 12 real tab components as null (lazy in Phase D).
 // 8 defer + 1 integration (priceMemory) have R5 next-action to tracking/quotes/returns.
@@ -162,7 +179,7 @@ const TAB_DEFS: TabDef[] = [
     status: '尚未开放', workaround: '当前请用「退货」tab 处理售后退货',
     actionText: '去退货', actionTabKey: 'returns' },
   // 19 — integration fallback (Chat B S-PRICE-1 pending; internal placeholder)
-  { key: 'priceMemory', label: '价格记忆',
+  { key: 'priceMemory', label: '价格',
     component: defineAsyncComponent(() => import('./detail/tabs/PriceMemoryTab.vue')) },
   // 20-21 — real (Phase D7, D5)
   { key: 'salesUserHist', label: '业务员变更',
@@ -210,6 +227,7 @@ onMounted(async () => {
   try {
     customer.value = await getCustomer(factoryId.value, customerId.value);
     // assignedSalesUserName resolved in Phase D9 via /users/{id} lookup or backend join
+    void loadLatestOrderSalesperson();
   } catch (e: any) {
     const status = e?.code || e?.response?.status;
     const msg = e?.message || e?.response?.data?.message || '加载失败';

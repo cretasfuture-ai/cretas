@@ -298,13 +298,18 @@ const permissionLabel = computed(() => permissionDisplayName(props.response.requ
   <div v-else-if="isUnknown" class="op-card op-card--confirm" data-testid="purchase-outcome-recovery" aria-live="polite">
     <div class="op-card-header">
       <el-icon><WarningFilled /></el-icon>
-      <span>{{ recovery?.state === 'DRAFT' && recovery.purchaseOrderId ? '采购草稿已创建' : '采购处理结果待核对' }}</span>
+      <span v-if="isCanonicalPurchase">{{ recovery?.state === 'DRAFT' && recovery.purchaseOrderId ? '采购草稿已创建' : '采购处理结果待核对' }}</span>
+      <span v-else data-testid="aiop-outcome-unknown">{{ intentLabel }}结果待核对</span>
     </div>
-    <div class="op-card-body">
+    <div v-if="isCanonicalPurchase" class="op-card-body">
       <p>{{ recoveryMessage }}</p>
       <p v-if="referenceError" role="alert">{{ referenceError }}</p>
       <p v-if="recoveryError" role="alert">{{ recoveryError }}</p>
       <p v-if="!recoveryGrantId">缺少处理参考，请到采购模块核对，勿重复提交。</p>
+    </div>
+    <!-- 非采购写操作结果不明 (可能已写入): 只让人去核对, ⛔ 不给重试 (会写两遍) -->
+    <div v-else class="op-card-body">
+      <p>{{ resultMessage || '操作结果暂时无法确认（可能已经写入）。请先到业务页面核对这条记录，勿重复提交。' }}</p>
     </div>
     <div v-if="recoveryGrantId" class="op-card-footer">
       <el-button :loading="checkingStatus" :disabled="checkingStatus" @click="handleCheckStatus">查询处理结果</el-button>
@@ -332,7 +337,8 @@ const permissionLabel = computed(() => permissionDisplayName(props.response.requ
     <!-- 确认成功后卡体替换为结果 -->
     <div v-if="phase === 'done'" class="op-card-body">
       <div class="op-card-result">
-        <el-icon v-if="resultStatus === 'SUCCESS'" class="op-result-icon-success"><CircleCheckFilled /></el-icon>
+        <!-- ALREADY_EXECUTED: 同一张确认凭据之前已经执行成功, 这次没有重复执行 —— 是成功, 不是失败 -->
+        <el-icon v-if="resultStatus === 'SUCCESS' || resultStatus === 'ALREADY_EXECUTED'" class="op-result-icon-success"><CircleCheckFilled /></el-icon>
         <el-icon v-else><InfoFilled /></el-icon>
         <span class="op-result-message">{{ resultMessage }}</span>
         <el-tag v-if="resultStatus === 'DEMO_WRITE_BLOCKED'" type="info" size="small" effect="plain">演示环境</el-tag>

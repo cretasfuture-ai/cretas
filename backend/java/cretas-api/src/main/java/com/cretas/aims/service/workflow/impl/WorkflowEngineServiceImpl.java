@@ -488,6 +488,17 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
                                                    String actorRole,
                                                    HistoryAction action,
                                                    String notes) {
+        return transitionNode(instanceId, actorId, actorRole, action, notes, null);
+    }
+
+    @Override
+    @Transactional
+    public ApprovalWorkflowInstance transitionNode(String instanceId,
+                                                   Long actorId,
+                                                   String actorRole,
+                                                   HistoryAction action,
+                                                   String notes,
+                                                   String requestedFromNodeId) {
         Objects.requireNonNull(instanceId, "instanceId must not be null");
         Objects.requireNonNull(action, "action must not be null");
 
@@ -506,7 +517,13 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
             throw new BusinessException(409,
                     "工作流实例无 active 节点, 不能 transition. instanceId=" + instanceId);
         }
-        String fromNodeId = instance.getCurrentNodeIds().get(0);
+        if (requestedFromNodeId != null && !instance.getCurrentNodeIds().contains(requestedFromNodeId)) {
+            throw new BusinessException(409, "审批节点已变化，请刷新待办后重试")
+                    .withCode("OA_TASK_NODE_CHANGED");
+        }
+        // fromNodeId 在拿到 graph 后才能按角色选 (并行网关有多个 active 节点), 先放占位
+        String fromNodeId = requestedFromNodeId != null
+                ? requestedFromNodeId : instance.getCurrentNodeIds().get(0);
 
         // 3. 取 workflow + 索引 graph
         String expectedDefinitionDigest = stableBoundDefinitionDigest(instance);
@@ -523,6 +540,15 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
         List<ApprovalWorkflowNode> nodes = workflowService.deserializeNodes(workflow.getNodesJson());
         List<ApprovalWorkflowEdge> edges = workflowService.deserializeEdges(workflow.getEdgesJson());
         GraphIndex graph = indexGraph(nodes, edges);
+
+        if (requestedFromNodeId == null) {
+            // 并行网关: 多个 active 节点时推进「操作人负责的那个」, 不是永远推第一个。
+            fromNodeId = pickActiveNodeForRole(instance.getCurrentNodeIds(), graph, actorRole, fromNodeId);
+        } else if (!nodeAllowsActor(graph.nodesById.get(requestedFromNodeId), actorId, actorRole)) {
+            // 显式指定节点时, 不能替别的分支的审批人批 (超管兜底除外)
+            throw new BusinessException(403, "您不属于该审批节点的处理角色")
+                    .withCode("OA_TASK_FORBIDDEN");
+        }
 
         ApprovalWorkflowNode fromNode = graph.nodesById.get(fromNodeId);
         if (fromNode == null) {
@@ -1553,6 +1579,78 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
     }
 
     // ==================== Internal helpers ====================
+
+    /**
+     * 显式指定节点推进时的放行判据 —— 默认拒绝:
+     * 超管放行; 系统动作 (无操作人: 自动/超时) 放行; 否则必须是 approval 节点, 且
+     * 操作人角色在 approverRoles 里, 或操作人 id 在 approverUserIds 里 (画布「按人点名」)。
+     * 节点什么都没配 ⇒ 只有超管能推, 不能被别的分支的人带着 fromNodeId 批掉。
+     */
+    private boolean nodeAllowsActor(ApprovalWorkflowNode node, Long actorId, String actorRole) {
+        if (node == null || (actorId == null && (actorRole == null || actorRole.isBlank()))
+                || FactoryUserRole.factory_super_admin.name().equals(actorRole)) {
+            return true;
+        }
+        if (!"approval".equals(node.getType()) || node.getConfig() == null) {
+            return false;
+        }
+        Object roles = node.getConfig().get("approverRoles");
+        if (actorRole != null && roles instanceof List<?> roleList
+                && roleList.stream().anyMatch(r -> r != null && actorRole.equals(String.valueOf(r)))) {
+            return true;
+        }
+        Object users = node.getConfig().get("approverUserIds");
+        return actorId != null && users instanceof List<?> userList
+                && userList.stream().anyMatch(u -> u != null && String.valueOf(actorId).equals(String.valueOf(u)));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public String resolveActiveNodeForRole(ApprovalWorkflowInstance instance, String role) {
+        if (instance == null || instance.getCurrentNodeIds() == null || instance.getCurrentNodeIds().isEmpty()) {
+            return null;
+        }
+        String first = instance.getCurrentNodeIds().get(0);
+        if (instance.getCurrentNodeIds().size() == 1) {
+            return first;
+        }
+        try {
+            ApprovalWorkflow workflow = workflowService
+                    .getById(instance.getFactoryId(), instance.getWorkflowId()).orElse(null);
+            if (workflow == null) {
+                return first;
+            }
+            GraphIndex graph = indexGraph(workflowService.deserializeNodes(workflow.getNodesJson()), List.of());
+            return pickActiveNodeForRole(instance.getCurrentNodeIds(), graph, role, first);
+        } catch (RuntimeException e) {
+            log.warn("resolveActiveNodeForRole 失败, 退回第一个节点: instanceId={}, error={}", instance.getId(), e.getMessage());
+            return first;
+        }
+    }
+
+    /**
+     * 多个 active 节点时, 选操作人角色在 approverRoles 里的第一个 approval 节点。
+     * 只有一个 active 节点 / 没给角色 / 没有任何匹配 (如超管兜底、自动超时) ⇒ 返回 {@code fallback} (第一个)。
+     */
+    @SuppressWarnings("unchecked")
+    private String pickActiveNodeForRole(List<String> activeNodeIds, GraphIndex graph,
+                                         String actorRole, String fallback) {
+        if (activeNodeIds.size() <= 1 || actorRole == null || actorRole.isBlank()) {
+            return fallback;
+        }
+        for (String nodeId : activeNodeIds) {
+            ApprovalWorkflowNode node = graph.nodesById.get(nodeId);
+            if (node == null || !"approval".equals(node.getType()) || node.getConfig() == null) {
+                continue;
+            }
+            Object roles = node.getConfig().get("approverRoles");
+            if (roles instanceof List<?> roleList
+                    && roleList.stream().anyMatch(r -> r != null && actorRole.equals(String.valueOf(r)))) {
+                return nodeId;
+            }
+        }
+        return fallback;
+    }
 
     /**
      * moduleCode → DecisionType — Sprint 6 W3-B (2026-05-19) 改进 lookup 顺序:

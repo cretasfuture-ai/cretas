@@ -12,6 +12,8 @@ import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.inventory.PurchaseRequisitionRepository;
 import com.cretas.aims.service.inventory.PurchaseRequisitionService;
 import com.cretas.aims.service.inventory.PurchaseService;
+import com.cretas.aims.entity.inventory.PurchaseRequisitionApprovalRecord;
+import com.cretas.aims.repository.inventory.PurchaseRequisitionApprovalRecordRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -44,6 +46,7 @@ public class PurchaseRequisitionServiceImpl implements PurchaseRequisitionServic
     private final PurchaseRequisitionRepository requisitionRepository;
     private final PurchaseService purchaseService;
     private final UserRepository userRepository;
+    private final PurchaseRequisitionApprovalRecordRepository approvalRecordRepository;
 
     @Override
     @Transactional
@@ -112,7 +115,74 @@ public class PurchaseRequisitionServiceImpl implements PurchaseRequisitionServic
                     .withHint("当前用户非请购人, 无法提交此请购单审批");
         }
         transitionStatus(pr, PurchaseRequisitionStatus.PENDING_APPROVAL);
+        // 新一轮提交: 清掉上一轮的审批结论(历史在 approval_records 里), 轮次 +1
+        pr.setSubmitRound((pr.getSubmitRound() == null ? 0 : pr.getSubmitRound()) + 1);
+        pr.setApproverId(null);
+        pr.setApprovedAt(null);
+        pr.setRejectionReason(null);
+        PurchaseRequisition saved = requisitionRepository.save(pr);
+        requisitionRepository.flush();
+        appendRecord(pr, PurchaseRequisitionApprovalRecord.Action.SUBMITTED, currentUserId, null,
+                snapshotItems(pr.getRequestedItems()), pr.getExpectedDate());
+        return saved;
+    }
+
+    @Override
+    @Transactional
+    public PurchaseRequisition reopenRequisition(String factoryId, String requisitionId, Long currentUserId) {
+        PurchaseRequisition pr = loadAndCheckFactory(factoryId, requisitionId);
+        requireRequester(pr, currentUserId, "重开");
+        if (pr.getStatus() == PurchaseRequisitionStatus.REJECTED
+                && (pr.getSubmitRound() == null || pr.getSubmitRound() == 0)
+                && approvalRecordRepository.countByFactoryIdAndRequisitionId(factoryId, requisitionId) == 0) {
+            // 存量驳回单(机制上线前就被驳回, 终态): 驳回信息只在单据上, 提交时会被清掉 ⇒ 先补写第 1 轮的驳回流水
+            ensureRoundForLegacy(pr);
+            appendRecord(pr, PurchaseRequisitionApprovalRecord.Action.REJECTED, pr.getApproverId(),
+                    pr.getRejectionReason(), null, null, pr.getApprovedAt());
+        }
+        transitionStatus(pr, PurchaseRequisitionStatus.DRAFT);
+        PurchaseRequisition saved = requisitionRepository.save(pr);
+        requisitionRepository.flush(); // 先吃 @Version, 并发败者在这里失败, 不留下流水
+        appendRecord(pr, PurchaseRequisitionApprovalRecord.Action.REOPENED, currentUserId, null, null, null);
+        log.info("请购单驳回后重开: id={}, round={}, requesterId={}", requisitionId, pr.getSubmitRound(), currentUserId);
+        return saved;
+    }
+
+    @Override
+    @Transactional
+    public PurchaseRequisition updateDraft(String factoryId, String requisitionId, Long currentUserId,
+                                           CreatePurchaseRequisitionRequest request) {
+        PurchaseRequisition pr = loadAndCheckFactory(factoryId, requisitionId);
+        requireRequester(pr, currentUserId, "修改草稿");
+        if (pr.getStatus() != PurchaseRequisitionStatus.DRAFT) {
+            throw new BusinessException(400,
+                    "仅 DRAFT 状态可修改 (当前状态: " + pr.getStatus().getDisplayName() + ")")
+                    .withHint("被驳回的请购单请先重开(reopen)再修改");
+        }
+        if (request.getRequestedItems() == null || request.getRequestedItems().isEmpty()) {
+            throw new BusinessException(400, "请购行项目不能为空")
+                    .withHint("请添加至少 1 行请购物料");
+        }
+        // 数量必须 > 0: 转 PO 时数量 <=0 的行会被静默跳过(见 mapItemsToPoItems), 改量入口不能放它们进来
+        for (Map<String, Object> item : request.getRequestedItems()) {
+            BigDecimal q = item == null ? null : toBigDecimal(item.get("quantity"));
+            if (q == null || q.compareTo(BigDecimal.ZERO) <= 0) {
+                throw new BusinessException(400, "请购行数量必须大于 0")
+                        .withHint("请检查每一行的数量, 0 或负数不能保存");
+            }
+        }
+        pr.setRequestedItems(new ArrayList<>(request.getRequestedItems()));
+        pr.setExpectedDate(request.getExpectedDate());
+        pr.setReason(request.getReason());
+        pr.setRemark(request.getRemark());
         return requisitionRepository.save(pr);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<PurchaseRequisitionApprovalRecord> getApprovalHistory(String factoryId, String requisitionId) {
+        loadAndCheckFactory(factoryId, requisitionId);
+        return approvalRecordRepository.findByFactoryIdAndRequisitionIdOrderBySeqAsc(factoryId, requisitionId);
     }
 
     @Override
@@ -122,8 +192,12 @@ public class PurchaseRequisitionServiceImpl implements PurchaseRequisitionServic
         transitionStatus(pr, PurchaseRequisitionStatus.APPROVED);
         pr.setApproverId(approverId);
         pr.setApprovedAt(LocalDateTime.now());
+        ensureRoundForLegacy(pr);
         log.info("审批通过请购单: id={}, approverId={}", requisitionId, approverId);
-        return requisitionRepository.save(pr);
+        PurchaseRequisition saved = requisitionRepository.save(pr);
+        requisitionRepository.flush();
+        appendRecord(pr, PurchaseRequisitionApprovalRecord.Action.APPROVED, approverId, null, null, null);
+        return saved;
     }
 
     @Override
@@ -139,8 +213,12 @@ public class PurchaseRequisitionServiceImpl implements PurchaseRequisitionServic
         pr.setApproverId(approverId);
         pr.setApprovedAt(LocalDateTime.now());
         pr.setRejectionReason(rejectionReason);
+        ensureRoundForLegacy(pr);
         log.info("驳回请购单: id={}, approverId={}, reason={}", requisitionId, approverId, rejectionReason);
-        return requisitionRepository.save(pr);
+        PurchaseRequisition saved = requisitionRepository.save(pr);
+        requisitionRepository.flush();
+        appendRecord(pr, PurchaseRequisitionApprovalRecord.Action.REJECTED, approverId, rejectionReason, null, null);
+        return saved;
     }
 
     @Override
@@ -188,6 +266,11 @@ public class PurchaseRequisitionServiceImpl implements PurchaseRequisitionServic
                     "仅 DRAFT 状态可删除 (当前状态: " + pr.getStatus().getDisplayName() + ")")
                     .withHint("如需取消已提交的请购单, 请使用 reject (驳回) 操作");
         }
+        // 提交/驳回过的单据(submit_round>0)带审批历史, 软删后历史接口会找不到单据 ⇒ 不许删
+        if (pr.getSubmitRound() != null && pr.getSubmitRound() > 0) {
+            throw new BusinessException(400, "该请购单已有审批历史, 不能删除")
+                    .withHint("驳回后重开的单据请修改后重新提交");
+        }
         // 仅 requester 本人可删 (MVP — 一致于 submitRequisition)
         if (!pr.getRequesterId().equals(currentUserId)) {
             throw new BusinessException(403, "仅请购人本人可删除草稿")
@@ -231,6 +314,56 @@ public class PurchaseRequisitionServiceImpl implements PurchaseRequisitionServic
                     .withHint("当前请购单不属于该工厂, 无法访问");
         }
         return pr;
+    }
+
+    private void requireRequester(PurchaseRequisition pr, Long currentUserId, String what) {
+        if (pr.getRequesterId() == null || !pr.getRequesterId().equals(currentUserId)) {
+            throw new BusinessException(403, "仅请购人本人可" + what)
+                    .withHint("当前用户非请购人, 无法" + what + "此请购单");
+        }
+    }
+
+    /** 存量单据(submit_round=0)在审批流水机制之前就已提交: 首次通过/驳回时按第 1 轮记入。 */
+    private void ensureRoundForLegacy(PurchaseRequisition pr) {
+        if (pr.getSubmitRound() == null || pr.getSubmitRound() == 0) {
+            pr.setSubmitRound(1);
+        }
+    }
+
+    private void appendRecord(PurchaseRequisition pr, PurchaseRequisitionApprovalRecord.Action action,
+                              Long actorId, String reason, List<Map<String, Object>> itemsSnapshot,
+                              LocalDate expectedDate) {
+        appendRecord(pr, action, actorId, reason, itemsSnapshot, expectedDate, null);
+    }
+
+    private void appendRecord(PurchaseRequisition pr, PurchaseRequisitionApprovalRecord.Action action,
+                              Long actorId, String reason, List<Map<String, Object>> itemsSnapshot,
+                              LocalDate expectedDate, LocalDateTime actedAt) {
+        PurchaseRequisitionApprovalRecord r = new PurchaseRequisitionApprovalRecord();
+        r.setFactoryId(pr.getFactoryId());
+        r.setRequisitionId(pr.getId());
+        r.setRound(pr.getSubmitRound() == null || pr.getSubmitRound() == 0 ? 1 : pr.getSubmitRound());
+        r.setSeq(approvalRecordRepository
+                .findTopByFactoryIdAndRequisitionIdOrderBySeqDesc(pr.getFactoryId(), pr.getId())
+                .map(last -> last.getSeq() + 1).orElse(1));
+        r.setAction(action);
+        r.setActorId(actorId);
+        r.setActedAt(actedAt != null ? actedAt : LocalDateTime.now());
+        r.setReason(reason);
+        r.setItemsSnapshot(itemsSnapshot);
+        r.setExpectedDateSnapshot(expectedDate);
+        approvalRecordRepository.save(r);
+    }
+
+    /** 深拷贝行项目: 快照不能随之后的改量被一起改掉。 */
+    private static List<Map<String, Object>> snapshotItems(List<Map<String, Object>> items) {
+        List<Map<String, Object>> copy = new ArrayList<>();
+        if (items != null) {
+            for (Map<String, Object> m : items) {
+                copy.add(m == null ? null : new java.util.LinkedHashMap<>(m));
+            }
+        }
+        return copy;
     }
 
     private void transitionStatus(PurchaseRequisition pr, PurchaseRequisitionStatus target) {

@@ -127,8 +127,27 @@ public class FinanceRowScopeQuery {
             requireOwner(factoryId, owner);
             return;
         }
+        if ("OUTSOURCE_RECEIVE".equals(sourceType) || "OUTSOURCE_GOODS_RETURN".equals(sourceType)) {
+            requireOwner(factoryId, resolveOutsourceOwner(factoryId, sourceId));
+            return;
+        }
         // Unknown source types are not safe to attribute to the operator.
         requireOwner(factoryId, null);
+    }
+
+    @Autowired(required = false)
+    private com.cretas.aims.repository.outsource.OutsourceMovementRepository outsourceMovementRepository;
+
+    @Autowired(required = false)
+    private com.cretas.aims.repository.outsource.OutsourceOrderRepository outsourceOrderRepository;
+
+    /** 委外收货 / 退货明细 → 委外单创建人; 找不到 ⇒ null (fail-closed)。 */
+    private Long resolveOutsourceOwner(String factoryId, String movementId) {
+        if (!hasText(movementId) || outsourceMovementRepository == null || outsourceOrderRepository == null) return null;
+        return outsourceMovementRepository.findById(movementId)
+                .filter(m -> factoryId.equals(m.getFactoryId()))
+                .flatMap(m -> outsourceOrderRepository.findByIdAndFactoryId(m.getOrderId(), factoryId))
+                .map(o -> o.getCreatedBy()).orElse(null);
     }
 
     /** Loads a transaction in its tenant and rejects hidden, damaged, or cross-source rows. */
@@ -179,6 +198,10 @@ public class FinanceRowScopeQuery {
         }
         if ("PAYABLE_SETTLEMENT".equals(transaction.getSourceType())) {
             return resolvePayableSettlementOwner(transaction);
+        }
+        if ("OUTSOURCE_RECEIVE".equals(transaction.getSourceType())
+                || "OUTSOURCE_GOODS_RETURN".equals(transaction.getSourceType())) {
+            return resolveOutsourceOwner(factoryId, transaction.getSourceId());
         }
         if (hasText(transaction.getSourceType()) || hasText(transaction.getSourceId())) return null;
         if (hasText(transaction.getSalesOrderId())) {

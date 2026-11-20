@@ -42,6 +42,11 @@ public interface IntentPreviewTokenRepository extends JpaRepository<IntentPrevie
      * <p>The expected digest is recomputed by the service from persisted bindings before this
      * update. Factory, tenant, user, status and expiry remain database predicates so a stale read
      * or concurrent request cannot bypass them.</p>
+     *
+     * <p>The business object the token was issued for (entity type / entity id) is part of the
+     * claim predicate too: a token issued for one object can never be claimed to execute against
+     * another. Absent values are compared as the empty string ({@code COALESCE}), so callers pass
+     * {@code ""} for "issued without an object id" — never {@code null}.</p>
      */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("UPDATE IntentPreviewToken t SET t.status = :executingStatus, " +
@@ -50,6 +55,8 @@ public interface IntentPreviewTokenRepository extends JpaRepository<IntentPrevie
            "AND t.userId = :userId AND t.commandDigest = :expectedCommandDigest " +
            "AND t.parametersHash = :expectedParametersHash AND t.toolName = :expectedToolName " +
            "AND t.descriptorVersion = :expectedDescriptorVersion AND t.executionMode = :expectedMode " +
+           "AND COALESCE(t.entityType, '') = :expectedEntityType " +
+           "AND COALESCE(t.entityId, '') = :expectedEntityId " +
            "AND t.status = :pendingStatus AND t.expiresAt > :now")
     int claimForExecution(@Param("token") String token,
                           @Param("factoryId") String factoryId,
@@ -60,23 +67,46 @@ public interface IntentPreviewTokenRepository extends JpaRepository<IntentPrevie
                           @Param("expectedToolName") String expectedToolName,
                           @Param("expectedDescriptorVersion") String expectedDescriptorVersion,
                           @Param("expectedMode") ToolExecutionMode expectedMode,
+                          @Param("expectedEntityType") String expectedEntityType,
+                          @Param("expectedEntityId") String expectedEntityId,
                           @Param("claimId") String claimId,
                           @Param("claimedAt") LocalDateTime claimedAt,
                           @Param("now") LocalDateTime now,
                           @Param("pendingStatus") TokenStatus pendingStatus,
                           @Param("executingStatus") TokenStatus executingStatus);
 
-    /** Only the current lease owner can resolve an executing token. */
+    /**
+     * Only the current lease owner can resolve its token. Besides EXECUTING, the owner may still
+     * settle a lease that reconciliation already marked OUTCOME_UNKNOWN (the owner was merely slow):
+     * the owner knows the real outcome, reconciliation only knew that nobody reported one.
+     */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("UPDATE IntentPreviewToken t SET t.status = :resolvedStatus, " +
            "t.resolvedAt = :resolvedAt, t.resolutionMessage = :message " +
-           "WHERE t.token = :token AND t.claimId = :claimId AND t.status = :executingStatus")
+           "WHERE t.token = :token AND t.claimId = :claimId " +
+           "AND (t.status = :executingStatus OR t.status = :unknownStatus)")
     int resolveClaim(@Param("token") String token,
                      @Param("claimId") String claimId,
                      @Param("executingStatus") TokenStatus executingStatus,
+                     @Param("unknownStatus") TokenStatus unknownStatus,
                      @Param("resolvedStatus") TokenStatus resolvedStatus,
                      @Param("resolvedAt") LocalDateTime resolvedAt,
                      @Param("message") String message);
+
+    /**
+     * Reconciliation of leases nobody resolved (process died / hung mid-execution): EXECUTING rows
+     * claimed before the cutoff become OUTCOME_UNKNOWN. They are never returned to PENDING, so a
+     * reconciled token can never be claimed and executed again.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE IntentPreviewToken t SET t.status = :unknownStatus, " +
+           "t.resolvedAt = :now, t.resolutionMessage = :message " +
+           "WHERE t.status = :executingStatus AND t.claimedAt < :claimedBefore")
+    int reconcileStaleExecuting(@Param("claimedBefore") LocalDateTime claimedBefore,
+                                @Param("now") LocalDateTime now,
+                                @Param("message") String message,
+                                @Param("executingStatus") TokenStatus executingStatus,
+                                @Param("unknownStatus") TokenStatus unknownStatus);
 
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("UPDATE IntentPreviewToken t SET t.status = :expiredStatus, " +
@@ -134,6 +164,21 @@ public interface IntentPreviewTokenRepository extends JpaRepository<IntentPrevie
                              @Param("userId") Long userId,
                              @Param("intentCode") String intentCode,
                              @Param("now") LocalDateTime now);
+
+    /**
+     * 按行 id 作废一张还没被认领的凭据 (属主 + 工厂 + 租户都要对上)。原子: 与 {@link #claimForExecution}
+     * 并发时只有一方生效 —— 已被认领 (EXECUTING / 终态) 的返回 0, 不会被改回已取消。
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE IntentPreviewToken t SET t.status = 'CANCELLED', t.resolvedAt = :now, " +
+           "t.resolutionMessage = :reason " +
+           "WHERE t.id = :id AND t.factoryId = :factoryId AND t.tenantId = :factoryId AND t.userId = :userId " +
+           "AND t.status = 'PENDING'")
+    int cancelPendingById(@Param("id") Long id,
+                          @Param("factoryId") String factoryId,
+                          @Param("userId") Long userId,
+                          @Param("reason") String reason,
+                          @Param("now") LocalDateTime now);
 
     /**
      * 删除指定天数之前的已处理令牌 (清理历史数据)

@@ -81,8 +81,14 @@ class IntentExecutionOrchestratorSuggestedActionSecurityTest {
         when(configService.resolveBusinessDomain(FACTORY_ID)).thenReturn("FACTORY");
         AIIntentConfig config = new AIIntentConfig();
         config.setIntentCode(INTENT_CODE);
+        config.setIntentName("Material query");
         config.setBusinessType("FACTORY");
+        config.setIsActive(true);
         when(configService.getIntentByCode(FACTORY_ID, INTENT_CODE)).thenReturn(Optional.of(config));
+        when(configService.hasPermission(FACTORY_ID, INTENT_CODE, "factory_super_admin")).thenReturn(true);
+        // INTENT-DISTILL D2: 普通入口与 SSE 共用同一个按权限过滤的候选服务
+        ReflectionTestUtils.setField(orchestrator, "clarificationCandidateService", new ClarificationCandidateService(
+                configService, mock(IntentPermissionGate.class), null, new com.cretas.aims.ai.tool.WriteGuardService()));
 
         IntentMatchResult matchResult = IntentMatchResult.builder()
                 .topCandidates(List.of(IntentMatchResult.CandidateIntent.builder()
@@ -95,7 +101,7 @@ class IntentExecutionOrchestratorSuggestedActionSecurityTest {
         @SuppressWarnings("unchecked")
         List<IntentExecuteResponse.SuggestedAction> actions =
                 (List<IntentExecuteResponse.SuggestedAction>) ReflectionTestUtils.invokeMethod(
-                        orchestrator, "buildCandidateActions", matchResult, FACTORY_ID);
+                        orchestrator, "buildCandidateActions", matchResult, FACTORY_ID, 1L, "factory_super_admin", null);
 
         IntentExecuteResponse.SuggestedAction selectIntent = actions.stream()
                 .filter(action -> "SELECT_INTENT".equals(action.getActionCode()))
@@ -103,41 +109,6 @@ class IntentExecutionOrchestratorSuggestedActionSecurityTest {
                 .orElseThrow();
         assertThat(selectIntent.getParameters())
                 .containsEntry("intentCode", INTENT_CODE)
-                .doesNotContainKey("forceExecute");
-    }
-
-    @Test
-    void conversationCandidateKeepsIntentAndSessionWithoutForceExecute() {
-        ConversationService.ConversationResponse conversationResponse =
-                ConversationService.ConversationResponse.builder()
-                        .sessionId("session-1")
-                        .status(ConversationSession.SessionStatus.ACTIVE)
-                        .message("Choose an intent")
-                        .candidates(List.of(ConversationService.CandidateInfo.builder()
-                                .intentCode(INTENT_CODE)
-                                .intentName("Material query")
-                                .confidence(0.70)
-                                .build()))
-                        .build();
-        when(conversationService.continueConversation(FACTORY_ID, 1L, "session-1", "choose"))
-                .thenReturn(conversationResponse);
-
-        IntentExecuteRequest request = IntentExecuteRequest.builder()
-                .sessionId("session-1")
-                .userInput("choose")
-                .build();
-        IntentExecuteResponse response;
-        try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(
-                new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, 1L, FACTORY_ID, "ADMIN"))) {
-            response = ReflectionTestUtils.invokeMethod(
-                    orchestrator, "handleConversationContinuation", FACTORY_ID, request, 1L, "ADMIN");
-        }
-
-        assertThat(response).isNotNull();
-        assertThat(response.getSuggestedActions()).hasSize(1);
-        assertThat(response.getSuggestedActions().get(0).getParameters())
-                .containsEntry("intentCode", INTENT_CODE)
-                .containsEntry("sessionId", "session-1")
                 .doesNotContainKey("forceExecute");
     }
 }

@@ -31,6 +31,7 @@ import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -86,6 +87,20 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
      */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.workprocess.WorkflowStepUnlockGuard unlockGuard;
+
+    /**
+     * 工序多负责人表 (T121), 「本人可报」用 —— 与 RN 报工 {@code YieldReportServiceImpl} 读的是同一张表。
+     * required=false 同上 (不改构造器); 没注入时只按任务负责人判, 只会更严。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.ProductWorkProcessAssigneeRepository pwpAssigneeRepository;
+
+    /**
+     * 工序首检闸 (V20261115_62)。工厂开关默认关: 关时只查一次开关就返回, 开工/完工与没有首检时一样。
+     * required=false 同上 (不改构造器、不打断既有 @InjectMocks 单测); 没注入 = 不查首检。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.quality.firstarticle.FirstArticleGate firstArticleGate;
 
     // ==================== T142: batch assignedToName helper ====================
 
@@ -441,6 +456,7 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
     @Transactional
     public WorkProcessTaskDTO start(String factoryId, Long id, Long operatorUserId) {
         WorkProcessTask task = loadOrThrow(factoryId, id);
+        assertNotOutsourced(task);
         assertTransition(task.getStatus(), Status.IN_PROGRESS);
         // 缺口 04: 上游产出的料还没到, 不许开工 (409 WORKFLOW_UPSTREAM_NOT_READY, 写明等哪一道)
         if (unlockGuard != null) {
@@ -454,7 +470,7 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
         }
         WorkProcessTask saved = taskRepository.save(task);
         log.info("工序任务 {} 开始 (operator={})", id, operatorUserId);
-        return toDTO(saved, lookupDefinition(factoryId, saved.getWorkProcessId()));
+        return withFirstArticleNotice(factoryId, saved, toDTO(saved, lookupDefinition(factoryId, saved.getWorkProcessId())));
     }
 
     @Override
@@ -477,7 +493,15 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
         }
 
         WorkProcessTask task = loadOrThrow(factoryId, id);
+        // 本人可报 (先于状态判断: 别人的工序连状态也不透出)。AI 预览 (WorkProcessTaskTransitionPreview#complete) 同序。
+        checkCanComplete(factoryId, task.getFactoryId(), task.getAssignedTo(),
+                task.getProductWorkProcessId(), operatorUserId);
+        assertNotOutsourced(task);
         assertTransition(task.getStatus(), Status.COMPLETED);
+        // 工序首检: 工厂开关 = 拦截且首检没合格 → 409; 关 / 提示 → 放行 (AI 预览经 assertFirstArticleAllowsComplete 同判据)
+        if (firstArticleGate != null) {
+            firstArticleGate.assertCanComplete(factoryId, task);
+        }
 
         LocalDateTime now = LocalDateTime.now();
         task.setStatus(Status.COMPLETED);
@@ -496,7 +520,7 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
         WorkProcessTask saved = taskRepository.save(task);
         log.info("工序任务 {} 完成 actualQuantity={} actualMinutes={}",
                 id, request.getActualQuantity(), saved.getActualMinutes());
-        return toDTO(saved, lookupDefinition(factoryId, saved.getWorkProcessId()));
+        return withFirstArticleNotice(factoryId, saved, toDTO(saved, lookupDefinition(factoryId, saved.getWorkProcessId())));
     }
 
     @Override
@@ -568,7 +592,101 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
         log.info("工序任务 {} 软删", id);
     }
 
+    @Override
+    public void assertCanComplete(String factoryId, WorkProcessTaskDTO task, Long operatorUserId) {
+        if (task == null) {
+            return;
+        }
+        checkCanComplete(factoryId, task.getFactoryId(), task.getAssignedTo(),
+                task.getProductWorkProcessId(), operatorUserId);
+    }
+
+    @Override
+    public void assertFirstArticleAllowsComplete(String factoryId, Long taskId) {
+        if (firstArticleGate == null || taskId == null) {
+            return;
+        }
+        taskRepository.findByFactoryIdAndId(factoryId, taskId)
+                .ifPresent(task -> firstArticleGate.assertCanComplete(factoryId, task));
+    }
+
+    /** 工厂开关 = 提示 / 拦截且这道工序首检没合格时, 返回里带一句提示; 开关关 → DTO 原样 (字段为 null 不序列化)。 */
+    private WorkProcessTaskDTO withFirstArticleNotice(String factoryId, WorkProcessTask task, WorkProcessTaskDTO dto) {
+        if (firstArticleGate != null && dto != null) {
+            dto.setFirstArticleNotice(firstArticleGate.noticeFor(factoryId, task));
+        }
+        return dto;
+    }
+
+    @Override
+    public boolean isCompletionSupervisor(String factoryId, Long operatorUserId) {
+        return com.cretas.aims.security.AuthenticatedActor.fromCurrentExecution()
+                .filter(a -> a.type() == com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER)
+                .filter(a -> a.id().equals(operatorUserId))
+                .filter(a -> factoryId != null && factoryId.equals(a.factoryId()))
+                .map(a -> com.cretas.aims.utils.ReportAuthGuard.isSupervisor(a.role()))
+                .orElse(false);
+    }
+
+    /**
+     * 本人可报 —— 口径见 {@link WorkProcessTaskService#assertCanComplete}。允许集合与 RN 报工同一份
+     * ({@code ReportAuthGuard#buildPermittedSet}: 多负责人表有人就用它, 没有就用任务负责人; 都空 = 未指派, 谁都能报)。
+     */
+    private void checkCanComplete(String factoryId, String taskFactoryId, Long assignedTo,
+                                  Long productWorkProcessId, Long operatorUserId) {
+        Optional<com.cretas.aims.security.AuthenticatedActor> actor =
+                com.cretas.aims.security.AuthenticatedActor.fromCurrentExecution();
+        boolean factoryUserOfOtherFactory = actor
+                .filter(a -> a.type() == com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER)
+                .map(a -> a.factoryId() != null && !a.factoryId().equals(factoryId))
+                .orElse(false);
+        if ((taskFactoryId != null && !taskFactoryId.equals(factoryId)) || factoryUserOfOtherFactory) {
+            throw new BusinessException(403, "这道工序不是本厂的，不能报完工")
+                    .withHint("请在自己工厂里报工");
+        }
+        if (isCompletionSupervisor(factoryId, operatorUserId)) {
+            return;
+        }
+        Set<Long> permitted = com.cretas.aims.utils.ReportAuthGuard.buildPermittedSet(
+                assignedTo, joinTableAssignees(productWorkProcessId));
+        if (permitted.isEmpty()) {
+            return; // 未指派: 谁都能报 (与 RN 报工、列表「我的 + 未指派」同口径)
+        }
+        // 平台账号的 id 不是 users.id, 不拿它去比负责人 (撞号会误放行)
+        boolean comparableIdentity = actor.map(a -> a.type() == com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER)
+                .orElse(true);
+        if (comparableIdentity && operatorUserId != null && permitted.contains(operatorUserId)) {
+            return;
+        }
+        throw new BusinessException(403, "这道工序不是派给您的，不能替别人报完工")
+                .withHint("请报派给自己的工序；需要替别人报，请找车间主管");
+    }
+
+    private List<Long> joinTableAssignees(Long productWorkProcessId) {
+        // 不注入时 (手工构造的单测) 只按任务负责人判: 比读了多负责人表更严, 不会多放行
+        if (productWorkProcessId == null || pwpAssigneeRepository == null) {
+            return List.of();
+        }
+        return pwpAssigneeRepository.findByProductWorkProcessId(productWorkProcessId).stream()
+                .map(com.cretas.aims.entity.ProductWorkProcessAssignee::getWorkerId)
+                .filter(java.util.Objects::nonNull)
+                .collect(Collectors.toList());
+    }
+
     // ==================== Helpers ====================
+
+    /**
+     * 委外工序的状态只由委外单推进 (发料 → 进行中, 结单 → 完成; 产量 = 委外实收合格数)。
+     * 从报工入口开工 / 完工会让工序状态和委外厂的实际收发分叉。
+     */
+    static void assertNotOutsourced(WorkProcessTask task) {
+        if (Boolean.TRUE.equals(task.getIsOutsourced())) {
+            throw new BusinessException(409, "这道工序已委外, 由委外收货完成")
+                    .withCode("WORK_PROCESS_TASK_OUTSOURCED")
+                    .withHint("请到「生产管理 › 委外单」收货; 委外单结单后工序自动完成")
+                    .withSeverity("BLOCKING");
+        }
+    }
 
     private WorkProcessTask loadOrThrow(String factoryId, Long id) {
         return taskRepository.findByFactoryIdAndId(factoryId, id)

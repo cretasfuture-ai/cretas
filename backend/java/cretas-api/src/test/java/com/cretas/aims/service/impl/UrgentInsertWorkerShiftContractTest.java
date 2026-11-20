@@ -75,7 +75,7 @@ class UrgentInsertWorkerShiftContractTest {
                 .productTypeId("P1").previewQuantity(BigDecimal.TEN).quantityUnit("PIECE")
                 .plannedUnit("件").productionLineId("L1").windowStart(start)
                 .windowEnd(start.plusHours(2)).slotUpdatedAt(slot.getUpdatedAt())
-                .impactLevel("none").requiresApproval(false).affectedPlanCount(0).candidateNumber(1).build();
+                .impactLevel("none").requiresApproval(false).affectedPlanCount(0).candidateNumber(1).materialFingerprint(UrgentInsertTestSupport.MATERIAL_FP).impactFingerprint(UrgentInsertServiceImpl.impactFingerprint(null)).scheduleFingerprint(UrgentInsertTestSupport.SCHEDULE_FP).build();
         preview.setCreatedAt(LocalDateTime.now());
         when(previews.findByIdAndFactoryId("PV1", F)).thenReturn(Optional.of(preview));
         products = mock(ProductTypeRepository.class);
@@ -174,7 +174,8 @@ class UrgentInsertWorkerShiftContractTest {
     @Test
     void everyExplicitWorkerMustBeInVerifiedOwnFactoryAvailabilitySet() {
         when(shifts.check(F, start, start.plusHours(2), 2)).thenReturn(ready());
-        for (List<Long> ids : List.of(List.of(11L), List.of(11L, 777L), List.of(11L, 12L, 777L))) {
+        // A1: 人数少于标准只提示不拦 (见 UrgentInsertDisciplineContractTest); 这里只验「点名的人必须在可派名单里」
+        for (List<Long> ids : List.of(List.of(777L), List.of(11L, 777L), List.of(11L, 12L, 777L))) {
             assertThatThrownBy(() -> service.confirmInsert(F, 1L, request(ids)))
                     .isInstanceOf(BusinessException.class).hasMessageContaining("指定工人不足");
         }
@@ -202,8 +203,8 @@ class UrgentInsertWorkerShiftContractTest {
 
     @Test
     void omittedSelectionPreservesExistingPendingPlanForLaterAssignmentPath() {
+        // 没有名单就不核验名单; 确认只读一次班次是为了在结果里提示「人员未核对」, 不预留也不分配任何人
         service.confirmInsert(F, 1L, request(null));
-        verifyNoInteractions(shifts);
         verify(plans).save(argThat(plan -> plan.getStatus()
                 == com.cretas.aims.entity.enums.ProductionPlanStatus.PENDING));
     }

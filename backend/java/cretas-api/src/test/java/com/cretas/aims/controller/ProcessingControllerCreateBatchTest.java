@@ -72,6 +72,7 @@ class ProcessingControllerCreateBatchTest {
         CreateProductionBatchRequest req = new CreateProductionBatchRequest();
         req.setBatchNumber("BATCH-001");
         req.setProductTypeId("PT-001");
+        req.setPlannedQuantity(new BigDecimal("100")); // 2026-11-15: 数量必须 > 0, 最小体也要带计划量
 
         when(processingService.createBatch(anyString(), any(ProductionBatch.class)))
                 .thenAnswer(inv -> inv.getArgument(1));
@@ -90,7 +91,7 @@ class ProcessingControllerCreateBatchTest {
         assertNull(mapped.getFactoryId(), "factoryId is set inside service, not by mapper");
         assertNull(mapped.getStatus(), "status PLANNED is set inside service, not by mapper");
         assertNull(mapped.getProductName(), "productName default '待设置产品名称' belongs to service");
-        assertNull(mapped.getQuantity(), "quantity default belongs to service");
+        assertNull(mapped.getQuantity(), "quantity default (fallback to plannedQuantity) belongs to service");
         assertNull(mapped.getUnit(), "unit default 'kg' belongs to service");
         // Auto-managed fields stay null on create
         assertNull(mapped.getId(), "id must remain null on create — DB IDENTITY assigns");
@@ -167,6 +168,7 @@ class ProcessingControllerCreateBatchTest {
         CreateProductionBatchRequest req = new CreateProductionBatchRequest();
         req.setBatchNumber("BATCH-002");
         req.setProductTypeId("PT-001");
+        req.setPlannedQuantity(new BigDecimal("100"));
         // req.photoRequired left null
 
         when(processingService.createBatch(anyString(), any(ProductionBatch.class)))
@@ -191,6 +193,7 @@ class ProcessingControllerCreateBatchTest {
         CreateProductionBatchRequest req = new CreateProductionBatchRequest();
         req.setBatchNumber("BATCH-003");
         req.setProductTypeId("PT-001");
+        req.setPlannedQuantity(new BigDecimal("100"));
         // req.customFields left null
 
         when(processingService.createBatch(anyString(), any(ProductionBatch.class)))
@@ -206,5 +209,62 @@ class ProcessingControllerCreateBatchTest {
                 "null DTO field must NOT overwrite entity @Builder.Default empty map");
         assertTrue(mapped.getCustomFields().isEmpty(),
                 "customFields default empty HashMap preserved");
+    }
+
+    // ===== 2026-11-15 Steve 裁决: 后端也拒绝数量 0 =====
+
+    private CreateProductionBatchRequest bareRequest() {
+        CreateProductionBatchRequest req = new CreateProductionBatchRequest();
+        req.setBatchNumber("BATCH-ZERO");
+        req.setProductTypeId("PT-001");
+        return req;
+    }
+
+    private void assertRejected(CreateProductionBatchRequest req) {
+        com.cretas.aims.exception.BusinessException ex = org.junit.jupiter.api.Assertions.assertThrows(
+                com.cretas.aims.exception.BusinessException.class, () -> controller.createBatch("F001", req));
+        assertEquals(400, ex.getCode());
+        assertEquals("BATCH_QUANTITY_MUST_BE_POSITIVE", ex.getErrorCode());
+        Mockito.verifyNoInteractions(processingService); // 被拒的请求不能碰到 service (不建批次)
+    }
+
+    @Test
+    void createBatch_plannedQuantityZero_rejected() {
+        CreateProductionBatchRequest req = bareRequest();
+        req.setPlannedQuantity(BigDecimal.ZERO);
+        assertRejected(req);
+    }
+
+    @Test
+    void createBatch_noQuantityAtAll_rejected_insteadOfSilentlyRecordingZero() {
+        assertRejected(bareRequest());
+    }
+
+    @Test
+    void createBatch_quantityZeroEvenWithPositivePlanned_rejected() {
+        CreateProductionBatchRequest req = bareRequest();
+        req.setPlannedQuantity(new BigDecimal("50"));
+        req.setQuantity(BigDecimal.ZERO);
+        assertRejected(req);
+    }
+
+    @Test
+    void createBatch_plannedZeroButQuantityPositive_rejected() {
+        CreateProductionBatchRequest req = bareRequest();
+        req.setPlannedQuantity(BigDecimal.ZERO);
+        req.setQuantity(new BigDecimal("50"));
+        assertRejected(req);
+    }
+
+    @Test
+    void createBatch_positiveQuantity_passesThrough_negativeControl() {
+        CreateProductionBatchRequest req = bareRequest();
+        req.setPlannedQuantity(new BigDecimal("0.001"));
+        when(processingService.createBatch(anyString(), any(ProductionBatch.class)))
+                .thenAnswer(inv -> inv.getArgument(1));
+
+        controller.createBatch("F001", req);
+
+        Mockito.verify(processingService).createBatch(Mockito.eq("F001"), any(ProductionBatch.class));
     }
 }

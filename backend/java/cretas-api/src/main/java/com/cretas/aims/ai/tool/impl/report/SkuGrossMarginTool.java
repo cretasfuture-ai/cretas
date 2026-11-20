@@ -69,20 +69,29 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
 
     @Override
     public Map<String, Object> getParametersSchema() {
-        return Map.of(
+        return ReportToolSchemas.withOptionalExtraction(Map.of(
                 "type", "object",
                 "properties", Map.of(
                         "productName", Map.of("type", "string", "description", "产品名称(可选，模糊匹配，不填则查全部有销售或有目录价的产品)"),
-                        "startDate", Map.of("type", "string", "description", "实际销售毛利的起始日期 yyyy-MM-dd(可选，默认最近30天)"),
-                        "endDate", Map.of("type", "string", "description", "实际销售毛利的结束日期 yyyy-MM-dd(可选，默认今天)")
+                        "startDate", Map.of("type", "string", "format", "date", "description", "实际销售毛利的起始日期 yyyy-MM-dd(可选，默认最近30天)"),
+                        "endDate", Map.of("type", "string", "format", "date", "description", "实际销售毛利的结束日期 yyyy-MM-dd(可选，默认今天)"),
+                        "sortOrder", Map.of("type", "string", "enum", List.of("highest", "lowest"),
+                                "description", "排序方向(可选，默认 highest 毛利从高到低)。用户问'毛利最低/最差/末位/倒数/亏钱的产品'时填 lowest(从低到高)")
                 ),
                 "required", List.of()
-        );
+        ));
     }
 
     @Override
     protected List<String> getRequiredParameters() {
         return List.of();
+    }
+
+    private static final java.util.regex.Pattern LOWEST_WORDS = java.util.regex.Pattern.compile("最低|最差|最少|倒数|末位|垫底|最不赚钱|亏钱");
+
+    /** 原话是不是在问「最低 / 最差 / 倒数」那一头。 */
+    static boolean asksLowest(String userInput) {
+        return userInput != null && LOWEST_WORDS.matcher(userInput).find();
     }
 
     /** 测试可覆盖; 生产用服务器本地日期 (后端全线 GMT+8)。 */
@@ -93,7 +102,15 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
     @Override
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params,
                                             Map<String, Object> context) throws Exception {
-        String keyword = blankToNull(getString(params, "productName"));
+        // 产品名本次请求解析一次; 回复开头写明按哪个产品 / 全厂统计 (「卤牛肉片」按卤牛肉回答时也看得出来)
+        ReportToolSchemas.ProductResolution product = ReportToolSchemas.resolveProduct(productTypeRepository, factoryId, getString(params, "productName"));
+        return ReportToolSchemas.withNote(answer(factoryId, params, context, product), product.leadIn(false));
+    }
+
+    private Map<String, Object> answer(String factoryId, Map<String, Object> params, Map<String, Object> context,
+                                       ReportToolSchemas.ProductResolution product) throws Exception {
+        String raw = getString(params, "productName");
+        String keyword = product.label();
         String startText = blankToNull(getString(params, "startDate"));
         String endText = blankToNull(getString(params, "endDate"));
 
@@ -105,22 +122,39 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
         }
         boolean defaultPeriod = startText == null && endText == null;
 
+        // 毛利率与 web SKU 毛利同一判定 (ShipmentSkuMarginDTO.marginRate 的 @PriceSensitive 口径): 看不到就整份不给,
+        // 不给「金额已遮、毛利率仍在」的部分答案 (2026-11-16 #1788 独立审查 H1)。不查库。
+        if (!replyShowsPriceSpec(context, MARGIN_RATE_SPEC) || !replyShowsAmount(context, "marginRate")) {
+            Map<String, Object> hidden = resultData(List.of(), 0, start, end, defaultPeriod);
+            hidden.put("marginHidden", true);
+            return buildSimpleResult(MARGIN_RATE_HIDDEN_MESSAGE, hidden);
+        }
+
         // ---- 口径 1 的数据: 复用销售毛利报表的查询 (不另写 SQL) ----
         Map<String, Object> payload = realizedQuery.fetch(factoryId, start, end);
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> realizedRows = (List<Map<String, Object>>) payload.get("rank");
 
-        List<ProductType> types = productTypeRepository.findByFactoryIdAndIsActiveTrue(factoryId);
+        List<ProductType> types = product.catalog() != null ? product.catalog() : List.of();   // 本次请求已加载, 不再查第二次
         Map<String, ProductType> typeById = new HashMap<>();
         for (ProductType t : types) {
             if (t.getId() != null) typeById.put(t.getId(), t);
         }
 
-        // ---- 选出要回答的 SKU ----
+        // ---- 选出要回答的 SKU (口径表 B: 只锁定名称完整出现在原话里的产品, ⛔ 不按「名称含这个词」反向包含挑) ----
+        ReportToolSchemas.ProductScope scope = product.scope();
+        Set<String> pickedIds = scope == ReportToolSchemas.ProductScope.MATCHED ? product.productIds() : Set.of();
+        Set<String> pickedNames = new HashSet<>();
+        for (String n : product.productNames()) pickedNames.add(n.trim().toLowerCase(Locale.ROOT));
+        String asked = raw == null ? "" : raw.trim().toLowerCase(Locale.ROOT);
         Map<String, Candidate> candidates = new LinkedHashMap<>();
         for (ProductType t : types) {
-            boolean pick = keyword != null ? containsIgnoreCase(t.getName(), keyword)
-                    : t.getUnitPrice() != null && t.getUnitPrice().signum() > 0;
+            boolean pick = switch (scope) {
+                case ALL -> t.getUnitPrice() != null && t.getUnitPrice().signum() > 0;
+                case MATCHED -> pickedIds.contains(t.getId());
+                case NAME_ONLY -> containsIgnoreCase(t.getName(), product.keyword());
+                case NOT_FOUND -> false;
+            };
             if (pick && t.getId() != null) {
                 candidates.computeIfAbsent(t.getId(), k -> new Candidate()).type = t;
             }
@@ -128,8 +162,14 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
         for (Map<String, Object> row : realizedRows) {
             String id = (String) row.get("productTypeId");
             String name = (String) row.get("productName");
-            boolean pick = keyword == null || containsIgnoreCase(name, keyword)
-                    || (id != null && candidates.containsKey(id));
+            String n = name == null ? "" : name.trim().toLowerCase(Locale.ROOT);
+            boolean pick = switch (scope) {
+                case ALL -> true;
+                case MATCHED -> (id != null && candidates.containsKey(id)) || (id == null && pickedNames.contains(n));
+                case NAME_ONLY -> containsIgnoreCase(name, product.keyword());
+                // 目录里没有 (例如已停用) 但期间有销售: 销售记录上的名称完整出现在原话里才算问到了它
+                case NOT_FOUND -> n.length() >= 2 && asked.contains(n);
+            };
             if (!pick) continue;
             String key = id != null ? id : "name:" + name;
             Candidate c = candidates.computeIfAbsent(key, k -> new Candidate());
@@ -138,10 +178,17 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
         }
 
         if (candidates.isEmpty()) {
-            String msg = keyword != null
-                    ? "没有找到名称含「" + keyword + "」的在用产品，所选期间(" + start + " 至 " + end + ")也没有该名称的销售记录，毛利率无从计算。"
-                    : "所选期间(" + start + " 至 " + end + ")没有销售记录，也没有设置目录价的在用产品，没有可计算毛利率的产品。";
-            return buildSimpleResult(msg, resultData(List.of(), 0, start, end, defaultPeriod));
+            String msg;
+            if (scope == ReportToolSchemas.ProductScope.NOT_FOUND && !product.suggestions().isEmpty()) {
+                msg = product.refusalMessage("计算毛利率", false);
+            } else if (keyword != null) {
+                msg = "没有找到名称含「" + keyword + "」的在用产品，所选期间(" + start + " 至 " + end + ")也没有该名称的销售记录，毛利率无从计算。";
+            } else {
+                msg = "所选期间(" + start + " 至 " + end + ")没有销售记录，也没有设置目录价的在用产品，没有可计算毛利率的产品。";
+            }
+            Map<String, Object> empty = resultData(List.of(), 0, start, end, defaultPeriod);
+            if (!product.suggestions().isEmpty()) empty.put("candidates", product.suggestions());
+            return buildSimpleResult(msg, empty);
         }
 
         // ---- 逐 SKU 组装两种口径 ----
@@ -149,9 +196,16 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
         for (Candidate c : candidates.values()) {
             items.add(buildItem(factoryId, c, start, end, defaultPeriod));
         }
+        String sortOrder = getString(params, "sortOrder");
+        // 参数抽取没给方向时, 用原话兜底: 「毛利最低的产品」被默认成从高到低是答非所问 (LSMDEMO 2026-11-18)
+        boolean lowestFirst = sortOrder == null || sortOrder.isBlank()
+                ? asksLowest(getString(params, "originalUserInput") != null ? getString(params, "originalUserInput") : getString(params, "userInput"))
+                : "lowest".equalsIgnoreCase(sortOrder);
+        // 没有毛利率的 (没数据) 始终排最后, 不因升序跑到「最低」前面
+        Comparator<BigDecimal> rateOrder = lowestFirst ? Comparator.<BigDecimal>naturalOrder() : Comparator.<BigDecimal>reverseOrder();
         items.sort(Comparator
-                .comparing((Map<String, Object> i) -> rateOf(i, "realized"), Comparator.nullsLast(Comparator.<BigDecimal>reverseOrder()))
-                .thenComparing(i -> rateOf(i, "catalog"), Comparator.nullsLast(Comparator.<BigDecimal>reverseOrder()))
+                .comparing((Map<String, Object> i) -> rateOf(i, "realized"), Comparator.nullsLast(rateOrder))
+                .thenComparing(i -> rateOf(i, "catalog"), Comparator.nullsLast(rateOrder))
                 .thenComparing(i -> String.valueOf(i.get("productName"))));
         // 工艺保密: 当前调用者无权看的产品不按毛利排 (排名本身泄露毛利高低) —— 挪到最后, 按名称排
         com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.Excluded secret = llmCostScope.forCurrentCaller(factoryId);
@@ -169,9 +223,85 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
         int total = items.size();
         List<Map<String, Object>> shown = total > MAX_ITEMS ? new ArrayList<>(items.subList(0, MAX_ITEMS)) : items;
 
+        Map<String, Object> data = resultData(shown, total, start, end, defaultPeriod);
+        Map<String, Object> chart = marginChart(shown, secret, lowestFirst);
+        if (chart != null) {
+            data.put("charts", List.of(chart));
+        }
+        data.put("sortOrder", lowestFirst ? "lowest" : "highest");
         return buildSimpleResult(buildMessage(shown, total, start, end, defaultPeriod, secret,
-                        replyShowsAmounts(context, "revenue", "cost", "price", "unitCost")),
-                resultData(shown, total, start, end, defaultPeriod));
+                        replyShowsAmounts(context, MARGIN_AMOUNT_KEYS), replyShowsAmount(context, "costCoverage"), lowestFirst),
+                data);
+    }
+
+    /**
+     * 实际销售毛利率排行柱图 (六膳门演示: 问答要出图)。只画有毛利率的、当前调用者看得到的 SKU, 前 10;
+     * 工艺保密而无权看的产品不进图 (排名和高度本身会泄露毛利)。没有可画的数据就不出图, 不画空图。
+     */
+    static Map<String, Object> marginChart(List<Map<String, Object>> items,
+                                           com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.Excluded secret) {
+        return marginChart(items, secret, false);
+    }
+
+    static Map<String, Object> marginChart(List<Map<String, Object>> items,
+                                           com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.Excluded secret,
+                                           boolean lowestFirst) {
+        List<String> names = new ArrayList<>();
+        List<BigDecimal> rates = new ArrayList<>();
+        for (Map<String, Object> item : items) {
+            Object id = item.get("productTypeId");
+            if (id == null || secret.coversProduct(id.toString())) continue;
+            BigDecimal rate = rateOf(item, "realized");
+            if (rate == null) continue;
+            names.add(String.valueOf(item.get("productName")));
+            rates.add(rate);
+            if (names.size() >= 10) break;
+        }
+        if (names.isEmpty()) return null;
+        Map<String, Object> option = new LinkedHashMap<>();
+        option.put("tooltip", Map.of("trigger", "axis"));
+        option.put("grid", Map.of("left", 50, "right", 20, "bottom", 70, "containLabel", true));
+        option.put("xAxis", Map.of("type", "category", "data", names, "axisLabel", Map.of("interval", 0, "rotate", 25)));
+        option.put("yAxis", Map.of("type", "value", "name", "%"));
+        option.put("series", List.of(Map.of("type", "bar", "name", "实际销售毛利率(%)", "data", rates)));
+        Map<String, Object> chart = new LinkedHashMap<>();
+        chart.put("type", "bar");
+        chart.put("title", lowestFirst ? "SKU 实际销售毛利率最低（%，从低到高前 10）" : "SKU 实际销售毛利率排行（%，前 10）");
+        chart.put("option", option);
+        return chart;
+    }
+
+    /**
+     * 毛利两处 (本工具 / {@link ReportSalesMarginSummaryTool}) 与 web 同一个可见性判据 (2026-11-16 复跑 Q05/Q06 vs Q11,
+     * #1788 独立审查 H1: 与 web 的 shipment-sku-margin / 经营报告毛利段对齐, 只收紧不放开):
+     * <ul>
+     *   <li>能不能用 = 工具门 {@code finance:read | finance:read_write} (中央 ToolRbacEnforcer, 与 web 财务模块门同源);</li>
+     *   <li>毛利率 = {@link #MARGIN_RATE_SPEC}: web {@code ShipmentSkuMarginDTO.marginRate} 上 {@code @PriceSensitive} 的口径,
+     *       经同一个判定点 (PriceFieldResponseAdvice#showsSpec → PriceVisibility) 按权限配置判; 看不到 ⇒ 整份不给;</li>
+     *   <li>金额 (收入 / 成本 / 毛利 / 目录价 / 单位成本) 是否写进回复 = {@code replyShowsAmounts(这组键)};
+     *       成本覆盖率问 {@code costCoverage} 这个键 —— 文字与遮挡后的字段同进同出。</li>
+     * </ul>
+     * 两个工具都只用这几个常量问, ⛔ 不各写一份、不写死角色。
+     */
+    static final String[] MARGIN_AMOUNT_KEYS = {"revenue", "cost", "grossProfit", "price", "unitCost"};
+
+    /** web SKU 毛利视图里毛利率字段的口径, 直接读注解 (web 改口径, 这里跟着变)。 */
+    static final String MARGIN_RATE_SPEC = webMarginRateSpec();
+
+    static final String MARGIN_RATE_HIDDEN_MESSAGE = "毛利率按当前账号的权限配置不显示（与 web「SKU 毛利」页同一判定，需要价格查看权限），"
+            + "销售额、成本、毛利金额也不显示；需要请联系工厂管理员开通。";
+
+    private static String webMarginRateSpec() {
+        try {
+            com.cretas.aims.security.PriceSensitive annotation = com.cretas.aims.dto.finance.report.ShipmentSkuMarginDTO.class
+                    .getDeclaredField("marginRate").getAnnotation(com.cretas.aims.security.PriceSensitive.class);
+            if (annotation == null) {
+                throw new IllegalStateException("ShipmentSkuMarginDTO.marginRate 没有 @PriceSensitive");
+            }
+            return annotation.permission();
+        } catch (NoSuchFieldException e) {
+            throw new IllegalStateException("ShipmentSkuMarginDTO.marginRate 不存在", e);
+        }
     }
 
     // ==================== 组装 ====================
@@ -268,7 +398,7 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
 
     private Map<String, Object> buildCatalog(String factoryId, ProductType type) {
         Map<String, Object> m = new LinkedHashMap<>();
-        m.put("definition", "目录价理论毛利: 产品目录价 vs 最近一条已算出单位成本的批次 (三价对比看板同一口径)");
+        m.put("definition", "目录价理论毛利: 产品目录价 vs 最近 " + ThreePriceComparisonService.CATALOG_COST_BATCHES + " 批已算出单位成本批次的加权单位成本 (按实际产量加权, 不取单批)");
         if (type == null) {
             m.put("status", "NOT_IN_CATALOG");
             m.put("reason", "该产品不在在用产品目录中，没有目录价");
@@ -301,6 +431,8 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
         m.put("marginRate", status.equals("OK") ? cm.grossMarginPct() : null);   // 已是百分数
         m.put("costBatchNumber", cm.costBatchNumber());
         m.put("costAsOf", cm.costAsOf() != null ? cm.costAsOf().toString() : null);
+        m.put("costBatchCount", cm.costBatchCount());
+        m.put("latestBatchUnitCost", money(cm.latestBatchUnitCost()));
         return m;
     }
 
@@ -323,14 +455,24 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
 
     private String buildMessage(List<Map<String, Object>> shown, int total, LocalDate start, LocalDate end,
                                 boolean defaultPeriod, com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.Excluded secret,
-                                boolean showAmounts) {
+                                boolean showAmounts, boolean showCoverage, boolean lowest) {
+        this.lowestFirst.set(lowest);
         this.showAmounts.set(showAmounts);
+        this.showCoverage.set(showCoverage);
         try {
             return buildMessageText(shown, total, start, end, defaultPeriod, secret);
         } finally {
+            this.lowestFirst.remove();
             this.showAmounts.remove();
+            this.showCoverage.remove();
         }
     }
+
+    /** 成本覆盖率进不进文字: 与字段 realized.costCoverage 经遮挡层后同进同出 (#1788 审查 M2)。 */
+    private final ThreadLocal<Boolean> showCoverage = new ThreadLocal<>();
+
+    /** 本次回答的排序方向 (文字里写明是从低到高还是从高到低)。 */
+    private final ThreadLocal<Boolean> lowestFirst = ThreadLocal.withInitial(() -> false);
 
     /** 文字里的收入 / 成本 / 目录价 / 单位成本与 revenue / cost / price / unitCost 字段同进同出 (ERP-S6-MSG-TEXT-PRICE-LEAK-001) */
     private final ThreadLocal<Boolean> showAmounts = new ThreadLocal<>();
@@ -342,7 +484,8 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
     private String buildMessageText(List<Map<String, Object>> shown, int total, LocalDate start, LocalDate end,
                                 boolean defaultPeriod, com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.Excluded secret) {
         StringBuilder sb = new StringBuilder();
-        sb.append("SKU 毛利率共 ").append(total).append(" 个产品，两种口径分开给，不要混着看。")
+        sb.append("SKU 毛利率共 ").append(total).append(" 个产品（").append(lowestFirst.get() ? "按毛利率从低到高" : "按毛利率从高到低")
+          .append("），每个产品给实际销售毛利和目录价理论毛利两个数。")
           .append("「实际销售毛利」统计期间 ").append(start).append(" 至 ").append(end)
           .append(defaultPeriod ? "（默认最近 " + DEFAULT_PERIOD_DAYS + " 天）" : "").append("。\n");
         int n = 0;
@@ -369,7 +512,11 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
         if ("OK".equals(status)) {
             StringBuilder sb = new StringBuilder();
             sb.append(r.get("marginRate")).append("%（已回填成本明细的收入 ").append(moneyText(r.get("revenue")))
-              .append("，成本 ").append(moneyText(r.get("cost"))).append("，成本覆盖 ").append(r.get("costCoverage")).append("% 的收入）");
+              .append("，成本 ").append(moneyText(r.get("cost")));
+            if (Boolean.TRUE.equals(showCoverage.get())) {
+                sb.append("，成本覆盖 ").append(r.get("costCoverage")).append("% 的收入");
+            }
+            sb.append("）");
             if (r.get("note") != null) sb.append("。").append(r.get("note"));
             return sb.toString();
         }
@@ -380,12 +527,12 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
 
     private String catalogText(Map<String, Object> c) {
         if ("OK".equals(c.get("status"))) {
-            return c.get("marginRate") + "%（目录价 " + moneyText(c.get("price")) + "，最近批次 " + c.get("costBatchNumber")
-                    + " 单位成本 " + moneyText(c.get("unitCost")) + "）";
+            return c.get("marginRate") + "%（目录价 " + moneyText(c.get("price")) + "，近 " + c.get("costBatchCount")
+                    + " 批（最近 " + c.get("costBatchNumber") + "）加权单位成本（总成本 ÷ 实际产量）" + moneyText(c.get("unitCost")) + "）";
         }
         StringBuilder sb = new StringBuilder((String) c.get("reason"));
         if (c.get("price") != null) sb.append("（目录价 ").append(moneyText(c.get("price"))).append("）");
-        if (c.get("unitCost") != null) sb.append("（最近批次单位成本 ").append(moneyText(c.get("unitCost"))).append("）");
+        if (c.get("unitCost") != null) sb.append("（近批次加权单位成本 ").append(moneyText(c.get("unitCost"))).append("）");
         return sb.toString();
     }
 

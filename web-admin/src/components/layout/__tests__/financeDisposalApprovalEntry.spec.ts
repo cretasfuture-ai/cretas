@@ -23,6 +23,9 @@ vi.mock('@/api/request', () => ({ ...api, ApiError: class extends Error {} }));
 vi.mock('@/api/permissionApi', () => permissionApi);
 
 let pinia: ReturnType<typeof createPinia>;
+// 后端 GET /disposal-records/approval-permission 的答案 (与 approve/reject 守卫同一份判断)。
+// 不同测试按「后端说能 / 不能」设置, 证明入口跟权限走而不是跟岗位名走。
+let backendCanApprove: boolean | 'error' = false;
 
 function identity(role: string) {
   const user: User = {
@@ -68,14 +71,22 @@ beforeEach(() => {
   pinia = createPinia();
   setActivePinia(pinia);
   vi.clearAllMocks();
+  backendCanApprove = false;
   permissionApi.getPlatformPermissions.mockResolvedValue([]);
   permissionApi.getFactoryOverride.mockResolvedValue({});
   permissionApi.getUserModuleAccess.mockResolvedValue([]);
-  api.get.mockResolvedValue({ success: true, message: '', data: [] });
+  api.get.mockImplementation(async (url: string) => {
+    if (String(url).endsWith('/disposal-records/approval-permission')) {
+      if (backendCanApprove === 'error') throw new Error('403');
+      return { success: true, message: '', data: { canApprove: backendCanApprove } };
+    }
+    return { success: true, message: '', data: [] };
+  });
 });
 
 describe('财务经理的报废审批入口', () => {
   it('阳性: 财务经理看得到菜单, 点进去到达审批页', async () => {
+    backendCanApprove = true;
     identity('finance_manager');
     const { w, r } = await sidebar();
     const target = w.findAll('.el-menu-item').find((n) => n.text() === '报废审批');
@@ -94,6 +105,7 @@ describe('财务经理的报废审批入口', () => {
   });
 
   it('阴性: 同持 finance 的出纳走不到审批页, 菜单也没有', async () => {
+    backendCanApprove = false;
     const p = identity('cashier');
     expect(p.canWrite('finance')).toBe(true);
     const { w, r } = await sidebar();
@@ -106,6 +118,33 @@ describe('财务经理的报废审批入口', () => {
     const p = identity('quality_manager');
     expect(p.canWrite('finance')).toBe(false);
     const r = router();
+    await r.push('/finance/disposal-approvals');
+    expect(r.currentRoute.value.path).toBe('/403');
+  });
+
+  it('阳性(按权限不按岗位名): 工厂把审批配给出纳 ⇒ 后端说能 ⇒ 出纳看得到菜单也进得去', async () => {
+    backendCanApprove = true;
+    identity('cashier');
+    const { w, r } = await sidebar();
+    expect(w.text()).toContain('报废审批');
+    await r.push('/finance/disposal-approvals');
+    expect(r.currentRoute.value.path).toBe('/finance/disposal-approvals');
+  });
+
+  it('阴性(按权限不按岗位名): 后端说不能 ⇒ 连财务经理也没有菜单、直达 URL 进 /403', async () => {
+    backendCanApprove = false;
+    identity('finance_manager');
+    const { w, r } = await sidebar();
+    expect(w.text()).not.toContain('报废审批');
+    await r.push('/finance/disposal-approvals');
+    expect(r.currentRoute.value.path).toBe('/403');
+  });
+
+  it('阴性: 资格读不到 ⇒ 不显示入口也不放行 (fail-closed)', async () => {
+    backendCanApprove = 'error';
+    identity('finance_manager');
+    const { w, r } = await sidebar();
+    expect(w.text()).not.toContain('报废审批');
     await r.push('/finance/disposal-approvals');
     expect(r.currentRoute.value.path).toBe('/403');
   });

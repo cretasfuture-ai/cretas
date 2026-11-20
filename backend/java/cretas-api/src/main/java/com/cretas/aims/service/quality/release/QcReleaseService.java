@@ -2,6 +2,7 @@ package com.cretas.aims.service.quality.release;
 
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.ProductType;
+import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
@@ -9,12 +10,16 @@ import com.cretas.aims.entity.quality.QcReleaseRecord;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
+import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.quality.QcReleaseRecordRepository;
+import com.cretas.aims.service.quality.QualityDispositionInventoryService;
+import com.cretas.aims.service.quality.QualityDispositionInventoryService.FlipDecision;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -36,8 +41,14 @@ import java.util.stream.Collectors;
  *   半成品库行   inspectionStatus PENDING        → RELEASED / REJECTED
  *   在制批次     status INSPECTING                → AVAILABLE / DEFECTIVE
  *   成品批次     status PENDING_INSPECTION        → AVAILABLE / DEFECTIVE
+ *   原料收货批次 status INSPECTING                → AVAILABLE / DEFECTIVE   (D-S411-04)
  * </pre>
  * 每次决定写一条 {@link QcReleaseRecord} (结论 + 放行人 + 放行时间)。
+ *
+ * <p>原料收货批次 (sourceDocType 不是 PRODUCTION_BATCH) 的状态翻转走
+ * {@link QualityDispositionInventoryService#applyMaterialFlip} —— 与质检处置桥接同一份实现, 放行后发
+ * {@code MaterialBatchReleasedEvent}, 缺料实例据此把「质检中」挪成「已放行」。判不合格 = DEFECTIVE
+ * (与放行决策工具 / 在制批次判不合格同一状态)。
  *
  * <p>🔴 放行 (RELEASED) 之前问 {@link QcReleaseBlocker}: 该批次/计划有未处理的 CCP 偏离就拒绝
  * ({@code QC_RELEASE_BLOCKED_BY_CCP_DEVIATION}, 缺口 13)。判不合格 (REJECTED) 不受偏离影响 ——
@@ -72,6 +83,19 @@ public class QcReleaseService {
     private com.cretas.aims.repository.ProductionBatchRepository productionBatchRepo;
 
     public static final String CODE_BLOCKED_BY_QC_FAILED = "QC_RELEASE_BLOCKED_BY_QC_FAILED";
+    /** 这次要放的货出自报废批次 (Owner 2026-11-09: 报废批次只扣它自己的货)。 */
+    public static final String CODE_BLOCKED_BY_SCRAPPED_BATCH = "QC_RELEASE_BLOCKED_BY_SCRAPPED_BATCH";
+    /** 计划有报废批次而这批货分不清归属 (不猜)。 */
+    public static final String CODE_OWNERSHIP_UNCLEAR = "QC_RELEASE_OWNERSHIP_UNCLEAR";
+
+    /** 成品归属判据要读血缘边; required=false 仅为手工构造的单测, 真要判归属时没注入会直接报错 (不当「分得清」)。 */
+    @Autowired(required = false)
+    private com.cretas.aims.repository.lineage.BatchLineageEdgeRepository batchLineageEdgeRepository;
+
+    /** 测试 / 装配用。 */
+    public void setBatchLineageEdgeRepository(com.cretas.aims.repository.lineage.BatchLineageEdgeRepository repo) {
+        this.batchLineageEdgeRepository = repo;
+    }
 
     /** 测试 / 装配用。 */
     public void setSemiTxnRepo(com.cretas.aims.repository.SemiFinishedInventoryTransactionRepository repo) {
@@ -92,20 +116,46 @@ public class QcReleaseService {
         this.semiQcHoldLots = lots;
     }
 
+    /** 原料收货批次的物料名 (D-S411-04)。非 final: 不改既有手工构造的测试; Spring 里必注入。 */
+    @Autowired
+    private RawMaterialTypeRepository rawMaterialTypeRepo;
+
+    /** 原料放行后发 MaterialBatchReleasedEvent (缺料实例重算)。Spring 里必注入; 缺了原料放行直接报错, 不静默不发。 */
+    @Autowired
+    private ApplicationEventPublisher eventPublisher;
+
+    /** 纪律排查 A3: 原料放行写放行台账。required=false 仅为单测; 未装配时原料放行拒绝 (fail-closed)。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.discipline.MaterialBatchReleaseGuard materialBatchReleaseGuard;
+
+    /** 测试 / 装配用。 */
+    public void setRawMaterialTypeRepo(RawMaterialTypeRepository repo) {
+        this.rawMaterialTypeRepo = repo;
+    }
+
+    /** 测试 / 装配用。 */
+    public void setEventPublisher(ApplicationEventPublisher publisher) {
+        this.eventPublisher = publisher;
+    }
+
     /** 一条待检。 */
     public record PendingItem(
             String targetType,
             String targetId,
-            /** 给人看的形态: 半成品 / 在制半成品 / 成品 */
+            /** 给人看的形态: 半成品 / 在制半成品 / 成品 / 原料 */
             String formLabel,
             String batchNumber,
             String productTypeId,
+            /** 产品名; 原料行是物料名 */
             String productName,
             BigDecimal quantity,
             String unit,
+            /** 产出时间; 原料行是入库 (建批) 时间 */
             LocalDateTime producedAt,
             /** 挡放行的未处理 CCP 偏离条数 (0 = 可放行) */
-            long openDeviationCount) {
+            long openDeviationCount,
+            /** 原料行的物料类型 id; 其它形态为 null */
+            String materialTypeId) {
     }
 
     /** 放行请求。 */
@@ -128,13 +178,22 @@ public class QcReleaseService {
                 factoryId, FinishedGoodsBatch.Status.PENDING_INSPECTION).stream()
                 .filter(f -> f.getAvailableQuantity() != null && f.getAvailableQuantity().signum() > 0)
                 .toList();
+        // D-S411-04: 原料收货批次「质检中」。按货架实物量 (含已预留的部分 —— 预留的货同样要先放行才能用) 判有没有货可放。
+        List<MaterialBatch> raws = materialBatchRepo.findRawBatchesByFactoryIdAndStatus(
+                factoryId, MaterialBatchStatus.INSPECTING).stream()
+                .filter(QcReleaseService::isRawMaterialBatch)
+                .filter(r -> r.getPhysicalQuantity().signum() > 0)
+                .toList();
+        Map<String, String> materialNames = rawMaterialNames(factoryId, raws);
 
         Set<String> productIds = new HashSet<>();
         semis.forEach(s -> productIds.add(s.getProductTypeId()));
         wips.forEach(w -> productIds.add(w.getProductTypeId()));
         fgs.forEach(f -> productIds.add(f.getProductTypeId()));
         productIds.remove(null);
-        Map<String, String> names = productIds.isEmpty() ? Map.of()
+        // 不用 Map.of(): 下面 names.get(产品 id) 的 id 可能为 null (副产 / 老在制批次), 不可变 Map get(null) 直接抛 NPE,
+        // 整张待检清单打不开 (D-S411-04 写测试时撞到)
+        Map<String, String> names = productIds.isEmpty() ? new java.util.HashMap<>()
                 : productTypeRepo.findByFactoryIdAndIdIn(factoryId, productIds).stream()
                         .collect(Collectors.toMap(ProductType::getId, ProductType::getName, (a, b) -> a));
 
@@ -143,20 +202,26 @@ public class QcReleaseService {
             out.add(new PendingItem(QcReleaseRecord.TargetType.SEMI_FINISHED, String.valueOf(s.getId()), "半成品",
                     s.getIntermediateBatchNo(), s.getProductTypeId(), names.get(s.getProductTypeId()),
                     pendingQuantityOf(s), s.getUnit(), s.getUpdatedAt(),
-                    openDeviations(factoryId, QcReleaseRecord.TargetType.SEMI_FINISHED, s, null, null)));
+                    openDeviations(factoryId, QcReleaseRecord.TargetType.SEMI_FINISHED, s, null, null), null));
         }
         for (MaterialBatch w : wips) {
             out.add(new PendingItem(QcReleaseRecord.TargetType.WIP_MATERIAL_BATCH, w.getId(), "在制半成品",
                     w.getBatchNumber(), w.getProductTypeId(), names.get(w.getProductTypeId()),
                     w.getCurrentQuantity(), w.getQuantityUnit(), w.getCreatedAt(),
-                    openDeviations(factoryId, QcReleaseRecord.TargetType.WIP_MATERIAL_BATCH, null, w, null)));
+                    openDeviations(factoryId, QcReleaseRecord.TargetType.WIP_MATERIAL_BATCH, null, w, null), null));
         }
         for (FinishedGoodsBatch f : fgs) {
             out.add(new PendingItem(QcReleaseRecord.TargetType.FINISHED_GOODS, f.getId(), "成品",
                     f.getBatchNumber(), f.getProductTypeId(),
                     f.getProductName() != null ? f.getProductName() : names.get(f.getProductTypeId()),
                     f.getAvailableQuantity(), f.getUnit(), f.getCreatedAt(),
-                    openDeviations(factoryId, QcReleaseRecord.TargetType.FINISHED_GOODS, null, null, f)));
+                    openDeviations(factoryId, QcReleaseRecord.TargetType.FINISHED_GOODS, null, null, f), null));
+        }
+        for (MaterialBatch r : raws) {
+            // 原料收货不挂 CCP 偏离 (QcReleaseBlocker 只按生产批次 / 计划判), 偏离数恒 0
+            out.add(new PendingItem(QcReleaseRecord.TargetType.RAW_MATERIAL_BATCH, r.getId(), "原料",
+                    r.getBatchNumber(), null, materialNames.get(r.getMaterialTypeId()),
+                    r.getPhysicalQuantity(), r.getQuantityUnit(), r.getCreatedAt(), 0L, r.getMaterialTypeId()));
         }
         out.sort(Comparator.comparing(PendingItem::producedAt,
                 Comparator.nullsLast(Comparator.reverseOrder())));
@@ -194,10 +259,23 @@ public class QcReleaseService {
                     assertNoOpenDeviation(openDeviations(factoryId, cmd.targetType(), s, null, null),
                             s.getIntermediateBatchNo());
                     // 第二轮审查 M2: 与成品同一口径 —— 入过这一行的计划有批次质检 FAILED ⇒ 不能放行
-                    assertPlansQcNotFailed(factoryId, semiPlanIds(factoryId, s, pending),
+                    SemiSources semiSources = semiProductionBatchIds(factoryId, s, pending);
+                    Set<Long> sourceBatches = semiSources.batchIds();
+                    String what = "半成品批次 " + s.getIntermediateBatchNo();
+                    List<ScrappedRef> scrapped = assertPlansQcNotFailed(factoryId,
+                            planIdsOf(factoryId, sourceBatches),
                             com.cretas.aims.service.foodsafety.ccp.CcpOpenDeviationLookup
-                                    .planPrefixOfAnchor(s.getIntermediateBatchNo()),
-                            "半成品批次 " + s.getIntermediateBatchNo());
+                                    .planPrefixOfAnchor(s.getIntermediateBatchNo()), what);
+                    if (!scrapped.isEmpty()) {
+                        if (sourceBatches.isEmpty()) {
+                            throw ownershipUnclear(what, "这一行待检认不出来自哪些生产批次");
+                        }
+                        // #1548 第二轮审查 2: 有一笔待检没记生产批次, 那一笔可能就是报废批的 —— 分不清就不放
+                        if (semiSources.partlyUnknown()) {
+                            throw ownershipUnclear(what, "这一行有待检数量没记来自哪个生产批次");
+                        }
+                        assertNotFromScrapped(scrapped, sourceBatches, what);
+                    }
                 } else {
                     // 审查高 2: 判不合格 = 把待检的那部分数量从可用余额里转出 (QC_REJECT 出库流水),
                     // 已放行的存量不动; 这一行回到「无待检」, 之后的新产出照常按需检进待检。
@@ -223,10 +301,20 @@ public class QcReleaseService {
                     assertNoOpenDeviation(openDeviations(factoryId, cmd.targetType(), null, w, null),
                             w.getBatchNumber());
                     // 第二轮审查 M2: 在制批次所在计划有批次质检 FAILED ⇒ 不能放行
-                    assertPlansQcNotFailed(factoryId, wipPlanIds(factoryId, w), null,
-                            "在制半成品批次 " + w.getBatchNumber());
+                    String what = "在制半成品批次 " + w.getBatchNumber();
+                    List<ScrappedRef> scrapped =
+                            assertPlansQcNotFailed(factoryId, wipPlanIds(factoryId, w), null, what);
+                    if (!scrapped.isEmpty()) {
+                        Long source = wipSourceBatchId(w);
+                        if (source == null) {
+                            throw ownershipUnclear(what, "认不出它来自哪个生产批次");
+                        }
+                        assertNotFromScrapped(scrapped, Set.of(source), what);
+                    }
                 }
-                w.setStatus(release ? MaterialBatchStatus.AVAILABLE : MaterialBatchStatus.DEFECTIVE);
+                // #1590 遗留 M5: 被扣留 (冻结 / 偏离扣留) 的在制批次放行时还原扣留前状态
+                w.setStatus(release ? MaterialBatchHoldService.releaseTarget(w, MaterialBatchStatus.AVAILABLE)
+                        : MaterialBatchStatus.DEFECTIVE);
                 materialBatchRepo.save(w);
                 record.batchNumber(w.getBatchNumber()).productTypeId(w.getProductTypeId())
                         .quantity(w.getCurrentQuantity()).unit(w.getQuantityUnit());
@@ -246,6 +334,37 @@ public class QcReleaseService {
                 finishedGoodsRepo.save(f);
                 record.batchNumber(f.getBatchNumber()).productTypeId(f.getProductTypeId())
                         .quantity(f.getAvailableQuantity()).unit(f.getUnit());
+            }
+            case QcReleaseRecord.TargetType.RAW_MATERIAL_BATCH -> {
+                // 跨厂: 带 factoryId 查, 别厂批次与不存在一样 404, 一行不动
+                MaterialBatch r = materialBatchRepo.findByIdAndFactoryIdForUpdate(cmd.targetId(), factoryId)
+                        .orElseThrow(() -> notFound("原料批次"));
+                if (!isRawMaterialBatch(r) || r.getStatus() != MaterialBatchStatus.INSPECTING) {
+                    throw notPending("原料批次 " + r.getBatchNumber());
+                }
+                if (eventPublisher == null) {
+                    // 放行不发事件 = 缺料实例停在「质检中」; 宁可不放也不静默漏发
+                    throw new BusinessException(500, "原料放行缺少事件发布器, 不能放行").withCode(CODE_INVALID);
+                }
+                BigDecimal physical = r.getPhysicalQuantity();
+                MaterialBatchStatus rawBefore = r.getStatus();
+                MaterialBatchStatus rawTarget = release ? MaterialBatchStatus.AVAILABLE : MaterialBatchStatus.DEFECTIVE;
+                if (release && materialBatchReleaseGuard == null) {
+                    throw new BusinessException(500, "原料放行缺少放行台账, 不能放行 (纪律排查 A3)").withCode(CODE_INVALID);
+                }
+                FlipDecision flip = QualityDispositionInventoryService.applyMaterialFlip(materialBatchRepo,
+                        eventPublisher, this, r, rawTarget);
+                if (flip != FlipDecision.FLIP) {
+                    // INSPECTING 原料对 AVAILABLE / DEFECTIVE 恒为 FLIP; 走到这里说明守卫口径变了, 不假装放行成功
+                    throw notPending("原料批次 " + r.getBatchNumber());
+                }
+                if (release) {
+                    // 纪律排查 A3: 质检放行页放行原料同样写放行台账 (与 qc_release_records 互补: 那张表只管质检放行页)
+                    materialBatchReleaseGuard.recordIfRelease(factoryId, r, rawBefore, r.getStatus(),
+                            com.cretas.aims.entity.material.MaterialBatchRelease.Channel.QC_RELEASE,
+                            cmd.conclusion(), null, userId, null);
+                }
+                record.batchNumber(r.getBatchNumber()).quantity(physical).unit(r.getQuantityUnit());
             }
             default -> throw invalid("不支持的放行对象类型: " + cmd.targetType());
         }
@@ -313,8 +432,9 @@ public class QcReleaseService {
         if (f.getProductionPlanId() == null || f.getProductionPlanId().isBlank()) {
             return;
         }
-        assertPlansQcNotFailed(factoryId, java.util.Set.of(f.getProductionPlanId()), null,
-                "成品批次 " + f.getBatchNumber());
+        assertFinishedGoodsNotFromScrapped(factoryId, f,
+                assertPlansQcNotFailed(factoryId, java.util.Set.of(f.getProductionPlanId()), null,
+                        "成品批次 " + f.getBatchNumber()));
     }
 
     /**
@@ -322,10 +442,10 @@ public class QcReleaseService {
      * 这些计划 (或计划 id 以锚号里的前缀开头的计划) 里有生产批次质检判 FAILED ⇒ 拒绝放行。
      * 判不合格 (REJECTED) 不受影响 —— 质检失败的货本来就该判不合格。
      */
-    private void assertPlansQcNotFailed(String factoryId, java.util.Collection<String> planIds, String planIdPrefix,
-                                        String what) {
+    private List<ScrappedRef> assertPlansQcNotFailed(
+            String factoryId, java.util.Collection<String> planIds, String planIdPrefix, String what) {
         if (productionBatchRepo == null) {
-            return;
+            return List.of();
         }
         java.util.Set<String> plans = new java.util.LinkedHashSet<>();
         if (planIds != null) {
@@ -333,17 +453,82 @@ public class QcReleaseService {
         }
         boolean hasPrefix = planIdPrefix != null && !planIdPrefix.isBlank();
         if (plans.isEmpty() && !hasPrefix) {
-            return;
+            return List.of();
         }
-        long failed = productionBatchRepo.countQcFailedInPlans(factoryId,
-                plans.isEmpty() ? java.util.Set.of("#NO-PLAN#") : plans,
-                hasPrefix ? com.cretas.aims.util.SqlLikeEscaper.escape(planIdPrefix) + "%" : "#NO-PREFIX#");
-        if (failed > 0) {
+        java.util.Collection<String> planArg = plans.isEmpty() ? java.util.Set.of("#NO-PLAN#") : plans;
+        String prefixArg = hasPrefix ? com.cretas.aims.util.SqlLikeEscaper.escape(planIdPrefix) + "%" : "#NO-PREFIX#";
+        // Owner 2026-11-09: 报废批次不挡同计划其它批次 —— 只有「不合格未解除且不是报废」的批次才整计划拒绝。
+        // 一条语句数 (#1548 第二轮审查 4: 原来是「总数 − 报废清单长度」两条语句, 中间能被插进来)。
+        long uncleared = productionBatchRepo.countUnclearedNotScrappedInPlans(factoryId, planArg, prefixArg);
+        if (uncleared > 0) {
             throw new BusinessException(409, what + " 所在生产计划有批次质检不合格，不能放行")
                     .withCode(CODE_BLOCKED_BY_QC_FAILED)
                     .withHint("请到「质量管理 → 质检记录」复核该计划的不合格批次；确认不合格请选「不合格」")
                     .withSeverity("BLOCKING")
                     .withHintTarget("decision");
+        }
+        // 报废批次只用于归属判断: 这次要放的货是报废批的 (或分不清) 才拒。
+        return productionBatchRepo.findScrappedInPlans(factoryId, planArg, prefixArg).stream()
+                .map(ref -> new ScrappedRef(ref.getId(), ref.getBatchNumber()))
+                .toList();
+    }
+
+    /** 计划范围里一个报废批次 (id + 批号)。 */
+    private record ScrappedRef(Long id, String batchNumber) {
+    }
+
+    /** 这次要放的货出自报废批次 ⇒ 不放 (报废是终态, 它的货留在隔离)。 */
+    private static void assertNotFromScrapped(List<ScrappedRef> scrapped,
+                                              java.util.Collection<Long> sourceBatchIds, String what) {
+        for (ScrappedRef b : scrapped) {
+            if (sourceBatchIds.contains(b.id())) {
+                throw new BusinessException(409, what + " 出自已判报废的生产批次 " + b.batchNumber() + "，不能放行")
+                        .withCode(CODE_BLOCKED_BY_SCRAPPED_BATCH)
+                        .withHint("报废是终态；这批货请选「不合格」，实物按废弃处理")
+                        .withSeverity("BLOCKING")
+                        .withHintTarget("decision");
+            }
+        }
+    }
+
+    /** 计划里有报废批次, 而这次要放的货分不清出自哪个批次 ⇒ 不放, 如实说原因 (不猜)。 */
+    private static BusinessException ownershipUnclear(String what, String reason) {
+        return new BusinessException(409, what + " 所在计划有已报废的批次，但" + reason
+                + "，分不清这批货是不是报废批的，不能放行")
+                .withCode(CODE_OWNERSHIP_UNCLEAR)
+                .withHint("请先补齐这批货的生产批次血缘 (或核对批号), 再放行")
+                .withSeverity("BLOCKING")
+                .withHintTarget("decision");
+    }
+
+    /** 成品: 按计划级放行同一份归属判据 ({@link com.cretas.aims.service.quality.PlanGoodsOwnership})。 */
+    private void assertFinishedGoodsNotFromScrapped(String factoryId, FinishedGoodsBatch f,
+                                                    List<ScrappedRef> scrapped) {
+        if (scrapped.isEmpty()) {
+            return;
+        }
+        String what = "成品批次 " + f.getBatchNumber();
+        List<com.cretas.aims.entity.ProductionBatch> planBatches = new ArrayList<>(
+                productionBatchRepo.findByFactoryIdAndProductionPlanId(factoryId, f.getProductionPlanId()));
+        for (ScrappedRef s : scrapped) {
+            if (planBatches.stream().noneMatch(b -> java.util.Objects.equals(b.getId(), s.id()))) {
+                com.cretas.aims.entity.ProductionBatch ref = new com.cretas.aims.entity.ProductionBatch();
+                ref.setId(s.id());
+                ref.setBatchNumber(s.batchNumber());
+                planBatches.add(ref);
+            }
+        }
+        var ownership = com.cretas.aims.service.quality.PlanGoodsOwnership.attribute(
+                batchLineageEdgeRepository, factoryId, List.of(f), planBatches);
+        if (ownership.outsidePlan() != null) {
+            throw ownershipUnclear(what, ownership.outsidePlan());
+        }
+        Set<Long> sources = new HashSet<>(ownership.of(f));
+        scrapped.stream().filter(s -> s.batchNumber() != null && s.batchNumber().equals(f.getBatchNumber()))
+                .forEach(s -> sources.add(s.id()));
+        assertNotFromScrapped(scrapped, sources, what);
+        if (ownership.unknown() != null) {
+            throw ownershipUnclear(what, ownership.unknown());
         }
     }
 
@@ -359,17 +544,20 @@ public class QcReleaseService {
      * </ol>
      * 计划 id 一次 IN 查询取出 (L-6)。逐道录入锚号行另按锚号里的计划前缀判 (调用方传入)。
      */
-    private java.util.Set<String> semiPlanIds(String factoryId, SemiFinishedInventory s, BigDecimal pending) {
+    private SemiSources semiProductionBatchIds(String factoryId, SemiFinishedInventory s, BigDecimal pending) {
         if (productionBatchRepo == null || s.getId() == null) {
-            return java.util.Set.of();
+            return new SemiSources(java.util.Set.of(), false);
         }
         java.util.Set<Long> pbIds = new java.util.LinkedHashSet<>();
         BigDecimal attributed = BigDecimal.ZERO;
+        boolean partlyUnknown = false;
         if (semiQcHoldLots != null) {
             for (com.cretas.aims.entity.quality.SemiQcHoldLot lot : semiQcHoldLots.openLots(factoryId, s.getId())) {
                 attributed = attributed.add(lot.getQuantityOpen());
                 if (lot.getProductionBatchId() != null) {
                     pbIds.add(lot.getProductionBatchId());
+                } else if (lot.getQuantityOpen() != null && lot.getQuantityOpen().signum() > 0) {
+                    partlyUnknown = true;
                 }
             }
         }
@@ -386,10 +574,56 @@ public class QcReleaseService {
             }
         }
         pbIds.remove(null);
-        if (pbIds.isEmpty()) {
+        return new SemiSources(pbIds, partlyUnknown);
+    }
+
+    /** 半成品这一行待检来自的生产批次; partlyUnknown = 有一笔待检没记生产批次 (那一笔出处不明)。 */
+    private record SemiSources(java.util.Set<Long> batchIds, boolean partlyUnknown) {
+    }
+
+    /** 这些生产批次所在计划 (一次 IN 查询, L-6)。 */
+    private java.util.Set<String> planIdsOf(String factoryId, java.util.Set<Long> pbIds) {
+        if (productionBatchRepo == null || pbIds.isEmpty()) {
             return java.util.Set.of();
         }
         return new java.util.LinkedHashSet<>(productionBatchRepo.findPlanIdsByIds(factoryId, pbIds));
+    }
+
+    /** 原料收货批次 = 不是在制 / 副产 (sourceDocType 不是 PRODUCTION_BATCH; null 的老数据算原料)。 */
+    static boolean isRawMaterialBatch(MaterialBatch b) {
+        return b != null && !QcInspectionGuard.WIP_SOURCE_DOC_TYPE.equals(b.getSourceDocType());
+    }
+
+    /** 原料批次的物料名 (一次 IN 查询)。批次本身已按工厂取出, 这里只按 id 取名字。 */
+    private Map<String, String> rawMaterialNames(String factoryId, List<MaterialBatch> raws) {
+        Set<String> ids = raws.stream().map(MaterialBatch::getMaterialTypeId)
+                .filter(java.util.Objects::nonNull).collect(Collectors.toSet());
+        Map<String, String> out = new java.util.HashMap<>();   // 不用 Map.of(): 物料 id 可能为 null, get(null) 会抛
+        if (ids.isEmpty()) {
+            return out;
+        }
+        if (rawMaterialTypeRepo == null) {
+            throw new IllegalStateException("QcReleaseService 未注入 RawMaterialTypeRepository, 原料待检取不到物料名");
+        }
+        for (RawMaterialType t : rawMaterialTypeRepo.findByIdIn(ids)) {
+            // findByIdIn 不带工厂 (仓储注释: 隔离由调用方逐行校验) —— 别厂的物料名不显示
+            if (t.getName() != null && factoryId.equals(t.getFactoryId())) {
+                out.putIfAbsent(t.getId(), t.getName());
+            }
+        }
+        return out;
+    }
+
+    /** 在制批次的来源生产批次 id (sourceDocId); 认不出 = null。 */
+    private static Long wipSourceBatchId(MaterialBatch w) {
+        if (w.getSourceDocId() == null) {
+            return null;
+        }
+        try {
+            return Long.valueOf(w.getSourceDocId().trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     /** 在制批次 (sourceDocId = 生产批次 id) 所在计划。 */

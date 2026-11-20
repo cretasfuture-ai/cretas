@@ -25,7 +25,9 @@ const src = readFileSync(DRAWER, 'utf-8');
 describe('OrderPeekDrawer 结构约束', () => {
   it('⚠️ 阳性对照: 文件读得到且不是空的(否则下面的断言全部恒真)', () => {
     expect(src.length).toBeGreaterThan(1000);
-    expect(src).toContain('el-drawer');
+    expect(src).toContain('USlideover');
+    // 非模态: 模态抽屉会给 body 加 pointer-events:none, 抽屉下面的页面点不了
+    expect(src).toContain(':modal="false"');
   });
 
   it('⛔ 不得包含任何写动作 —— 只读是设计约束, 不是"暂时没做"', () => {

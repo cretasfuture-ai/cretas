@@ -59,6 +59,19 @@ class MaterialBatchServiceImplLowStockEventTest {
                 productionPlanBatchUsageRepository,
                 excelUtil,
                 futurePlanMatchingService);
+        // 排查 2026-11-10 A4/A5: 带计划的领料 / 预留 / 消耗要核对归属, 计划仓储必注入; 桩成本厂的公司备料计划
+        {
+            com.cretas.aims.repository.ProductionPlanRepository ownershipPlans =
+                    org.mockito.Mockito.mock(com.cretas.aims.repository.ProductionPlanRepository.class);
+            org.mockito.Mockito.lenient().when(ownershipPlans.existsById(org.mockito.ArgumentMatchers.anyString())).thenReturn(true);
+            org.mockito.Mockito.lenient().when(ownershipPlans.findById(org.mockito.ArgumentMatchers.anyString())).thenAnswer(inv -> {
+                com.cretas.aims.entity.ProductionPlan p = new com.cretas.aims.entity.ProductionPlan();
+                p.setId(inv.getArgument(0));
+                p.setFactoryId("F006");
+                return java.util.Optional.of(p);
+            });
+            org.springframework.test.util.ReflectionTestUtils.setField(service, "productionPlanRepository", ownershipPlans);
+        }
         InventoryLowStockEventPublisher lowStockEventPublisher = new InventoryLowStockEventPublisher(
                 applicationEventPublisher,
                 materialBatchRepository,
@@ -84,6 +97,26 @@ class MaterialBatchServiceImplLowStockEventTest {
         assertThat(captor.getValue().getMaterialTypeId()).isEqualTo("RM-1");
         assertThat(captor.getValue().getCurrentStock()).isEqualByComparingTo("40");
         assertThat(batch.getUsedQuantity()).isEqualByComparingTo("60");
+    }
+
+    @Test
+    void useBatchQuantityRefusesHeldOrDefectiveBatchWithChineseReason() {
+        // #1590 遗留: 通用扣减原语也过状态闸 —— 冻结扣住 (质检中) / 判不合格的批次有余量也不能扣
+        for (MaterialBatchStatus st : new MaterialBatchStatus[]{MaterialBatchStatus.INSPECTING, MaterialBatchStatus.DEFECTIVE}) {
+            MaterialBatch batch = batch("MB-B", "RM-1", "100", "0", "0");
+            batch.setStatus(st);
+            when(materialBatchRepository.findById("MB-B")).thenReturn(Optional.of(batch));
+
+            org.assertj.core.api.Assertions.assertThatThrownBy(
+                            () -> service.useBatchQuantity("F006", "MB-B", new BigDecimal("10")))
+                    .as(st.name())
+                    .isInstanceOfSatisfying(com.cretas.aims.exception.BusinessException.class, e -> {
+                        assertThat(e.getCode()).isEqualTo(409);
+                        assertThat(e.getMessage()).contains(st.getDisplayName());
+                    });
+            assertThat(batch.getUsedQuantity()).as(st.name()).isEqualByComparingTo("0");
+        }
+        verify(materialBatchRepository, org.mockito.Mockito.never()).save(any(MaterialBatch.class));
     }
 
     @Test

@@ -7,54 +7,35 @@
   <div class="payments-tab">
     <div class="toolbar">
       <span class="title">收款记录</span>
-      <el-button :icon="Refresh" @click="fetchList" :loading="state === 'loading'">刷新</el-button>
+      <UButton icon="i-lucide-refresh-cw" color="neutral" variant="outline" :loading="state === 'loading'" @click="fetchList">刷新</UButton>
     </div>
 
-    <el-skeleton v-if="state === 'loading'" :rows="5" animated />
-    <el-empty v-else-if="state === 'empty'" description="该客户暂无收款记录" :image-size="80" />
-    <div v-else-if="state === 'error'" class="error-panel">
-      <el-result icon="error" :title="errorMsg">
-        <template #extra>
-          <el-button type="primary" @click="fetchList">重试</el-button>
-        </template>
-      </el-result>
-    </div>
+    <div v-if="state === 'loading'" class="skeleton"><USkeleton v-for="i in 5" :key="i" class="h-9 w-full" /></div>
+    <UEmpty v-else-if="state === 'empty'" icon="i-lucide-banknote" description="该客户暂无收款记录" />
+    <UAlert v-else-if="state === 'error'" color="error" variant="subtle" :title="errorMsg" :actions="[{ label: '重试', color: 'error', variant: 'outline', onClick: fetchList }]" />
 
     <template v-else>
-      <el-table :data="payments" border stripe size="small">
-        <el-table-column label="收款单号" prop="paymentNumber" width="170" />
-        <el-table-column label="收款日期" prop="paymentDate" width="120" />
-        <el-table-column label="方式" prop="paymentMethod" width="110" />
-        <el-table-column label="状态" prop="status" width="110">
-          <template #default="{ row }">
-            <el-tag size="small">{{ row.status }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="金额" align="right" width="160">
-          <template #default="{ row }">
-            <span v-if="canViewPrice">{{ formatMoney(row.amount) }}</span>
-            <span v-else class="masked">****</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="备注" prop="remark" min-width="160" show-overflow-tooltip />
-      </el-table>
+      <UTable :data="payments" :columns="columns" class="cs-table" data-testid="customer-payments-table">
+        <template #status-cell="{ row }"><UBadge :color="statusColor(row.original.status)" variant="soft">{{ paymentStatusText(row.original.status) }}</UBadge></template>
+        <template #paymentMethod-cell="{ row }">{{ paymentMethodText(row.original.paymentMethod) }}</template>
+        <template #amount-cell="{ row }">
+          <span v-if="canViewPrice" class="num">{{ formatMoney(row.original.amount) }}</span>
+          <span v-else class="masked">****</span>
+        </template>
+      </UTable>
 
-      <el-pagination
-        class="pagination"
-        background
-        layout="prev, pager, next, total"
-        :total="totalElements"
-        :page-size="pageSize"
-        :current-page="currentPage"
-        @current-change="onPageChange"
-      />
+      <div class="pager">
+        <span class="total">共 {{ totalElements }} 条</span>
+        <UPagination :page="currentPage" :items-per-page="pageSize" :total="totalElements" show-edges :sibling-count="1" @update:page="onPageChange" />
+      </div>
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
-import { Refresh } from '@element-plus/icons-vue';
+import type { CsTableColumn as TableColumn } from '@/types/csTable';
+import { paymentMethodText, paymentStatusText, statusColor } from './customerTabLabels';
 import { ElMessage } from 'element-plus';
 import { storeToRefs } from 'pinia';
 import { useAuthStore } from '@/store/modules/auth';
@@ -90,6 +71,15 @@ const payments = ref<PaymentRow[]>([]);
 const totalElements = ref(0);
 const currentPage = ref(1);
 const pageSize = 20;
+const R = { class: { th: 'text-right', td: 'text-right' } };
+const columns: TableColumn<PaymentRow>[] = [
+  { accessorKey: 'paymentNumber', header: '收款单号' },
+  { accessorKey: 'paymentDate', header: '收款日期' },
+  { id: 'paymentMethod', header: '方式' },
+  { id: 'status', header: '状态' },
+  { id: 'amount', header: '金额', meta: R },
+  { accessorKey: 'remark', header: '备注' },
+];
 
 function formatMoney(v?: number | null): string {
   if (v == null) return '—';
@@ -134,10 +124,14 @@ onMounted(fetchList);
 </script>
 
 <style scoped>
-.payments-tab { padding: 8px 0; }
+.payments-tab { padding: 12px 0; }
 .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-.toolbar .title { font-size: 14px; color: var(--el-text-color-secondary); }
-.pagination { margin-top: 16px; justify-content: flex-end; display: flex; }
-.masked { color: var(--el-text-color-secondary); font-family: monospace; letter-spacing: 2px; user-select: none; }
-.error-panel { padding: 24px 0; }
+.toolbar .title { font-size: var(--cs-type-section); font-weight: 600; color: var(--cs-text); }
+.pager { display: flex; justify-content: flex-end; align-items: center; gap: 12px; margin-top: 16px; }
+.total { color: var(--cs-muted); font-size: var(--cs-font-small); }
+.masked { color: var(--cs-muted); font-family: monospace; letter-spacing: 2px; user-select: none; }
+.num { font-variant-numeric: tabular-nums; }
+.skeleton { display: grid; gap: 8px; }
+:deep(.cs-table th) { height: 32px; padding-block: 4px; font-size: var(--cs-font-small); font-weight: 500; color: var(--cs-muted); background: var(--cs-surface-subtle); white-space: nowrap; }
+:deep(.cs-table td) { font-size: 13px; padding-block: 0; height: var(--cs-row-height); color: var(--cs-text); border-color: var(--cs-border); }
 </style>

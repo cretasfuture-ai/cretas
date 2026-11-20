@@ -132,7 +132,7 @@ public class PriceListController {
     @RequirePermission({"procurement:price:view", "sales:read", "sales:read_write"})
     @GetMapping("/lookup")
     @Operation(summary = "查询产品售价（客户专属→全局）")
-    public ApiResponse<Map<String, Object>> lookupPrice(
+    public ApiResponse<com.cretas.aims.dto.inventory.PriceLookupResult> lookupPrice(
             @PathVariable @NotBlank String factoryId,
             @RequestParam(required = false) String customerId,
             @RequestParam String productTypeId) {
@@ -172,12 +172,8 @@ public class PriceListController {
             }
         }
 
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("found", price != null);
-        result.put("price", price);
-        result.put("source", source);
-        result.put("priceListName", priceListName);
-        return ApiResponse.success("查询成功", result);
+        return ApiResponse.success("查询成功", new com.cretas.aims.dto.inventory.PriceLookupResult(
+                price != null, price, source, priceListName));
     }
 
     private PriceListItem findItemByProduct(String priceListId, String productTypeId) {

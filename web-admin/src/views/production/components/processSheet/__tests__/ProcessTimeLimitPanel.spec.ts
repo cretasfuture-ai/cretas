@@ -9,6 +9,10 @@ import {
   parseBackendTime,
   remainingMinutesAt,
   remainingText,
+  timeLimitBlocks,
+  timeLimitWarningOf,
+  isReviewRecord,
+  recordKindText,
 } from '@/utils/processTimeLimit';
 import type { ProcessTimeLimitStatus } from '@/api/processTimeLimit';
 import type { WorkflowPortDescriptor } from '@/api/processSheet';
@@ -82,6 +86,29 @@ describe('时限文字', () => {
     expect(hasPartialExpiry(status({ perLot: true, expiredQuantity: 50, drawableQuantity: 0 }))).toBe(false);
     expect(hasPartialExpiry(status({ perLot: false, expiredQuantity: 10, drawableQuantity: 40 }))).toBe(false);
   });
+
+  it('PROTO-Q41 开关: 只有后端明说 false 才是只警告; 旧后端不带字段按拦截', () => {
+    expect(timeLimitBlocks(status({ blockOnExceed: false }))).toBe(false);
+    expect(timeLimitBlocks(status({ blockOnExceed: true }))).toBe(true);
+    expect(timeLimitBlocks(status())).toBe(true);
+  });
+
+  it('PROTO-Q41 成功响应里的时限警告: 只认 success + TIME_LIMIT_WARNING', () => {
+    expect(timeLimitWarningOf({ success: true, errorCode: 'TIME_LIMIT_WARNING', actionHint: 'W-1 已超时' })).toBe('W-1 已超时');
+    expect(timeLimitWarningOf({ success: false, errorCode: 'TIME_LIMIT_WARNING', actionHint: 'x' })).toBeNull();
+    expect(timeLimitWarningOf({ success: true, errorCode: 'OTHER', actionHint: 'x' })).toBeNull();
+    expect(timeLimitWarningOf({ success: true, errorCode: 'TIME_LIMIT_WARNING', actionHint: '  ' })).toBeNull();
+    expect(timeLimitWarningOf(null)).toBeNull();
+  });
+
+  it('PROTO-Q41 复盘记录: 只警告档两类才算, 被拦的原有记录 (含旧后端不带字段) 不算', () => {
+    expect(isReviewRecord({ recordKind: 'WARN_EXCEEDED' })).toBe(true);
+    expect(isReviewRecord({ recordKind: 'WARN_START_MISSING' })).toBe(true);
+    expect(isReviewRecord({ recordKind: 'BLOCKED' })).toBe(false);
+    expect(isReviewRecord({})).toBe(false);
+    expect(recordKindText({ recordKind: 'WARN_START_MISSING' })).toContain('没登记开始解冻');
+    expect(recordKindText({ recordKind: 'BLOCKED' })).toBeNull();
+  });
 });
 
 describe('ProcessTimeLimitPanel', () => {
@@ -101,6 +128,28 @@ describe('ProcessTimeLimitPanel', () => {
       expect.objectContaining({ params: { processOrder: 2 } }),
     );
     expect(wrapper.find('[data-testid="process-time-limit-panel"]').exists()).toBe(false);
+  });
+
+  it('缺口 16: 计划归属判不出时, 原料照常列出并说明在制品为什么没列', async () => {
+    const notice = '本计划缺客户信息，无法判定在制品归属（代工计划 P-1 缺少客户归属）：在制品和半成品暂不列出，原料照常显示。';
+    state.get.mockResolvedValue({ success: true, data: [status()], message: notice, severity: 'WARNING' });
+    const wrapper = mountPanel();
+    await flushPromises();
+    expect(wrapper.find('[data-testid="time-limit-owner-notice"]').text()).toBe(notice);
+    expect(wrapper.findAll('[data-testid="time-limit-row"]')).toHaveLength(1);
+  });
+
+  it('缺口 16: 只有提示没有行也显示整块; 普通成功的 message 不当提示', async () => {
+    state.get.mockResolvedValue({ success: true, data: [], message: '本计划缺客户信息…', severity: 'WARNING' });
+    const onlyNotice = mountPanel();
+    await flushPromises();
+    expect(onlyNotice.find('[data-testid="time-limit-owner-notice"]').exists()).toBe(true);
+
+    state.get.mockResolvedValue({ success: true, data: [status()], message: '操作成功' });
+    const normal = mountPanel();
+    await flushPromises();
+    expect(normal.find('[data-testid="time-limit-owner-notice"]').exists()).toBe(false);
+    expect(normal.findAll('[data-testid="time-limit-row"]')).toHaveLength(1);
   });
 
   it('读失败: 就地说明, 不假装没有时限', async () => {
@@ -140,6 +189,16 @@ describe('ProcessTimeLimitPanel', () => {
     const wrapper = mountPanel();
     await flushPromises();
     expect(wrapper.get('[data-testid="time-limit-partial"]').text()).toBe('可领 35 kg，已超时 15 kg');
+  });
+
+  it('PROTO-Q41 只警告档的按笔部分超时: 不说「可领」, 说明都能投料', async () => {
+    state.get.mockResolvedValue(ok([status({
+      state: 'EXPIRED', perLot: true, expiredQuantity: 15, drawableQuantity: 35, blockOnExceed: false,
+    })]));
+    const wrapper = mountPanel();
+    await flushPromises();
+    expect(wrapper.get('[data-testid="time-limit-partial"]').text())
+      .toBe('未超时 35 kg，已超时 15 kg（本厂只警告，都能投料）');
   });
 
   it('要登记解冻: 确认后发 START/THAW, 然后刷新', async () => {
@@ -197,5 +256,47 @@ describe('ProcessTimeLimitPanel', () => {
     await wrapper.get('[data-testid="time-limit-end-cold"]').trigger('click');
     await flushPromises();
     expect(state.post).toHaveBeenLastCalledWith('/F-1/process-time-limits/marks/9/end');
+  });
+  it('A13 补登实际开始时间: 没填原因不能登记; 填了发 startedAt + backfillReason (不是现在)', async () => {
+    state.get.mockResolvedValue(ok([status({
+      state: 'START_MISSING', deadlineAt: null, remainingMinutes: null, reason: '还没有登记开始解冻，不能投料',
+    })]));
+    const wrapper = mountPanel();
+    await flushPromises();
+    await wrapper.get('[data-testid="time-limit-backfill-thaw"]').trigger('click');
+    await flushPromises();
+    const vm = wrapper.vm as unknown as {
+      backfillAt: string; backfillReason: string; backfillDisabledReason: string; submitBackfill: () => Promise<void>;
+    };
+    vm.backfillAt = '2026-11-04T06:00:00';
+    await flushPromises();
+    expect(vm.backfillDisabledReason).toBe('请填写补登原因');
+    await vm.submitBackfill();
+    expect(state.post).not.toHaveBeenCalled();
+
+    vm.backfillReason = '早班 6 点开始解冻，忘了登记';
+    await flushPromises();
+    expect(vm.backfillDisabledReason).toBe('');
+    await vm.submitBackfill();
+    await flushPromises();
+    expect(state.post).toHaveBeenCalledWith('/F-1/process-time-limits/marks', {
+      targetType: 'RAW_MATERIAL_BATCH', targetId: 'mb-1', kind: 'START', code: 'THAW',
+      startedAt: '2026-11-04T06:00:00', backfillReason: '早班 6 点开始解冻，忘了登记',
+    });
+  });
+
+  it('A13 阴性对照: 未来时间不能补登; 不在待登记状态的行没有补登入口', async () => {
+    state.get.mockResolvedValue(ok([status({
+      state: 'START_MISSING', deadlineAt: null, remainingMinutes: null, reason: '还没有登记开始解冻，不能投料',
+    }), status({ targetId: 'mb-2', batchNumber: 'RM-2' })]));
+    const wrapper = mountPanel();
+    await flushPromises();
+    expect(wrapper.findAll('[data-testid="time-limit-backfill-thaw"]')).toHaveLength(1);
+    await wrapper.get('[data-testid="time-limit-backfill-thaw"]').trigger('click');
+    const vm = wrapper.vm as unknown as { backfillAt: string; backfillReason: string; backfillDisabledReason: string };
+    vm.backfillAt = '2026-11-04T12:00:00';
+    vm.backfillReason = 'x';
+    await flushPromises();
+    expect(vm.backfillDisabledReason).toBe('开始时间不能晚于现在');
   });
 });

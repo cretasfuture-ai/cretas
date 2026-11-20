@@ -290,7 +290,7 @@ class ProductionPlanSettlementTest {
         when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(plan()));
 
         BusinessException ex = assertThrows(BusinessException.class,
-                () -> service.completeProduction(FACTORY_ID, PLAN_ID, new BigDecimal("90"), 1309L));
+                () -> service.completeProduction(FACTORY_ID, PLAN_ID, new BigDecimal("90"), 1309L, null));
 
         assertEquals(409, ex.getCode());
         assertEquals("PRODUCTION_SETTLEMENT_REQUIRED", ex.getErrorCode());
@@ -593,6 +593,52 @@ class ProductionPlanSettlementTest {
     }
 
     @Test
+    @DisplayName("#1590 遗留: 结单实际领用的原料批次已被冻结 (质检中) / 判不合格 → 409 中文原因, 不扣料; 过期照扣")
+    void settleProduction_heldOrDefectiveRawBatch_rejectedWithChineseReason() {
+        for (com.cretas.aims.entity.enums.MaterialBatchStatus st : new com.cretas.aims.entity.enums.MaterialBatchStatus[]{
+                com.cretas.aims.entity.enums.MaterialBatchStatus.INSPECTING,
+                com.cretas.aims.entity.enums.MaterialBatchStatus.DEFECTIVE,
+                com.cretas.aims.entity.enums.MaterialBatchStatus.EXPIRED}) {
+            ProductionPlan plan = plan();
+            when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
+            when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndIdempotencyKeyAndDeletedAtIsNull(
+                    FACTORY_ID, PLAN_ID, "idem-1")).thenReturn(Optional.empty());
+            when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
+                    FACTORY_ID, PLAN_ID)).thenReturn(Optional.empty());
+            MaterialBatch batch = materialBatch();
+            batch.setStatus(st);
+            SemiFinishedInventory wip = wip();
+            when(materialBatchRepository.findByIdAndFactoryId("MB-1", FACTORY_ID)).thenReturn(Optional.of(batch));
+            when(materialBatchRepository.findByIdAndFactoryIdForUpdate("MB-1", FACTORY_ID)).thenReturn(Optional.of(batch));
+            when(semiFinishedInventoryRepository.findByIdForUpdate(7L)).thenReturn(Optional.of(wip));
+            when(warehouseResolver.resolveLogisticsId(FACTORY_ID)).thenReturn("WH-LOG-ID");
+            stubCurrentBom("RM-1");
+            when(materialBatchRepository.save(any(MaterialBatch.class))).thenAnswer(inv -> inv.getArgument(0));
+            when(semiFinishedInventoryRepository.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> inv.getArgument(0));
+            when(productionSettlementRepository.save(any(ProductionSettlement.class))).thenAnswer(inv -> inv.getArgument(0));
+            when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
+            when(productionSettlementConsumptionRepository.saveAll(anyList()))
+                    .thenAnswer(inv -> assignSettlementConsumptionIds(inv.getArgument(0)));
+            when(productionSettlementLaborRepository.saveAll(anyList())).thenAnswer(inv -> inv.getArgument(0));
+
+            if (st == com.cretas.aims.entity.enums.MaterialBatchStatus.EXPIRED) {
+                // 阳性对照: 过期由领料那一步把关, 结单补记已经发生的领用照扣 (与报工 assertReportable 同口径)
+                service.settleProduction(FACTORY_ID, PLAN_ID, baseRequest(), 10L);
+                assertEquals(new BigDecimal("16"), batch.getUsedQuantity());
+                continue;
+            }
+            BigDecimal usedBefore = batch.getUsedQuantity();
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> service.settleProduction(FACTORY_ID, PLAN_ID, baseRequest(), 10L), st.name());
+            assertEquals(409, ex.getCode(), st.name());
+            assertTrue(ex.getMessage().contains(st.getDisplayName()), ex.getMessage());
+            assertTrue(ex.getActionHint() != null && ex.getActionHint().contains("撤销") && ex.getActionHint().contains("质检放行"),
+                    "过账场景提示要说清怎么解: " + ex.getActionHint());
+            assertEquals(0, batch.getUsedQuantity().compareTo(usedBefore), "不扣料: " + batch.getUsedQuantity());
+        }
+    }
+
+    @Test
     @DisplayName("结单原料批次在无关仓库 (成品仓/研发库) 时拒绝扣料")
     void settleProduction_rawBatchInUnrelatedWarehouse_rejected() {
         // 无关仓库 = 非原料仓/物流仓 (isRawOrLogisticsWarehouse=false) 且非生产仓 (isWorkshopWarehouse=false),
@@ -726,7 +772,8 @@ class ProductionPlanSettlementTest {
         assertEquals("PENDING_WAREHOUSE_RECEIPT", response.getPostingStatus());
         assertEquals(ProductionPlanStatus.COMPLETED, plan.getStatus());
         assertEquals(new BigDecimal("16"), batch.getUsedQuantity());
-        verify(productionSettlementRepository).save(any(ProductionSettlement.class));
+        // 结单落库 (N1 之后投料明细会再保存一次, 守的是「落了库」不是「只 save 一次」)
+        verify(productionSettlementRepository, org.mockito.Mockito.atLeastOnce()).save(any(ProductionSettlement.class));
     }
 
     @Test
@@ -764,7 +811,8 @@ class ProductionPlanSettlementTest {
         verify(bomRecipeRepository, never())
                 .findByFactoryIdAndProductTypeIdAndIsCurrentTrue(any(), any());
         verify(materialBatchRepository).save(batch);
-        verify(productionSettlementRepository).save(any(ProductionSettlement.class));
+        // 结单落库 (N1 之后投料明细会再保存一次, 守的是「落了库」不是「只 save 一次」)
+        verify(productionSettlementRepository, org.mockito.Mockito.atLeastOnce()).save(any(ProductionSettlement.class));
     }
 
     @Test
@@ -1461,7 +1509,8 @@ class ProductionPlanSettlementTest {
         assertEquals("PENDING_WAREHOUSE_RECEIPT", response.getPostingStatus());
         verify(materialBatchRepository).save(rawBatch);
         verify(materialBatchRepository).save(auxBatch);
-        verify(productionSettlementRepository).save(any(ProductionSettlement.class));
+        // 结单落库 (N1 之后投料明细会再保存一次, 守的是「落了库」不是「只 save 一次」)
+        verify(productionSettlementRepository, org.mockito.Mockito.atLeastOnce()).save(any(ProductionSettlement.class));
     }
 
     @Test
@@ -2994,5 +3043,148 @@ class ProductionPlanSettlementTest {
                 .availableQuantity(new BigDecimal("8"))
                 .status(SemiFinishedInventory.Status.AVAILABLE)
                 .build();
+    }
+
+    // ═══════════════ 纪律排查 A7 / A11 (2026-11-10): 由工厂配置, 不写死 ═══════════════
+
+    private void discipline(java.util.Map<String, String> cfg) {
+        ReflectionTestUtils.setField(service, "disciplinePolicy",
+                com.cretas.aims.service.discipline.DisciplineFixtures.policy(cfg));
+        when(productionPlanMapper.toDTO(any(ProductionPlan.class)))
+                .thenAnswer(inv -> new com.cretas.aims.dto.production.ProductionPlanDTO());
+    }
+
+    private static final java.util.Map<String, String> DIRECT_COMPLETE = java.util.Map.of(
+            com.cretas.aims.service.canvas.ThresholdKeys.PRODUCTION_COMPLETION_REQUIRE_SETTLEMENT, "0");
+
+    @Test
+    @DisplayName("A7 默认开: 任何工厂 (不只 F006) 直接完工都要求先结单")
+    void a7_defaultRequiresSettlementForEveryFactory() {
+        discipline(java.util.Map.of());
+        ProductionPlan p = plan();
+        p.setFactoryId("F001");
+        when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(p));
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.completeProduction("F001", PLAN_ID, new BigDecimal("90"), 1309L, null));
+        assertEquals("PRODUCTION_SETTLEMENT_REQUIRED", ex.getErrorCode());
+        assertEquals(ProductionPlanStatus.IN_PROGRESS, p.getStatus());
+        verify(productionPlanRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("A7 非默认: 工厂关掉开关后可直接完工 —— F006 也不再被写死拦住")
+    void a7_switchOffAllowsDirectCompletionEvenForF006() {
+        discipline(DIRECT_COMPLETE);
+        ProductionPlan p = plan();
+        when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(p));
+        when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(productionBatchRepository.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID)).thenReturn(List.of());
+
+        service.completeProduction(FACTORY_ID, PLAN_ID, new BigDecimal("90"), 1309L, null);
+
+        assertEquals(ProductionPlanStatus.COMPLETED, p.getStatus());
+        org.junit.jupiter.api.Assertions.assertNull(p.getOverPlanReason(), "没超产不该记超产原因");
+    }
+
+    @Test
+    @DisplayName("A7 直接完工超产: 不填原因 → 409 且计划不动; 填了原因 → 完成并记下原因")
+    void a7_directCompletionOverPlanNeedsReason() {
+        discipline(DIRECT_COMPLETE);
+        ProductionPlan p = plan(); // 计划 100
+        when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(p));
+        when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(productionBatchRepository.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID)).thenReturn(List.of());
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.completeProduction(FACTORY_ID, PLAN_ID, new BigDecimal("120"), 1309L, "  "));
+        assertEquals("PRODUCTION_OVER_PLAN_REASON_REQUIRED", ex.getErrorCode());
+        assertEquals(ProductionPlanStatus.IN_PROGRESS, p.getStatus());
+        verify(productionPlanRepository, never()).save(any());
+
+        service.completeProduction(FACTORY_ID, PLAN_ID, new BigDecimal("120"), 1309L, "客户追加 20 箱");
+        assertEquals(ProductionPlanStatus.COMPLETED, p.getStatus());
+        assertEquals("客户追加 20 箱", p.getOverPlanReason());
+    }
+
+    // ── A11 仓库多收 (报产 90kg, 称重容差 10kg) ─────────────────────────────
+
+    private ProductionSettlement a11Setup() {
+        ProductionPlan plan = plan();
+        ProductionSettlement settlement = settled();
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdForUpdate(
+                FACTORY_ID, PLAN_ID)).thenReturn(Optional.of(settlement));
+        when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumber(FACTORY_ID, "FG-P-001"))
+                .thenReturn(Optional.empty());
+        when(productTypeRepository.findByIdAndFactoryId("PT-1", FACTORY_ID)).thenReturn(Optional.empty());
+        when(warehouseResolver.resolveFinishedGoodsId(FACTORY_ID)).thenReturn("WH-FG-ID");
+        when(finishedGoodsBatchRepository.save(any(FinishedGoodsBatch.class))).thenAnswer(inv -> {
+            FinishedGoodsBatch batch = inv.getArgument(0);
+            batch.setId("fg-1");
+            return batch;
+        });
+        when(productionTransitLedgerRepository.save(any(ProductionTransitLedger.class))).thenAnswer(inv -> {
+            ProductionTransitLedger ledger = inv.getArgument(0);
+            ledger.setId("ledger-1");
+            return ledger;
+        });
+        when(productionSettlementRepository.save(any(ProductionSettlement.class))).thenAnswer(inv -> inv.getArgument(0));
+        return settlement;
+    }
+
+    @Test
+    @DisplayName("A11 默认 BLOCK (= 原口径): 多收 30kg 即使填了原因和责任方也硬拦, 不建成品")
+    void a11_defaultBlocksOverReceipt() {
+        discipline(java.util.Map.of());
+        a11Setup();
+        BusinessException ex = assertThrows(BusinessException.class, () -> service.confirmWarehouseReceipt(
+                FACTORY_ID, PLAN_ID, receiptRequest("r-a11-1", "120", "kg", "报工少报", "PRODUCTION"), 11L));
+        assertEquals("RECEIPT_EXCEEDS_PRODUCTION_REPORTED", ex.getErrorCode());
+        verify(finishedGoodsBatchRepository, never()).save(any());
+        verify(productionTransitLedgerRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("A11 一律填原因放行: 不填原因 409 / 不选责任方 409 / 都填了 → 入库并按负差异进中转挂账")
+    void a11_alwaysWithReasonNeedsReasonAndResponsibility() {
+        discipline(java.util.Map.of(
+                com.cretas.aims.service.canvas.ThresholdKeys.PRODUCTION_RECEIPT_OVER_RECEIVE_MODE, "ALWAYS_WITH_REASON"));
+        a11Setup();
+        assertEquals("PRODUCTION_RECEIPT_VARIANCE_REASON_REQUIRED", assertThrows(BusinessException.class,
+                () -> service.confirmWarehouseReceipt(FACTORY_ID, PLAN_ID,
+                        receiptRequest("r-a11-2", "120", "kg", null, "PRODUCTION"), 11L)).getErrorCode());
+        assertEquals("PRODUCTION_RECEIPT_RESPONSIBILITY_REQUIRED", assertThrows(BusinessException.class,
+                () -> service.confirmWarehouseReceipt(FACTORY_ID, PLAN_ID,
+                        receiptRequest("r-a11-3", "120", "kg", "报工少报", "PENDING"), 11L)).getErrorCode());
+        verify(finishedGoodsBatchRepository, never()).save(any());
+
+        ProductionWarehouseReceiptResponse response = service.confirmWarehouseReceipt(FACTORY_ID, PLAN_ID,
+                receiptRequest("r-a11-4", "120", "kg", "报工少报", "PRODUCTION"), 11L);
+        assertEquals("PENDING_CLEARING", response.getPostingStatus());
+        assertEquals("ledger-1", response.getTransitLedgerId());
+        assertEquals(0, new BigDecimal("-30").compareTo(response.getVarianceQuantity()));
+        org.mockito.ArgumentCaptor<ProductionTransitLedger> ledger =
+                org.mockito.ArgumentCaptor.forClass(ProductionTransitLedger.class);
+        verify(productionTransitLedgerRepository).save(ledger.capture());
+        assertEquals("PRODUCTION", ledger.getValue().getResponsibilitySide());
+        assertEquals("报工少报", ledger.getValue().getVarianceReason());
+    }
+
+    @Test
+    @DisplayName("A11 比例内填原因放行 (50%): 多收 30kg (33%) 填原因可收; 阴性对照: 多收 50kg (56%) 仍拦")
+    void a11_withinRate() {
+        discipline(java.util.Map.of(
+                com.cretas.aims.service.canvas.ThresholdKeys.PRODUCTION_RECEIPT_OVER_RECEIVE_MODE, "WITHIN_RATE",
+                com.cretas.aims.service.canvas.ThresholdKeys.PRODUCTION_RECEIPT_OVER_RECEIVE_RATE, "0.5"));
+        a11Setup();
+        BusinessException ex = assertThrows(BusinessException.class, () -> service.confirmWarehouseReceipt(
+                FACTORY_ID, PLAN_ID, receiptRequest("r-a11-5", "140", "kg", "报工少报", "PRODUCTION"), 11L));
+        assertEquals("RECEIPT_EXCEEDS_PRODUCTION_REPORTED", ex.getErrorCode());
+        assertTrue(ex.getMessage().contains("50%"), ex.getMessage());
+        verify(finishedGoodsBatchRepository, never()).save(any());
+
+        ProductionWarehouseReceiptResponse ok = service.confirmWarehouseReceipt(FACTORY_ID, PLAN_ID,
+                receiptRequest("r-a11-6", "120", "kg", "报工少报", "WAREHOUSE"), 11L);
+        assertEquals("PENDING_CLEARING", ok.getPostingStatus());
     }
 }

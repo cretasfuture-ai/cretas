@@ -3,6 +3,7 @@ package com.cretas.aims.service.oa;
 import com.cretas.aims.dto.oa.TodoItemDTO;
 
 import java.util.List;
+import java.util.Set;
 
 /**
  * 我的待办聚合服务接口 — RN OA 待办中心后端。
@@ -39,4 +40,26 @@ public interface MyTodoAggregatorService {
      * @return 待办数量
      */
     int countTodos(String factoryId, String callerRole);
+
+    /**
+     * 按<b>具体用户</b>出待办: 每一类用 {@code PermissionService.hasPermission(user, code)} 判, 叠加个人权限覆盖
+     * (平台对单个员工收回某模块时, 这一类就不出); 岗位取库里的 {@code user.getRoleCode()}, 不信 token 里的旧岗位。
+     * {@code user == null} → 空列表。HTTP 入口 ({@code MyTodoController}) 对工厂账号一律走这条。
+     */
+    List<TodoItemDTO> listTodosForUser(String factoryId, com.cretas.aims.entity.User user);
+
+    /** {@link #listTodosForUser} 的条数。 */
+    int countTodosForUser(String factoryId, com.cretas.aims.entity.User user);
+
+    /**
+     * 调用方岗位「能办」的待办类型 (平台账号按 token 岗位走这条)。与 {@link #listTodos} 同一张权限表,
+     * 强制插单另要求岗位被插单审批画布点名 (见实现)。只说能不能办, 不查待办条数。
+     */
+    Set<TodoItemDTO.TodoType> availableTypes(String factoryId, String callerRole);
+
+    /**
+     * 具体用户「能办」的待办类型, 叠加个人权限覆盖。App 用它决定显不显示「待办」入口:
+     * 非空 = 显示 (哪怕此刻 0 条), 空 = 不显示。{@code user == null} → 空。
+     */
+    Set<TodoItemDTO.TodoType> availableTypesForUser(String factoryId, com.cretas.aims.entity.User user);
 }

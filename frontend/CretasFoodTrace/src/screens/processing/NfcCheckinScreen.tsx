@@ -9,6 +9,8 @@ import { processingApiClient, type ProcessingBatch } from '../../services/api/pr
 import { processTaskApiClient, type ProcessTaskItem } from '../../services/api/processTaskApiClient';
 import BarcodeScannerModal from '../../components/processing/BarcodeScannerModal';
 import NfcCheckinModal from '../../components/processing/NfcCheckinModal';
+import RequiredReasonModal from '../../components/processing/RequiredReasonModal';
+import { blockedMessage, FORCE_START_REASONS, SHORTAGE_CASE_OPEN } from '../../utils/requiredReason';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuthStore } from '../../store/authStore';
 import { useFactoryFeatureStore } from '../../store/factoryFeatureStore';
@@ -212,12 +214,16 @@ export default function NfcCheckinScreen() {
     }
   }, [selectBatch]);
 
-  const startAndSelectBatch = useCallback(async (batch: BatchItem) => {
+  // 纪律排查 A12: 本厂开了「缺料时拦开工」, 开批次被拦时弹原因选择 (原因记进缺料处理记录), 不再只说「开始失败」
+  const [forceStart, setForceStart] = useState<{ batch: BatchItem; message: string } | null>(null);
+
+  const startAndSelectBatch = useCallback(async (batch: BatchItem, forceStartReason?: string) => {
     if (!user?.id) return;
     setStartingBatch(true);
     try {
-      const res = await processingApiClient.startProduction(batch.id.toString(), user.id);
+      const res = await processingApiClient.startProduction(batch.id.toString(), user.id, undefined, forceStartReason);
       if (res?.success) {
+        setForceStart(null);
         const updated = { ...batch, status: 'IN_PROGRESS' };
         setBatches(prev => prev.map(b => b.id === batch.id ? updated : b));
         selectBatch(updated);
@@ -225,6 +231,11 @@ export default function NfcCheckinScreen() {
         appAlert('开始失败', res?.message || '无法开始生产');
       }
     } catch (error: unknown) {
+      const blocked = blockedMessage(error, SHORTAGE_CASE_OPEN);
+      if (blocked && !forceStartReason) {
+        setForceStart({ batch, message: blocked });
+        return;
+      }
       const msg = error instanceof Error ? error.message : '开始生产失败';
       appAlert('开始失败', msg);
     } finally {
@@ -494,6 +505,20 @@ export default function NfcCheckinScreen() {
             )}
           />
         )}
+
+      {/* 纪律排查 A12: 缺料时开工要原因 */}
+      <RequiredReasonModal
+        message={forceStart?.message ?? null}
+        title="缺料还没解决"
+        hint="可以先去处理缺料；确实要现在开工，请选一个原因，原因会记进缺料处理记录："
+        reasons={FORCE_START_REASONS}
+        confirmLabel="仍然开工"
+        cancelLabel="先不开工"
+        submitting={startingBatch}
+        testIDPrefix="force-start"
+        onConfirm={(reason) => { if (forceStart) startAndSelectBatch(forceStart.batch, reason); }}
+        onCancel={() => setForceStart(null)}
+      />
       </View>
     );
   }
@@ -670,6 +695,7 @@ export default function NfcCheckinScreen() {
         onClose={() => setScannerVisible(false)}
         onScan={handleQrScan}
       />
+
     </View>
   );
 }

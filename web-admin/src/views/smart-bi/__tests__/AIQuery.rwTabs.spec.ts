@@ -159,17 +159,19 @@ describe('AIQuery AI read/write tabs (P2)', () => {
     wrapper.unmount();
   });
 
-  it('keeps operation requests and ordinary consultation behind the intent gateway with data loaded', async () => {
+  it('问题 51: 咨询页载入数据后直接走上传分析(跳过 Java); 操作页仍走意图层 OPERATE', async () => {
     executeIntentMock.mockResolvedValue(successResponse);
     const wrapper = await mountWithRole('factory_super_admin');
     const vm = wrapper.vm as unknown as AIQueryVm;
     vm.setAnalysisContext([{ revenue: 120 }], []);
-    await send(wrapper, '给五花肉入库 200kg');
-    expect(executeIntentMock.mock.calls[0][2].mode).toBe('READ');
+    await send(wrapper, '各产品的销售额占比是多少？');
+    expect(executeIntentMock).not.toHaveBeenCalled();
+    expect(chatAnalysisStreamMock).toHaveBeenCalledTimes(1);
     vm.activeAiTab = 'operate';
     await send(wrapper, '分析销售额的月度变化趋势，标注增长和下降的关键月份');
-    expect(executeIntentMock.mock.calls[1][2].mode).toBe('OPERATE');
-    expect(chatAnalysisStreamMock).not.toHaveBeenCalled();
+    expect(executeIntentMock).toHaveBeenCalledTimes(1);
+    expect(executeIntentMock.mock.calls[0][2].mode).toBe('OPERATE');
+    expect(chatAnalysisStreamMock).toHaveBeenCalledTimes(1);
     wrapper.unmount();
   });
 

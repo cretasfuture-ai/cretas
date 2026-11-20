@@ -62,3 +62,42 @@
 ## 6. 周期复审
 
 注册表每 21 天复审一次（`_REGISTRY_AUDIT_DATE`）。本条目会被每日探针 `scripts/cron/probe-llm-registry.sh`（47 crontab，每天 03:17 CST）一并探测，经隧道真请求一次；非 ok 即进告警。
+
+## 出境 SOCKS 出口：OpenAI / Anthropic 经 mini 出网（2026-11-12，LLM-PROVIDER-SWITCH）
+
+47 在国内，直连两家都不行：`api.anthropic.com` 返回 403（地区封锁），`api.openai.com` 超时。所以在 mini 上开一个出口，两家的请求从这里出去。
+
+- **47 侧（organizer 已改，已备份）**
+  - `Match User cretas-llm-canada` 的 `PermitListen` 改为 `127.0.0.1:11437 127.0.0.1:11438`。
+  - `authorized_keys` 加了 `permitlisten="127.0.0.1:11438"`。
+  - 其余不变：`AllowTcpForwarding remote`、`PermitOpen none`、`GatewayPorts no`。
+- **mini 侧**（2026-11-12 已装好并验证）：独立的 launchd 任务 `com.cretas.llm-egress`，跑 `~/cretas-llm/egress-tunnel.sh`。
+  - 它做一次反向转发 `-R 127.0.0.1:11438:127.0.0.1:7897`：47 回环上的 11438 → mini 上 Clash Verge 的混合端口 7897（SOCKS 和 HTTP 都收）。
+  - **不用动态转发的原因**：mini 自己的出口 IP 也被这两家挡。实测 mini 直连 `api.openai.com` 超时，`api.anthropic.com` 返回 403 "Request not allowed"。mini 平时是经 Clash 上网的（系统代理就是 127.0.0.1:7897），而 SSH 动态转发不走 Clash，会被同样挡掉。
+  - ⇒ **这条出口依赖 mini 上的 Clash Verge 在跑**，出站走的是 Clash 当前的节点。请求是 TLS 端到端加密的，节点看不到内容。
+  - 用户和密钥与 11437 的隧道相同。
+  - **单独开一个进程的原因**：`tunnel.sh` 带了 `ExitOnForwardFailure`。如果把 11438 合进去，11438 被拒时 11437 会一起断，本地模型也就没了。
+  - 两个文件的参考副本：`local-llm-canada-mini/egress-tunnel.sh`、`com.cretas.llm-egress.plist.example`。
+- **验证读数**（2026-11-12，在 47 上用 `curl --socks5-hostname 127.0.0.1:11438` 测）：
+  - 连通：两家都返回 401（没带密钥），3 轮各 0.47–0.55 s。
+  - 断线：停掉 egress 任务后，47 上 11438 没有人监听，curl 立刻失败（rc=7，0.0001 s），明确报错，不会挂死。这时 11437 不受影响（返回 401，0.07 s）。
+  - 恢复：重新 bootstrap 后再测，401，0.53 s。
+- **应用 / 重装**（在 mini 上，以 rex 执行）：
+
+  ```
+  cp egress-tunnel.sh ~/cretas-llm/
+  chmod 700 ~/cretas-llm/egress-tunnel.sh
+  cp com.cretas.llm-egress.plist.example ~/Library/LaunchAgents/com.cretas.llm-egress.plist
+  launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.cretas.llm-egress.plist
+  ```
+
+- **服务配置**：`.env.prod` 里设 `LLM_EGRESS_PROXY=socks5h://127.0.0.1:11438`。只有 openai 和 anthropic 两家走它，见 `common/llm_router.py` 的 `_EGRESS_PROXY_ACCOUNTS`。
+- **判活**（在 47 上）：
+
+  ```
+  curl -s -o /dev/null -w '%{http_code} %{time_total}\n' --socks5-hostname 127.0.0.1:11438 https://api.openai.com/v1/models
+  ```
+
+  - 返回 `401`：连通，只是没带密钥。
+  - 换成 `https://api.anthropic.com/v1/models` 同样判。
+  - 返回 `000` 并且 `curl: (7)`（连接被拒）：隧道断了。这时请求会明确报错，不会挂死。

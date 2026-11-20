@@ -167,6 +167,10 @@ public class ProductionPlan extends BaseEntity {
     @Column(name = "cancel_reason", columnDefinition = "TEXT")
     private String cancelReason;
 
+    /** 直接完工 (不经结单) 时实际产量超过计划的原因 (纪律排查 A7)。结单路径的超产原因在结单上。 */
+    @Column(name = "over_plan_reason", length = 500)
+    private String overPlanReason;
+
     @Column(name = "cancelled_by")
     private Long cancelledBy;
 
@@ -547,6 +551,17 @@ public class ProductionPlan extends BaseEntity {
      */
     @Column(name = "approval_comment", length = 500)
     private String approvalComment;
+
+    /**
+     * 本人审批留痕: 强制插单提交人 = 审批人, 工厂开了 allow_self_approval (红线 4, V20261114_01)。
+     * 与撤回/盘点/改价/退款/应收应付的审批记录同名同口径; 审批意见里的「【本人审批】」前缀只是给人看的文字。
+     */
+    @Column(name = "self_approved", nullable = false)
+    private boolean selfApproved = false;
+
+    /** 本人审批原因 (开关开时必填)。 */
+    @Column(name = "self_approval_reason", columnDefinition = "TEXT")
+    private String selfApprovalReason;
 
     /**
      * 强制插单原因

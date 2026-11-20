@@ -1,0 +1,16 @@
+# factory-agentops-gate.yml 的 pull_request 触发路径 (2026-11-12 从 workflow 的 on.pull_request.paths 原样搬来)。
+# 由该 workflow 的 changes 作业经 scripts/ci/changed-paths.py 判定; 语义同 GitHub Actions paths:
+# `**` 跨目录, `*` 不跨 `/`, `!` 取反 (按顺序, 最后命中者为准)。一行一个 glob, `#` 起注释。
+# ⛔ 不要为了让某个 PR 跳过闸而删模式; 加模式与原 paths 同一规矩 (闸读什么, 什么就进触发面)。
+
+backend/python/smartbi/agent/eval/**
+backend/python/smartbi/agent/runtime/evaluation.py
+backend/python/tests/fixtures/factory_agentops/**
+scripts/ci/factory_agentops_gate.py
+scripts/ci/check_factory_evaluator_provenance.py
+backend/python/tests/agent_eval/test_legacy_factory_compatibility.py
+.github/workflows/factory-agentops-gate.yml
+
+# 判定仪器自身: 改了它们就该触发本闸 (否则清单/判定改坏了这道闸无从发现)。
+scripts/ci/changed-paths.py
+scripts/ci/trigger-paths/factory-agentops-gate.txt

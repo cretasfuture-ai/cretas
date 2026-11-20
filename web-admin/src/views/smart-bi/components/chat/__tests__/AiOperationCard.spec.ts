@@ -136,6 +136,33 @@ describe('AiOperationCard', () => {
     expect(wrapper.text()).not.toContain('确认执行');
   });
 
+  it('shows a non-purchase OUTCOME_UNKNOWN as 结果待核对 without purchase wording or a retry', async () => {
+    confirmIntentActionMock.mockResolvedValue({
+      status: 'OUTCOME_UNKNOWN',
+      message: '操作结果暂时无法确认（可能已经写入）。请先在业务页面核对这条记录，确认没有写入再重新发起，勿直接重复提交。',
+    });
+    const wrapper = mountCard(previewResponse);
+    const confirmBtn = wrapper.findAll('button.el-button').find((b) => b.text().includes('确认执行'));
+    await confirmBtn!.trigger('click');
+    await flushPromises();
+
+    expect(wrapper.find('[data-testid="aiop-outcome-unknown"]').text()).toContain('结果待核对');
+    expect(wrapper.text()).toContain('可能已经写入');
+    expect(wrapper.text()).not.toContain('采购');
+    expect(wrapper.text()).not.toContain('确认执行');
+  });
+
+  it('shows ALREADY_EXECUTED as a success (the same confirmation already ran, nothing re-ran)', async () => {
+    confirmIntentActionMock.mockResolvedValue({ status: 'ALREADY_EXECUTED', message: '这次确认已经执行过，没有重复执行。' });
+    const wrapper = mountCard(previewResponse);
+    const confirmBtn = wrapper.findAll('button.el-button').find((b) => b.text().includes('确认执行'));
+    await confirmBtn!.trigger('click');
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('没有重复执行');
+    expect(wrapper.find('.op-result-icon-success').exists()).toBe(true);
+  });
+
   it('tags the result as 演示环境 when confirm returns DEMO_WRITE_BLOCKED', async () => {
     confirmIntentActionMock.mockResolvedValue({
       status: 'DEMO_WRITE_BLOCKED',

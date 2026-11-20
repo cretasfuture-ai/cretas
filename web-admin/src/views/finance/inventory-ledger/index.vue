@@ -23,8 +23,9 @@
 import { ref, computed, onMounted } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
-import { ElMessage, ElMessageBox } from 'element-plus';
-import { Refresh, Download, Search } from '@element-plus/icons-vue';
+import { ElMessage } from 'element-plus';
+import type { CsTableColumn } from '@/types/csTable';
+import { maskedAmount } from '../financeDisplay';
 import { get } from '@/api/request';
 import request from '@/api/request';
 
@@ -78,8 +79,31 @@ const tableData = ref<InventoryLedgerLineDTO[]>([]);
 const ledgerPeriod = ref({ startDate: '', endDate: '' });
 
 // Filters
-const dateRange = ref<[string, string] | null>(null);
+// 日期范围: 两个原生日期输入 (取代 el-date-picker); 物料: 下拉选择 (取代手填物料类型 UUID)
+const startDate = ref('');
+const endDate = ref('');
+const dateRange = computed<[string, string] | null>(() => (startDate.value && endDate.value ? [startDate.value, endDate.value] : null));
+const ALL_MATERIALS = '__ALL__';
 const materialTypeId = ref('');
+interface MaterialOption { id: string; name?: string | null; code?: string | null }
+const materialOptions = ref<MaterialOption[]>([]);
+const materialItems = computed(() => [
+  { label: '全部物料', value: ALL_MATERIALS },
+  ...materialOptions.value.map((m) => ({
+    label: m.code ? `${m.name || m.code}（${m.code}）` : String(m.name || '未命名物料'),
+    value: String(m.id),
+  })),
+]);
+async function loadMaterialOptions() {
+  if (!factoryId.value) return;
+  try {
+    const res = await get<MaterialOption[] | { content: MaterialOption[] }>(`/${factoryId.value}/raw-material-types/active`, { _silent: true } as never);
+    const d = res.data;
+    materialOptions.value = Array.isArray(d) ? d : (d?.content ?? []);
+  } catch {
+    ElMessage.error('物料选项加载失败，可先不选物料直接查询');
+  }
+}
 
 // ============================================================
 // Computed
@@ -98,26 +122,23 @@ const periodLabel = computed(() => {
 // ============================================================
 // Helpers
 // ============================================================
+// 数量/金额: null = 没有值 → 「—」, 不当 0 显示; 真实的 0 仍显示 0。
 function fmtQty(v: number | null): string {
-  if (v === null || v === undefined) return '0.000000';
-  return Number(v).toFixed(6);
+  return maskedAmount(v, 6);
 }
 
 function fmtAmt(v: number | null): string {
-  // @PriceSensitive: null → "—" (后端已脱敏, 前端不重算)
-  if (v === null || v === undefined) return '—';
-  return Number(v).toFixed(2);
+  // @PriceSensitive: null → "—" (后端已脱敏, 前端不重算); 真实 0 金额显示 0.00 (旧写法 !v 会把 0 也当遮蔽)
+  return maskedAmount(v, 2);
 }
 
 function fmtPrice(v: number | null): string {
-  if (v === null || v === undefined) return '—';
-  return Number(v).toFixed(4);
+  return maskedAmount(v, 4);
 }
 
-function amtTooltip(v: number | null): string {
-  if (v === null || v === undefined) return '需要财务权限查看金额';
-  return '';
-}
+const isMasked = (v: number | null | undefined) => v === null || v === undefined;
+const AMT_TIP = '需要财务权限查看金额';
+const PRICE_TIP = '需要财务权限查看单价';
 
 // ============================================================
 // Data load
@@ -133,7 +154,7 @@ async function loadData() {
   try {
     const [startDate, endDate] = dateRange.value!;
     const params: Record<string, string> = { startDate, endDate };
-    if (materialTypeId.value) params.materialTypeId = materialTypeId.value;
+    if (materialTypeId.value && materialTypeId.value !== ALL_MATERIALS) params.materialTypeId = materialTypeId.value;
 
     const res = await get<InventoryLedgerDTO>(
       `/${factoryId.value}/inventory/ledger`,
@@ -170,7 +191,7 @@ async function handleExport() {
       startDate,
       endDate,
     };
-    if (materialTypeId.value) params.materialTypeId = materialTypeId.value;
+    if (materialTypeId.value && materialTypeId.value !== ALL_MATERIALS) params.materialTypeId = materialTypeId.value;
 
     // _keepResponse: true 必须 — 否则响应拦截器把 blob 解成 {success,data,message} 信封,
     // response.headers 会是 undefined(信封没有 headers 字段), 下面读 content-disposition
@@ -204,258 +225,121 @@ async function handleExport() {
 }
 
 function handleReset() {
-  dateRange.value = null;
+  startDate.value = '';
+  endDate.value = '';
   materialTypeId.value = '';
   tableData.value = [];
   ledgerPeriod.value = { startDate: '', endDate: '' };
 }
 
 onMounted(() => {
-  // 默认不自动查询，需用户选日期后手动触发（防呆 Rule 1）
+  // 默认不自动查询，需用户选日期后手动触发（防呆 Rule 1）; 只预载物料下拉
+  void loadMaterialOptions();
 });
+
+const QTY_KEYS = ['openingQty', 'inboundQty', 'outboundProductionQty', 'outboundSalesQty', 'transferInQty', 'transferOutQty', 'adjustQty', 'closingQty'] as const;
+const AMT_KEYS = ['openingAmount', 'inboundAmount', 'outboundAmount', 'adjustAmount', 'closingAmount'] as const;
+const R = { th: 'text-right', td: 'text-right' };
+const columns: CsTableColumn<InventoryLedgerLineDTO>[] = [
+  { id: 'materialCode', header: '物料代码', meta: { class: { th: 'sticky left-0 z-10 min-w-[110px]', td: 'sticky left-0 z-10 bg-[var(--cs-surface)] min-w-[110px]' } } },
+  { id: 'materialName', header: '物料名称', meta: { class: { th: 'sticky left-[110px] z-10 min-w-[140px]', td: 'sticky left-[110px] z-10 bg-[var(--cs-surface)] min-w-[140px]' } } },
+  { accessorKey: 'unit', header: '单位' },
+  { id: 'openingQty', header: '期初数量', meta: { class: R } },
+  { id: 'openingAmount', header: '期初金额', meta: { class: R } },
+  { id: 'inboundQty', header: '入库数量', meta: { class: R } },
+  { id: 'inboundAmount', header: '入库金额', meta: { class: R } },
+  { id: 'outboundProductionQty', header: '领用数量', meta: { class: R } },
+  { id: 'outboundSalesQty', header: '出货数量', meta: { class: R } },
+  { id: 'outboundAmount', header: '出库金额', meta: { class: R } },
+  { id: 'transferInQty', header: '调入数量', meta: { class: R } },
+  { id: 'transferOutQty', header: '调出数量', meta: { class: R } },
+  { id: 'adjustQty', header: '盘点调整', meta: { class: R } },
+  { id: 'adjustAmount', header: '调整金额', meta: { class: R } },
+  { id: 'closingQty', header: '期末数量', meta: { class: R } },
+  { id: 'closingAmount', header: '期末金额', meta: { class: R } },
+  { id: 'movingAvgUnitPrice', header: '移动均价', meta: { class: R } },
+];
 </script>
 
 <template>
-  <div class="page-container">
-    <!-- 页头 -->
-    <div class="page-header">
-      <div class="page-header__left">
-        <h2 class="page-title">进销存台账</h2>
-        <span v-if="periodLabel" class="period-badge">{{ periodLabel }}</span>
+  <div class="page" data-testid="inventory-ledger-page">
+    <section class="cs-card">
+      <header class="cs-card-head">
+        <h2>进销存台账</h2>
+        <span v-if="periodLabel" class="period" data-testid="ledger-period">{{ periodLabel }}</span>
+      </header>
+
+      <!-- 筛选栏 -->
+      <div class="filter-bar">
+        <UFormField label="日期范围" required orientation="horizontal">
+          <div class="range">
+            <UInput v-model="startDate" type="date" class="w-40" data-testid="ledger-start" />
+            <span class="muted">至</span>
+            <UInput v-model="endDate" type="date" class="w-40" data-testid="ledger-end" />
+          </div>
+        </UFormField>
+        <UFormField label="物料" orientation="horizontal">
+          <!-- 物料从档案下拉选, 不再让用户手填物料类型 UUID -->
+          <USelectMenu
+            :model-value="materialTypeId || ALL_MATERIALS"
+            value-key="value"
+            :items="materialItems"
+            placeholder="全部物料"
+            class="w-64"
+            data-testid="ledger-material"
+            @update:model-value="materialTypeId = String($event ?? '')"
+          />
+        </UFormField>
+        <UButton icon="i-lucide-search" :loading="loading" :disabled="!canQuery" data-testid="ledger-query" @click="loadData">查询</UButton>
+        <UButton color="neutral" variant="outline" icon="i-lucide-refresh-cw" @click="handleReset">重置</UButton>
+        <UButton color="success" icon="i-lucide-download" :loading="exportLoading" :disabled="!canQuery" data-testid="ledger-export" @click="handleExport">导出 Excel</UButton>
       </div>
-    </div>
 
-    <!-- 筛选栏 -->
-    <el-card shadow="never" class="filter-card">
-      <el-form :inline="true" class="filter-form">
-        <el-form-item label="日期范围" required>
-          <el-date-picker
-            v-model="dateRange"
-            type="daterange"
-            range-separator="至"
-            start-placeholder="开始日期"
-            end-placeholder="结束日期"
-            value-format="YYYY-MM-DD"
-            style="width: 260px"
-          />
-        </el-form-item>
-        <el-form-item label="物料代码/名称">
-          <el-input
-            v-model="materialTypeId"
-            placeholder="物料类型 ID（可选）"
-            clearable
-            style="width: 200px"
-          />
-        </el-form-item>
-        <el-form-item>
-          <el-button
-            type="primary"
-            :icon="Search"
-            :loading="loading"
-            :disabled="!canQuery"
-            @click="loadData"
-          >
-            查询
-          </el-button>
-          <el-button :icon="Refresh" @click="handleReset">重置</el-button>
-          <el-button
-            type="success"
-            :icon="Download"
-            :loading="exportLoading"
-            :disabled="!canQuery"
-            @click="handleExport"
-          >
-            导出 Excel
-          </el-button>
-        </el-form-item>
-      </el-form>
-    </el-card>
-
-    <!-- 台账表格 -->
-    <el-card shadow="never" class="table-card">
-      <el-alert
+      <UAlert
         v-if="!canViewPrice && tableData.length > 0"
+        color="info" variant="soft" icon="i-lucide-info" class="mx-5 mb-3"
         title="金额列需要财务权限查看，当前仅显示数量"
-        type="info"
-        :closable="false"
-        show-icon
-        style="margin-bottom: 12px"
       />
 
-      <el-table
-        v-loading="loading"
-        :data="tableData"
-        border
-        stripe
-        style="width: 100%"
-        empty-text="请选择日期范围后点击查询"
-        size="small"
-      >
-        <el-table-column label="物料代码" prop="materialCode" width="120" fixed="left" />
-        <el-table-column label="物料名称" prop="materialName" min-width="140" fixed="left" show-overflow-tooltip />
-        <el-table-column label="单位" prop="unit" width="60" />
-
-        <!-- 期初 -->
-        <el-table-column label="期初数量" width="110" align="right">
-          <template #default="{ row }">{{ fmtQty(row.openingQty) }}</template>
-        </el-table-column>
-        <el-table-column label="期初金额" width="110" align="right">
-          <template #default="{ row }">
-            <el-tooltip v-if="!row.openingAmount" :content="amtTooltip(row.openingAmount)" placement="top">
-              <span class="price-masked">{{ fmtAmt(row.openingAmount) }}</span>
-            </el-tooltip>
-            <span v-else>{{ fmtAmt(row.openingAmount) }}</span>
+      <div class="scroll">
+        <UTable :data="tableData" :columns="columns" :loading="loading" class="cs-table" data-testid="ledger-table">
+          <template #empty>请选择日期范围后点击查询</template>
+          <template #materialCode-cell="{ row }">{{ row.original.materialCode || '—' }}</template>
+          <template #materialName-cell="{ row }">{{ row.original.materialName || '—' }}</template>
+          <template v-for="k in QTY_KEYS" :key="k" #[`${k}-cell`]="{ row }">
+            <span class="num" :class="{ 'text-danger': k === 'adjustQty' && (row.original.adjustQty ?? 0) < 0 }">{{ fmtQty(row.original[k]) }}</span>
           </template>
-        </el-table-column>
-
-        <!-- 入库 -->
-        <el-table-column label="入库数量" width="110" align="right">
-          <template #default="{ row }">{{ fmtQty(row.inboundQty) }}</template>
-        </el-table-column>
-        <el-table-column label="入库金额" width="110" align="right">
-          <template #default="{ row }">
-            <el-tooltip v-if="!row.inboundAmount" :content="amtTooltip(row.inboundAmount)" placement="top">
-              <span class="price-masked">{{ fmtAmt(row.inboundAmount) }}</span>
-            </el-tooltip>
-            <span v-else>{{ fmtAmt(row.inboundAmount) }}</span>
+          <template v-for="k in AMT_KEYS" :key="k" #[`${k}-cell`]="{ row }">
+            <!-- 遮蔽 (null) 只显示「—」+ 原生 title; 真实 0 金额显示 0.00。UTooltip 需全局 UApp, 暂用 title -->
+            <span v-if="isMasked(row.original[k])" class="num masked" :title="AMT_TIP" data-testid="ledger-masked">{{ fmtAmt(row.original[k]) }}</span>
+            <span v-else class="num" :class="{ 'text-danger': k === 'adjustAmount' && (row.original.adjustAmount ?? 0) < 0 }">{{ fmtAmt(row.original[k]) }}</span>
           </template>
-        </el-table-column>
-
-        <!-- 出库：生产领用 -->
-        <el-table-column label="领用数量" width="110" align="right">
-          <template #default="{ row }">{{ fmtQty(row.outboundProductionQty) }}</template>
-        </el-table-column>
-
-        <!-- 出库：销售出货 -->
-        <el-table-column label="出货数量" width="110" align="right">
-          <template #default="{ row }">{{ fmtQty(row.outboundSalesQty) }}</template>
-        </el-table-column>
-
-        <!-- 出库合计金额 -->
-        <el-table-column label="出库金额" width="110" align="right">
-          <template #default="{ row }">
-            <el-tooltip v-if="!row.outboundAmount" :content="amtTooltip(row.outboundAmount)" placement="top">
-              <span class="price-masked">{{ fmtAmt(row.outboundAmount) }}</span>
-            </el-tooltip>
-            <span v-else>{{ fmtAmt(row.outboundAmount) }}</span>
+          <template #movingAvgUnitPrice-cell="{ row }">
+            <span v-if="isMasked(row.original.movingAvgUnitPrice)" class="num masked" :title="PRICE_TIP" data-testid="ledger-masked">{{ fmtPrice(row.original.movingAvgUnitPrice) }}</span>
+            <span v-else class="num">{{ fmtPrice(row.original.movingAvgUnitPrice) }}</span>
           </template>
-        </el-table-column>
-
-        <!-- 调拨 -->
-        <el-table-column label="调入数量" width="100" align="right">
-          <template #default="{ row }">{{ fmtQty(row.transferInQty) }}</template>
-        </el-table-column>
-        <el-table-column label="调出数量" width="100" align="right">
-          <template #default="{ row }">{{ fmtQty(row.transferOutQty) }}</template>
-        </el-table-column>
-
-        <!-- 盘盈/损 -->
-        <el-table-column label="盘点调整" width="100" align="right">
-          <template #default="{ row }">
-            <span :class="{ 'text-danger': (row.adjustQty ?? 0) < 0 }">
-              {{ fmtQty(row.adjustQty) }}
-            </span>
-          </template>
-        </el-table-column>
-        <el-table-column label="调整金额" width="110" align="right">
-          <template #default="{ row }">
-            <el-tooltip v-if="!row.adjustAmount" :content="amtTooltip(row.adjustAmount)" placement="top">
-              <span class="price-masked">{{ fmtAmt(row.adjustAmount) }}</span>
-            </el-tooltip>
-            <span v-else :class="{ 'text-danger': (row.adjustAmount ?? 0) < 0 }">
-              {{ fmtAmt(row.adjustAmount) }}
-            </span>
-          </template>
-        </el-table-column>
-
-        <!-- 期末 -->
-        <el-table-column label="期末数量" width="110" align="right" fixed="right">
-          <template #default="{ row }">
-            <strong>{{ fmtQty(row.closingQty) }}</strong>
-          </template>
-        </el-table-column>
-        <el-table-column label="期末金额" width="110" align="right" fixed="right">
-          <template #default="{ row }">
-            <el-tooltip v-if="!row.closingAmount" :content="amtTooltip(row.closingAmount)" placement="top">
-              <strong class="price-masked">{{ fmtAmt(row.closingAmount) }}</strong>
-            </el-tooltip>
-            <strong v-else>{{ fmtAmt(row.closingAmount) }}</strong>
-          </template>
-        </el-table-column>
-
-        <!-- 移动均价 -->
-        <el-table-column label="移动均价" width="110" align="right">
-          <template #default="{ row }">
-            <el-tooltip v-if="!row.movingAvgUnitPrice" content="需要财务权限查看单价" placement="top">
-              <span class="price-masked">{{ fmtPrice(row.movingAvgUnitPrice) }}</span>
-            </el-tooltip>
-            <span v-else>{{ fmtPrice(row.movingAvgUnitPrice) }}</span>
-          </template>
-        </el-table-column>
-      </el-table>
-
-      <div v-if="tableData.length" class="table-footer">
-        共 {{ tableData.length }} 条物料
+        </UTable>
       </div>
-    </el-card>
+
+      <footer v-if="tableData.length" class="foot">共 {{ tableData.length }} 条物料</footer>
+    </section>
   </div>
 </template>
 
 <style scoped>
-.page-container {
-  padding: 20px;
-  background-color: #F4F6F9;
-  min-height: 100%;
-}
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
-}
-.page-header__left {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-.page-title {
-  font-size: 18px;
-  font-weight: 600;
-  color: #1B65A8;
-  margin: 0;
-}
-.period-badge {
-  font-size: 13px;
-  color: #666;
-  background: #e8f0fe;
-  padding: 2px 10px;
-  border-radius: 12px;
-}
-.filter-card {
-  margin-bottom: 16px;
-  border-radius: 10px;
-  box-shadow: 0 2px 12px rgba(27, 101, 168, 0.06);
-}
-.filter-form {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-.table-card {
-  border-radius: 10px;
-  box-shadow: 0 2px 12px rgba(27, 101, 168, 0.06);
-}
-.price-masked {
-  color: #aaa;
-  cursor: help;
-}
-.text-danger {
-  color: #f56c6c;
-}
-.table-footer {
-  margin-top: 12px;
-  font-size: 13px;
-  color: #999;
-  text-align: right;
-}
+.page { padding: var(--cs-space-4); }
+.cs-card { background: var(--cs-surface); border: 1px solid var(--cs-border); border-radius: var(--cs-radius); min-width: 0; }
+.cs-card-head { display: flex; align-items: baseline; gap: var(--cs-space-3); padding: var(--cs-space-4) var(--cs-space-5); border-bottom: 1px solid var(--cs-border); }
+.cs-card-head h2 { margin: 0; font-size: var(--cs-type-title); font-weight: 650; color: var(--cs-text); }
+.period { font-size: var(--cs-font-small); color: var(--cs-primary); background: var(--cs-primary-soft); padding: 2px 10px; border-radius: 12px; }
+.filter-bar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--cs-space-3); padding: var(--cs-space-3) var(--cs-space-5); }
+.range { display: flex; align-items: center; gap: var(--cs-space-2); }
+.muted { color: var(--cs-muted); font-size: var(--cs-font-small); }
+.scroll { overflow-x: auto; }
+.foot { padding: var(--cs-space-3) var(--cs-space-5); font-size: 13px; color: var(--cs-muted); text-align: right; border-top: 1px solid var(--cs-border); }
+.num { font-variant-numeric: tabular-nums; }
+.masked { color: var(--cs-muted); cursor: help; }
+.text-danger { color: var(--cs-danger); }
+:deep(.cs-table th) { height: 32px; padding-block: 4px; font-size: var(--cs-font-small); font-weight: 500; color: var(--cs-muted); background: var(--cs-surface-subtle); white-space: nowrap; }
+:deep(.cs-table td) { font-size: 13px; padding-block: 0; height: var(--cs-row-height); color: var(--cs-text); border-color: var(--cs-border); white-space: nowrap; }
 </style>

@@ -25,6 +25,9 @@ import {
   type AssignmentResult,
 } from './taskAssignment';
 import { shouldFocusAssignmentSection } from './assignmentDeepLink';
+import {
+  plannedBasisOf, plannedLabel, plannedQuantityOrNull, completionRatioPercent, completionRatioLabel, completionRatioHint,
+} from './plannedQuantityBasis';
 import { batchCostState, missingBatchCostLabels, readBatchCostEvidence, type BatchCostEvidence } from './batchCostEvidence';
 import { PROCESS_SECRET_LABEL, secretAwareCell } from '@/utils/processSecretField';
 
@@ -204,6 +207,16 @@ const isEditMode = computed(() => route.query.mode === 'edit');
 
 const loading = ref(false);
 const batch = ref<TableRow | null>(null);
+interface StageRecordRow {
+  id?: number;
+  stageName?: string | null;
+  stageOrder?: number | null;
+  inputWeight?: number | null;
+  outputWeight?: number | null;
+  durationMinutes?: number | null;
+  endTime?: string | null;
+  notes?: string | null;
+}
 const timeline = ref<TableRow[]>([]);
 const attachmentRefreshKey = ref(0);
 // T4-D4 (issue #533): F006 customer wants 原料消耗记录 visible on batch detail.
@@ -226,6 +239,8 @@ const wipRows = ref<WipRowItem[]>([]);
 
 // T140: 工序任务明细
 const workProcessTasks = ref<WorkProcessTaskItem[]>([]);
+// B7: 没有逐道报工任务时, 兼读加工环节记录 (processing_stage_records, 导入/环节录入写这里), 标明来源
+const stageRecords = ref<StageRecordRow[]>([]);
 // T140: 工序详情抽屉
 const taskDrawerVisible = ref(false);
 const selectedTask = ref<WorkProcessTaskItem | null>(null);
@@ -269,12 +284,13 @@ async function loadData() {
 
   loading.value = true;
   try {
-    const [batchRes, timelineRes, yieldRes, wipRes, tasksRes] = await Promise.allSettled([
+    const [batchRes, timelineRes, yieldRes, wipRes, tasksRes, stagesRes] = await Promise.allSettled([
       get(`/${factoryId.value}/processing/batches/${batchId.value}`),
       get(`/${factoryId.value}/processing/batches/${batchId.value}/timeline`),
       get(`/${factoryId.value}/production/batches/${batchId.value}/yield`),
       getBatchWip(factoryId.value, batchId.value),
-      getBatchWorkProcessTasks(factoryId.value, batchId.value)
+      getBatchWorkProcessTasks(factoryId.value, batchId.value),
+      get(`/${factoryId.value}/processing/batches/${batchId.value}/stages`)
     ]);
 
     if (batchRes.status === 'fulfilled' && batchRes.value.success) {
@@ -310,6 +326,10 @@ async function loadData() {
     } else {
       workProcessTasks.value = [];
     }
+
+    stageRecords.value = stagesRes.status === 'fulfilled' && stagesRes.value?.success && Array.isArray(stagesRes.value.data)
+      ? (stagesRes.value.data as StageRecordRow[]).slice().sort((a, b) => (a.stageOrder ?? 999) - (b.stageOrder ?? 999))
+      : [];
   } catch (error) {
     // Interceptor already shows specific sticky toast for ApiError.
     console.error('加载失败:', error);
@@ -775,13 +795,14 @@ function getWipStatusType(status: string) {
   return map[status?.toUpperCase()] || 'info';
 }
 
-// P0-2 review fix: 末道产出单位 (份/盒) ≠ 批次原计划单位 (kg) 时, 后端已把 efficiency/unitCost
-// 置 null (跨单位无意义)。前端据 plannedUnit≠unit 显诚实提示, 而非裸 "-" (易误读为"无数据")。
-// 镜像 cumulativeDisplay 跨单位做法。同单位批次 plannedUnit 为 null → 走原 formatPercent/formatCost。
+// P0-2 review fix / D-W-01: 计划量单位 (plannedUnit) 与批次单位不是同一个单位时, 后端把 efficiency
+// 置 null (跨单位无意义); unitCost 照算 (金额 ÷ 产出数量 = 元/产出单位, 与计划量无关)。
+// 「是不是同一个单位」以后端为准 (单位契约归一, 千克 ≡ kg): 后端给了效率就显示; 只有效率为空、且两个
+// 写法确实不同时才显「跨单位不可比」, 而非裸 "-" (易误读为"无数据")。镜像 cumulativeDisplay 跨单位做法。
 const isCrossUnit = computed(() => {
   const pu = batch.value?.plannedUnit;
   const u = batch.value?.unit;
-  return pu != null && pu !== '' && u != null && pu !== u;
+  return batch.value?.efficiency == null && pu != null && pu !== '' && u != null && pu !== u;
 });
 /**
  * 良品率 —— ⚠️ 只在【良品数量已知】时才显示。
@@ -806,8 +827,15 @@ const goodRateDisplay = computed(() => {
 /** 良品数未知时不上色 —— 否则「未知」会被涂成绿色, 看起来像达标。 */
 const goodRateKnown = computed(() => batch.value?.goodQuantity != null);
 
+// B4/B5: 计划数量列的真实含义 (理论产能 / 计划数量) 与完成比例口径 (含不良总产量 ÷ 它), 见 plannedQuantityBasis.ts
+const plannedBasis = computed(() => plannedBasisOf(batch.value));
+const plannedQuantityLabel = computed(() => plannedLabel(plannedBasis.value));
+const plannedQuantityDisplay = computed(() => {
+  const planned = plannedQuantityOrNull(batch.value);
+  return planned == null ? '—' : formatNum(planned);
+});
 const efficiencyDisplay = computed(() =>
-  isCrossUnit.value ? '跨单位不可比' : formatPercent(batch.value?.efficiency));
+  isCrossUnit.value ? '跨单位不可比' : formatPercent(completionRatioPercent(batch.value)));
 const costEvidenceState = computed(() => batchCostState(costBatchMatches.value ? batchCost.value : null, batchCostLoading.value, batchCostError.value));
 const costAmountsVisible = computed(() => costEvidenceState.value === 'COMPLETE' || costEvidenceState.value === 'PARTIAL');
 // 补录入口的资格与“完整金额可展示”是两件事：PARTIAL/UNVERIFIED 且服务明确缺少
@@ -1016,9 +1044,9 @@ function goToReversalList() {
       <!-- KPI Cards -->
       <div class="kpi-row">
         <div class="kpi-card">
-          <div class="kpi-label">计划数量</div>
-          <div class="kpi-value">{{ formatNum(batch.plannedQuantity) }}</div>
-          <div class="kpi-unit">{{ displayProcessUnit(batch.unit) }}</div>
+          <div class="kpi-label" data-testid="batch-planned-label">{{ plannedQuantityLabel }}</div>
+          <div class="kpi-value" data-testid="batch-planned-value">{{ plannedQuantityDisplay }}</div>
+          <div v-if="plannedQuantityDisplay !== '—'" class="kpi-unit">{{ displayProcessUnit(batch.unit) }}</div>
         </div>
         <div class="kpi-card">
           <div class="kpi-label">{{ actualQuantityLabel }}</div>
@@ -1044,7 +1072,7 @@ function goToReversalList() {
           </div>
         </div>
         <div class="kpi-card">
-          <div class="kpi-label">总产量完成比例</div>
+          <div class="kpi-label">{{ completionRatioLabel(plannedBasis) }}</div>
           <div class="kpi-value">{{ efficiencyDisplay }}</div>
         </div>
         <div v-if="canViewPrice" class="kpi-card">
@@ -1105,7 +1133,10 @@ function goToReversalList() {
             <span class="section-title">产量与质量</span>
           </template>
           <el-descriptions :column="2" border>
-            <el-descriptions-item label="计划数量">{{ formatNum(batch.plannedQuantity) }} {{ displayProcessUnit(batch.unit) }}</el-descriptions-item>
+            <el-descriptions-item :label="plannedQuantityLabel">
+              <template v-if="plannedQuantityDisplay !== '—'">{{ plannedQuantityDisplay }} {{ displayProcessUnit(batch.unit) }}</template>
+              <span v-else>—</span>
+            </el-descriptions-item>
             <el-descriptions-item label="总产量（含不良）">{{ formatNum(batch.actualQuantity) }} {{ displayProcessUnit(batch.unit) }}</el-descriptions-item>
             <el-descriptions-item label="良品数量">{{ formatNum(batch.goodQuantity) }} {{ displayProcessUnit(batch.unit) }}</el-descriptions-item>
             <el-descriptions-item label="不良品数量">
@@ -1122,8 +1153,8 @@ function goToReversalList() {
                 {{ goodRateDisplay }}
               </span>
             </el-descriptions-item>
-            <el-descriptions-item label="总产量完成比例">
-              {{ efficiencyDisplay }}（含不良总产量 ÷ 计划数量）
+            <el-descriptions-item :label="completionRatioLabel(plannedBasis)">
+              {{ efficiencyDisplay }}（{{ completionRatioHint(plannedBasis) }}）
             </el-descriptions-item>
           </el-descriptions>
         </el-card>
@@ -1684,8 +1715,40 @@ function goToReversalList() {
             </div>
           </template>
           <!-- 诚实空态: 批次未 spawn 工序任务 (转为批次时还未点"生成工序任务") -->
+          <div v-if="workProcessTasks.length === 0 && stageRecords.length > 0" data-testid="stage-records-fallback">
+            <el-alert
+              type="info"
+              :closable="false"
+              show-icon
+              title="来源：加工环节记录（非 App 逐道报工）。本批次没有逐道报工任务，以下是已录入的工序记录。"
+              style="margin-bottom:8px"
+            />
+            <el-table :data="stageRecords" border stripe size="small" style="width: 100%">
+              <el-table-column label="道" width="60" align="center">
+                <template #default="{ row }">{{ row.stageOrder ?? '-' }}</template>
+              </el-table-column>
+              <el-table-column label="工序" min-width="140" show-overflow-tooltip>
+                <template #default="{ row }">{{ row.stageName || '-' }}</template>
+              </el-table-column>
+              <el-table-column label="投入" width="110" align="right">
+                <template #default="{ row }">{{ row.inputWeight != null ? formatNum(row.inputWeight) + ' kg' : '—' }}</template>
+              </el-table-column>
+              <el-table-column label="产出" width="110" align="right">
+                <template #default="{ row }">{{ row.outputWeight != null ? formatNum(row.outputWeight) + ' kg' : '—' }}</template>
+              </el-table-column>
+              <el-table-column label="时长(分)" width="90" align="right">
+                <template #default="{ row }">{{ row.durationMinutes ?? '—' }}</template>
+              </el-table-column>
+              <el-table-column label="结束时间" width="160">
+                <template #default="{ row }">{{ row.endTime ? formatDateTime(row.endTime) : '—' }}</template>
+              </el-table-column>
+              <el-table-column label="记录说明" min-width="260" show-overflow-tooltip>
+                <template #default="{ row }">{{ row.notes || '—' }}</template>
+              </el-table-column>
+            </el-table>
+          </div>
           <el-empty
-            v-if="workProcessTasks.length === 0"
+            v-else-if="workProcessTasks.length === 0"
             description="暂无工序任务 (批次生产启动后可生成)"
             :image-size="60"
           />
@@ -2049,9 +2112,9 @@ function goToReversalList() {
         style="margin-bottom:16px"
       >
         <template #default>
-          <div style="font-size:13px;color:#606266;line-height:1.6;margin-top:4px">
+          <div style="font-size:13px;color:var(--cs-muted);line-height:1.6;margin-top:4px">
             产品: <strong>{{ batch?.productName || batch?.productType || '—' }}</strong><br>
-            计划数量: <strong>{{ batch?.plannedQuantity != null ? batch.plannedQuantity + ' ' + displayProcessUnit(batch.unit) : '—' }}</strong><br>
+            {{ plannedQuantityLabel }}: <strong>{{ plannedQuantityOrNull(batch) != null ? plannedQuantityOrNull(batch) + ' ' + displayProcessUnit(batch?.unit) : '—' }}</strong><br>
             当前状态: <strong>{{ batch ? getStatusText(batch.status) : '—' }}</strong>
           </div>
         </template>
@@ -2078,8 +2141,8 @@ function goToReversalList() {
 
       <!-- 撤回原因（fool-proof Rule 3: dropdown + 其他才显 textarea） -->
       <div style="margin-bottom:8px">
-        <span style="font-size:13px;font-weight:500;color:#303133">撤回原因</span>
-        <span style="color:#F56C6C;margin-left:2px">*</span>
+        <span style="font-size:13px;font-weight:500;color:var(--cs-text)">撤回原因</span>
+        <span style="color:var(--cs-danger);margin-left:2px">*</span>
       </div>
       <el-select
         v-model="reversalReasonSelected"
@@ -2158,7 +2221,7 @@ function goToReversalList() {
     font-size: 18px;
     font-weight: 600;
     margin: 0;
-    color: var(--text-color-primary, #303133);
+    color: var(--text-color-primary, var(--cs-text));
   }
 }
 
@@ -2171,27 +2234,27 @@ function goToReversalList() {
 
 .kpi-card {
   background: #fff;
-  border: 1px solid var(--border-color-lighter, #ebeef5);
+  border: 1px solid var(--border-color-lighter, var(--cs-border));
   border-radius: 8px;
   padding: 16px 20px;
   text-align: center;
 
   .kpi-label {
     font-size: 13px;
-    color: var(--text-color-secondary, #909399);
+    color: var(--text-color-secondary, var(--cs-muted));
     margin-bottom: 8px;
   }
 
   .kpi-value {
     font-size: 24px;
     font-weight: 700;
-    color: var(--text-color-primary, #303133);
+    color: var(--text-color-primary, var(--cs-text));
     line-height: 1.2;
   }
 
   .kpi-unit {
     font-size: 12px;
-    color: var(--text-color-secondary, #909399);
+    color: var(--text-color-secondary, var(--cs-muted));
     margin-top: 4px;
   }
 }
@@ -2205,14 +2268,14 @@ function goToReversalList() {
 .detail-card {
   :deep(.el-card__header) {
     padding: 12px 20px;
-    border-bottom: 1px solid var(--border-color-lighter, #ebeef5);
+    border-bottom: 1px solid var(--border-color-lighter, var(--cs-border));
   }
 }
 
 .section-title {
   font-size: 15px;
   font-weight: 600;
-  color: var(--text-color-primary, #303133);
+  color: var(--text-color-primary, var(--cs-text));
 }
 
 .cost-card-header,
@@ -2228,7 +2291,7 @@ function goToReversalList() {
 
 .section-meta {
   font-size: 13px;
-  color: #909399;
+  color: var(--cs-muted);
   margin-left: 12px;
 }
 
@@ -2243,20 +2306,20 @@ function goToReversalList() {
   padding: 8px 10px;
   border-radius: 4px;
   color: var(--el-color-warning-dark-2, #a86200);
-  background: var(--el-color-warning-light-9, #fdf6ec);
+  background: var(--el-color-warning-light-9, var(--cs-warning-soft));
   font-size: 13px;
 }
 
-.text-success { color: #67C23A; }
-.text-warning { color: #E6A23C; }
-.text-danger { color: #F56C6C; }
+.text-success { color: var(--cs-success); }
+.text-warning { color: var(--cs-warning); }
+.text-danger { color: var(--cs-danger); }
 
 .yield-summary {
   margin-top: 12px;
   padding-top: 12px;
-  border-top: 1px solid var(--border-color-lighter, #ebeef5);
+  border-top: 1px solid var(--border-color-lighter, var(--cs-border));
   font-weight: 600;
-  color: var(--text-color-primary, #303133);
+  color: var(--text-color-primary, var(--cs-text));
 }
 
 .yield-cost-summary {
@@ -2265,7 +2328,7 @@ function goToReversalList() {
   flex-wrap: wrap;
   gap: 8px 20px;
   font-size: 14px;
-  color: var(--text-color-secondary, #606266);
+  color: var(--text-color-secondary, var(--cs-muted));
 
   .cost-item {
     font-weight: 500;
@@ -2284,7 +2347,7 @@ function goToReversalList() {
   flex-wrap: wrap;
   gap: 8px 24px;
   font-size: 14px;
-  color: var(--text-color-secondary, #606266);
+  color: var(--text-color-secondary, var(--cs-muted));
 
   .trad-summary-item {
     font-weight: 500;
@@ -2326,7 +2389,7 @@ function goToReversalList() {
 /* 适配单元5: 展开行 — 证据照片/工时段/副产物/损耗/留样 细节 */
 .trad-detail {
   padding: 8px 16px 8px 48px;
-  background: var(--el-fill-color-lighter, #fafafa);
+  background: var(--el-fill-color-lighter, var(--cs-surface-subtle));
 }
 
 .trad-item {
@@ -2340,12 +2403,12 @@ function goToReversalList() {
 
 .trad-label {
   font-weight: 600;
-  color: var(--text-color-secondary, #606266);
+  color: var(--text-color-secondary, var(--cs-muted));
   min-width: 56px;
 }
 
 .trad-value {
-  color: var(--text-color-primary, #303133);
+  color: var(--text-color-primary, var(--cs-text));
 }
 
 .trad-empty {
@@ -2395,7 +2458,7 @@ function goToReversalList() {
 
 .annot-note-text {
   font-size: 10px;
-  color: #606266;
+  color: var(--cs-muted);
   word-break: break-all;
   line-height: 1.3;
 }
@@ -2405,31 +2468,31 @@ function goToReversalList() {
   padding: 2px 8px;
   border-radius: 4px;
   background: var(--el-color-info-light-9, #f4f4f5);
-  color: var(--text-color-primary, #303133);
+  color: var(--text-color-primary, var(--cs-text));
   font-size: 12px;
 }
 
 .trad-chip-by {
-  background: var(--el-color-success-light-9, #f0f9eb);
+  background: var(--el-color-success-light-9, var(--cs-success-soft));
 }
 
 /* 单元 F: 订单出成率弹窗 */
 .order-yield-meta {
   margin-bottom: 12px;
   font-size: 13px;
-  color: var(--text-color-secondary, #606266);
+  color: var(--text-color-secondary, var(--cs-muted));
 }
 
 .order-yield-summary {
   margin-top: 12px;
   padding-top: 12px;
-  border-top: 1px solid var(--border-color-lighter, #ebeef5);
+  border-top: 1px solid var(--border-color-lighter, var(--cs-border));
   display: flex;
   flex-wrap: wrap;
   justify-content: space-between;
   gap: 8px 20px;
   font-weight: 600;
-  color: var(--text-color-primary, #303133);
+  color: var(--text-color-primary, var(--cs-text));
 
   .order-yield-rate {
     color: var(--el-color-primary);
@@ -2439,7 +2502,7 @@ function goToReversalList() {
 .order-yield-note {
   margin-top: 6px;
   font-size: 13px;
-  color: var(--el-color-warning, #e6a23c);
+  color: var(--el-color-warning, var(--cs-warning));
 }
 
 .order-yield-cost {
@@ -2448,7 +2511,7 @@ function goToReversalList() {
   flex-wrap: wrap;
   gap: 8px 20px;
   font-size: 14px;
-  color: var(--text-color-secondary, #606266);
+  color: var(--text-color-secondary, var(--cs-muted));
 
   .cost-item {
     font-weight: 500;
@@ -2464,7 +2527,7 @@ function goToReversalList() {
   p {
     margin: 4px 0 0;
     font-size: 13px;
-    color: var(--text-color-secondary, #909399);
+    color: var(--text-color-secondary, var(--cs-muted));
   }
 
   .timeline-operator {
@@ -2483,7 +2546,7 @@ function goToReversalList() {
   // (与 isAssignmentDeepLinkHighlighted 的 setTimeout 时长一致)。
   &.is-deep-link-highlight {
     transition: box-shadow 0.3s ease;
-    box-shadow: 0 0 0 2px var(--el-color-primary, #409eff);
+    box-shadow: 0 0 0 2px var(--el-color-primary, var(--cs-primary));
   }
 }
 
@@ -2514,14 +2577,14 @@ function goToReversalList() {
   padding: 12px 16px;
   cursor: pointer;
   transition: background 0.15s;
-  border-bottom: 1px solid var(--border-color-lighter, #ebeef5);
+  border-bottom: 1px solid var(--border-color-lighter, var(--cs-border));
 
   &:last-child {
     border-bottom: none;
   }
 
   &:hover {
-    background: var(--el-fill-color-light, #f5f7fa);
+    background: var(--el-fill-color-light, var(--cs-surface-subtle));
   }
 }
 
@@ -2543,7 +2606,7 @@ function goToReversalList() {
   height: 28px;
   border-radius: 50%;
   background: var(--el-color-primary-light-9, #ecf5ff);
-  color: var(--el-color-primary, #409eff);
+  color: var(--el-color-primary, var(--cs-primary));
   font-size: 13px;
   font-weight: 700;
 }
@@ -2559,7 +2622,7 @@ function goToReversalList() {
 .task-name {
   font-size: 14px;
   font-weight: 500;
-  color: var(--text-color-primary, #303133);
+  color: var(--text-color-primary, var(--cs-text));
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2580,7 +2643,7 @@ function goToReversalList() {
 }
 
 .task-assignee-text {
-  color: var(--text-color-secondary, #606266);
+  color: var(--text-color-secondary, var(--cs-muted));
 }
 
 .task-assignee-empty {
@@ -2598,14 +2661,14 @@ function goToReversalList() {
   label {
     display: block;
     margin-bottom: 8px;
-    color: var(--text-color-primary, #303133);
+    color: var(--text-color-primary, var(--cs-text));
     font-weight: 600;
   }
 }
 
 .field-help {
   margin: 6px 0 0;
-  color: var(--text-color-secondary, #7a8599);
+  color: var(--text-color-secondary, var(--cs-muted));
   font-size: 12px;
   line-height: 1.5;
 }
@@ -2614,7 +2677,7 @@ function goToReversalList() {
   ul {
     margin: 10px 0 0;
     padding-left: 22px;
-    color: var(--text-color-primary, #303133);
+    color: var(--text-color-primary, var(--cs-text));
   }
 
   li + li {
@@ -2625,7 +2688,7 @@ function goToReversalList() {
 .task-output {
   flex-shrink: 0;
   font-size: 13px;
-  color: #67C23A;
+  color: var(--cs-success);
   font-weight: 500;
 }
 
@@ -2696,7 +2759,7 @@ function goToReversalList() {
   object-fit: cover;
   background: #111827;
   display: block;
-  border: 1px solid var(--border-color-lighter, #ebeef5);
+  border: 1px solid var(--border-color-lighter, var(--cs-border));
 }
 
 .gallery-thumb-video {
@@ -2714,12 +2777,12 @@ function goToReversalList() {
 .gallery-order {
   font-size: 11px;
   font-weight: 700;
-  color: var(--el-color-primary, #409eff);
+  color: var(--el-color-primary, var(--cs-primary));
 }
 
 .gallery-process-name {
   font-size: 11px;
-  color: var(--text-color-secondary, #606266);
+  color: var(--text-color-secondary, var(--cs-muted));
   text-align: center;
   max-width: 100%;
   overflow: hidden;
@@ -2734,7 +2797,7 @@ function goToReversalList() {
 /* SP1 T6 双产出: semiCode 副标题 (在半成品产出量下方小字) */
 .semi-code-text {
   font-size: 11px;
-  color: var(--text-color-secondary, #606266);
+  color: var(--text-color-secondary, var(--cs-muted));
   margin-top: 2px;
   white-space: nowrap;
   overflow: hidden;

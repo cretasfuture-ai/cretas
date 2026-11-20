@@ -124,8 +124,23 @@ public class ReportReversalServiceImpl implements ReportReversalService {
     @org.springframework.beans.factory.annotation.Autowired
     private ProductionPlanRepository productionPlanRepository;
 
+    /**
+     * 交接单 11-11 二.1: 数量恢复把「已用完 / 已耗尽」翻回能用之前, 问一次这批是不是判过不合格
+     * ({@code MaterialQcRejectionGuard#statusWhenRestored})。field-inject 不改既有构造器; 走到恢复分支却没注入时
+     * 闸直接报错, ⛔ 不当「没判过」恢复成可用。prod Spring 恒注入。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.quality.QcReleaseRecordRepository qcReleaseRecordRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.foodsafety.ProcessTimeLimitEventRepository processTimeLimitEventRepository;
+
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private SalesOrderItemRepository salesOrderItemRepository;
+
+    /** 纪律排查 B1: 工厂级「允许本人审批」。未注入 = 开关关 (四眼照旧)。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.workflow.FactorySelfApprovalGate selfApprovalGate;
 
     /** 缺口 11 第二轮审查 M1: 撤回某次报工时只解除它自己未放行的待检 (分笔账)。未注入 = 不解除 (保守)。 */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -186,6 +201,15 @@ public class ReportReversalServiceImpl implements ReportReversalService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.production.WorkshopReportReservationService workshopReservationService;
 
+    /**
+     * C1 (Steve 2026-11-10 裁定 B): 撤回放回生产仓的料, 若所属领料单已关单, 直接退回原料仓。
+     * field-inject (required=false) 同上惯例。缺失而确有料要退时 loud-fail, ⛔ 不跳过。
+     * ⛔ 不加 {@code @Lazy}: required=false + @Lazy 注入的是永不为 null 的代理, 下面的缺失判断会变成死代码
+     * (领料服务不依赖撤回服务, 没有装配环要打断)。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.factory.FactoryMaterialRequisitionService requisitionService;
+
     /** Exact-batch cleanup of unposted consumption during an atomic reversal. */
     @org.springframework.beans.factory.annotation.Autowired
     private ReversalConsumptionCleanupService reversalConsumptionCleanupService;
@@ -195,11 +219,37 @@ public class ReportReversalServiceImpl implements ReportReversalService {
     private com.cretas.aims.repository.MaterialConsumptionRepository materialConsumptionRepository;
 
     /**
+     * N1 (2026-11-09): 还回结单按逐道录入行扣掉的成品投料 (与 consumeForFeedStrict 成对)。
+     * field-inject 同上; 结单明细里有成品投料而它缺失时 loud-fail, ⛔ 不跳过。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.inventory.FinishedGoodsFeedService finishedGoodsFeedService;
+
+    /**
+     * 纪律排查 C5: 撤回一个生产批次只作废它自己产出的成品。成品表只挂计划 id, 归属按血缘边判
+     * (与质检放行同一份判据 {@link com.cretas.aims.service.quality.PlanGoodsOwnership})。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.lineage.BatchLineageEdgeRepository batchLineageEdgeRepository;
+
+    /**
      * SP12 快速撤回时间窗口 (分钟)。
      * 在此窗口内, 本人提交 + 无下游消费 → 快速撤回无需审批。
      * 超出此窗口 → 退回完整审批流。
      */
     static final int FAST_PATH_WINDOW_MINUTES = 5;
+
+    /**
+     * C4 (2026-11-10): 入库流水不全时的下一步。⛔ 不再叫人「先用半成品盘点校正」—— 盘点会留下未归零的调整量,
+     * 撤回随即被 WIP_ADJUSTMENT_PRESENT 拦住, 两条提示互相指路。两处拦截都指向同一个出口。
+     */
+    static final String WIP_LEDGER_GAP_HINT =
+            "这批半成品缺少可冲销的入库流水, 系统无法自动撤回。请联系管理员核对该批次的入库记录后再处理";
+
+    /** C4: 有盘点调整的半成品同样无法自动撤回, 出口与 {@link #WIP_LEDGER_GAP_HINT} 相同。 */
+    static final String WIP_ADJUSTMENT_HINT =
+            "这批半成品做过盘点调整, 系统无法判断调整量归属哪次报工, 不能自动撤回。请联系管理员核对后再处理";
+
 
     // ==================== 提交撤回申请 ====================
 
@@ -233,6 +283,11 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                         .withCode("FG_SHIPPED")
                         .withHint("请确认出货记录后处理退货再申请撤回");
             }
+            refuseWhileInterimSessionCovers(factoryId, batchId, batch.getProductionPlanId());
+            // 纪律排查 C5 (审查 F4): 成品归属分不清的, 提交时就说, 不等审批人批了才在执行时 409
+            goodsProducedByThisBatch(factoryId, batchId,
+                    fgbRepo.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(factoryId, batch.getProductionPlanId()),
+                    batch.getProductionPlanId());
         }
 
         // G3: 幂等检查
@@ -393,6 +448,8 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         if (reversalConsumptionCleanupService != null) {
             reversalConsumptionCleanupService.lockReversalScope(factoryId, log_.getBatchId(), log_.getPlanId());
         }
+        // 存货生产: 被小结盖过的这一道只能先撤销小结 (在任何改动之前判; 提交时也判过, 这里防提交后又小结)
+        refuseWhileInterimSessionCovers(factoryId, log_.getBatchId(), log_.getPlanId());
 
         Long batchId = log_.getBatchId();
         List<Long> revertedTxnIds = new ArrayList<>();
@@ -489,7 +546,9 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                     .orElse(BigDecimal.ZERO);
             if (adjustment.signum() != 0) {
                 throw new BusinessException(409, "撤回失败: 半成品存在未归零的盘点调整，不能自动猜测其归属")
-                        .withCode("WIP_ADJUSTMENT_PRESENT");
+                        .withCode("WIP_ADJUSTMENT_PRESENT")
+                        .withHint(WIP_ADJUSTMENT_HINT)
+                        .withSeverity("BLOCKING");
             }
         }
         for (SemiFinishedInventory wip : lockedWips) {
@@ -504,7 +563,7 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                         wip.getIntermediateBatchNo(),
                         strandedQuantity.stripTrailingZeros().toPlainString()))
                         .withCode("WIP_NOT_LEDGERED")
-                        .withHint("请先用「半成品盘点」把该批次余额校正到实际值，再重新提交撤回")
+                        .withHint(WIP_LEDGER_GAP_HINT)
                         .withSeverity("BLOCKING")
                         .withHintTarget(String.valueOf(batchId));
             }
@@ -535,14 +594,38 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                 factoryId, log_.getPlanId(), involvedSfiIds);
         SettlementReversalScope settlementScope = validateSettlementReversalScopeIfPresent(
                 factoryId, batchId, log_.getPlanId());
+        // N1: 结单按逐道录入行扣掉的常驻半成品/成品投料, 撤回要原样还 —— 能不能还在任何改动之前判定
+        //     (被撤那一道的行马上会被软删, 旧结单要靠它们才判得出「扣过但没记」)。
+        // 存货生产 (SAFETY_STOCK) 的结单是从小结桥接出来的: 投料是小结扣的、戳是小结盖的, 都只归撤销小结管。
+        boolean settlementOwnsPlanFeeds = settlementScope == null || !settlementIsInterimMirror(settlementScope.plan());
+        List<com.cretas.aims.service.production.SettlementStockFeedDetail.Entry> settlementStockFeeds =
+                preflightSettlementStockFeeds(factoryId, log_.getPlanId(), involvedSfiIds, settlementOwnsPlanFeeds);
         LocalDateTime now = LocalDateTime.now();
+        // C1: 本次撤回放回到各原料/生产仓批次上的实际量 (占用释放 + 结单回扣)。③.65 据此把属于已关单领料单的部分
+        //     退回原料仓。批次行锁在各步之前按批次 id 排序先拿 (见下方 / restoreSettlementConsumption); ③.65 里锁的是
+        //     领料单和原料批次, 用 TreeMap 只是让那一步的顺序可预期。
+        Map<String, BigDecimal> givenBackByMaterialBatch = new java.util.TreeMap<>();
+        // 审查 #3: 释放前先按批次 id 排序锁住这些报工占过料的批次, 与关单 / 撤销小结 / 小结同一锁序;
+        //   否则按报工引用顺序加锁, 与关单按领料行顺序加锁会在同一张单的多个生产仓批次上互相死锁。
+        if (workshopReservationService != null && materialBatchRepository != null) {
+            java.util.TreeSet<String> reservedBatchIds = new java.util.TreeSet<>();
+            for (ProductionReport r : reports) {
+                reservedBatchIds.addAll(
+                        com.cretas.aims.service.production.WorkshopReportReservationService.reservationOf(r).keySet());
+            }
+            for (String lockId : reservedBatchIds) {
+                materialBatchRepository.findByIdAndFactoryIdForUpdate(lockId, factoryId);
+            }
+        }
         // 🔴 释放路径 2/3 (冲销): 先把这些报工在生产仓占的原料放回去, 再软删。
         //    ⚠️ 顺序不可反 —— findYieldReportsByBatch 带 deletedAt IS NULL, 软删之后
         //    就再也枚举不到它们了; 那时 reserved 会永久挂着, 而追溯源已经没了。
         //    ⛔ 释放量不在这里算, 走与驳回/结单同一个出口。
         if (workshopReservationService != null) {
             for (ProductionReport r : reports) {
-                workshopReservationService.releaseForReport(factoryId, r);
+                workshopReservationService.releaseForReportByBatch(factoryId, r)
+                        .forEach((materialBatchId, released) ->
+                                givenBackByMaterialBatch.merge(materialBatchId, released, BigDecimal::add));
             }
         }
         for (ProductionReport r : reports) {
@@ -701,17 +784,19 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                                 + "撤回没法把它退回去 —— 若就这样标记完成, 报工没了而货还在, 账就对不上了",
                         batchId, stranded.stripTrailingZeros().toPlainString()))
                         .withCode("WIP_NOT_LEDGERED")
-                        .withHint("这批半成品是流水账补全之前入的库。请先用「半成品盘点」把该批次余额"
-                                + "校正到实际值 (盘点会补一条 ADJUST 流水), 再重新提交撤回")
+                        .withHint(WIP_LEDGER_GAP_HINT)
                         .withSeverity("BLOCKING")
                         .withHintTarget(String.valueOf(batchId));
             }
         }
 
-        // ③ 将对应 FinishedGoodsBatch 标记 REVERSED (如有)
+        // ③ 将【本批次产出的】FinishedGoodsBatch 标记 REVERSED (如有)
+        // 纪律排查 C5: 成品只挂计划 id; 以前按计划把全部成品都作废, 同计划别的批次 (没撤回) 的成品跟着作废。
+        // 归属与质检放行同一份判据 (血缘优先, 没有血缘时单批计划 / 批号相同算确定); 分不清就拒绝, ⛔ 不整计划作废、不猜。
         if (log_.getPlanId() != null) {
-            List<FinishedGoodsBatch> fgbs =
-                    fgbRepo.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(factoryId, log_.getPlanId());
+            List<FinishedGoodsBatch> fgbs = goodsProducedByThisBatch(factoryId, batchId,
+                    fgbRepo.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(factoryId, log_.getPlanId()),
+                    log_.getPlanId());
             for (FinishedGoodsBatch fgb : fgbs) {
                 fgb.setStatus(FinishedGoodsBatch.Status.REVERSED);
                 fgb.setReversalLogId(logId);
@@ -728,13 +813,18 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         // ③.6 R3 修复: 回扣结单消耗的原料 usedQuantity (+ 恢复被领用的半成品), 并软删结单,
         // 让原料/半成品库存归还且允许重新结单。同一 @Transactional, 禁 fail-soft。
         boolean settlementRestored = restoreSettlementConsumption(
-                factoryId, log_.getPlanId(), batchId, logId, reversalOperatorId(log_));
+                factoryId, log_.getPlanId(), batchId, logId, reversalOperatorId(log_), settlementStockFeeds,
+                settlementOwnsPlanFeeds, log_, givenBackByMaterialBatch);
         for (Long settlementSemiWipId : settlementSemiWipIds) {
             SemiFinishedInventory restored = wipRepo.findByIdForUpdate(settlementSemiWipId)
                     .orElseThrow(() -> malformedWipTransaction(
                             "结单恢复后半成品库存不存在", "WIP_NOT_FOUND"));
             validateFinalWipState(restored, false);
         }
+
+        // ③.65 C1: 放回生产仓的料若属于已关单的领料单, 直接退回原料仓 (留退料流水)。必须在 ③.6 之后:
+        //   结单回扣也会把料还到生产仓批次上。
+        returnGivenBackToClosedRequisitions(factoryId, givenBackByMaterialBatch, logId, reversalOperatorId(log_));
 
         // ③.7 结单成功撤回后恢复计划/批次的可重报状态。
         // 只在确实找到并恢复了活动结单时执行：报工未结单的撤回不应凭空改动一个
@@ -755,6 +845,49 @@ public class ReportReversalServiceImpl implements ReportReversalService {
 
         log.info("[SP2] executeReversal DONE logId={} batchId={} revertedTxns={}",
                 logId, batchId, revertedTxnIds.size());
+    }
+
+    /**
+     * ③.65 C1 生产仓幽灵库存 (排查报告 2026-11-10; Steve 裁定 B: 撤回时把料直接退回原料仓, 不拦撤回)。
+     *
+     * <p>先关领料单、后撤回报工: 关单按生产仓可用量退料并把生产仓批次标「已用完」, 而报工占的那部分还挂着;
+     * 撤回放掉占用 (或回扣结单用量) 后, 这批料落在一张已关单的生产仓批次上 —— 状态已用完、账上却有数,
+     * 原料仓少退了这部分, 系统里没有任何出路。这里把<b>本次撤回放回去的量</b> (不多不少) 按领料单退回原料仓。
+     *
+     * <p>领料单未关单 ⇒ 0, 料留在生产仓, 之后关单按生产仓现存退回 (原路径不变)。
+     * 生产仓批次此刻已被本事务锁住 (释放 / 回扣时加的行锁), 是否已关单在锁后读 ⇒ 与并发关单不会重复退料。
+     */
+    private void returnGivenBackToClosedRequisitions(String factoryId, Map<String, BigDecimal> givenBackByMaterialBatch,
+                                                     Long logId, Long operatorId) {
+        if (givenBackByMaterialBatch == null || givenBackByMaterialBatch.isEmpty()) {
+            return;
+        }
+        if (requisitionService == null) {
+            // 未注入时只有「确实落在领料单生产仓批次上」才算配置错误; 否则保持旧行为。
+            if (materialBatchRepository != null) {
+                for (String materialBatchId : givenBackByMaterialBatch.keySet()) {
+                    boolean fromRequisition = materialBatchRepository
+                            .findByIdAndFactoryIdForUpdate(materialBatchId, factoryId)
+                            .map(b -> "MATERIAL_REQUISITION".equals(b.getSourceDocType()))
+                            .orElse(false);
+                    if (fromRequisition) {
+                        throw new BusinessException(500, "撤回失败: 领料单退料服务未初始化, 无法判断生产仓的料是否要退回原料仓")
+                                .withCode("REVERSAL_REQUISITION_SERVICE_UNAVAILABLE")
+                                .withHint("请联系管理员检查后端领料服务配置")
+                                .withSeverity("BLOCKING");
+                    }
+                }
+            }
+            return;
+        }
+        for (Map.Entry<String, BigDecimal> entry : givenBackByMaterialBatch.entrySet()) {
+            BigDecimal returned = requisitionService.returnToSourceIfRequisitionClosed(
+                    factoryId, entry.getKey(), entry.getValue(), operatorId, "report-reversal:" + logId);
+            if (returned != null && returned.signum() > 0) {
+                log.info("[C1] reversal logId={} 生产仓批次 {} 放回 {}, 所属领料单已关单 ⇒ 退回原料仓 {}",
+                        logId, entry.getKey(), entry.getValue(), returned);
+            }
+        }
     }
 
     /**
@@ -1736,6 +1869,12 @@ public class ReportReversalServiceImpl implements ReportReversalService {
     @Override
     @Transactional
     public void approveReversal(String factoryId, Long logId, Long approvedBy) {
+        approveReversal(factoryId, logId, approvedBy, null);
+    }
+
+    @Override
+    @Transactional
+    public void approveReversal(String factoryId, Long logId, Long approvedBy, String selfApprovalReason) {
         ReportReversalLog log_ = findReversalLogForUpdate(logId, factoryId);
         // 跨租户校验: 撤回日志须属于当前工厂 (防止越权批准其它工厂的撤回执行)
         if (log_.getFactoryId() == null || !log_.getFactoryId().equals(factoryId)) {
@@ -1758,11 +1897,21 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         // W6 #27: 4 眼原则 — 审批人不能与提交人相同 (防自批漏洞)。
         // 撤回是高风险写操作 (软删报工 + 回滚库存均价), 提交人自己批准 = 无监督。
         // 参考 ArApServiceImpl 4-eyes 范式 (审批人 ≠ 提交人)。
-        if (log_.getSubmittedBy() != null && log_.getSubmittedBy().equals(approvedBy)) {
+        // 纪律排查 B1 (Owner 2026-11-10): 工厂开了「允许本人审批」时提交人可自批, 必须写原因并留痕。
+        com.cretas.aims.service.workflow.FactorySelfApprovalGate.Decision selfDecision =
+                com.cretas.aims.service.workflow.FactorySelfApprovalGate.decide(selfApprovalGate, factoryId,
+                        log_.getSubmittedBy() != null && log_.getSubmittedBy().equals(approvedBy),
+                        selfApprovalReason);
+        if (selfDecision.forbidden()) {
             throw new BusinessException(403, "审批人不能与提交人相同 (4 眼原则)")
                     .withCode("SELF_APPROVAL_FORBIDDEN")
-                    .withHint("请使用其他主管账号审批此撤回申请")
+                    .withHint("请使用其他主管账号审批此撤回申请; "
+                            + com.cretas.aims.service.workflow.FactorySelfApprovalGate.SWITCH_HINT)
                     .withHintTarget("审批人");
+        }
+        if (selfDecision.selfApproved()) {
+            log_.setSelfApproved(true);
+            log_.setSelfApprovalReason(selfDecision.reason());
         }
         log_.setApprovedBy(approvedBy);
         log_.setApprovedAt(LocalDateTime.now());
@@ -1967,7 +2116,11 @@ public class ReportReversalServiceImpl implements ReportReversalService {
      * @param operatorId     记账人 (见 {@link #reversalOperatorId})
      */
     private boolean restoreSettlementConsumption(String factoryId, String planId, Long reversedBatchId,
-                                                 Long reversalLogId, Long operatorId) {
+                                                 Long reversalLogId, Long operatorId,
+                                                 List<com.cretas.aims.service.production.SettlementStockFeedDetail.Entry> stockFeeds,
+                                                 boolean settlementOwnsPlanFeeds,
+                                                 ReportReversalLog reversalLog,
+                                                 Map<String, BigDecimal> givenBackByMaterialBatch) {
         if (materialBatchRepository == null
                 || productionSettlementRepository == null
                 || productionSettlementConsumptionRepository == null) {
@@ -1989,12 +2142,19 @@ public class ReportReversalServiceImpl implements ReportReversalService {
             log.debug("[SP2] restoreSettlementConsumption: 无结单记录, 跳过 planId={}", planId);
             return false;
         }
-        reverseSettlementSemiStocking(factoryId, settlement, reversedBatchId, operatorId);
+        reverseSettlementSemiStocking(factoryId, settlement, reversedBatchId, operatorId, givenBackByMaterialBatch);
 
         List<ProductionSettlementConsumption> lines = productionSettlementConsumptionRepository
                 .findBySettlementIdAndDeletedAtIsNull(settlement.getId());
 
         LocalDateTime now = LocalDateTime.now();
+        // 审查 #3: 回扣前按批次 id 排序先锁住结单扣过的原料/生产仓批次 (与关单同一锁序)。
+        for (String lockId : new java.util.TreeSet<>(lines.stream()
+                .filter(line -> !"SEMI_FINISHED".equals(line.getSourceType()))
+                .map(ProductionSettlementConsumption::getMaterialBatchId)
+                .filter(Objects::nonNull).toList())) {
+            materialBatchRepository.findByIdAndFactoryIdForUpdate(lockId, factoryId);
+        }
         int restoredMaterial = 0;
         int restoredSemi = 0;
         // fail-closed (修2): repo 已注入 (走到这里说明顶部未注入跳过分支没触发) → 每一笔应恢复的消耗
@@ -2016,7 +2176,8 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                             line.getSemiFinishedInventoryId(), qty));
                 }
             } else {
-                if (restoreMaterialBatchConsumption(factoryId, line.getMaterialBatchId(), qty)) {
+                if (restoreMaterialBatchConsumption(factoryId, line.getMaterialBatchId(), qty,
+                        givenBackByMaterialBatch)) {
                     restoredMaterial++;
                 } else {
                     throw new BusinessException(409, String.format(
@@ -2025,6 +2186,15 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                 }
             }
         }
+
+        // N1: 结单按逐道录入行扣掉的常驻半成品/成品投料原样还回, 再把这张结单盖过戳的行与报工消耗
+        //     重新标成待扣 —— 重结时没撤的那几道才会且只会再扣一次; 被撤那一道已扣的量也在这里还回。
+        //     存货生产的桥接结单: 结单时刻就是最后一次小结的过账时刻, 按它清戳清掉的是小结的戳 ——
+        //     下一次小结会把这些投料再扣一次。小结的戳只归撤销小结清。
+        int restoredFeeds = restoreSettlementStockFeeds(factoryId, stockFeeds, reversalLogId, operatorId, reversalLog);
+        int unstamped = settlementOwnsPlanFeeds
+                ? unstampSettledFacts(factoryId, planId, reversedBatchId, settlement.getSettledAt(), now)
+                : 0;
 
         // 全部恢复成功后才软删消耗行 (防重新结单时重复回扣 / 重复统计)
         for (ProductionSettlementConsumption line : lines) {
@@ -2040,9 +2210,232 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         settlement.setDeletedAt(now);
         productionSettlementRepository.save(settlement);
 
-        log.info("[SP2] 撤回回扣结单消耗 planId={} settlementId={} 原料{}笔/半成品{}笔, settlement 已软删",
-                planId, settlement.getId(), restoredMaterial, restoredSemi);
+        log.info("[SP2] 撤回回扣结单消耗 planId={} settlementId={} 原料{}笔/半成品{}笔/逐道投料{}笔, 重新待扣{}行, settlement 已软删",
+                planId, settlement.getId(), restoredMaterial, restoredSemi, restoredFeeds, unstamped);
         return true;
+    }
+
+    /**
+     * N1 撤回前置判定: 这张结单按逐道录入行扣掉的常驻半成品/成品投料能不能原样还回。
+     *
+     * <ul>
+     *   <li>没有活结单 → {@code null} (没有可还的)。</li>
+     *   <li>结单带明细 → 照明细还; 要还的半成品同时又是这次报工撤回要动的行 → 409 (两条路同时改同一行, 不猜顺序)。</li>
+     *   <li>旧结单 (明细列为 null): 本计划结单会读的逐道行 (不论戳) 里确实有结单时扣的投料 → 409, ⛔ 不按现在的行和
+     *       每盒克重倒推 (倒推出来的量不是当时扣的量); 一笔都没有 → 空, 照常撤回。</li>
+     * </ul>
+     * 必须在任何改动 (软删报工 / 软删逐道行) 之前调用: 旧结单的判定要看被撤那一道还没软删的行。
+     */
+    private List<com.cretas.aims.service.production.SettlementStockFeedDetail.Entry> preflightSettlementStockFeeds(
+            String factoryId, String planId, Set<Long> reportSfiIds, boolean settlementOwnsPlanFeeds) {
+        if (planId == null || productionSettlementRepository == null) {
+            return null;
+        }
+        ProductionSettlement settlement = productionSettlementRepository
+                .findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(factoryId, planId).orElse(null);
+        if (settlement == null) {
+            return null;
+        }
+        List<com.cretas.aims.service.production.SettlementStockFeedDetail.Entry> entries =
+                com.cretas.aims.service.production.SettlementStockFeedDetail.parse(settlement.getStockFeedDetail());
+        if (entries == null) {
+            if (!settlementOwnsPlanFeeds) {
+                return List.of();   // 存货生产: 结单从来不扣逐道投料 (小结扣), 没有「扣过但没记」
+            }
+            List<String> unrecorded = legacySettlementStockFeeds(factoryId, planId, settlement);
+            if (!unrecorded.isEmpty()) {
+                throw new BusinessException(409, "这张结单在投料明细上线前完成, 结单时按逐道录入扣掉的半成品/成品没有逐笔记录 ("
+                        + String.join("、", unrecorded) + "), 撤回无法原样还回")
+                        .withCode("SETTLEMENT_STOCK_FEED_DETAIL_MISSING")
+                        .withHint("请联系管理员按结单当时的扣减量人工核对这几批半成品/成品库存后再处理, 直接撤回会让它们在重新结单时再被扣一次")
+                        .withSeverity("BLOCKING")
+                        .withHintTarget(planId);
+            }
+            return List.of();
+        }
+        boolean anyFinished = false;
+        // 只取身份 (⛔ 不把库存行装进持久化上下文: 之后的锁内还原要读的是锁到的那一刻的余额)
+        Set<String> reportSfiBatchNos = new HashSet<>();
+        for (Long sfiId : reportSfiIds == null ? Set.<Long>of() : reportSfiIds) {
+            wipRepo.findSourceRefById(sfiId)
+                    .map(SemiFinishedInventoryRepository.SourceRef::getIntermediateBatchNo)
+                    .ifPresent(no -> reportSfiBatchNos.add(no.trim()));
+        }
+        for (com.cretas.aims.service.production.SettlementStockFeedDetail.Entry entry : entries) {
+            if (entry == null || entry.batchNumber() == null || entry.batchNumber().isBlank()
+                    || entry.quantity() == null || entry.quantity().signum() <= 0
+                    || !(com.cretas.aims.service.production.SettlementStockFeedDetail.KIND_SEMI.equals(entry.kind())
+                        || com.cretas.aims.service.production.SettlementStockFeedDetail.KIND_FINISHED.equals(entry.kind()))) {
+                throw new BusinessException(409, "结单的投料扣减明细不完整, 不能撤回")
+                        .withCode("SETTLEMENT_STOCK_FEED_DETAIL_INVALID")
+                        .withHint("请联系管理员核对这张结单的投料扣减明细");
+            }
+            if (com.cretas.aims.service.production.SettlementStockFeedDetail.KIND_FINISHED.equals(entry.kind())) {
+                anyFinished = true;
+                continue;
+            }
+            if (reportSfiBatchNos.contains(entry.batchNumber().trim())) {
+                throw new BusinessException(409, "撤回失败: 半成品 " + entry.batchNumber()
+                        + " 同时是本次撤回的报工产出和结单投料来源, 无法判断先还哪一笔")
+                        .withCode("WIP_SCOPE_INVALID")
+                        .withHint("请联系管理员核对这批半成品的入库与结单投料记录, 人工处理后再撤回");
+            }
+        }
+        if (!entries.isEmpty() && wipInventoryService == null) {
+            throw new BusinessException(409, "撤回失败: 半成品库存服务未就绪, 无法还回结单投料")
+                    .withCode("REVERSAL_SETTLEMENT_DEPENDENCY_MISSING")
+                    .withHint("这是系统配置问题, 请联系管理员检查服务部署后再撤回, 本次没有改动任何库存");
+        }
+        if (anyFinished && finishedGoodsFeedService == null) {
+            throw new BusinessException(409, "撤回失败: 成品投料服务未就绪, 无法还回结单投料")
+                    .withCode("REVERSAL_SETTLEMENT_DEPENDENCY_MISSING")
+                    .withHint("这是系统配置问题, 请联系管理员检查服务部署后再撤回, 本次没有改动任何库存");
+        }
+        return entries;
+    }
+
+    /**
+     * 旧结单 (没有明细) 当时按逐道录入行扣过哪些投料: 本计划结单会读的每一行 (与结单扣料同一份判定
+     * {@link com.cretas.aims.service.production.SettlementStockFeedDetail#isSettlementRow}), 不是提交时已扣、
+     * 也不是被同批手工领用替换掉的常驻半成品/成品投料。只用来判定「能不能撤」, ⛔ 不拿来还。
+     *
+     * <p>⛔ 不按「盖着这张结单的戳」筛: 结单扣料从来不看戳, 只给还没戳的行盖戳。本 PR 之前的撤回既不还料
+     * 也不清戳, 于是「结单 → 旧撤回 → 再结单」之后, 没撤的那几道还挂着第一次结单的戳, 却已被第二次结单再扣过;
+     * 按戳筛会把它们漏掉, 这张结单就被放行撤回, 再结单时第三次扣。
+     */
+    private List<String> legacySettlementStockFeeds(String factoryId, String planId, ProductionSettlement settlement) {
+        if (processSheetRowRepository == null) {
+            return List.of();
+        }
+        Set<String> manualSemiBatchNos = new HashSet<>();
+        List<ProductionSettlementConsumption> lines = productionSettlementConsumptionRepository == null ? List.of()
+                : Optional.ofNullable(productionSettlementConsumptionRepository
+                        .findBySettlementIdAndDeletedAtIsNull(settlement.getId())).orElse(List.of());
+        for (ProductionSettlementConsumption line : lines) {
+            if (line != null && "SEMI_FINISHED".equals(line.getSourceType()) && line.getSemiFinishedInventoryId() != null) {
+                wipRepo.findSourceRefById(line.getSemiFinishedInventoryId())
+                        .map(SemiFinishedInventoryRepository.SourceRef::getIntermediateBatchNo)
+                        .ifPresent(no -> manualSemiBatchNos.add(no.trim()));
+            }
+        }
+        com.fasterxml.jackson.databind.ObjectMapper mapper = payloadMapper();
+        List<String> found = new ArrayList<>();
+        for (ProcessSheetRow row : Optional.ofNullable(processSheetRowRepository.findByFactoryIdAndPlanId(
+                factoryId, planId)).orElse(List.of())) {
+            if (!com.cretas.aims.service.production.SettlementStockFeedDetail.isSettlementRow(row)) {
+                continue;
+            }
+            com.cretas.aims.dto.processentry.ProcessSheetRowRequest req;
+            try {
+                req = mapper.readValue(row.getRowPayload(), com.cretas.aims.dto.processentry.ProcessSheetRowRequest.class);
+            } catch (Exception e) {
+                throw malformedWipTransaction("报工行载荷无法解析, 无法判断结单扣过哪些投料: rowId="
+                        + row.getId(), "PROCESS_SHEET_PAYLOAD_INVALID");
+            }
+            for (com.cretas.aims.dto.processentry.ProcessSheetRowRequest.UpstreamRef ref
+                    : req.getUpstreamSources() == null
+                    ? List.<com.cretas.aims.dto.processentry.ProcessSheetRowRequest.UpstreamRef>of()
+                    : req.getUpstreamSources()) {
+                if (ref == null || ref.getFeedQuantityKg() == null || ref.getFeedQuantityKg().signum() <= 0
+                        || ref.getSourceBatchNumber() == null || ref.getSourceBatchNumber().isBlank()) {
+                    continue;
+                }
+                String batchNo = ref.getSourceBatchNumber().trim();
+                boolean deductedAtSettlement = ref.isFinishedGoods()
+                        || (ref.isSemiFinished() && !ref.isStockConsumedAtSubmit()
+                            && !manualSemiBatchNos.contains(batchNo));
+                if (deductedAtSettlement) {
+                    found.add(batchNo + "×" + ref.getFeedQuantityKg().stripTrailingZeros().toPlainString() + "kg");
+                }
+            }
+        }
+        return found;
+    }
+
+    /** 照结单明细原样还回投料; 返回还了几笔。半成品源行已不在时登记在撤回原因里 (⛔ 不造库存), 与回料还回同一口径。 */
+    private int restoreSettlementStockFeeds(String factoryId,
+                                            List<com.cretas.aims.service.production.SettlementStockFeedDetail.Entry> entries,
+                                            Long reversalLogId, Long operatorId, ReportReversalLog reversalLog) {
+        if (entries == null || entries.isEmpty()) {
+            return 0;
+        }
+        int restored = 0;
+        List<String> skipped = new ArrayList<>();
+        for (com.cretas.aims.service.production.SettlementStockFeedDetail.Entry entry : entries) {
+            String batchNo = entry.batchNumber().trim();
+            if (com.cretas.aims.service.production.SettlementStockFeedDetail.KIND_FINISHED.equals(entry.kind())) {
+                // 不复活已作废 (REVERSED) 的成品批次: 产出它的计划可能已被整单撤回 (#1550 审查 3)
+                finishedGoodsFeedService.restoreForSettlementReversal(factoryId, batchNo, entry.quantity(), operatorId);
+                restored++;
+                continue;
+            }
+            com.cretas.aims.service.wip.WipInventoryService.ClerkSemiRestore receipt =
+                    wipInventoryService.restoreClerkSemiExact(factoryId, batchNo, entry.quantity(),
+                            "reversal-log:" + reversalLogId, operatorId);
+            if (receipt == null) {
+                skipped.add(batchNo + "×" + entry.quantity().stripTrailingZeros().toPlainString());
+                continue;
+            }
+            restored++;
+        }
+        if (!skipped.isEmpty() && reversalLog != null) {
+            String note = " [撤回还回结单投料: 跳过 " + skipped.size() + " 条(源行不在): " + String.join(", ", skipped) + "]";
+            reversalLog.setReason((reversalLog.getReason() == null ? "" : reversalLog.getReason()) + note);
+            log.warn("[SP2] 撤回还回结单投料: factoryId={} 跳过 {} 条 (源行不在): {}", factoryId, skipped.size(), skipped);
+        }
+        return restored;
+    }
+
+    /**
+     * 结单给本计划逐道行和报工消耗盖的戳 (interim_settled_at = 结单时间) 撤回时一并清掉:
+     * 它们扣的料已经还回, 重新算待扣; 重结时再盖。被撤那一道的报工消耗清戳后已是未过账的行,
+     * 交给与「未结单撤回」同一个清理出口软删 (⛔ 不在这里另写一份软删规则)。
+     *
+     * @return 清掉戳的逐道行 + 报工消耗条数
+     */
+    private int unstampSettledFacts(String factoryId, String planId, Long reversedBatchId,
+                                    LocalDateTime settledAt, LocalDateTime now) {
+        if (settledAt == null) {
+            return 0;
+        }
+        int count = 0;
+        Set<Long> planBatchIds = new HashSet<>();
+        if (reversedBatchId != null) {
+            planBatchIds.add(reversedBatchId);
+        }
+        Optional.ofNullable(batchRepo.findByFactoryIdAndProductionPlanId(factoryId, planId)).orElse(List.of())
+                .stream().filter(Objects::nonNull).map(ProductionBatch::getId).filter(Objects::nonNull)
+                .forEach(planBatchIds::add);
+        if (processSheetRowRepository != null) {
+            List<ProcessSheetRow> stampedRows = Optional.ofNullable(processSheetRowRepository
+                    .findByFactoryIdAndPlanIdAndInterimSettledAt(factoryId, planId, settledAt)).orElse(List.of());
+            for (ProcessSheetRow row : stampedRows) {
+                if (row.getBatchId() != null) {
+                    planBatchIds.add(row.getBatchId());
+                }
+                row.setInterimSettledAt(null);
+            }
+            if (!stampedRows.isEmpty()) {
+                processSheetRowRepository.saveAll(stampedRows);
+            }
+            count += stampedRows.size();
+        }
+        if (materialConsumptionRepository != null && !planBatchIds.isEmpty()) {
+            List<com.cretas.aims.entity.MaterialConsumption> stamped = Optional.ofNullable(materialConsumptionRepository
+                    .findByFactoryIdAndProductionBatchIdInAndInterimSettledAt(
+                            factoryId, new ArrayList<>(planBatchIds), settledAt)).orElse(List.of());
+            for (com.cretas.aims.entity.MaterialConsumption consumption : stamped) {
+                consumption.setInterimSettledAt(null);
+            }
+            if (!stamped.isEmpty()) {
+                materialConsumptionRepository.saveAll(stamped);
+            }
+            count += stamped.size();
+        }
+        if (reversalConsumptionCleanupService != null && reversedBatchId != null) {
+            reversalConsumptionCleanupService.softDeleteUnpostedForReversedBatch(factoryId, reversedBatchId, planId, now);
+        }
+        return count;
     }
 
     /**
@@ -2054,7 +2447,8 @@ public class ReportReversalServiceImpl implements ReportReversalService {
      * 只有这次撤回的那一道, 它的在制批次已被 voidClerkWipStock 作废, 不用再还。
      */
     private void reverseSettlementSemiStocking(String factoryId, ProductionSettlement settlement,
-                                               Long reversedBatchId, Long operatorId) {
+                                               Long reversedBatchId, Long operatorId,
+                                               Map<String, BigDecimal> givenBackByMaterialBatch) {
         var slices = com.cretas.aims.service.production.SettlementSemiStockingService
                 .parseDetail(settlement.getSemiStockingDetail());
         if (slices.isEmpty()) {
@@ -2070,7 +2464,8 @@ public class ReportReversalServiceImpl implements ReportReversalService {
             if (Objects.equals(slice.productionBatchId(), reversedBatchId)) {
                 continue;
             }
-            if (!restoreMaterialBatchConsumption(factoryId, slice.materialBatchId(), slice.storageQuantity())) {
+            if (!restoreMaterialBatchConsumption(factoryId, slice.materialBatchId(), slice.storageQuantity(),
+                    givenBackByMaterialBatch)) {
                 throw new BusinessException(409, String.format(
                         "撤回失败: 半成品入库对应的在制批次恢复失败 (materialBatchId=%s, qty=%s) — 已回滚",
                         slice.materialBatchId(), slice.storageQuantity()))
@@ -2177,6 +2572,54 @@ public class ReportReversalServiceImpl implements ReportReversalService {
     }
 
     private record SettlementReversalScope(ProductionBatch batch, ProductionPlan plan) {}
+
+    /**
+     * 这张结单是不是小结的镜像: 存货生产 (SAFETY_STOCK) 计划结单不扣逐道投料、不给行和报工消耗盖戳
+     * (都由小结做, 见 {@code ProductionPlanServiceImpl#deductProcessSheetStockFeeds} 与结单打戳的
+     * sourceType 守卫), 仓库确认时的桥接结单 ({@code by-stock-interim:}) 只是把小结的结果抄一份。
+     * 以计划来源判定而不以幂等键前缀判定: 同一计划上无论哪条路写出的结单, 结单本身都没扣过这些料。
+     */
+    private static boolean settlementIsInterimMirror(ProductionPlan plan) {
+        return plan != null && plan.getSourceType() == com.cretas.aims.entity.enums.PlanSourceType.SAFETY_STOCK;
+    }
+
+    static final String INTERIM_SETTLED_REVERSAL_CODE = "REVERSAL_BLOCKED_BY_INTERIM_SETTLE";
+
+    /**
+     * 存货生产 (SAFETY_STOCK) 计划: 被撤那一道的录入行或原料消耗带小结戳 (= 有一次已过账的小结盖过它们) 时拒绝撤回。
+     *
+     * <p>小结扣的投料/原料、建的成品批都只归撤销小结管; 报工撤回不还它们 (见 {@link #settlementIsInterimMirror})。
+     * 若放行: 行和报工被软删、本计划成品批全标作废, 而小结的扣减原样留着 —— 重报这一道再小结一次会把同一份投料再扣一遍
+     * (实测形状: 真实用 30, 两次小结共扣 50), 那次小结还指着一个已作废的成品批。有没有桥接结单都一样, 所以按计划来源判,
+     * 不按结单判。⛔ 不在这里替用户撤销小结: 撤销小结有自己的下游已消耗守卫, 要它先过。</p>
+     */
+    private void refuseWhileInterimSessionCovers(String factoryId, Long batchId, String planId) {
+        if (batchId == null || planId == null || planId.isBlank() || productionPlanRepository == null) {
+            return;
+        }
+        ProductionPlan plan = productionPlanRepository.findByIdAndFactoryId(planId, factoryId).orElse(null);
+        if (!settlementIsInterimMirror(plan)) {
+            return;
+        }
+        long stampedRows = processSheetRowRepository == null ? 0
+                : rowsOfReversedStep(factoryId, batchId, planId).stream()
+                        .filter(row -> row.getDeletedAt() == null && row.getInterimSettledAt() != null)
+                        .count();
+        long stampedConsumptions = materialConsumptionRepository == null ? 0
+                : Optional.ofNullable(materialConsumptionRepository.findByProductionBatchIdAndFactoryId(batchId, factoryId))
+                        .orElse(List.of()).stream()
+                        .filter(c -> c != null && c.getInterimSettledAt() != null)
+                        .count();
+        if (stampedRows == 0 && stampedConsumptions == 0) {
+            return;
+        }
+        throw new BusinessException(409, "这一道已经小结过 (" + stampedRows + " 条录入行、" + stampedConsumptions
+                + " 条原料消耗已结), 小结扣的投料和建的成品只能由撤销小结还回, 不能直接撤回报工")
+                .withCode(INTERIM_SETTLED_REVERSAL_CODE)
+                .withHint("请先在「生产计划」列表该计划的「更多 → 申请撤销小结」撤销盖过这一道的小结 (审批通过后生效), 再撤回这道报工")
+                .withSeverity("BLOCKING")
+                .withHintTarget(planId);
+    }
 
     private Set<Long> preflightSettlementSemiFinished(String factoryId, String planId,
                                                        Set<Long> reportSfiIds) {
@@ -2307,7 +2750,8 @@ public class ReportReversalServiceImpl implements ReportReversalService {
      *
      * @return true = 已回扣并保存; false = 批次不存在或入参不合法 (跳过)
      */
-    private boolean restoreMaterialBatchConsumption(String factoryId, String materialBatchId, BigDecimal qty) {
+    private boolean restoreMaterialBatchConsumption(String factoryId, String materialBatchId, BigDecimal qty,
+                                                    Map<String, BigDecimal> givenBackByMaterialBatch) {
         if (materialBatchId == null) {
             log.warn("[SP2] restoreMaterialBatchConsumption: 消耗行缺 materialBatchId, 跳过 (qty={})", qty);
             return false;
@@ -2329,12 +2773,18 @@ public class ReportReversalServiceImpl implements ReportReversalService {
             newUsed = BigDecimal.ZERO;
         }
         batch.setUsedQuantity(newUsed);
+        BigDecimal restored = used.subtract(newUsed);
+        if (givenBackByMaterialBatch != null && restored.signum() > 0) {
+            givenBackByMaterialBatch.merge(materialBatchId, restored, BigDecimal::add);
+        }
         // usedQuantity 归 0 且原状态是消耗终态 → 恢复 AVAILABLE (撤回后批次重新可用)。
         // 其他状态 (EXPIRED/SCRAPPED/DEFECTIVE/RESERVED 等独立决策) 不动。
         if (newUsed.compareTo(BigDecimal.ZERO) == 0
                 && (MaterialBatchStatus.USED_UP == batch.getStatus()
                     || MaterialBatchStatus.DEPLETED == batch.getStatus())) {
-            batch.setStatus(MaterialBatchStatus.AVAILABLE);
+            // 判过不合格的批次撤回后仍是不良品 (交接单 11-11 二.1)
+            batch.setStatus(com.cretas.aims.service.quality.release.MaterialQcRejectionGuard.statusWhenRestored(
+                    qcReleaseRecordRepository, processTimeLimitEventRepository, batch));
         }
         materialBatchRepository.save(batch);
         return true;
@@ -2649,8 +3099,7 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                     ledgerInTotal.stripTrailingZeros().toPlainString(),
                     producedOnRecord.subtract(ledgerInTotal).stripTrailingZeros().toPlainString()))
                     .withCode("WIP_LEDGER_INCOMPLETE")
-                    .withHint("这批半成品是流水账补全之前入的库。请先用「半成品盘点」把该批次余额"
-                            + "校正到实际值 (盘点会补一条 ADJUST 流水), 再重新提交撤回")
+                    .withHint(WIP_LEDGER_GAP_HINT)
                     .withSeverity("BLOCKING")
                     .withHintTarget(sfi.getIntermediateBatchNo());
         }
@@ -2690,5 +3139,76 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                     : SemiFinishedInventory.Status.DEPLETED);
         }
         wipRepo.save(sfi);
+    }
+
+    /**
+     * 纪律排查 C5: 计划下的成品里, 只挑出这个生产批次产出的那些。
+     * <ul>
+     *   <li>计划只有一个生产批次 (或没有别的批次) ⇒ 全部是它的 (与修复前一致);</li>
+     *   <li>多批次 ⇒ 按 {@link com.cretas.aims.service.quality.PlanGoodsOwnership}: 血缘边优先, 没有血缘时批号相同算它的;</li>
+     *   <li>有成品分不清归属 / 血缘指向计划外 / 一批成品由几个生产批次合出 ⇒ 409 {@code FG_OWNERSHIP_UNCLEAR},
+     *       一条都不作废 (整计划作废会误伤没撤回的批次, 只作废一部分会留下说不清的账)。</li>
+     * </ul>
+     */
+    private List<FinishedGoodsBatch> goodsProducedByThisBatch(String factoryId, Long batchId,
+                                                              List<FinishedGoodsBatch> planGoods, String planId) {
+        // 审查 F1: 已经作废的成品 (如先撤销小结时作废的合产批) 不再参与归属, 也不会被再作废一次
+        List<FinishedGoodsBatch> live = planGoods == null ? List.of() : planGoods.stream()
+                .filter(fg -> !FinishedGoodsBatch.Status.REVERSED.equals(fg.getStatus()))
+                .toList();
+        if (live.isEmpty()) {
+            return List.of();
+        }
+        // 审查 F2: 取消的批次没有产出, 不算「同计划别的批次」(与结单撤回的范围校验同口径)
+        List<ProductionBatch> planBatches = batchRepo.findByFactoryIdAndProductionPlanId(factoryId, planId);
+        planBatches = planBatches == null ? List.of() : planBatches.stream()
+                .filter(b -> b.getStatus() != ProductionBatchStatus.CANCELLED || batchId.equals(b.getId()))
+                .toList();
+        boolean otherBatches = planBatches.stream().anyMatch(b -> b.getId() != null && !b.getId().equals(batchId));
+        if (!otherBatches) {
+            return refuseIfShipped(batchId, live);
+        }
+        planGoods = live;
+        if (batchLineageEdgeRepository == null) {
+            throw new BusinessException(503, "成品归属判断服务未就绪, 无法只撤回本批次的成品")
+                    .withCode("FG_OWNERSHIP_UNAVAILABLE")
+                    .withHint("请稍后重试; 仍不行请联系管理员");
+        }
+        com.cretas.aims.service.quality.PlanGoodsOwnership.Ownership ownership =
+                com.cretas.aims.service.quality.PlanGoodsOwnership.attribute(
+                        batchLineageEdgeRepository, factoryId, planGoods, planBatches);
+        String why = ownership.outsidePlan() != null ? ownership.outsidePlan() : ownership.unknown();
+        List<FinishedGoodsBatch> mine = new ArrayList<>();
+        for (FinishedGoodsBatch fg : planGoods) {
+            Set<Long> owners = ownership.of(fg);
+            if (owners.contains(batchId) && owners.size() > 1 && why == null) {
+                why = "成品批 " + fg.getBatchNumber() + " 由本批次和同计划别的生产批次一起产出";
+            }
+            if (owners.contains(batchId)) {
+                mine.add(fg);
+            }
+        }
+        if (why != null) {
+            throw new BusinessException(409, "撤回批次 " + batchId + " 时分不清同计划的成品哪些是它产出的: " + why)
+                    .withCode("FG_OWNERSHIP_UNCLEAR")
+                    .withHint("同一计划有多个生产批次, 成品只能作废本批次产出的那部分; 请先补齐成品的生产批次来源 (血缘), "
+                            + "或联系管理员核对后再撤回")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget(String.valueOf(batchId));
+        }
+        return refuseIfShipped(batchId, mine);
+    }
+
+    /** 要作废的成品里已经出过货的 ⇒ 不作废 (提交时的 G2 之后才出货的那种; 出过货只能走退货)。 */
+    private static List<FinishedGoodsBatch> refuseIfShipped(Long batchId, List<FinishedGoodsBatch> goods) {
+        for (FinishedGoodsBatch fg : goods) {
+            if (fg.getShippedQuantity() != null && fg.getShippedQuantity().signum() > 0) {
+                throw new BusinessException(409, String.format(
+                        "批次 %d 的成品 %s 已出货, 无法整单撤回", batchId, fg.getBatchNumber()))
+                        .withCode("FG_SHIPPED")
+                        .withHint("请确认出货记录后处理退货再申请撤回");
+            }
+        }
+        return goods;
     }
 }

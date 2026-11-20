@@ -40,8 +40,10 @@ public class PlatformFactoryMenuService {
             FactoryFeatureConfig row = rows.get(id);
             if (row == null && "analytics".equals(id)) row = rows.get("smartbi");
             Map<String,Object> c = row == null || row.getConfig() == null ? Map.of() : row.getConfig();
-            boolean visible = !"analytics".equals(id) || !"FACTORY".equalsIgnoreCase(factory.getType());
-            if ("analytics".equals(id) && c.containsKey("showInSidebar")) visible = Boolean.TRUE.equals(c.get("showInSidebar"));
+            // P2b (M3, 2026-11-14): analytics is default-visible for every factory type, FACTORY included;
+            // only an explicit showInSidebar=false turns it off (same rule as web-admin factoryMenuVisibility).
+            boolean visible = true;
+            if ("analytics".equals(id) && Boolean.FALSE.equals(c.get("showInSidebar"))) visible = false;
             if (c.containsKey("menuVisible")) visible = Boolean.TRUE.equals(c.get("menuVisible"));
             List<String> disabled = list(c.get("disabledMenuPaths"));
             boolean configured = c.containsKey("menuVisible") || c.containsKey("showInSidebar") || c.containsKey("disabledMenuPaths");

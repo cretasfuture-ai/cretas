@@ -241,6 +241,60 @@ class QcReleaseRepositoryQueryValidationTest {
     }
 
     @Test
+    @DisplayName("Owner 2026-11-09: 计划范围里的报废批次 —— 只取 SCRAPPED, 按计划 id 或前缀, 工厂隔离")
+    void scrappedInPlans() {
+        productionBatch(F, "PLANSSSS-0001", com.cretas.aims.entity.enums.QualityStatus.SCRAPPED);
+        productionBatch(F, "PLANSSSS-0001", com.cretas.aims.entity.enums.QualityStatus.FAILED);
+        productionBatch(F, "PLANSSSS-0002", com.cretas.aims.entity.enums.QualityStatus.PASSED);
+        productionBatch("OTHER-QRS", "PLANSSSS-0001", com.cretas.aims.entity.enums.QualityStatus.SCRAPPED);
+        em.clear();
+
+        var scrapped = productionBatchRepo.findScrappedInPlans(F, List.of("PLANSSSS-0001"), "#NO-PREFIX#");
+        assertThat(scrapped).hasSize(1);
+        assertThat(scrapped.get(0).getId()).isNotNull();
+        assertThat(scrapped.get(0).getBatchNumber()).startsWith("QCF-");
+        assertThat(productionBatchRepo.findScrappedInPlans(F, List.of("#NO-PLAN#"), "PLANSSSS%")).hasSize(1);
+        assertThat(productionBatchRepo.findScrappedInPlans(F, List.of("PLANSSSS-0002"), "#NO-PREFIX#")).isEmpty();
+        // 与计数同一范围: 计数含报废和 FAILED (2), 报废清单只有 1 —— 质检放行据此分出「非报废的不合格」
+        assertThat(productionBatchRepo.countQcFailedInPlans(F, List.of("PLANSSSS-0001"), "#NO-PREFIX#")).isEqualTo(2L);
+    }
+
+    @Test
+    @DisplayName("#1548 第二轮审查 1/3/4: 一条语句数非报废的不合格; 计划锁和锁后重读都含 CLERK_WIP; 工厂隔离")
+    void planLockAndUnclearedCountIncludeClerkWip() {
+        productionBatch(F, "PLANLOCK-0001", com.cretas.aims.entity.enums.QualityStatus.FAILED);
+        productionBatch(F, "PLANLOCK-0001", com.cretas.aims.entity.enums.QualityStatus.SCRAPPED);
+        productionBatch(F, "PLANLOCK-0001", com.cretas.aims.entity.enums.QualityStatus.PASSED);
+        productionBatch("OTHER-LOCK", "PLANLOCK-0001", com.cretas.aims.entity.enums.QualityStatus.FAILED);
+        com.cretas.aims.entity.ProductionBatch wip = new com.cretas.aims.entity.ProductionBatch();
+        wip.setFactoryId(F);
+        wip.setBatchNumber("CLK-B-" + java.util.UUID.randomUUID().toString().substring(0, 8));
+        wip.setProductTypeId("PT-QCF");
+        wip.setQuantity(new BigDecimal("1"));
+        wip.setUnit("kg");
+        wip.setStatus(com.cretas.aims.entity.enums.ProductionBatchStatus.IN_PROGRESS);
+        wip.setProductionPlanId("PLANLOCK-0001");
+        wip.setQualityStatus(com.cretas.aims.entity.enums.QualityStatus.FAILED);
+        wip.setBatchType("CLERK_WIP");
+        wip.setCreatedAt(LocalDateTime.now());
+        wip.setUpdatedAt(LocalDateTime.now());
+        productionBatchRepo.saveAndFlush(wip);
+        em.clear();
+
+        assertThat(productionBatchRepo.countUnclearedNotScrappedInPlans(F, List.of("PLANLOCK-0001"), "#NO-PREFIX#"))
+                .isEqualTo(2L);
+        assertThat(productionBatchRepo.countUnclearedNotScrappedInPlans(F, List.of("#NO-PLAN#"), "PLANLOCK%"))
+                .isEqualTo(2L);
+        List<Long> locked = productionBatchRepo.lockAllIdsInPlan(F, "PLANLOCK-0001");
+        assertThat(locked).hasSize(4).isSorted().contains(wip.getId());
+        assertThat(productionBatchRepo.findQcStatesInPlan(F, "PLANLOCK-0001"))
+                .extracting(com.cretas.aims.repository.ProductionBatchRepository.PlanBatchQcState::getId)
+                .containsExactlyElementsOf(locked);
+        // 与旧查询的差别正是 CLERK_WIP: 放行原来用的那条看不见它
+        assertThat(productionBatchRepo.countQcFailedInPlans(F, List.of("PLANLOCK-0001"), "#NO-PREFIX#")).isEqualTo(3L);
+    }
+
+    @Test
     @DisplayName("第三轮审查 L-6: 一次 IN 查询取出这些批次的计划 id (去重, 跳过无计划, 工厂隔离)")
     void planIdsByBatchIds() {
         productionBatch(F, "PLAN-L6-A", null);
@@ -330,6 +384,22 @@ class QcReleaseRepositoryQueryValidationTest {
                 .extracting(MaterialBatch::getId).containsExactlyInAnyOrder("WIP-INSP", "WIP-OK");
     }
 
+    @Test
+    @DisplayName("D-S411-04 原料待检: 只列本厂、非 PRODUCTION_BATCH (含 sourceDocType 为空的老数据) 的 INSPECTING")
+    void rawBatchPendingQuery() {
+        material("RAWQ-INSP", "PURCHASE_RECEIVE", "PO-9", MaterialBatchStatus.INSPECTING);
+        material("RAWQ-LEGACY", null, null, MaterialBatchStatus.INSPECTING);
+        material("RAWQ-OK", "PURCHASE_RECEIVE", "PO-10", MaterialBatchStatus.AVAILABLE);
+        material("RAWQ-WIP", "PRODUCTION_BATCH", "703", MaterialBatchStatus.INSPECTING);
+        material("RAWQ-OTHER", "PURCHASE_RECEIVE", "PO-11", MaterialBatchStatus.INSPECTING);
+        jdbc.update("UPDATE material_batches SET factory_id = ? WHERE id = 'RAWQ-OTHER'", OTHER);
+
+        assertThat(materialBatchRepo.findRawBatchesByFactoryIdAndStatus(F, MaterialBatchStatus.INSPECTING))
+                .extracting(MaterialBatch::getId).containsExactlyInAnyOrder("RAWQ-INSP", "RAWQ-LEGACY");
+        assertThat(materialBatchRepo.findRawBatchesByFactoryIdAndStatus(OTHER, MaterialBatchStatus.INSPECTING))
+                .extracting(MaterialBatch::getId).containsExactly("RAWQ-OTHER");
+    }
+
     private void fg(String id, String status) {
         FinishedGoodsBatch b = new FinishedGoodsBatch();
         b.setId(id);
@@ -381,6 +451,23 @@ class QcReleaseRepositoryQueryValidationTest {
         assertThat(t1.get(0).getConclusion()).isEqualTo("结论-T1");
         assertThat(t1.get(0).getReleasedBy()).isEqualTo(9L);
         assertThat(recordRepo.findTop200ByFactoryIdOrderByReleasedAtDesc(F)).hasSize(3);
+    }
+
+    /**
+     * D-S411-04 复审 R3: 「最近一条」是原料能不能改回可用的判据 ({@code MaterialQcRejectionGuard})。
+     * 两条记录 releasedAt 相同 (同一秒内先判不合格、再复检放行) 时, 后写入的那条 (id 大) 必须排在前面, 不能看库的心情。
+     */
+    @Test
+    @DisplayName("qc_release_records: releasedAt 相同时按 id 倒序, 后写的那条是「最近一条」")
+    void sameReleasedAtFallsBackToIdDescending() {
+        LocalDateTime same = LocalDateTime.of(2026, 11, 10, 9, 30, 0);
+        QcReleaseRecord first = recordRepo.saveAndFlush(record("T7", "REJECTED", same));
+        QcReleaseRecord second = recordRepo.saveAndFlush(record("T7", "RELEASED", same));
+        em.clear();
+        assertThat(second.getId()).isGreaterThan(first.getId());   // 阳性对照: 后写的 id 确实更大
+
+        List<QcReleaseRecord> t7 = recordRepo.findByTarget(F, QcReleaseRecord.TargetType.SEMI_FINISHED, "T7");
+        assertThat(t7).extracting(QcReleaseRecord::getId).containsExactly(second.getId(), first.getId());
     }
 
     @Test

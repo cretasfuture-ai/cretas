@@ -357,29 +357,6 @@ export default function PlanDetailScreen() {
     );
   };
 
-  // 完成计划
-  const handleCompletePlan = () => {
-    Alert.alert(
-      '完成计划',
-      `确定将该计划标记为已完成吗？\n计划量: ${plan?.quantity ?? 0} ${plan?.productUnit ?? 'kg'}`,
-      [
-        { text: '取消', style: 'cancel' },
-        {
-          text: '确定完成',
-          onPress: async () => {
-            try {
-              await productionPlanApiClient.completeProduction(planId, plan?.quantity ?? 0);
-              Alert.alert('成功', '计划已完成');
-              loadPlanData();
-            } catch (e) {
-              Alert.alert('错误', e instanceof Error ? e.message : '完成失败');
-            }
-          },
-        },
-      ]
-    );
-  };
-
   // 渲染原料匹配卡片
   const renderMaterialCard = (material: MaterialMatch) => (
     <View
@@ -685,6 +662,7 @@ export default function PlanDetailScreen() {
     </SafeAreaView>
   );
 }
+
 
 const styles = StyleSheet.create({
   container: {

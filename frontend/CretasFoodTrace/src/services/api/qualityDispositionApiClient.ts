@@ -100,6 +100,71 @@ export interface DispositionRule {
   updatedAt: string;
 }
 
+/**
+ * 待处置的质检记录 (GET /processing/quality/inspections?result=FAIL,CONDITIONAL)。
+ * 后端按行返回 batchNumber / productName (见 ProcessingServiceImpl#convertInspectionToMap)。
+ */
+export interface DispositionCandidate {
+  id: string;
+  productionBatchId: number;
+  inspectorId: number;
+  inspectorName?: string | null;
+  inspectionDate?: string | null;
+  sampleSize: number;
+  passCount: number;
+  failCount: number;
+  passRate?: number | null;
+  result: string;
+  notes?: string | null;
+  batchNumber?: string | null;
+  productName?: string | null;
+}
+
+/** GET /quality-disposition/pending 单条 (等待审批的处置申请)。 */
+export interface PendingDisposition {
+  id: string;
+  entityId: string;
+  productionBatchId?: number | null;
+  batchNumber?: string | null;
+  decisionMade: string;
+  actionDescription?: string | null;
+  reason?: string | null;
+  executorId?: number | null;
+  executorName?: string | null;
+  approvalLevel?: string | null;
+  createdAt: string;
+}
+
+/** POST /quality-disposition/{id}/approve 请求体 (与网页同一份)。 */
+export interface ApproveDispositionRequest {
+  approved: boolean;
+  approverId: number;
+  approverName?: string;
+  comment?: string;
+  /** 申请人就是审批人、且本厂允许本人审批时必填。 */
+  selfApprovalReason?: string;
+}
+
+export interface ApproveDispositionResult {
+  applicationId: string;
+  approved: boolean;
+  message: string;
+  finishedGoodsHeld?: number | null;
+}
+
+interface Envelope<T> {
+  success: boolean;
+  data?: T | null;
+  message?: string;
+}
+
+function unwrap<T>(res: Envelope<T>, fallback: string): T {
+  if (!res || !res.success || res.data == null) {
+    throw new Error(res?.message || fallback);
+  }
+  return res.data;
+}
+
 // ==================== API 客户端 ====================
 
 /**
@@ -196,6 +261,39 @@ export const qualityDispositionAPI = {
    * @param factoryId 工厂ID
    * @returns 规则列表
    */
+  /**
+   * 待处置质检记录: 不合格 + 有条件放行 (与网页「待处置质检」同一个过滤)。
+   */
+  async listDispositionCandidates(factoryId: string): Promise<DispositionCandidate[]> {
+    const res = await apiClient.get<Envelope<{ content?: DispositionCandidate[] }>>(
+      `/api/mobile/${factoryId}/processing/quality/inspections`,
+      { params: { page: 1, size: 100, result: 'FAIL,CONDITIONAL' } }
+    );
+    const rows = unwrap(res, '待处置批次读取失败').content ?? [];
+    return [...rows].sort((a, b) => String(b.inspectionDate ?? '').localeCompare(String(a.inspectionDate ?? '')));
+  },
+
+  /** 等待审批的处置申请 (只读列表, 谁都能看; 审批按钮另按 approval_quality_disposition 判)。 */
+  async getPendingDispositions(factoryId: string): Promise<PendingDisposition[]> {
+    const res = await apiClient.get<Envelope<PendingDisposition[]>>(
+      `/api/mobile/${factoryId}/quality-disposition/pending`
+    );
+    return unwrap(res, '待审批处置读取失败');
+  },
+
+  /** 批准 / 驳回 (后端 @RequirePermission approval_quality_disposition:approve)。 */
+  async approveDisposition(
+    factoryId: string,
+    id: string,
+    request: ApproveDispositionRequest
+  ): Promise<ApproveDispositionResult> {
+    const res = await apiClient.post<Envelope<ApproveDispositionResult>>(
+      `/api/mobile/${factoryId}/quality-disposition/${encodeURIComponent(id)}/approve`,
+      request
+    );
+    return unwrap(res, '审批处置失败');
+  },
+
   async getRules(factoryId: string): Promise<DispositionRule[]> {
     const response = await apiClient.get<{ code: number; data: DispositionRule[]; message: string; success: boolean }>(
       `/api/mobile/${factoryId}/quality-disposition/rules`

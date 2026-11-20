@@ -3,6 +3,7 @@
  */
 import { createRouter, createWebHistory, RouteRecordRaw } from 'vue-router';
 import { setupRouterGuards } from './guards';
+import { digitalEmployeeProps, digitalWorkdeskTitle } from './digitalEmployeeProps';
 import smartBIRoutes, { smartBIRedirects } from './modules/smartbi';
 import productionAnalyticsRoutes from './modules/production-analytics';
 import crmRoutes from './modules/crm';
@@ -115,18 +116,11 @@ const businessRoutes: RouteRecordRaw[] = [
           hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'],
         },
       },
+      // P4：原「异常中心」改造成顶层「发现的问题 /issues」，旧地址跳过去（书签 / 外部链接不失效）。
       {
         path: 'workspaces/exceptions',
         name: 'FactoryWorkspaceExceptions',
-        component: () => import('@/views/workspaces/index.vue'),
-        meta: {
-          requiresAuth: true,
-          title: '异常中心',
-          icon: 'Warning',
-          module: 'dashboard',
-          roles: ['factory_super_admin', 'permission_admin'],
-          hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'],
-        },
+        redirect: '/issues',
       },
       {
         path: 'workspaces/plans-approvals',
@@ -182,7 +176,8 @@ const businessRoutes: RouteRecordRaw[] = [
         path: 'dashboard/ai-value',
         name: 'AiValueSummary',
         component: () => import('@/views/dashboard/AiValueSummary.vue'),
-        meta: { requiresAuth: true, title: 'AI 工作台', icon: 'MagicStick', module: 'dashboard' }
+          props: digitalEmployeeProps,
+          meta: { requiresAuth: true, title: 'AI价值数字专员工作台', icon: 'MagicStick', module: 'dashboard' }
       },
       {
         path: 'operations/customer-material-arrivals',
@@ -206,6 +201,59 @@ const businessRoutes: RouteRecordRaw[] = [
         //     看得见这个看板、点进去必 403。与 /rd、/transfer 同形。
         meta: { requiresAuth: true, title: '生产进度看板', icon: 'Monitor', module: 'production' }
       },
+      // P3：顶层「今天」「待办」。只读聚合，各来源按自己的模块权限读；入口与个人 OA 同判据 module: 'dashboard'
+      {
+        path: 'today',
+        name: 'TodayPage',
+        component: () => import('@/views/today/TodayPage.vue'),
+        meta: { requiresAuth: true, title: '今天', icon: 'Sunny', module: 'dashboard' }
+      },
+      {
+        path: 'todo',
+        name: 'TodoPage',
+        component: () => import('@/views/today/TodoPage.vue'),
+        meta: { requiresAuth: true, title: '待办', icon: 'Finished', module: 'dashboard' }
+      },
+      // P4：顶层「发现的问题」。只读聚合各来源（各按自己的模块权限读）+ 处置（关闭结论 / 转待办），入口同「今天」「待办」
+      {
+        path: 'issues',
+        name: 'IssuesPage',
+        component: () => import('@/views/issues/IssuesPage.vue'),
+        meta: { requiresAuth: true, title: '发现的问题', icon: 'WarningFilled', module: 'dashboard', hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'] }
+      },
+      // P8：数字班组（MIGRATION-PLAN 2.7）。数据接口按登录人权限逐件判（DigitalCrewController），入口同「待办」判据
+      {
+        path: 'crew',
+        name: 'CrewHome',
+        component: () => import('@/views/crew/CrewHome.vue'),
+        meta: { requiresAuth: true, title: '班组首页', icon: 'UserFilled', module: 'dashboard', hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'] }
+      },
+      {
+        path: 'crew/ledger',
+        name: 'CrewLedger',
+        component: () => import('@/views/crew/CrewLedger.vue'),
+        meta: { requiresAuth: true, title: '工作记录与额度', module: 'dashboard', hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'] }
+      },
+      {
+        path: 'crew/settings',
+        name: 'CrewSettings',
+        component: () => import('@/views/crew/CrewSettings.vue'),
+        meta: { requiresAuth: true, title: '数字班组配置', icon: 'Setting', module: 'system', hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'] }
+      },
+      {
+        path: 'crew/member/:member(clerk|keeper|planner|inspector|accountant)',
+        name: 'CrewMember',
+        component: () => import('@/views/crew/CrewMemberPage.vue'),
+        meta: { requiresAuth: true, title: '数字员工', module: 'dashboard', hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'] }
+      },
+      {
+        // P10 外部软件（MIGRATION-PLAN 第四块）：只在平台授权了黑湖接口的工厂可进（守卫见 guards.ts externalIntegration;
+        // 后端没授权同样 404）。只读：外部数据时点 + 报工对照列，不改任何一边、不回写外部系统。
+        path: 'external-software',
+        name: 'ExternalSoftwarePage',
+        component: () => import('@/views/external-software/ExternalSoftwarePage.vue'),
+        meta: { requiresAuth: true, title: '外部软件对照', module: 'production', externalIntegration: 'blacklake' }
+      },
       {
         path: 'dashboard/widgets',
         name: 'WidgetDemoDashboard',
@@ -218,9 +266,10 @@ const businessRoutes: RouteRecordRaw[] = [
         path: 'workdesk/sales-owner',
         name: 'SalesOwnerWorkdesk',
         component: () => import('@/views/workdesk/SalesOwnerWorkdesk.vue'),
+        props: digitalEmployeeProps,
         meta: {
           requiresAuth: true,
-          title: '销售老板工作台',
+          title: digitalWorkdeskTitle('/workdesk/sales-owner', '销售老板工作台'),
           icon: 'Sell',
           module: 'sales'
         }
@@ -231,9 +280,10 @@ const businessRoutes: RouteRecordRaw[] = [
         path: 'workdesk/finance-manager',
         name: 'FinanceManagerWorkdesk',
         component: () => import('@/views/workdesk/FinanceManagerWorkdesk.vue'),
+        props: digitalEmployeeProps,
         meta: {
           requiresAuth: true,
-          title: '财务主管工作台',
+          title: digitalWorkdeskTitle('/workdesk/finance-manager', '财务主管工作台'),
           icon: 'Money',
           module: 'finance'
         }
@@ -245,9 +295,10 @@ const businessRoutes: RouteRecordRaw[] = [
         path: 'workdesk/quality-manager',
         name: 'QualityManagerWorkdesk',
         component: () => import('@/views/workdesk/QualityManagerWorkdesk.vue'),
+        props: digitalEmployeeProps,
         meta: {
           requiresAuth: true,
-          title: '质量主管工作台',
+          title: digitalWorkdeskTitle('/workdesk/quality-manager', '质量主管工作台'),
           icon: 'Warning',
           module: 'quality'
         }
@@ -259,9 +310,10 @@ const businessRoutes: RouteRecordRaw[] = [
         path: 'workdesk/warehouse-keeper',
         name: 'WarehouseKeeperWorkdesk',
         component: () => import('@/views/workdesk/WarehouseKeeperWorkdesk.vue'),
+        props: digitalEmployeeProps,
         meta: {
           requiresAuth: true,
-          title: '仓管员工作台',
+          title: digitalWorkdeskTitle('/workdesk/warehouse-keeper', '仓管员工作台'),
           icon: 'Box',
           module: 'warehouse'
         }
@@ -274,9 +326,10 @@ const businessRoutes: RouteRecordRaw[] = [
         path: 'workdesk/purchaser',
         name: 'PurchaserWorkdesk',
         component: () => import('@/views/workdesk/PurchaserWorkdesk.vue'),
+        props: digitalEmployeeProps,
         meta: {
           requiresAuth: true,
-          title: '采购员工作台',
+          title: digitalWorkdeskTitle('/workdesk/purchaser', '采购员工作台'),
           icon: 'ShoppingCart',
           module: 'procurement'
         }
@@ -289,9 +342,10 @@ const businessRoutes: RouteRecordRaw[] = [
         path: 'workdesk/quality-chief',
         name: 'QualityChiefWorkdesk',
         component: () => import('@/views/workdesk/QualityChiefWorkdesk.vue'),
+        props: digitalEmployeeProps,
         meta: {
           requiresAuth: true,
-          title: '质检主管工作台',
+          title: digitalWorkdeskTitle('/workdesk/quality-chief', '质检主管工作台'),
           icon: 'Aim',
           module: 'quality'
         }
@@ -305,9 +359,10 @@ const businessRoutes: RouteRecordRaw[] = [
         path: 'workdesk/production-manager',
         name: 'ProductionManagerWorkdesk',
         component: () => import('@/views/workdesk/ProductionManagerWorkdesk.vue'),
+        props: digitalEmployeeProps,
         meta: {
           requiresAuth: true,
-          title: '生产经理工作台',
+          title: digitalWorkdeskTitle('/workdesk/production-manager', '生产经理工作台'),
           icon: 'Operation',
           module: 'production'
         }
@@ -362,6 +417,14 @@ const businessRoutes: RouteRecordRaw[] = [
             name: 'ProductionDeliveryRisks',
             component: () => import('@/views/production/delivery-risks/index.vue'),
             meta: { requiresAuth: true, title: '交付风险', module: 'production' }
+          },
+          {
+            // 委外单 (DECISIONS 第十九节): 按委外厂开单, 任务行挂工单工序或整单委外; 支持 ?orderId= 直接打开详情。
+            // 菜单只登记在原型分组侧栏 (menuConfig.ts 的 OUTSOURCE_LEAF), 不新增委外菜单组。
+            path: 'outsource',
+            name: 'ProductionOutsourceOrders',
+            component: () => import('@/views/production/outsource/index.vue'),
+            meta: { requiresAuth: true, title: '委外单', module: 'production' }
           },
           // 2026-09-02 LIUSHANMEN 生产管理菜单收拢 (owner 拍板): 生产看板 hub ——
           // 合并未完成计划队列/备货看板/交货预警 3 个视角为一个入口 (el-tabs), 见
@@ -432,6 +495,14 @@ const businessRoutes: RouteRecordRaw[] = [
             component: () => import('@/views/production/bom/EcnList.vue'),
             meta: { requiresAuth: true, title: '工程变更通知', module: 'production' }
           },
+          {
+            // D-S5-09 (2026-11-11): BOM 调价建议 列表 / 详情 / 批准 / 驳回。
+            // 能看: production / rd / finance 可读 (后端同口径); 批准 / 驳回按钮看 approval_bom_price_adjustment。
+            path: 'bom/price-adjustments',
+            name: 'BomPriceAdjustmentList',
+            component: () => import('@/views/production/bom/PriceAdjustmentList.vue'),
+            meta: { requiresAuth: true, title: 'BOM调价建议', module: 'production' }
+          },
           // 2026-09-02 LIUSHANMEN 生产管理菜单收拢 (owner 拍板): 报工审批 hub ——
           // 合并报工审批/撤回审批 2 个视角为一个入口 (el-tabs), 见
           // views/production/approval-hub/index.vue。⛔ 路径不变, 仍是
@@ -445,6 +516,13 @@ const businessRoutes: RouteRecordRaw[] = [
             component: () => import('@/views/production/approval-hub/index.vue'),
             meta: { requiresAuth: true, title: '报工审批', module: 'production' }
           },
+          // P5：称重报工（逐笔、带皮重、数据疑点 · 找谁核）。写入复用已有报工接口。
+          {
+            path: 'weigh',
+            name: 'ProductionWeigh',
+            component: () => import('@/views/production/weigh/WeighPage.vue'),
+            meta: { requiresAuth: true, title: '称重报工', module: 'production' }
+          },
           // 2026-09-02 同上收拢: 生产分析 hub —— 合并本文件内的 3 个视角
           // (BOM达成率分析/工序投入产出对比/人效双口径对比) + 另外 3 个视角
           // (车间实时生产报表 in /analytics/*, 生产数据分析/成品出厂核算 in
@@ -456,7 +534,7 @@ const businessRoutes: RouteRecordRaw[] = [
             path: 'bom-achievement',
             name: 'BomAchievement',
             redirect: (to) => buildProductionAnalysisRedirect(to, 'bom-achievement'),
-            meta: { requiresAuth: true, title: 'BOM达成率分析', module: 'production' }
+            meta: { requiresAuth: true, title: 'BOM用量对比', module: 'production' }
           },
           // 标准出成率维护 (2026-09-05) —— 唯一的人工写入口。
           // 自动回写已删除 (owner 裁定「标准只能人改」), 而 recalculate-apply 端点
@@ -630,7 +708,7 @@ const businessRoutes: RouteRecordRaw[] = [
             path: 'wip-batches',
             name: 'WarehouseWipBatches',
             component: () => import('@/views/warehouse/materials/wip-list.vue'),
-            meta: { requiresAuth: true, title: '在制品 (WIP)', module: 'warehouse' }
+            meta: { requiresAuth: true, title: '在制品', module: 'warehouse' }
           },
           {
             path: 'shipments',
@@ -809,6 +887,13 @@ meta: { requiresAuth: true, title: '调拨单列表', module: 'inventory', bread
             component: () => import('@/views/quality/inspections/list.vue'),
             meta: { requiresAuth: true, title: '质检记录', module: 'quality' }
           },
+          // 工序首检 (E 线 BL17): 送检 / 判定 / 首检标准 / 本厂开关; 菜单只登记在原型分组侧栏 (menuConfig.ts 的 FIRST_ARTICLE_LEAF)
+          {
+            path: 'first-article',
+            name: 'QualityFirstArticle',
+            component: () => import('@/views/quality/first-article/index.vue'),
+            meta: { requiresAuth: true, title: '工序首检', module: 'quality' }
+          },
           // 缺口 11: 质检放行 (需检产品产出待检 → 放行 / 不合格)
           {
             path: 'release',
@@ -844,8 +929,8 @@ meta: { requiresAuth: true, title: '调拨单列表', module: 'inventory', bread
             meta: {
               requiresAuth: true,
               title: '不良品处置',
-              module: 'quality',
-              roles: ['quality_manager', 'factory_super_admin', 'platform_admin', 'permission_admin']
+              // B14: 按质检模块权限放行 (后端 quality:read / read_write), 不再叠岗位白名单
+              module: 'quality'
             }
           },
           {
@@ -855,8 +940,8 @@ meta: { requiresAuth: true, title: '调拨单列表', module: 'inventory', bread
             meta: {
               requiresAuth: true,
               title: '批次召回',
-              module: 'quality',
-              roles: ['quality_manager', 'factory_super_admin', 'platform_admin', 'permission_admin']
+              // B14: 按质检模块权限放行 (后端 quality:read / read_write, 召回后端本来没有岗位限制)
+              module: 'quality'
             }
           },
           {
@@ -1569,7 +1654,8 @@ meta: { requiresAuth: true, title: '调拨单列表', module: 'inventory', bread
               requiresAuth: true,
               title: '报废审批',
               module: 'finance',
-              roles: ['finance_manager', 'factory_super_admin', 'platform_admin']
+              // 按报废审批权限 (disposal:approve) 判, 不按岗位名: 守卫读后端 approval-permission
+              requiresDisposalApproval: true
             }
           },
           {
@@ -1720,13 +1806,13 @@ meta: { requiresAuth: true, title: '调拨单列表', module: 'inventory', bread
           // 权限矩阵**只读**页 (ARCH-PERMISSION-ADMIN-L1-EDITOR-20260906 step 1)。
           // module 必须是 'system' —— 与后端 PermissionMatrixController 的
           // @RequirePermission({"system:read","system:read_write"}) 是同一个权限码。
-          // ⛔ 不要改成别的模块或加 roles 白名单: 那会让「菜单看得见」与「接口进得去」
-          //    两个判据分叉, 症状是「看得见点进去 403」(本仓反复踩的形态)。
+          // 2026-11-18 (PROTO-DEMO-PERM): 全平台表 ⇒ 平台专属, roles 与后端 @RequireRole({"platform_admin"})
+          //    同一份名单, 菜单项也带同样的 roles —— 三处一致由 permissionGateMatchesBackend.spec.ts 钉住。
           {
             path: 'permission-matrix',
             name: 'SystemPermissionMatrix',
             component: () => import('@/views/system/permission-matrix/index.vue'),
-            meta: { requiresAuth: true, title: '权限矩阵', module: 'system', breadcrumbParent: '人事管理' }
+            meta: { requiresAuth: true, title: '权限矩阵', module: 'system', roles: ['platform_admin'], breadcrumbParent: '人事管理' }
           },
           {
             path: 'logs',
@@ -2295,7 +2381,8 @@ meta: { requiresAuth: true, title: '校准列表', module: 'system', roles: plat
             path: 'logistics/workbench',
             name: 'LogisticsSchedulingWorkbench',
             component: () => import('@/views/scheduling/logistics/workbench/index.vue'),
-            meta: { requiresAuth: true, title: '排线工作台', module: 'scheduling', mockDemo: true, hideForFactoryTypes: ['FACTORY', 'RESTAURANT'] },
+              props: digitalEmployeeProps,
+              meta: { requiresAuth: true, title: '排线数字专员工作台', module: 'scheduling', mockDemo: true, hideForFactoryTypes: ['FACTORY', 'RESTAURANT'] },
           },
           {
             path: 'logistics/records',

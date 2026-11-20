@@ -51,19 +51,37 @@ public interface SpecialApprovalService {
     SpecialApprovalDTO getApprovalById(String factoryId, String approvalId);
 
     /**
+     * 能审批质检处置的<b>工厂</b>角色 —— 即 {@code /quality-disposition/{id}/approve} 上 {@code @RequireRole} 名单去掉平台角色,
+     * 也是 {@code /quality/approvals/{id}/decision} 的 {@code @RequireRole} 与 AI 工具 {@code order_approval} 的角色要求。
+     * 平台管理员不按角色字符串认 (PlatformRoleBoundaryGateContractTest), 由已认证的平台身份
+     * ({@code AuthenticatedActor}) 放行, 与 RequireRoleInterceptor 同口径。几处一致由
+     * {@code QualityBatchDispositionContractTest#approverRoleListsAreTheSameEverywhere} 钉住。
+     */
+    java.util.Set<String> APPROVER_ROLES =
+            java.util.Set.of("quality_manager", "factory_super_admin", "permission_admin");
+
+    /**
      * 处理审批决策
+     *
+     * <p>谁在审批以 {@code actingUserId} / {@code actingRole} 为准 —— 调用方从<b>已认证的身份</b>取
+     * (HTTP: JWT 拦截器写入的 userId / role; AI 工具: 执行上下文里的 userId 及其账号角色), 不从请求体取。
+     * 与 {@code /quality-disposition/{id}/approve} 同口径: 只有审批角色能审批, 申请人不能批自己的申请。
      *
      * @param factoryId 工厂ID
      * @param approvalId 审批ID
      * @param decision 审批决策
-     * @param approverId 审批人ID
+     * @param approverId 记录在审批行上的审批人ID (沿用原来的取值方式)
+     * @param actingUserId 当前已认证的操作人 (审批身份校验用)
+     * @param actingRole 当前已认证操作人的角色代码 (审批身份校验用)
      * @return 更新后的审批信息
      */
     SpecialApprovalDTO processDecision(
             String factoryId,
             String approvalId,
             ApprovalDecisionRequest decision,
-            Long approverId
+            Long approverId,
+            Long actingUserId,
+            String actingRole
     );
 
     /**

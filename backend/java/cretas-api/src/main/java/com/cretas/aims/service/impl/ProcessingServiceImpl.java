@@ -102,6 +102,24 @@ public class ProcessingServiceImpl implements ProcessingService {
     private final ProcessSheetRowRepository processSheetRowRepository;
     @Autowired
     private QualityCheckItemBindingRepository qualityCheckItemBindingRepository;
+    /** 批次级开工与计划级同一道缺料闸 (纪律排查 A8)。字段注入, 不打断按构造器装配的既有测试; 没注入 = 不过闸。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.shortage.ShortageStartGate shortageStartGate;
+    /** 1551-11 开工被拦时说清在等谁批; 只影响措辞。字段注入理由同上, 没注入时用通用说法 (拦截照常)。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.production.ForceInsertApproverDescriber forceInsertApproverDescriber;
+    /**
+     * 动态质检表哪些项不合格才判整张 FAIL (工厂开关 quality.inspection.fail_scope, 2026-11-11)。字段注入, 不打断按构造器装配的既有测试;
+     * 没注入 (单测直接 new) 时按 Steve 裁定的默认 MINOR_FOR_REVIEW。
+     */
+    @Autowired(required = false)
+    private com.cretas.aims.service.discipline.FactoryDisciplinePolicy disciplinePolicy;
+    /** 交质量经理决定的条件合格: 提交后通知接收人 (quality.notify.inspection_review, 默认质量经理)。可选, 理由同上。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.NotificationService reviewNotificationService;
+    /** afterCommit 里原事务已提交, 写通知必须开新事务 (同 UrgentInsertScheduleService 的提醒)。 */
+    @Autowired(required = false)
+    private org.springframework.transaction.PlatformTransactionManager reviewNotificationTx;
     @Autowired
     private InventoryLowStockEventPublisher inventoryLowStockEventPublisher;
     // 来源工序真名解析 (2026-08-02): 暂用 optional 字段注入 —— 该类的大量既有测试仍按
@@ -194,18 +212,44 @@ public class ProcessingServiceImpl implements ProcessingService {
         if (batch.getUnit() == null || batch.getUnit().isEmpty()) {
             batch.setUnit("kg");
         }
+        // D-W-01: 手工 / AI 建批 (ProcessingController.createBatch、ProcessingBatchCreateTool、
+        // ProcessingBatchCreateToolDataOp 都走这里) 的计划量是按批次自己的单位填的 —— 记下来,
+        // 实体与实收才知道它与产出同单位 (100 箱 / 95 箱 ⇒ 95.00), 哪怕批次挂了一个按 kg 的计划。
+        if (batch.getPlannedQuantity() != null
+                && (batch.getPlannedUnit() == null || batch.getPlannedUnit().isBlank())) {
+            batch.setPlannedUnit(batch.getUnit());
+        }
 
         return productionBatchRepository.save(batch);
     }
+    @Transactional(rollbackFor = Exception.class)
     public ProductionBatch startProduction(String factoryId, String batchId, Integer supervisorId) {
-        log.info("开始生产: factoryId={}, batchId={}, supervisorId={}", factoryId, batchId, supervisorId);
+        // 自调用不经代理, 4 参的 @Transactional 不生效 ⇒ 这里也要声明 (缺料闸里有加锁查询)
+        return startProduction(factoryId, batchId, supervisorId, null);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public ProductionBatch startProduction(String factoryId, String batchId, Integer supervisorId,
+                                           String forceStartReason) {
+        log.info("开始生产: factoryId={}, batchId={}, supervisorId={}, forced={}", factoryId, batchId, supervisorId,
+                forceStartReason != null && !forceStartReason.isBlank());
         Long id = parseBatchId(batchId);
-        ProductionBatch batch = productionBatchRepository.findByIdAndFactoryId(id, factoryId)
+        // 锁批次行: 两个并发开工不会都读到 PLANNED (独立审查 #1596)
+        ProductionBatch batch = productionBatchRepository.findByIdAndFactoryIdForUpdate(id, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("批次不存在"));
         if (ProductionBatchStatus.PLANNED != batch.getStatus()) {
             throw new BusinessException(409, "批次状态不允许开始生产: " + batch.getStatus())
                     .withHint("请刷新批次列表查看最新状态");
         }
+        // 1551-11: 批次挂在待审批的强制插单上 (手工 / AI 建批带 productionPlanId) ⇒ 与计划开工同一道审批闸。
+        //    放在缺料闸 (会写缺料实例的强制原因) 和任何状态写入之前, 被拦不留半截状态。
+        com.cretas.aims.entity.ProductionPlan linkedPlan = linkedPlanOf(factoryId, batch);
+        com.cretas.aims.service.production.PendingApprovalStartGuard.check(linkedPlan, forceInsertApproverDescriber);
+        // 纪律排查 A8: 批次级开工与计划级同口径。手工 / AI 建的批次可以挂在一个还没开工的计划上
+        // (POST /processing/batches 带 productionPlanId), 直接开批次就绕过了计划开工的缺料闸。
+        // 只在计划还没开工时过闸: 计划已开工 = 当时已过闸或已强制开工并留痕, 不再让每个批次重问一遍。
+        checkShortageGateForBatchStart(factoryId, linkedPlan, forceStartReason);
         batch.setStatus(ProductionBatchStatus.IN_PROGRESS);
         batch.setStartTime(LocalDateTime.now());
         batch.setSupervisorId(supervisorId != null ? supervisorId.longValue() : null);
@@ -236,6 +280,9 @@ public class ProcessingServiceImpl implements ProcessingService {
             throw new BusinessException(409, "只有暂停中的批次可以恢复生产")
                     .withHint("请刷新批次列表查看最新状态");
         }
+        // 1551-11 (独立审查): 修复前绕过审批开工、后来计划被驳回 / 取消的存量批次, 暂停后不能再恢复生产
+        com.cretas.aims.service.production.PendingApprovalStartGuard.check(
+                linkedPlanOf(factoryId, batch), forceInsertApproverDescriber);
         batch.setStatus(ProductionBatchStatus.IN_PROGRESS);
         batch.setNotes(batch.getNotes() != null ? batch.getNotes() + "\n恢复生产: " + LocalDateTime.now() : "恢复生产: " + LocalDateTime.now());
         return productionBatchRepository.save(batch);
@@ -243,8 +290,77 @@ public class ProcessingServiceImpl implements ProcessingService {
     @Transactional(rollbackFor = Exception.class)
     public ProductionBatch completeProduction(String factoryId, String batchId, BigDecimal actualQuantity,
                                              BigDecimal goodQuantity, BigDecimal defectQuantity) {
-        // 默认重载: 不改批次成品单位 (沿用 batch.unit)
+        // 对外的 5 参入口同样要超产原因 (没带 ⇒ 超产时 409); 报工结清的自动完工走 6 参 (finishedUnit) 重载
+        return completeProductionWithReason(factoryId, batchId, actualQuantity, goodQuantity, defectQuantity, null);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public ProductionBatch completeProductionWithReason(String factoryId, String batchId, BigDecimal actualQuantity,
+                                                        BigDecimal goodQuantity, BigDecimal defectQuantity,
+                                                        String overPlanReason) {
+        // 纪律排查 A8: 与计划级直接完工同口径 —— 实际产量超过批次计划量 (同单位) 必须说明原因
+        Long id = parseBatchId(batchId);
+        ProductionBatch locked = productionBatchRepository.findByIdAndFactoryIdForUpdate(id, factoryId)
+                .orElseThrow(() -> new ResourceNotFoundException("批次不存在"));
+        BigDecimal planned = locked.getPlannedQuantity();
+        // 同一个单位才比: 与效率计算同一份判据 (千克 ≡ 公斤 ≡ kg; 没记计划单位时看所挂计划的单位; 不知道就不比)
+        boolean sameUnit = locked.quantityComparableWithPlan();
+        boolean completable = locked.getStatus() == ProductionBatchStatus.IN_PROGRESS
+                || locked.getStatus() == ProductionBatchStatus.PAUSED;   // 不能完工的由下面原有的 409 说清状态
+        boolean overPlan = completable && actualQuantity != null && planned != null && planned.signum() > 0 && sameUnit
+                && actualQuantity.compareTo(planned) > 0;
+        String reason = overPlanReason == null ? null : overPlanReason.trim();
+        if (overPlan && (reason == null || reason.isEmpty())) {
+            String unit = locked.getUnit() == null ? "" : " " + locked.getUnit();
+            throw new BusinessException(409, "批次 " + locked.getBatchNumber() + " 实际产量超过计划产量, 必须填写超产原因")
+                    .withCode("PRODUCTION_OVER_PLAN_REASON_REQUIRED")
+                    .withHint("计划 " + planned.stripTrailingZeros().toPlainString() + unit + ", 实际 "
+                            + actualQuantity.stripTrailingZeros().toPlainString() + unit + "; 请填写超产原因后再完成")
+                    .withHintTarget("超产原因");
+        }
+        if (overPlan) {
+            String line = "超产原因: " + reason + " (计划 " + planned.stripTrailingZeros().toPlainString()
+                    + ", 实际 " + actualQuantity.stripTrailingZeros().toPlainString() + ")";
+            locked.setNotes(locked.getNotes() != null && !locked.getNotes().isBlank()
+                    ? locked.getNotes() + "\n" + line : line);
+            Map<String, Object> fields = locked.getCustomFields() == null
+                    ? new LinkedHashMap<>() : new LinkedHashMap<>(locked.getCustomFields());
+            Map<String, Object> audit = new LinkedHashMap<>();
+            audit.put("plannedQuantity", planned);
+            audit.put("actualQuantity", actualQuantity);
+            audit.put("reason", reason);
+            audit.put("recordedAt", LocalDateTime.now().toString());
+            fields.put("overPlan", audit);
+            locked.setCustomFields(fields);
+        }
         return completeProduction(factoryId, batchId, actualQuantity, goodQuantity, defectQuantity, null);
+    }
+
+    /** 计划处于这些状态时批次开工不再过缺料闸; 其余 (待处理 / 草稿 / 待审批 …) 都算「还没开工」(独立审查 #1596)。 */
+    private static final java.util.Set<com.cretas.aims.entity.enums.ProductionPlanStatus> PLAN_ALREADY_STARTED_OR_CLOSED =
+            java.util.EnumSet.of(com.cretas.aims.entity.enums.ProductionPlanStatus.IN_PROGRESS,
+                    com.cretas.aims.entity.enums.ProductionPlanStatus.PAUSED,
+                    com.cretas.aims.entity.enums.ProductionPlanStatus.COMPLETED,
+                    com.cretas.aims.entity.enums.ProductionPlanStatus.CANCELLED);
+
+    /** 批次所挂的本厂计划; 没挂 / 跨厂 / 查不到 ⇒ null。 */
+    private com.cretas.aims.entity.ProductionPlan linkedPlanOf(String factoryId, ProductionBatch batch) {
+        if (batch.getProductionPlanId() == null || batch.getProductionPlanId().isBlank()) {
+            return null;
+        }
+        return productionPlanRepository.findById(batch.getProductionPlanId())
+                .filter(p -> factoryId.equals(p.getFactoryId()))
+                .orElse(null);
+    }
+
+    /** A8: 批次挂在没开工的计划上时, 过与计划开工同一道缺料闸 (原因记入缺料实例)。 */
+    private void checkShortageGateForBatchStart(String factoryId, com.cretas.aims.entity.ProductionPlan plan,
+                                                String forceStartReason) {
+        if (shortageStartGate == null || plan == null || PLAN_ALREADY_STARTED_OR_CLOSED.contains(plan.getStatus())) {
+            return; // 计划已开工 (当时已过闸 / 已强制并留痕) 或已结束: 不再让每个批次重问
+        }
+        shortageStartGate.check(factoryId, plan, forceStartReason, com.cretas.aims.utils.SecurityUtils.currentUserId());
     }
 
     @Override
@@ -268,11 +384,16 @@ public class ProcessingServiceImpl implements ProcessingService {
         batch.setDefectQuantity(defectQuantity);
         // P0-2: 末道产出单位非空时, 成品按"末道产出单位"(如 份/盒)入库, 而非批次原单位 (kg)
         // → createFinishedGoodsFromBatch 的 fg.setUnit(batch.getUnit()) 自动拿到正确单位.
-        // 覆盖 unit 前先把原计划单位记到瞬态 plannedUnit, 供 calculateMetrics 检测跨单位:
-        // 跨单位 (产出"份" ≠ 原计划"kg") 时 efficiency/unitCost 会被置 null 诚实留空,
+        // 覆盖 unit 前确保 plannedUnit (持久化列) 记着计划量的单位, 供 calculateMetrics 检测跨单位:
+        // 跨单位 (产出"份" ≠ 原计划"kg") 时 efficiency 置 null 诚实留空,
         // 不算出 actualQuantity(份)/plannedQuantity(kg) 这类无意义值 (镜像 yield cumulative=null).
+        // unitCost 不受影响 (金额 ÷ 产出份数 = 元/份, 见 ProductionBatch#plannedUnit)。
+        // D-W-01: 建批时已经记过的 (转批次 / 文员录入 / 手工建批都写) 不覆盖 —— 文员批次的 unit 早已是
+        // 产出单位, 拿它覆盖会把「计划量是 kg」改成「计划量是袋」; 只给没记的存量批次补上当前单位。
         if (finishedUnit != null && !finishedUnit.isBlank()) {
-            batch.setPlannedUnit(batch.getUnit());  // 记录原单位 (kg), 须在 setUnit 之前
+            if (batch.getPlannedUnit() == null || batch.getPlannedUnit().isBlank()) {
+                batch.setPlannedUnit(batch.getUnit());  // 记录原单位 (kg), 须在 setUnit 之前
+            }
             batch.setUnit(finishedUnit);
         }
         // 计算指标
@@ -328,6 +449,11 @@ public class ProcessingServiceImpl implements ProcessingService {
                 if (materialBatchId == null) continue;
                 MaterialBatch mb = materialBatchRepository.findByIdAndFactoryId(materialBatchId, factoryId).orElse(null);
                 if (mb == null) continue;
+                // 扣留中的批次状态不动, 只把扣留记录跟着进在制 (放行后回生产预留, 完工时再正常释放)
+                if (com.cretas.aims.service.quality.release.MaterialBatchHoldService.followWip(mb, true)) {
+                    materialBatchRepository.save(mb);
+                    continue;
+                }
                 if (mb.getStatus() == MaterialBatchStatus.RESERVED || mb.getStatus() == MaterialBatchStatus.AVAILABLE) {
                     mb.setStatus(MaterialBatchStatus.PRODUCING_RESERVED);
                     materialBatchRepository.save(mb);
@@ -364,19 +490,16 @@ public class ProcessingServiceImpl implements ProcessingService {
                 if (materialBatchId == null) continue;
                 MaterialBatch mb = materialBatchRepository.findByIdAndFactoryId(materialBatchId, factoryId).orElse(null);
                 if (mb == null) continue;
+                // B1: 扣留期间工序完工/取消 — 状态仍是质检中不动, 但扣留记录改成离开在制后的状态,
+                // 否则放行会还原成生产预留, 此后再没有路径把它翻回来 (库存搁死在在制列表)
+                if (com.cretas.aims.service.quality.release.MaterialBatchHoldService.followWip(mb, false)) {
+                    materialBatchRepository.save(mb);
+                    flipped++;
+                    continue;
+                }
                 if (mb.getStatus() != MaterialBatchStatus.PRODUCING_RESERVED) continue;
 
-                MaterialBatchStatus next;
-                BigDecimal current = mb.getCurrentQuantity();
-                BigDecimal reserved = mb.getReservedQuantity() != null ? mb.getReservedQuantity() : BigDecimal.ZERO;
-                if (current.compareTo(BigDecimal.ZERO) <= 0) {
-                    next = MaterialBatchStatus.DEPLETED;
-                } else if (reserved.compareTo(BigDecimal.ZERO) > 0) {
-                    next = MaterialBatchStatus.RESERVED;
-                } else {
-                    next = MaterialBatchStatus.AVAILABLE;
-                }
-                mb.setStatus(next);
+                mb.setStatus(com.cretas.aims.service.quality.release.MaterialBatchHoldService.wipExitStatus(mb));
                 materialBatchRepository.save(mb);
                 flipped++;
             }
@@ -445,6 +568,10 @@ public class ProcessingServiceImpl implements ProcessingService {
         }
         if (batch.getPlannedQuantity() == null) {
             batch.setPlannedQuantity(batch.getQuantity());
+            // D-W-01: 补的是批次自己的数量, 按批次单位计
+            if (batch.getPlannedUnit() == null) {
+                batch.setPlannedUnit(batch.getUnit());
+            }
         }
     }
 
@@ -750,7 +877,7 @@ public class ProcessingServiceImpl implements ProcessingService {
         // 审计 round2: 补录时效锁 — 班组报工业务日期不得早于 T-maxDays (对齐 submitReport/recordMaterialInput)。
         // 仅当显式传 reportTime 时校验 (默认 now() 必在窗口内)。
         if (reportTimeProvided && backdateWindowValidator != null) {
-            backdateWindowValidator.assertWithinWindow(reportTime.toLocalDate(), "班组报工");
+            backdateWindowValidator.assertWithinWindow(factoryId, reportTime.toLocalDate(), "班组报工");
         }
 
         // 处理可选的个人明细
@@ -892,6 +1019,11 @@ public class ProcessingServiceImpl implements ProcessingService {
                                          List<Map<String, Object>> consumptions, Long userId) {
         log.info("记录原材料消耗: factoryId={}, productionBatchId={}, userId={}", factoryId, productionBatchId, userId);
         ProductionBatch productionBatch = getBatchById(factoryId, productionBatchId);
+        // 排查 2026-11-10 A4: 与其它领料入口同一套硬拦 (状态 + 归属)。批次挂了计划按计划判归属;
+        // 挂的计划查不到 (别厂 / 已删) 一律拒绝, 不退化成「无计划」口径。
+        String planId = productionBatch.getProductionPlanId();
+        ProductionPlan issuePlan = planId == null ? null : productionPlanRepository.findById(planId)
+                .filter(p -> factoryId.equals(p.getFactoryId())).orElse(null);
 
         // N+1 修复：使用缓存 Map 避免重复查询
         Map<String, MaterialBatch> batchCache = new HashMap<>();
@@ -905,6 +1037,14 @@ public class ProcessingServiceImpl implements ProcessingService {
             MaterialBatch materialBatch = batchCache.computeIfAbsent(materialBatchId,
                     id -> materialBatchRepository.findByIdAndFactoryId(id, factoryId)
                             .orElseThrow(() -> new ResourceNotFoundException("原材料批次不存在: " + id)));
+
+            com.cretas.aims.service.gate.MaterialBatchStateGate.assertUsable(materialBatch);
+            com.cretas.aims.service.processentry.ProductionInventoryOwnershipGuard.assertIssuable(
+                    issuePlan, planId != null, materialBatch,
+                    rawMaterialTypeRepository.findById(materialBatch.getMaterialTypeId() == null ? "" : materialBatch.getMaterialTypeId())
+                            .filter(t -> factoryId.equals(t.getFactoryId()))
+                            .map(com.cretas.aims.entity.RawMaterialType::getMainCategory).orElse(null),
+                    "materialBatchId");
 
             // 检查库存
             if (materialBatch.getRemainingQuantity().compareTo(quantity) < 0) {
@@ -1033,6 +1173,7 @@ public class ProcessingServiceImpl implements ProcessingService {
             row.put("effectiveMaxValue", binding.getOverrideMaxValue() != null ? binding.getOverrideMaxValue() : item.getMaxValue());
             row.put("effectiveIsRequired", binding.getOverrideIsRequired() != null ? binding.getOverrideIsRequired() : item.getIsRequired());
             row.put("requireNoteOnFail", Boolean.TRUE.equals(item.getRequireNoteOnFail()));
+            row.put("severity", item.getSeverity() == null ? null : item.getSeverity().name());
             items.add(row);
         }
         form.put("items", items);
@@ -1066,6 +1207,12 @@ public class ProcessingServiceImpl implements ProcessingService {
         List<Map<String, Object>> snapshotItems = new ArrayList<>();
         List<String> failedWithoutReason = new ArrayList<>();
         boolean sampleFailed = false;
+        // 工厂开关: 哪些严重程度的项不合格才整张 FAIL; 其余不合格项标出来交质量经理决定 (2026-11-11)
+        com.cretas.aims.service.discipline.FactoryDisciplinePolicy.InspectionFailScope failScope = disciplinePolicy == null
+                ? com.cretas.aims.service.discipline.FactoryDisciplinePolicy.DEFAULT_INSPECTION_FAIL_SCOPE
+                : disciplinePolicy.inspectionFailScope(factoryId);
+        boolean sheetFailed = false;
+        List<String> reviewItems = new ArrayList<>();
         for (var answer : answers) {
             if (answer == null || answer.getBindingId() == null || answer.getItemId() == null) {
                 throw new BusinessException(400, "质检项目答案不能为空且必须包含项目标识");
@@ -1120,6 +1267,11 @@ public class ProcessingServiceImpl implements ProcessingService {
                 itemFailed = !answer.getValue().toString().trim().equals(standardValue.trim());
             }
             sampleFailed |= itemFailed;
+            boolean failsSheet = itemFailed && failScope.failsWholeSheet(item.getSeverity());
+            sheetFailed |= failsSheet;
+            if (itemFailed && !failsSheet) {
+                reviewItems.add(item.getItemName());
+            }
             // D-S302-02: 不合格项要原因时, 本项备注或本次备注有一个写了就算 (手机只有一个备注框)
             if (itemFailed && Boolean.TRUE.equals(item.getRequireNoteOnFail())
                     && !hasReason(answer.getNote()) && !hasReason(request.getNotes())) {
@@ -1131,6 +1283,8 @@ public class ProcessingServiceImpl implements ProcessingService {
             saved.put("effectiveStandardValue", standardValue); saved.put("value", answered ? answer.getValue() : null);
             saved.put("minValue", min); saved.put("maxValue", max); saved.put("isRequired", b.getOverrideIsRequired() != null ? b.getOverrideIsRequired() : item.getIsRequired());
             saved.put("status", answered ? (itemFailed ? "FAIL" : "PASS") : "NOT_ANSWERED");
+            saved.put("severity", item.getSeverity() == null ? null : item.getSeverity().name());
+            if (itemFailed && !failsSheet) saved.put("reviewRequired", true);
             if (hasReason(answer.getNote())) saved.put("note", answer.getNote().trim());
             snapshotItems.add(saved);
         }
@@ -1154,22 +1308,85 @@ public class ProcessingServiceImpl implements ProcessingService {
                     .withCode("QUALITY_FAIL_NOTE_REQUIRED")
                     .withHint("请在备注里写明不合格的原因后重新提交").withHintTarget("notes");
         }
-        BigDecimal failures = sampleFailed ? BigDecimal.ONE : BigDecimal.ZERO;
+        // 计数跟整张结论走: 只有交质量经理决定的项不合格时样本不算不合格 (合格率 100), 否则处置建议会按 0% 合格率给「报废」;
+        // 哪几项不合格照样在快照 items[].status=FAIL 和 reviewItems 里
+        BigDecimal failures = sheetFailed ? BigDecimal.ONE : BigDecimal.ZERO;
         BigDecimal passes = sampleSize.subtract(failures);
         QualityInspection inspection = new QualityInspection();
         inspection.setFactoryId(factoryId); inspection.setProductionBatchId(batch.getId()); inspection.setInspectorId(inspectorId);
         inspection.setInspectionDate(LocalDate.now()); inspection.setSampleSize(sampleSize); inspection.setFailCount(failures);
         inspection.setPassCount(passes); inspection.setPassRate(passes.multiply(BigDecimal.valueOf(100)).divide(passes.add(failures).max(BigDecimal.ONE), 2, RoundingMode.HALF_UP));
-        inspection.setResult(sampleFailed ? "FAIL" : "PASS"); inspection.setNotes(request.getNotes());
+        // 整张结论: 有判整张 FAIL 的项 ⇒ FAIL (走隔离 + 处置复核, 不变); 只有交质量经理决定的项不合格 ⇒ 条件合格,
+        // 不隔离成品, 记录里标出这些项。⛔ 已判不合格 (处置锁定中) 的批次不会被这条条件合格改回去 ——
+        // QualityInspectionServiceImpl.propagateToProductionBatch 只认处置复核 (Owner 2026-11-04)。
+        String verdict = sheetFailed ? "FAIL" : (reviewItems.isEmpty() ? "PASS" : "CONDITIONAL");
+        inspection.setResult(verdict); inspection.setNotes(request.getNotes());
         Map<String, Object> customFields = new LinkedHashMap<>();
         customFields.put("standardBasis", "DYNAMIC_PRODUCT_BINDING"); customFields.put("standardRevision", revision); customFields.put("items", snapshotItems);
+        customFields.put("failScope", failScope.name());
+        if (!sheetFailed && !reviewItems.isEmpty()) {
+            customFields.put("reviewRequired", true);
+            customFields.put("reviewItems", reviewItems);
+        }
         inspection.setCustomFields(customFields);
         QualityInspection savedInspection = qualityInspectionService.createInspection(factoryId, inspection);
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("inspection", savedInspection);
         result.put("standardRevision", revision);
+        if (!sheetFailed && !reviewItems.isEmpty()) {
+            // 告诉质检员: 这张没有判不合格, 但这些项不合格, 要质量经理决定
+            result.put("reviewRequired", true);
+            result.put("reviewItems", reviewItems);
+            result.put("reviewMessage", "以下项目不合格但不判整批不合格，已交质量经理决定：" + String.join("、", reviewItems));
+            notifyReviewAfterCommit(factoryId, batch, savedInspection, reviewItems);
+        }
         putBatchQualityOutcome(result, factoryId, savedInspection);
         return result;
+    }
+
+    /**
+     * 通知质量经理 (接收岗位按 quality.notify.inspection_review 配置, 找不到人改发厂长)。放到提交之后发:
+     * 通知失败不能把质检记录本身回滚掉, 也不能在事务里吞异常把它标成只回滚。
+     */
+    private void notifyReviewAfterCommit(String factoryId, ProductionBatch batch, QualityInspection saved,
+                                         List<String> reviewItems) {
+        if (reviewNotificationService == null) {
+            return;
+        }
+        String title = "质检待决定：" + (batch.getProductName() != null ? batch.getProductName() : "")
+                + " (" + batch.getBatchNumber() + ")";
+        String content = "以下项目不合格，按本厂设置不判整批不合格，请决定放行还是处置：" + String.join("、", reviewItems);
+        String sourceId = saved == null || saved.getId() == null ? null : String.valueOf(saved.getId());
+        Runnable sendNow = () -> reviewNotificationService.sendByPolicy(factoryId,
+                com.cretas.aims.service.canvas.ThresholdKeys.QUALITY_NOTIFY_INSPECTION_REVIEW,
+                List.of(com.cretas.aims.entity.enums.FactoryUserRole.quality_manager), title, content,
+                com.cretas.aims.entity.enums.NotificationType.WARNING, "QUALITY_INSPECTION_REVIEW", sourceId);
+        Runnable send = () -> {
+            try {
+                if (reviewNotificationTx != null) {
+                    // afterCommit 里原事务已提交、资源还绑着: REQUIRED 会加入一个不再提交的事务, 通知行静默丢失 ⇒ 开新事务
+                    org.springframework.transaction.support.TransactionTemplate fresh =
+                            new org.springframework.transaction.support.TransactionTemplate(reviewNotificationTx);
+                    fresh.setPropagationBehavior(org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+                    fresh.executeWithoutResult(status -> sendNow.run());
+                } else {
+                    sendNow.run();
+                }
+            } catch (RuntimeException e) {
+                log.error("质检待决定通知发送失败 (质检记录已保存): factoryId={}, inspection={}", factoryId, sourceId, e);
+            }
+        };
+        if (org.springframework.transaction.support.TransactionSynchronizationManager.isSynchronizationActive()) {
+            org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
+                    new org.springframework.transaction.support.TransactionSynchronization() {
+                        @Override
+                        public void afterCommit() {
+                            send.run();
+                        }
+                    });
+        } else {
+            send.run();
+        }
     }
 
     /** 全空白 (含全角空格、不换行空格) 不算写了原因。 */
@@ -1389,6 +1606,53 @@ public class ProcessingServiceImpl implements ProcessingService {
                 pageRequest.getSize(),
                 page.getTotalElements()
         );
+    }
+
+    /** 批量批次号上限, 与前端共享组件一致。 */
+    static final int MAX_BATCH_NOS = 200;
+
+    @Override
+    public PageResponse<Map<String, Object>> searchInspections(
+            String factoryId, String batchId, java.util.List<String> results,
+            LocalDate dateFrom, LocalDate dateTo, String keyword, java.util.List<String> batchNos,
+            PageRequest pageRequest) {
+        if (dateFrom != null && dateTo != null && dateFrom.isAfter(dateTo)) {
+            throw new BusinessException(400, "开始日期不能晚于结束日期");
+        }
+        java.util.List<String> nos = normalizeBatchNos(batchNos);
+        String kw = keyword == null ? null : keyword.replaceAll("[%_\\\\]", "").trim();
+        java.util.List<String> upperResults = results == null ? null
+                : results.stream().map(s -> s.trim().toUpperCase(Locale.ROOT)).filter(s -> !s.isEmpty()).toList();
+        Long batchLongId = batchId == null ? null : parseBatchId(batchId);
+        Page<QualityInspection> page = qualityInspectionRepository.searchForAdminList(
+                factoryId, batchLongId, upperResults, dateFrom, dateTo, kw, nos,
+                org.springframework.data.domain.PageRequest.of(pageRequest.getPage() - 1, pageRequest.getSize()));
+        Map<Long, ProductionBatch> batchesById = productionBatchRepository.findAllById(
+                        page.getContent().stream().map(QualityInspection::getProductionBatchId)
+                                .filter(Objects::nonNull).collect(Collectors.toSet()))
+                .stream().collect(Collectors.toMap(ProductionBatch::getId, Function.identity()));
+        List<Map<String, Object>> maps = page.getContent().stream()
+                .map(i -> convertInspectionToMap(i, batchesById.get(i.getProductionBatchId())))
+                .collect(Collectors.toList());
+        return PageResponse.of(maps, pageRequest.getPage(), pageRequest.getSize(), page.getTotalElements());
+    }
+
+    @Override
+    public java.util.List<String> findInspectedBatchNumbers(String factoryId, java.util.List<String> batchNos) {
+        java.util.List<String> nos = normalizeBatchNos(batchNos);
+        if (nos == null) return java.util.List.of();
+        return qualityInspectionRepository.findBatchNumbersHavingInspection(factoryId, nos);
+    }
+
+    /** 去空白、去重、保序; 空返回 null (= 不按批次号过滤); 超过上限报错, 不静默截断。 */
+    private static java.util.List<String> normalizeBatchNos(java.util.List<String> raw) {
+        if (raw == null) return null;
+        java.util.List<String> out = raw.stream().filter(Objects::nonNull).map(String::trim)
+                .filter(s -> !s.isEmpty()).distinct().toList();
+        if (out.size() > MAX_BATCH_NOS) {
+            throw new BusinessException(400, "一次最多查询 " + MAX_BATCH_NOS + " 个批次号");
+        }
+        return out.isEmpty() ? null : out;
     }
 
     /**
@@ -3119,6 +3383,8 @@ public class ProcessingServiceImpl implements ProcessingService {
             ProductionBatch productionBatch) {
         Map<String, Object> map = new HashMap<>();
         map.put("id", inspection.getId());
+        // 给用户看的质检编号 (QI-YYYYMMDD-NNNN, 数据库发号); null = 未编号, 前端显示「未编号」, 不拿 id 截一段顶替
+        map.put("inspectionNumber", inspection.getInspectionNumber());
         map.put("productionBatchId", inspection.getProductionBatchId());
         map.put("inspectorId", inspection.getInspectorId());
         // 质检记录列表把 inspectorId 这个**数字主键**直接摆给用户看(列名就叫「质检员ID」)。

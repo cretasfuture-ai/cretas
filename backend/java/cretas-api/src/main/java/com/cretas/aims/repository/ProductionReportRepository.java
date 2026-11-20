@@ -161,20 +161,48 @@ public interface ProductionReportRepository extends JpaRepository<ProductionRepo
             @Param("startDate") LocalDate startDate,
             @Param("endDate") LocalDate endDate);
 
+    /**
+     * 按工序 × 单位 × 来源 (report_type) 汇总产出与不良, 供 ProductionAnalyticsServiceImpl 合并成「工序 × 单位」行。
+     * <ul>
+     *   <li>来源: 旧进度报工 PROGRESS (工序 = process_category) + 称重逐道报工 YIELD
+     *       (工序 = 任务对应的 work_processes.process_name; 只取有产出的 OUTPUT / 旧式整合 (report_kind 为空) 行,
+     *       INPUT / SEGMENT 行没有产出)。复审 M5: 原先只读 PROGRESS, 称重数据整片「没数据」。</li>
+     *   <li>不同单位分行, 不相加。</li>
+     *   <li>defect 只汇总清点过不良的行 (defect_quantity 非空): 全没清点 ⇒ defect 为 NULL (不知道), 不是 0;
+     *       counted_output = 这些清点过的行的产出, defect_counted_count = 清点过的笔数。</li>
+     * </ul>
+     */
     @Query(value = """
         SELECT
-            COALESCE(process_category, '未分类') as process_category,
-            COALESCE(SUM(CAST(output_quantity AS DECIMAL(12,2))), 0) as output,
-            COALESCE(SUM(CAST(good_quantity AS DECIMAL(12,2))), 0) as good,
-            COALESCE(SUM(CAST(defect_quantity AS DECIMAL(12,2))), 0) as defect,
-            COUNT(*) as report_count
-        FROM production_reports
-        WHERE factory_id = :factoryId
-          AND report_type = 'PROGRESS'
-          AND report_date BETWEEN :startDate AND :endDate
-          AND deleted_at IS NULL
-        GROUP BY process_category
-        ORDER BY output DESC
+            x.src AS source,
+            x.process_category AS process_category,
+            x.unit AS unit,
+            COALESCE(SUM(x.output_q), 0) AS output,
+            SUM(x.good_q) AS good,
+            SUM(x.defect_q) AS defect,
+            SUM(CASE WHEN x.defect_q IS NOT NULL THEN x.output_q END) AS counted_output,
+            COUNT(x.defect_q) AS defect_counted_count,
+            COUNT(*) AS report_count
+        FROM (
+            SELECT r.report_type AS src,
+                   CASE WHEN r.report_type = 'YIELD'
+                        THEN COALESCE(wp.process_name, r.process_category, '未分类')
+                        ELSE COALESCE(r.process_category, '未分类') END AS process_category,
+                   r.output_unit AS unit,
+                   CAST(r.output_quantity AS DECIMAL(12,2)) AS output_q,
+                   CAST(r.good_quantity AS DECIMAL(12,2)) AS good_q,
+                   CAST(r.defect_quantity AS DECIMAL(12,2)) AS defect_q
+            FROM production_reports r
+            LEFT JOIN work_process_tasks t ON t.id = r.work_process_task_id AND t.factory_id = r.factory_id
+            LEFT JOIN work_processes wp ON wp.id = t.work_process_id AND wp.factory_id = r.factory_id
+            WHERE r.factory_id = :factoryId
+              AND r.report_date BETWEEN :startDate AND :endDate
+              AND r.deleted_at IS NULL
+              AND (r.report_type = 'PROGRESS'
+                   OR (r.report_type = 'YIELD' AND (r.report_kind IS NULL OR r.report_kind = 'OUTPUT')))
+        ) x
+        GROUP BY x.src, x.process_category, x.unit
+        ORDER BY x.process_category, x.unit, x.src
         """, nativeQuery = true)
     List<Map<String, Object>> getProcessBreakdown(
             @Param("factoryId") String factoryId,
@@ -484,7 +512,7 @@ public interface ProductionReportRepository extends JpaRepository<ProductionRepo
             pp.id AS plan_id,
             pp.plan_number AS plan_number,
             pp.product_type_id AS product_type_id,
-            ptp.name AS product_name,
+            CASE WHEN ptp.name IS NULL OR LEFT(ptp.name, 22) = '__RAW_WORKFLOW_OWNER__' THEN COALESCE(rmtp.name, ptp.name) ELSE ptp.name END AS product_name,
             pr.report_date AS report_date,
             pr.input_quantity AS input_quantity,
             pr.input_unit AS input_unit,
@@ -499,6 +527,7 @@ public interface ProductionReportRepository extends JpaRepository<ProductionRepo
         LEFT JOIN production_batches pb ON pb.id = COALESCE(pr.batch_id, wpt.production_batch_id)
         LEFT JOIN production_plans pp ON pp.id = pb.production_plan_id
         LEFT JOIN product_types ptp ON ptp.id = pp.product_type_id
+        LEFT JOIN raw_material_types rmtp ON rmtp.id = pp.product_type_id AND rmtp.factory_id = pp.factory_id AND rmtp.deleted_at IS NULL
         WHERE pr.factory_id = :factoryId
           AND pr.report_type = 'YIELD'
           AND pr.deleted_at IS NULL
@@ -521,32 +550,98 @@ public interface ProductionReportRepository extends JpaRepository<ProductionRepo
 
     /**
      * audit 单元2: 厂级按工序聚合 YIELD 报工投入/产出. native (沿用 analytics 投影惯例).
-     * 单位取工序标准 wp.unit/wp.output_unit (audit SQL-2). 可空参数由 service 转 sentinel
-     * (audit SQL-1: 永不传 null, 避 PG 类型推断失败).
+     * 单位: 每条报工先取报工自己记的单位 (pr.input_unit / pr.output_unit), 没记再退回工序标准
+     * wp.unit / wp.output_unit; 产出两处都没记时按投入单位 (多数工序不声明产出单位)。
+     * 空串与占位值 'unitless' 一律视为「没有单位」(NULL)。返回各侧单位的 MIN/MAX/种数及
+     * 「记了单位的报工数」, 由 service 判断能不能合计、能不能相除 —— SQL 层不再只看工序标准单位
+     * (2026-11-12 网页验收: 定量包装报工 kg/袋 → 袋/盒, 按工序标准判同单位, 转化率出 333%~500%)。
+     * 可空参数由 service 转 sentinel (audit SQL-1: 永不传 null, 避 PG 类型推断失败).
      */
     @Query(value = """
         SELECT
-            wp.process_name AS process_name,
-            COALESCE(SUM(CAST(pr.input_quantity AS DECIMAL(14,2))), 0) AS total_input,
-            COALESCE(SUM(CAST(pr.output_quantity AS DECIMAL(14,2))), 0) AS total_output,
-            wp.unit AS input_unit,
-            wp.output_unit AS output_unit,
-            COUNT(DISTINCT pr.batch_id) AS batch_count
-        FROM production_reports pr
-        JOIN work_process_tasks wpt ON pr.work_process_task_id = wpt.id AND wpt.deleted_at IS NULL
-        JOIN work_processes wp ON wpt.work_process_id = wp.id AND wp.deleted_at IS NULL
-        WHERE pr.factory_id = :factoryId
-          AND wpt.factory_id = :factoryId
-          AND pr.report_type = 'YIELD'
-          AND pr.deleted_at IS NULL
-          AND pr.report_date BETWEEN :startDate AND :endDate
-          AND (:productTypeId = '' OR wpt.product_type_id = :productTypeId)
-          AND (wpt.product_type_id IS NULL OR wpt.product_type_id NOT IN (:excludedProductTypeIds))
-          AND NOT EXISTS (SELECT 1 FROM production_batches pb
-                          WHERE pb.id = COALESCE(pr.batch_id, wpt.production_batch_id)
-                            AND pb.production_plan_id IN (:excludedPlanIds))
-        GROUP BY wp.id, wp.process_name, wp.unit, wp.output_unit
-        ORDER BY MIN(wpt.process_order)
+            t.process_name AS process_name,
+            COALESCE(SUM(t.input_quantity), 0) AS total_input,
+            COALESCE(SUM(t.output_quantity), 0) AS total_output,
+            MIN(t.in_unit) AS input_unit_min,
+            MAX(t.in_unit) AS input_unit_max,
+            COUNT(DISTINCT t.in_unit) AS input_unit_kinds,
+            COUNT(t.in_unit) AS input_unit_known,
+            MIN(t.out_unit) AS output_unit_min,
+            MAX(t.out_unit) AS output_unit_max,
+            COUNT(DISTINCT t.out_unit) AS output_unit_kinds,
+            COUNT(t.out_unit) AS output_unit_known,
+            COUNT(*) AS report_count,
+            COUNT(DISTINCT t.batch_id) AS batch_count,
+            COUNT(*) FILTER (WHERE t.src = 'STAGE') AS stage_record_count
+        FROM (
+            SELECT
+                'REPORT' AS src,
+                wp.id AS wp_id,
+                wp.process_name AS process_name,
+                wpt.process_order AS process_order,
+                pr.batch_id AS batch_id,
+                CAST(pr.input_quantity AS DECIMAL(14,2)) AS input_quantity,
+                CAST(pr.output_quantity AS DECIMAL(14,2)) AS output_quantity,
+                COALESCE(
+                    CASE WHEN TRIM(pr.input_unit) = '' OR LOWER(TRIM(pr.input_unit)) = 'unitless' THEN NULL ELSE TRIM(pr.input_unit) END,
+                    CASE WHEN TRIM(wp.unit) = '' OR LOWER(TRIM(wp.unit)) = 'unitless' THEN NULL ELSE TRIM(wp.unit) END
+                ) AS in_unit,
+                COALESCE(
+                    CASE WHEN TRIM(pr.output_unit) = '' OR LOWER(TRIM(pr.output_unit)) = 'unitless' THEN NULL ELSE TRIM(pr.output_unit) END,
+                    CASE WHEN TRIM(wp.output_unit) = '' OR LOWER(TRIM(wp.output_unit)) = 'unitless' THEN NULL ELSE TRIM(wp.output_unit) END,
+                    CASE WHEN TRIM(pr.input_unit) = '' OR LOWER(TRIM(pr.input_unit)) = 'unitless' THEN NULL ELSE TRIM(pr.input_unit) END,
+                    CASE WHEN TRIM(wp.unit) = '' OR LOWER(TRIM(wp.unit)) = 'unitless' THEN NULL ELSE TRIM(wp.unit) END
+                ) AS out_unit
+            FROM production_reports pr
+            JOIN work_process_tasks wpt ON pr.work_process_task_id = wpt.id AND wpt.deleted_at IS NULL
+            JOIN work_processes wp ON wpt.work_process_id = wp.id AND wp.deleted_at IS NULL
+            WHERE pr.factory_id = :factoryId
+              AND wpt.factory_id = :factoryId
+              AND pr.report_type = 'YIELD'
+              AND pr.deleted_at IS NULL
+              AND pr.report_date BETWEEN :startDate AND :endDate
+              AND (:productTypeId = '' OR wpt.product_type_id = :productTypeId)
+              AND (wpt.product_type_id IS NULL OR wpt.product_type_id NOT IN (:excludedProductTypeIds))
+              AND NOT EXISTS (SELECT 1 FROM production_batches pb
+                              WHERE pb.id = COALESCE(pr.batch_id, wpt.production_batch_id)
+                                AND pb.production_plan_id IN (:excludedPlanIds))
+            UNION ALL
+            -- PROTO-STAGE-IO: 加工环节记录 (processing_stage_records, 工位称重 / 手录环节) 兼读。
+            -- 去重口径: 批次已有任何 YIELD 报工 (不限日期窗) 就整批只用报工, 该批的环节记录不进 (同一批的同一工序不记两遍);
+            -- 只有没报工的批次才用环节记录。要求投入、产出重量都登记 (投入 0 / 空的工位累计行没有可除的分母, 不进)。
+            -- 环节记录重量一律 kg。同名工序并入报工那一行 (wp_id 取同厂同名工序), 否则按环节名单独成行。
+            SELECT
+                'STAGE' AS src,
+                (SELECT MIN(w2.id) FROM work_processes w2
+                  WHERE w2.factory_id = :factoryId AND w2.deleted_at IS NULL
+                    AND w2.process_name = COALESCE(NULLIF(TRIM(sr.stage_name), ''), sr.stage_type)) AS wp_id,
+                COALESCE(NULLIF(TRIM(sr.stage_name), ''), sr.stage_type) AS process_name,
+                1000 + COALESCE(sr.stage_order, 0) AS process_order,
+                sr.production_batch_id AS batch_id,
+                CAST(sr.input_weight AS DECIMAL(14,2)) AS input_quantity,
+                CAST(sr.output_weight AS DECIMAL(14,2)) AS output_quantity,
+                'kg' AS in_unit,
+                'kg' AS out_unit
+            FROM processing_stage_records sr
+            JOIN production_batches pb2 ON pb2.id = sr.production_batch_id AND pb2.factory_id = :factoryId
+            WHERE sr.factory_id = :factoryId
+              AND sr.deleted_at IS NULL
+              AND sr.input_weight > 0
+              AND sr.output_weight IS NOT NULL
+              AND CAST(COALESCE(sr.start_time, sr.created_at) AS DATE) BETWEEN :startDate AND :endDate
+              AND (:productTypeId = '' OR pb2.product_type_id = :productTypeId)
+              AND pb2.product_type_id NOT IN (:excludedProductTypeIds)
+              AND COALESCE(pb2.production_plan_id, '') NOT IN (:excludedPlanIds)
+              AND NOT EXISTS (SELECT 1 FROM production_reports pr2
+                              LEFT JOIN work_process_tasks wpt2 ON wpt2.id = pr2.work_process_task_id
+                                   AND wpt2.deleted_at IS NULL
+                              WHERE pr2.factory_id = :factoryId
+                                AND pr2.report_type = 'YIELD'
+                                AND pr2.deleted_at IS NULL
+                                AND COALESCE(pr2.batch_id, wpt2.production_batch_id) = sr.production_batch_id)
+        ) t
+        GROUP BY t.wp_id, t.process_name
+        ORDER BY MIN(t.process_order)
         """, nativeQuery = true)
     List<Map<String, Object>> aggregateYieldByProcess(
             @Param("factoryId") String factoryId,

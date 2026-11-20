@@ -64,6 +64,8 @@ class SchedulingResourceConcurrencyPostgresContractTest {
     @Autowired ProductEquipmentRequirementRepository requirements;
     @Autowired ProductionLineCapacityConfigRepository capacities;
     @Autowired JdbcTemplate jdbc;
+    @org.springframework.boot.test.mock.mockito.MockBean
+    com.cretas.aims.service.discipline.FactoryDisciplinePolicy disciplinePolicy;
     private String factory, product, line, slot;
     private Long actor, machine;
     private ConfirmUrgentInsertRequest request;
@@ -111,7 +113,8 @@ class SchedulingResourceConcurrencyPostgresContractTest {
             previews.saveAndFlush(InsertSlotPreview.builder().id(UUID.randomUUID().toString()).factoryId(factory).slotId(slot)
                     .productTypeId(product).previewQuantity(new BigDecimal("17")).quantityUnit("PIECE").plannedUnit("个")
                     .productionLineId(line).windowStart(start).windowEnd(start.plusHours(2)).candidateNumber(1)
-                    .slotUpdatedAt(storedSlot.getUpdatedAt()).impactLevel("none").requiresApproval(false).affectedPlanCount(0).build());
+                    .slotUpdatedAt(storedSlot.getUpdatedAt()).impactLevel("none").requiresApproval(false).affectedPlanCount(0)
+                    .materialFingerprint(UrgentInsertTestSupport.MATERIAL_FP).impactFingerprint(UrgentInsertServiceImpl.impactFingerprint(null)).scheduleFingerprint(UrgentInsertTestSupport.SCHEDULE_FP).build());
         });
         configuration.setCapacity(factory, line, product, new BigDecimal("100"), "PIECE", ProductionLineCapacityConfig.Source.FACTORY_CONFIG,
                 new ActorRef(AuthenticatedActorType.FACTORY_USER, actor));
@@ -232,7 +235,8 @@ class SchedulingResourceConcurrencyPostgresContractTest {
             previews.saveAndFlush(InsertSlotPreview.builder().id(id).factoryId(factory).slotId(slot).productTypeId(product)
                     .previewQuantity(new BigDecimal("17")).quantityUnit("PIECE").plannedUnit("个").productionLineId(line)
                     .windowStart(s.getStartTime()).windowEnd(s.getEndTime()).candidateNumber(2)
-                    .slotUpdatedAt(s.getUpdatedAt()).impactLevel("none").requiresApproval(false).affectedPlanCount(0).build());
+                    .slotUpdatedAt(s.getUpdatedAt()).impactLevel("none").requiresApproval(false).affectedPlanCount(0)
+                    .materialFingerprint(UrgentInsertTestSupport.MATERIAL_FP).impactFingerprint(UrgentInsertServiceImpl.impactFingerprint(null)).scheduleFingerprint(UrgentInsertTestSupport.SCHEDULE_FP).build());
         });
         ExecutorService pool = Executors.newFixedThreadPool(2); CyclicBarrier start = new CyclicBarrier(2);
         try {

@@ -117,6 +117,10 @@ def coerce_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
         coerced = pd.to_numeric(df[col], errors='coerce')
         non_null = df[col].notna().sum()
         if non_null > 0 and coerced.notna().sum() / non_null > 0.5:
+            # 转换会把 21014C / 26004+24004 这类编码清成 NaN 时整列保持文本
+            from smartbi.config import would_lose_code_values
+            if would_lose_code_values(df[col], coerced):
+                continue
             df[col] = coerced
     return df
 

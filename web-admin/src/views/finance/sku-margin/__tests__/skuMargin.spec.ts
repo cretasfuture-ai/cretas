@@ -9,7 +9,7 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
-import { defineComponent, h, inject, provide, computed, type ComputedRef } from 'vue';
+import { defineComponent, h } from 'vue';
 
 const postMock = vi.fn();
 const routeMock = vi.hoisted(() => ({ query: {} as Record<string, unknown> }));
@@ -36,54 +36,32 @@ vi.mock('@/composables/useChartInsight', async () => {
   const { ref } = await import('vue');
   return { useChartInsight: () => ({ insight: ref(null), loading: ref(false) }) };
 });
-vi.mock('@/views/smart-bi/components/ChartInsight.vue', () => ({
-  default: { name: 'ChartInsight', template: '<div class="chart-insight" />' },
-}));
 
 import SkuMargin from '../index.vue';
 import { readSkuMarginResponse, fmtPct, fmtMoney } from '../skuMarginData';
 
-// ---- 能渲染作用域插槽的表格桩 ----
-const ElTable = defineComponent({
-  props: { data: { type: Array, default: () => [] } },
+import { nuxtUiStubs } from '@/__tests__/helpers/nuxtUiStubs';
+// 共享桩的 UTable 渲染 `<列id>-cell` 插槽; 这里给每个单元格带上列头, 便于按列头取值
+const UTable = defineComponent({
+  props: { data: { type: Array, default: () => [] }, columns: { type: Array, default: () => [] } },
   setup(props, { slots }) {
-    provide('rows', computed(() => props.data));
-    return () => h('div', { class: 'el-table' }, slots.default?.());
-  },
-});
-const ElTableColumn = defineComponent({
-  props: { prop: { type: String, default: '' }, label: { type: String, default: '' } },
-  setup(props, { slots }) {
-    const rows = inject<ComputedRef<Record<string, unknown>[]>>('rows');
-    return () => h(
-      'div',
-      { class: 'col', 'data-label': props.label },
-      (rows?.value ?? []).map((row, i) =>
-        h('div', { class: 'cell', 'data-row': i },
-          slots.default ? slots.default({ row }) : String(row[props.prop] ?? '')),
-      ),
-    );
+    return () => h('div', { class: 'u-table' }, (props.columns as { id?: string; accessorKey?: string; header?: string }[]).map((c) => {
+      const key = c.id ?? c.accessorKey ?? '';
+      return h('div', { class: 'col', 'data-label': c.header }, (props.data as Record<string, unknown>[]).map((row, i) =>
+        h('div', { class: 'cell', 'data-row': i }, slots[`${key}-cell`] ? slots[`${key}-cell`]!({ row: { original: row } }) : String(row[c.accessorKey ?? ''] ?? ''))));
+    }));
   },
 });
 
 const stubs = {
+  ...nuxtUiStubs,
   ShipmentSkuMargin: { template: '<div class="shipment-margin-entry" />' },
-  'el-collapse': { template: '<div><slot /></div>' },
-  'el-collapse-item': { template: '<div><slot /></div>' },
-  'el-card': { template: '<div class="el-card"><slot name="header" /><slot /></div>' },
-  'el-alert': {
-    props: ['title', 'type'],
-    template: '<div class="el-alert" :data-type="type">{{ title }}<slot /></div>',
-  },
-  'el-button': { template: '<button><slot /></button>' },
-  'el-date-picker': { template: '<input />' },
-  'el-empty': { props: ['description'], template: '<div class="el-empty">{{ description }}</div>' },
-  'el-pagination': { template: '<div class="el-pagination" />' },
-  'el-tag': { template: '<span class="el-tag"><slot /></span>' },
-  'el-table': ElTable,
-  'el-table-column': ElTableColumn,
+  UTable,
+  UAlert: { props: ['title'], template: '<div class="u-alert">{{ title }}</div>' },
+  UIcon: { template: '<i />' },
+  USelect: { template: '<div />' },
+  UPagination: { template: '<div class="u-pagination" />' },
 };
-const directives = { loading: {} };
 
 // ---- 后端真实返回形状: ApiResponse.data = IntentExecuteResponse, 工具数据在 resultData.data ----
 const itemA = {
@@ -135,11 +113,18 @@ function okResponse(items: unknown[]) {
   };
 }
 
+// 「订单与目录参考」默认收起, 点开才渲染 (原 el-collapse 的行为)
+async function openReference(wrapper: ReturnType<typeof mount>) {
+  await wrapper.get('[data-testid="margin-reference-toggle"]').trigger('click');
+  await flushPromises();
+}
+
 async function mountPage(response: unknown) {
   postMock.mockReset();
   postMock.mockResolvedValue(response);
-  const wrapper = mount(SkuMargin, { global: { stubs, directives } });
+  const wrapper = mount(SkuMargin, { global: { stubs } });
   await flushPromises();
+  await openReference(wrapper);
   return wrapper;
 }
 
@@ -253,7 +238,10 @@ describe('KPI 只统计有实际销售毛利率的 SKU', () => {
     expect(wrapper.find('.kpi-avg').text()).toBe('18.4%');
     expect(wrapper.text()).toContain('2 / 3 个SKU有订单毛利率');
     expect(wrapper.text()).toContain('产品毛利率简单平均');
-    expect(wrapper.find('.chart-insight').exists()).toBe(false);
+    // 一图一分析（问题 40）接上后，性质仍然成立：毛利率是比率，分析里只比较高低，不出现合计/占比
+    const insight = wrapper.find('.chart-insight-container').text();
+    expect(insight).toContain('从 36.8%（牛肉酱）到 0%（保本产品）');
+    expect(insight).not.toMatch(/占比|合计|总计|总和/);
     expect(wrapper.find('.kpi-best').text()).toBe('36.8%');
     expect(wrapper.find('.kpi-worst').text()).toBe('0.0%');
   });
@@ -275,7 +263,7 @@ describe('失败 / 空结果: 如实说原因, 不换别的数据源顶替', () 
       data: { status: 'NEED_CLARIFICATION', message: '您是想问哪一类产品的毛利率?' },
     });
     expect(wrapper.find('.empty-notice').text()).toContain('您是想问哪一类产品的毛利率?');
-    expect(wrapper.find('.el-table').exists()).toBe(false);
+    expect(wrapper.find('.u-table').exists()).toBe(false);
     expect(postMock).toHaveBeenCalledTimes(1);   // 没有去别的接口兜底
   });
 
@@ -284,12 +272,13 @@ describe('失败 / 空结果: 如实说原因, 不换别的数据源顶替', () 
     // 真实拦截器对 success=false 的响应会 reject 一个 ApiError
     vi.spyOn(console, 'error').mockImplementation(() => {});
     postMock.mockReturnValue({ __reject: new Error('您当前的角色没有权限执行「SKU毛利率查询」操作') });
-    const wrapper = mount(SkuMargin, { global: { stubs, directives } });
+    const wrapper = mount(SkuMargin, { global: { stubs } });
     await flushPromises();
+    await openReference(wrapper);
     const notice = wrapper.find('.empty-notice');
     expect(notice.attributes('data-type')).toBe('error');
     expect(notice.text()).toContain('没有权限');
-    expect(wrapper.find('.el-table').exists()).toBe(false);
+    expect(wrapper.find('.u-table').exists()).toBe(false);
   });
 
   it('工具说没有产品 → 显示工具文案', async () => {

@@ -403,6 +403,10 @@ public interface ProductionBatchRepository extends JpaRepository<ProductionBatch
             + HIDDEN_FROM_PLATFORM_POLICY + ")")
     long countByStatusExcludingProcessSecretProducts(@Param("status") ProductionBatchStatus status);
 
+    /** 按批次结束时间半开区间 [from, to) 取批次 (AI 成本查询与成本分析页同口径: 按结束日落期)。 */
+    java.util.List<ProductionBatch> findByFactoryIdAndEndTimeGreaterThanEqualAndEndTimeLessThan(
+            String factoryId, LocalDateTime from, LocalDateTime to);
+
     /**
      * 获取时间范围内的批次（用于成本分析和绩效计算）
      */
@@ -446,6 +450,43 @@ public interface ProductionBatchRepository extends JpaRepository<ProductionBatch
      */
     @Query("SELECT b FROM ProductionBatch b WHERE b.id IN :ids AND b.factoryId = :factoryId")
     java.util.List<ProductionBatch> findByIdInAndFactoryId(@Param("ids") Collection<Long> ids, @Param("factoryId") String factoryId);
+
+    /**
+     * 调度 Dashboard 今日排程里的工作流批次: 本厂 {@code day} 当天<b>有活动</b>的正式批次 (状态在 statuses 内)。
+     * 「有活动」= 当天开工 / 当天完工 (COMPLETED 且 endTime 落在当天) / 当天有报工 (production_reports.report_date)
+     * / 当天有加工环节记录 (processing_stage_records 的开始、结束或录入时间落在当天)。子查询都带 factory_id。
+     * 不含 CLERK_WIP 中间工件 (同 {@link #findByFactoryIdAndProductionPlanIdIn} 口径)。软删由实体 @Where 过滤。
+     */
+    @Query("SELECT b FROM ProductionBatch b WHERE b.factoryId = :factoryId AND b.status IN :statuses "
+           + "AND (b.batchType IS NULL OR b.batchType <> 'CLERK_WIP') AND ("
+           + "  (b.startTime >= :dayStart AND b.startTime < :dayEnd) "
+           + "  OR (b.status = :completed AND b.endTime >= :dayStart AND b.endTime < :dayEnd) "
+           + "  OR EXISTS (SELECT 1 FROM ProductionReport r WHERE r.factoryId = :factoryId AND r.batchId = b.id "
+           + "             AND r.reportDate = :day AND r.deletedAt IS NULL) "
+           + "  OR EXISTS (SELECT 1 FROM ProcessingStageRecord s WHERE s.factoryId = :factoryId "
+           + "             AND s.productionBatchId = b.id AND ((s.startTime >= :dayStart AND s.startTime < :dayEnd) "
+           + "             OR (s.endTime >= :dayStart AND s.endTime < :dayEnd) "
+           + "             OR (s.createdAt >= :dayStart AND s.createdAt < :dayEnd)))"
+           + ") ORDER BY b.startTime, b.id")
+    java.util.List<ProductionBatch> findActiveOnDayForDashboard(
+            @Param("factoryId") String factoryId,
+            @Param("statuses") Collection<com.cretas.aims.entity.enums.ProductionBatchStatus> statuses,
+            @Param("completed") com.cretas.aims.entity.enums.ProductionBatchStatus completed,
+            @Param("day") java.time.LocalDate day,
+            @Param("dayStart") java.time.LocalDateTime dayStart,
+            @Param("dayEnd") java.time.LocalDateTime dayEnd);
+
+    /**
+     * 调度 Dashboard「跨日在产」计数的候选: 本厂在 {@code before} 之前开工、此刻仍在产 (statuses) 的正式批次。
+     * 调用方再减去当天有活动的那些。不含 CLERK_WIP。软删由实体上的 @Where 过滤。
+     */
+    @Query("SELECT b FROM ProductionBatch b WHERE b.factoryId = :factoryId AND b.status IN :statuses "
+           + "AND b.startTime IS NOT NULL AND b.startTime < :before "
+           + "AND (b.batchType IS NULL OR b.batchType <> 'CLERK_WIP') ORDER BY b.startTime, b.id")
+    java.util.List<ProductionBatch> findRunningForDashboard(
+            @Param("factoryId") String factoryId,
+            @Param("statuses") Collection<com.cretas.aims.entity.enums.ProductionBatchStatus> statuses,
+            @Param("before") java.time.LocalDateTime before);
 
     /**
      * 单元 F (F006 REQ-21): 查工厂下属于一组生产计划的全部批次 (按订单聚合出成率用).
@@ -509,6 +550,19 @@ public interface ProductionBatchRepository extends JpaRepository<ProductionBatch
                               @Param("planIds") java.util.Collection<String> planIds,
                               @Param("planIdPrefixPattern") String planIdPrefixPattern);
 
+    /**
+     * 同上的计划范围里, 判了报废 (SCRAPPED) 的生产批次 (Owner 2026-11-09: 报废批次不挡同计划其它批次的放行,
+     * 只有它自己的货留下)。质检放行用它把「不合格未解除」里的报废批次挑出来, 再按归属判这次要放的货是不是报废批的。
+     */
+    @Query("SELECT b.id AS id, b.batchNumber AS batchNumber FROM ProductionBatch b "
+           + "WHERE b.factoryId = :factoryId AND b.deletedAt IS NULL "
+           + "AND b.qualityStatus = com.cretas.aims.entity.enums.QualityStatus.SCRAPPED "
+           + "AND (b.productionPlanId IN :planIds OR b.productionPlanId LIKE :planIdPrefixPattern ESCAPE '\\') "
+           + "ORDER BY b.id")
+    java.util.List<ScrappedBatchRef> findScrappedInPlans(@Param("factoryId") String factoryId,
+                                                        @Param("planIds") java.util.Collection<String> planIds,
+                                                        @Param("planIdPrefixPattern") String planIdPrefixPattern);
+
     /** 一次取出这些生产批次的计划 id (质检放行反查计划, 第三轮审查 L-6: 不逐个 findById)。 */
     @Query("SELECT DISTINCT b.productionPlanId FROM ProductionBatch b WHERE b.factoryId = :factoryId "
            + "AND b.id IN :ids AND b.productionPlanId IS NOT NULL")
@@ -522,8 +576,8 @@ public interface ProductionBatchRepository extends JpaRepository<ProductionBatch
     /**
      * 三价对比看板 (per-SKU): 某产品最近一条已算出 {@code unitCost} 的批次 (按创建时间倒序).
      *
-     * <p>{@code unitCost} 由 {@link ProductionBatch#calculateMetrics()} 诚实计算 (跨单位/无成本
-     * 输入时留 null, 见实体注释) — 本查询只取有值的行, 调用方用最新一条作为「实际成本」看板取数,
+     * <p>{@code unitCost} 由 {@link ProductionBatch#calculateMetrics()} 诚实计算 (元/产出单位, 跨单位也照算;
+     * 无成本输入时留 null, 见实体注释) — 本查询只取有值的行, 调用方用最新一条作为「实际成本」看板取数,
      * 空列表即诚实缺数据 (不臆造 0)。排除 CLERK_WIP 内部工件批次, 与 {@link #findByFactoryId} 口径统一
      * (batchType 允许 null, 与既有排除写法不同 — 避免历史空 batchType 记录被误排除)。
      *
@@ -669,4 +723,50 @@ public interface ProductionBatchRepository extends JpaRepository<ProductionBatch
             @Param("factoryId") String factoryId,
             @Param("since") java.time.LocalDateTime since,
             @Param("productTypeId") String productTypeId);
+
+    /**
+     * 同上的计划范围里「不合格未解除、且不是报废」的批次数 —— 一条语句 (#1548 第二轮审查 4: 原来拿计数减报废清单长度,
+     * 两条语句之间能被插进来)。质检放行据此整计划拒绝; 报废批次另按归属判。
+     */
+    @Query("SELECT COUNT(b) FROM ProductionBatch b WHERE b.factoryId = :factoryId AND b.deletedAt IS NULL "
+           + "AND b.qualityStatus IN (com.cretas.aims.entity.enums.QualityStatus.FAILED, "
+           + "com.cretas.aims.entity.enums.QualityStatus.REWORK_REQUIRED, "
+           + "com.cretas.aims.entity.enums.QualityStatus.REWORKING, "
+           + "com.cretas.aims.entity.enums.QualityStatus.REWORK_COMPLETED) "
+           + "AND (b.productionPlanId IN :planIds OR b.productionPlanId LIKE :planIdPrefixPattern ESCAPE '\\')")
+    long countUnclearedNotScrappedInPlans(@Param("factoryId") String factoryId,
+                                          @Param("planIds") java.util.Collection<String> planIds,
+                                          @Param("planIdPrefixPattern") String planIdPrefixPattern);
+
+    /**
+     * 给计划下<b>所有</b>生产批次 (含逐道录入的 CLERK_WIP, 与 countQcFailedInPlans 同一范围) 加行锁, 按 id 顺序。
+     * 计划级放行在读兄弟批次状态之前先拿这把锁 (#1548 第二轮审查 1/3): 质检判 FAILED 写批次状态要等它, 不会出现
+     * 「放行读到兄弟批合格、同时兄弟批被判不合格」的丢失更新。锁顺序: 生产批次 → 成品行, 与既有路径一致。
+     * 原生 SQL 只取 id: 锁本身不需要实体, 状态在拿到锁之后用 {@link #findQcStatesInPlan} 重新读。
+     */
+    @Query(value = "SELECT id FROM production_batches WHERE factory_id = :factoryId "
+           + "AND production_plan_id = :planId AND deleted_at IS NULL ORDER BY id FOR UPDATE", nativeQuery = true)
+    java.util.List<Long> lockAllIdsInPlan(@Param("factoryId") String factoryId, @Param("planId") String planId);
+
+    /** 计划下所有生产批次 (含 CLERK_WIP) 的质检状态, 拿到 {@link #lockAllIdsInPlan} 的锁之后读。 */
+    @Query("SELECT b.id AS id, b.batchNumber AS batchNumber, b.qualityStatus AS qualityStatus FROM ProductionBatch b "
+           + "WHERE b.factoryId = :factoryId AND b.productionPlanId = :planId AND b.deletedAt IS NULL ORDER BY b.id")
+    java.util.List<PlanBatchQcState> findQcStatesInPlan(@Param("factoryId") String factoryId,
+                                                         @Param("planId") String planId);
+
+    /** 计划内批次的质检状态投影。 */
+    interface PlanBatchQcState {
+        Long getId();
+
+        String getBatchNumber();
+
+        com.cretas.aims.entity.enums.QualityStatus getQualityStatus();
+    }
+
+    /** 报废批次的最小投影 (只要 id 和批号; 不取整实体, 免得把 jsonb 等无关列读回来)。 */
+    interface ScrappedBatchRef {
+        Long getId();
+
+        String getBatchNumber();
+    }
 }

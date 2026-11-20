@@ -157,4 +157,10 @@ public interface BomRecipeService {
      * @throws IllegalStateException BOM 非 DRAFT 状态
      */
     BomSeasoningResponse saveSeasoning(String factoryId, String recipeId, BomSeasoningSaveRequest req);
+
+    /**
+     * 配方行单价已在调用方事务里改写之后, 按编辑 / 成本更正同一套规则重算配方头
+     * {@code totalMaterialCost / totalCost} (含同族分摊)。调用方须已持有行锁与配方头锁。
+     */
+    void recomputeCostsAfterItemPriceChange(BomRecipe recipe);
 }

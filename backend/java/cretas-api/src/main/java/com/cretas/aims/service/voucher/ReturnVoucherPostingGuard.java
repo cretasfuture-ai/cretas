@@ -41,8 +41,12 @@ public class ReturnVoucherPostingGuard {
                     || request.getReturnOrderId() == null || request.getPaidBy() == null
                     || request.getPaidAt() == null || request.getPaymentReference() == null
                     || request.getPaymentReference().isBlank()
-                    || Objects.equals(request.getCreatedBy(), request.getApprovedBy())
-                    || Objects.equals(request.getCreatedBy(), request.getPaidBy())
+                    // 纪律排查 B15: 申请人 = 审批人 / 付款人 只认当时留了痕的本人审批 (标记 + 原因),
+                    // 与 ReturnRefundEvidence 同口径; 不看现在的开关。
+                    || (Objects.equals(request.getCreatedBy(), request.getApprovedBy())
+                        && !ReturnRefundEvidence.hasSelfApprovalTrace(request))
+                    || (Objects.equals(request.getCreatedBy(), request.getPaidBy())
+                        && !ReturnRefundEvidence.hasSelfPaidTrace(request))
                     || request.getApprovedBy() == null || request.getApprovedAt() == null) {
                 throw invalid("退款尚未完成独立审批和实际付款登记");
             }

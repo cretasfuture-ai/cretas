@@ -3,73 +3,85 @@ import { computed, ref } from 'vue';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
-  hasFactoryAnalyticsSidebarOptIn, canShowOptedInFactoryAnalytics,
+  isFactoryAnalyticsSidebarTurnedOff, isFactoryAnalyticsGroupHidden,
   getDisabledFactoryMenuPaths, isFactoryMenuHidden, getFactoryModuleMenuOptions,
   getHiddenFactoryMenuModules,
 } from '../factoryMenuVisibility';
 import { menuConfig } from '../menuConfig';
 
-describe('factory analytics sidebar opt-in', () => {
-  it('requires both an enabled analytics feature and the explicit sidebar setting', () => {
-    expect(hasFactoryAnalyticsSidebarOptIn([
-      { moduleId: 'analytics', enabled: true, config: { showInSidebar: true } },
-    ])).toBe(true);
+describe('factory analytics sidebar: default visible, per-factory off (P2b / M3)', () => {
+  it('only an explicit showInSidebar === false turns the group off', () => {
+    for (const features of [
+      [{ moduleId: 'analytics', enabled: true, config: { showInSidebar: false } }],
+      [{ moduleId: 'analytics', enabled: false, config: { showInSidebar: false } }],
+      [{ moduleId: 'analytics', enabled: true, config: { showInSidebar: false, menuVisible: false } }],
+    ]) expect(isFactoryAnalyticsSidebarTurnedOff(features)).toBe(true);
     for (const features of [
       undefined, null, {}, [], [null],
       [{ moduleId: 'analytics', enabled: true }],
-      [{ moduleId: 'analytics', enabled: false, config: { showInSidebar: true } }],
-      [{ moduleId: 'analytics', enabled: true, config: { showInSidebar: false } }],
-      [{ moduleId: 'analytics', enabled: true, config: { showInSidebar: 'true' } }],
-    ]) expect(hasFactoryAnalyticsSidebarOptIn(features)).toBe(false);
+      [{ moduleId: 'analytics', enabled: true, config: {} }],
+      [{ moduleId: 'analytics', enabled: true, config: { showInSidebar: true } }],
+      [{ moduleId: 'analytics', enabled: true, config: { showInSidebar: 'false' } }],
+      [{ moduleId: 'analytics', enabled: true, config: { showInSidebar: 0 } }],
+      [{ moduleId: 'production', enabled: true, config: { showInSidebar: false } }],
+    ]) expect(isFactoryAnalyticsSidebarTurnedOff(features)).toBe(false);
   });
 
   it('reads the legacy SmartBI alias only when the canonical analytics row is absent', () => {
-    const legacy = { moduleId: 'smartbi', enabled: true, config: { showInSidebar: true } };
-    expect(hasFactoryAnalyticsSidebarOptIn([legacy])).toBe(true);
-    expect(hasFactoryAnalyticsSidebarOptIn([
-      legacy, { moduleId: 'analytics', enabled: false, config: { showInSidebar: true } },
+    const legacyOff = { moduleId: 'smartbi', enabled: true, config: { showInSidebar: false } };
+    expect(isFactoryAnalyticsSidebarTurnedOff([legacyOff])).toBe(true);
+    expect(isFactoryAnalyticsSidebarTurnedOff([
+      legacyOff, { moduleId: 'analytics', enabled: true, config: { showInSidebar: true } },
     ])).toBe(false);
     expect(getHiddenFactoryMenuModules([
       { moduleId: 'restaurant_buy', config: { menuVisible: false } },
     ])).toContain('restaurantProcurement');
   });
 
-  it('only lifts factory-type hiding for the data-and-analysis group', () => {
-    expect(canShowOptedInFactoryAnalytics('FACTORY', '/smart-bi', true)).toBe(true);
-    expect(canShowOptedInFactoryAnalytics('FACTORY', '/smart-bi', false)).toBe(false);
-    for (const type of ['RESTAURANT', 'LOGISTICS', '']) {
-      expect(canShowOptedInFactoryAnalytics(type, '/smart-bi', true)).toBe(false);
+  it('only hides the FACTORY data-and-analysis group, never anything else', () => {
+    expect(isFactoryAnalyticsGroupHidden('FACTORY', '/smart-bi', true)).toBe(true);
+    expect(isFactoryAnalyticsGroupHidden('FACTORY', '/smart-bi', false)).toBe(false);
+    for (const type of ['RESTAURANT', 'LOGISTICS', 'CENTRAL_KITCHEN', '']) {
+      expect(isFactoryAnalyticsGroupHidden(type, '/smart-bi', true)).toBe(false);
     }
-    for (const path of ['/finance', '/crm', '/ops', '/smart-bi/health-report']) {
-      expect(canShowOptedInFactoryAnalytics('FACTORY', path, true)).toBe(false);
+    for (const path of ['/finance', '/crm', '/ops', '/smart-bi/dashboard', '/analytics/ai-reports']) {
+      expect(isFactoryAnalyticsGroupHidden('FACTORY', path, true)).toBe(false);
     }
+  });
+
+  it('the /smart-bi group no longer carries a FACTORY type hide; its own leaf hides stay', () => {
+    const group = menuConfig.find(item => item.path === '/smart-bi');
+    expect(group).toBeDefined();
+    expect(group?.hideForFactoryTypes ?? []).not.toContain('FACTORY');
+    expect(group?.children?.find(c => c.path === '/smart-bi/revenue-report')?.hideForFactoryTypes).toEqual(['FACTORY']);
   });
 
   it('updates after async configuration arrives while still requiring analytics access', () => {
     const features = ref<unknown>([]);
     const permission = ref(false);
-    const visible = computed(() => permission.value && canShowOptedInFactoryAnalytics(
-      'FACTORY', '/smart-bi', hasFactoryAnalyticsSidebarOptIn(features.value),
+    const visible = computed(() => permission.value && !isFactoryAnalyticsGroupHidden(
+      'FACTORY', '/smart-bi', isFactoryAnalyticsSidebarTurnedOff(features.value),
     ));
-    expect(visible.value).toBe(false);
-    features.value = [{ moduleId: 'analytics', enabled: true, config: { showInSidebar: true } }];
     expect(visible.value).toBe(false);
     permission.value = true;
     expect(visible.value).toBe(true);
-    features.value = [];
+    features.value = [{ moduleId: 'analytics', enabled: true, config: { showInSidebar: false } }];
     expect(visible.value).toBe(false);
+    features.value = [];
+    expect(visible.value).toBe(true);
   });
 
-  it('wires the real sidebar to the opt-in without skipping its module and role checks', () => {
+  it('wires the real sidebar to the per-factory off switch without skipping module and role checks', () => {
     const src = readFileSync(resolve(process.cwd(), 'src/components/layout/AppSidebar.vue'), 'utf8');
-    expect(src).toContain('hasFactoryAnalyticsSidebarOptIn(featuresPayload.data)');
+    expect(src).toContain('isFactoryAnalyticsSidebarTurnedOff(featuresPayload.data)');
     expect(src).toContain('if (!navigationVisibility.isCurrentLoad(token)) return;');
     expect(src).toContain('featuresPayload?.success === true && Array.isArray(featuresPayload.data)');
     expect(src).toContain('navigationVisibility.markErrorIfCurrent(token)');
-    expect(src).toContain('factoryAnalyticsMenuEnabled.value = false;');
+    expect(src).toContain('factoryAnalyticsTurnedOff.value = false;');
     expect(src).toContain('getHiddenFactoryMenuModules(featuresPayload.data)');
     expect(src).toContain('hiddenFactoryMenuModules.value.includes(item.module)');
-    expect(src).toContain('item.hideForFactoryTypes?.includes(factoryType) && !factoryAnalyticsVisible');
+    expect(src).toContain('if (hiddenByFactory || hiddenByModule || factoryAnalyticsHidden) return false;');
+    expect(src).toContain('if (item.hideForFactoryTypes?.includes(factoryType)) {');
     expect(src).toContain('return item.roles.includes(currentRole) && canAccess;');
     expect(src).toContain('if (disabledSet.has(item.module))');
   });

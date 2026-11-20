@@ -30,5 +30,10 @@ class PurchaseAutoSuggestionRepositoryQueryValidationTest {
     void repositoryBootsAndCountQueryCanBeInvoked() {
         assertThat(purchaseOrderRepository.countAutoSuggestionsOn("JPA-PO-F1", "20261105"))
                 .isZero();
+        // 自动草稿预填供应商: 最近一次真实采购的供应商 (2026-11-11)
+        assertThat(purchaseOrderRepository.findRecentSupplierIdsForMaterial("JPA-PO-F1", "RM-NONE",
+                java.util.EnumSet.of(com.cretas.aims.entity.enums.PurchaseOrderStatus.DRAFT,
+                        com.cretas.aims.entity.enums.PurchaseOrderStatus.CANCELLED),
+                org.springframework.data.domain.PageRequest.of(0, 1))).isEmpty();
     }
 }

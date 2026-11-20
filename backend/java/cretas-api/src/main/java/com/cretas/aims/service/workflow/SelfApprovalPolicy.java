@@ -87,7 +87,7 @@ public class SelfApprovalPolicy {
                                       Long actorId,
                                       String actorRole) {
         return isExplicitCurrentNodeApprover(factoryId, instance, actorId)
-                || isSoleEligibleFactorySuperAdmin(factoryId, instance, actorId, actorRole);
+                || isSoleEligibleApprover(factoryId, instance, actorId, actorRole);
     }
 
     /**
@@ -105,19 +105,51 @@ public class SelfApprovalPolicy {
      * </ul>
      * <p>⇒ 本次收窄<b>只在配了审批流的工厂上生效</b>，这一点是有意的。</p>
      */
-    private boolean isSoleEligibleFactorySuperAdmin(String factoryId,
-                                                    ApprovalWorkflowInstance instance,
-                                                    Long actorId,
-                                                    String actorRole) {
-        if (!isFactorySuperAdmin(factoryId, actorId, actorRole)) {
+    private boolean isSoleEligibleApprover(String factoryId,
+                                           ApprovalWorkflowInstance instance,
+                                           Long actorId,
+                                           String actorRole) {
+        List<String> approverRoles = currentNodeApproverRoles(factoryId, instance);
+        boolean factoryHead = isFactorySuperAdmin(factoryId, actorId, actorRole);
+        if (approverRoles.isEmpty()) {
+            // 读不到节点角色 = 没有 OA 配置可跟随 —— 沿用旧行为, 只放行厂长, 见本方法 javadoc。
+            return factoryHead;
+        }
+        // 纪律排查 B10 (Steve 2026-11-10): 例外跟随 OA 配置, 不只给「厂长」这个角色名 ——
+        // 发起人的岗位就是当前节点点名的审批岗位、且本厂没有第二个够格的人 (一人厂), 也算。
+        // 厂长这条保留 (改动前的行为: 没有别人够格时厂长可自审, 即使节点没点名他), 上线后行为不变。
+        boolean namedByNode = isListedApproverRole(factoryId, actorId, actorRole, approverRoles);
+        if (!factoryHead && !namedByNode) {
             return false;
         }
-        List<String> approverRoles = currentNodeApproverRoles(factoryId, instance);
-        if (approverRoles.isEmpty()) {
-            // 读不到节点角色 —— 沿用旧行为放行, 见本方法 javadoc。
-            return true;
-        }
         return !anotherActiveUserCouldApprove(factoryId, approverRoles, actorId);
+    }
+
+    /**
+     * 发起人的岗位是否在当前节点的 {@code approverRoles} 里 (忽略大小写) —— 与审批引擎自己的判据同一口径。
+     * {@code actorRole} 缺失时回落查库 (只认本厂、有效账号), 不让缺失的入参把例外吞掉。
+     */
+    private boolean isListedApproverRole(String factoryId, Long actorId, String actorRole,
+                                         List<String> approverRoles) {
+        if (actorId == null) {
+            return false;
+        }
+        String role = actorRole;
+        if (role == null || role.isBlank()) {
+            if (userRepository == null) {
+                return false;
+            }
+            role = userRepository.findById(actorId)
+                    .filter(user -> Boolean.TRUE.equals(user.getIsActive())
+                            && factoryId != null && factoryId.equals(user.getFactoryId()))
+                    .map(user -> user.getRoleCode())
+                    .orElse(null);
+        }
+        if (role == null || role.isBlank()) {
+            return false;
+        }
+        String normalized = role.trim();
+        return approverRoles.stream().anyMatch(normalized::equalsIgnoreCase);
     }
 
     /**

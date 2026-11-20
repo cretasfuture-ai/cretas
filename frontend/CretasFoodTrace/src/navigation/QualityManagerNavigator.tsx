@@ -15,6 +15,8 @@ import { QualityInspectorStackParamList } from '../types/qualityInspector';
 import { getFactoryId, getUserRole } from '../types/auth';
 import { useAuthStore } from '../store/authStore';
 import { hasModulePermission } from '../utils/permissionHelper';
+import { useMyTodoEntry } from '../hooks/useMyTodos';
+import { todoTabScreen } from './todoTab';
 
 const Tab = createBottomTabNavigator();
 const QualityStack = createNativeStackNavigator<QualityInspectorStackParamList>();
@@ -64,6 +66,7 @@ function QualityManagerModuleScreen() {
 
 /** 质量经理：待审队列、审核/记录、考勤和账号；不暴露现场拍摄入口。 */
 export default function QualityManagerNavigator() {
+  const todoEntry = useMyTodoEntry();
   const insets = useSafeAreaInsets();
   const user = useAuthStore((state) => state.user);
   const actorRef = useRef({ user, generation: 0 });
@@ -102,6 +105,7 @@ export default function QualityManagerNavigator() {
           tabBarIcon: ({ color, size }) => <Icon source="clock-outline" color={color} size={size} />,
         }}
       />
+      {todoTabScreen(Tab, todoEntry, 'quality-manager-tab-oa-todo')}
       <Tab.Screen
         name="QualityManagerProfileTab"
         component={MobileAccountScreen}

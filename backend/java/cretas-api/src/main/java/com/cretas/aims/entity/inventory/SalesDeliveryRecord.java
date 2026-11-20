@@ -195,4 +195,11 @@ public class SalesDeliveryRecord extends BaseEntity {
     @Type(JsonBinaryType.class)
     @Column(name = "ai_invocation_metadata", columnDefinition = "jsonb")
     private Map<String, Object> aiInvocationMetadata;
+
+    /**
+     * 只读视图字段 (不落库, Q3 2026-11-09): 创建子发运单时没能自动分配批次的行和原因
+     * ({@code deliveryItemId / productName / code / message / hint})。只有创建子发运单的响应填它, 其它读取为 null。
+     */
+    @Transient
+    private List<Map<String, Object>> allocationNotices;
 }

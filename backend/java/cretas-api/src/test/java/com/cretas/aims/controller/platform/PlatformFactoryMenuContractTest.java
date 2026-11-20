@@ -79,6 +79,30 @@ class PlatformFactoryMenuContractTest {
     }
 
     @Test
+    void weighingCanBeHiddenAsAnExactLeafWhileSkuAndOtherFactoriesAreUntouched() {
+        FactoryFeatureConfig row = FactoryFeatureConfig.builder().factoryId("F001").moduleId("production")
+                .enabled(true).config(new HashMap<>(Map.of("unrelated", "keep"))).build();
+        when(repository.findByFactoryIdAndModuleIdAndDeletedAtIsNull("F001", "production"))
+                .thenReturn(Optional.of(row));
+        when(repository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.update("F001", "production", new PlatformFactoryMenuDTO.Update(true, List.of("/production/weigh")));
+
+        assertThat(row.getConfig()).containsEntry("disabledMenuPaths", List.of("/production/weigh"))
+                .containsEntry("menuVisible", true).containsEntry("unrelated", "keep");
+        assertThat(row.getEnabled()).isTrue();
+        verify(repository).save(row);
+        verify(repository, never()).findByFactoryIdAndModuleIdAndDeletedAtIsNull(eq("F002"), anyString());
+        for (String path : List.of("/production/weigh-extra", "/production/weigh/run", "/production/weigh?admin=true")) {
+            assertThatThrownBy(() -> service.update("F001", "production", new PlatformFactoryMenuDTO.Update(true, List.of(path))))
+                    .hasMessageContaining("不受支持");
+        }
+        assertThatThrownBy(() -> service.update("F001", "warehouse", new PlatformFactoryMenuDTO.Update(true, List.of("/production/weigh"))))
+                .hasMessageContaining("不受支持");
+        verify(repository, times(1)).save(any());
+    }
+
+    @Test
     void suppliedFactsComparisonIsConfigurableOnlyAsItsExactSchedulingLeaf() {
         String path = "/scheduling/proposal-comparison";
         FactoryFeatureConfig row = FactoryFeatureConfig.builder().factoryId("F001").moduleId("scheduling")
@@ -144,6 +168,27 @@ class PlatformFactoryMenuContractTest {
         when(repository.findByFactoryIdAndDeletedAtIsNull("F001")).thenReturn(List.of(row));
         assertThat(service.get("F001").getModules().stream()
                 .filter(module -> "analytics".equals(module.getModuleId())).findFirst().orElseThrow().isVisible()).isFalse();
+    }
+
+    @Test
+    void analyticsIsDefaultVisibleForFactoryAndOnlyExplicitFalseHidesIt() {
+        // P2b (M3): no row at all => FACTORY sees analytics by default
+        assertThat(analyticsVisible()).isTrue();
+        FactoryFeatureConfig row = FactoryFeatureConfig.builder().factoryId("F001").moduleId("analytics")
+                .moduleName("Analytics").enabled(true).config(new HashMap<>(Map.of("unrelated", "x"))).build();
+        when(repository.findByFactoryIdAndDeletedAtIsNull("F001")).thenReturn(List.of(row));
+        assertThat(analyticsVisible()).isTrue();
+        row.setConfig(new HashMap<>(Map.of("showInSidebar", "false")));
+        assertThat(analyticsVisible()).isTrue();
+        row.setConfig(new HashMap<>(Map.of("showInSidebar", false)));
+        assertThat(analyticsVisible()).isFalse();
+        row.setConfig(new HashMap<>(Map.of("showInSidebar", false, "menuVisible", false)));
+        assertThat(analyticsVisible()).isFalse();
+    }
+
+    private boolean analyticsVisible() {
+        return service.get("F001").getModules().stream()
+                .filter(module -> "analytics".equals(module.getModuleId())).findFirst().orElseThrow().isVisible();
     }
 
     @Test

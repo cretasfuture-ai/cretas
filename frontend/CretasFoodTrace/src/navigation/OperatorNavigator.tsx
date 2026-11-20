@@ -12,6 +12,8 @@ import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
 // 一线 AI 助手 (Line B 2026-10-05): 复用 FA 端 AIChatScreen, 熔断开关关掉时连路由都不注册
 import AIChatScreen from '../screens/factory-admin/ai-analysis/AIChatScreen';
 import { useFrontlineAIEntryEnabled } from '../hooks/useFrontlineAIEntry';
+import { useMyTodoEntry } from '../hooks/useMyTodos';
+import { todoTabScreen } from './todoTab';
 
 const Tab = createBottomTabNavigator<any>();
 const ReportStack = createNativeStackNavigator<any>();
@@ -38,6 +40,7 @@ function OperatorReportStackNavigator() {
  * 考勤、报工、工作、个人中心 四个tab
  */
 function OperatorTabNavigator() {
+  const todoEntry = useMyTodoEntry();
   // C1: Use safe-area insets so the tab bar clears Android gesture navigation bar.
   // insets.bottom is 0 on devices with hardware buttons; positive on gesture-nav devices.
   const insets = useSafeAreaInsets();
@@ -78,6 +81,7 @@ function OperatorTabNavigator() {
       />
 
       {/* 个人中心Tab - 账号信息、退出登录 */}
+      {todoTabScreen(Tab, todoEntry, 'operator-tab-oa-todo')}
       <Tab.Screen
         name="OperatorProfileTab"
         component={ProfileStackNavigator}

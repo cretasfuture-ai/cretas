@@ -31,14 +31,14 @@ INSERT INTO scale_protocol_configs (
     '{
         "frameType": "ASCII_FIXED",
         "encoding": "US-ASCII",
-        "frameLength": 12,
+        "frameLength": 14,
         "startMarker": null,
         "endMarker": "\\r\\n",
         "fields": [
             {"name": "sign", "start": 0, "length": 1, "type": "CHAR", "description": "符号 +/-"},
             {"name": "weight", "start": 1, "length": 6, "type": "DECIMAL", "decimalPlaces": 1, "description": "重量值"},
             {"name": "unit", "start": 8, "length": 2, "type": "STRING", "trim": true, "description": "单位"},
-            {"name": "stable", "start": 10, "length": 1, "type": "ENUM", "mapping": {"S": true, "U": false}, "description": "稳定标志"}
+            {"name": "stable", "start": 11, "length": 1, "type": "ENUM", "mapping": {"S": true, "U": false}, "description": "稳定标志"}
         ],
         "outputMapping": {
             "weight": "${sign == ''-'' ? -weight : weight}",

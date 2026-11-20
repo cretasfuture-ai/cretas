@@ -1,0 +1,170 @@
+{
+  "task_id": "SMARTBI-LOCAL-ANALYST-20261104",
+  "base_sha": "22373115674bada487f6e1a16c8090bff23d8be8",
+  "profile": "manufacturing-analyst/2026-11-04.5",
+  "source_hashes": {
+    "backend/python/blacklake/analyst_acceptance.py": "332ac6be4951d18c2c08cd52f8161411dce5685d4a7e4570a1d526608260e2e4",
+    "backend/python/blacklake/period_api.py": "9eb453d05270bd84777ef2c557e1e4d9d02242688074991fcee0bcb35dc85c7c",
+    "backend/python/blacklake/period_runtime.py": "4292609937503b9a801eef90cbb1751bcf43bec11045bd2b1d29b8120faf6fde",
+    "backend/python/blacklake/smartbi_api.py": "78139b874034e05462711732f42016b3a2b0733c641e285703803359c9a10a31",
+    "backend/python/blacklake/smartbi_app.py": "166eaeba85c28b530d49849f9d26227c7d6e8adf3bf129f823da70a179149db2",
+    "backend/python/blacklake/test_local.py": "1e1f536fff2ea8cdc6f5487e5186a7db69fc849f039bf6271ad6d43fbb515218",
+    "backend/python/smartbi/services/alert_ai_coordination.py": "d6aea547d78fb2b04e4d4bc6edd58a1d3f3c35908cdc39b249e41d4d81a9b113",
+    "backend/python/smartbi/services/alert_datasets.py": "1a0aef4dd33f7decaba7df42c3ebbbb5914bc6b2e4fd92eb7297430a3c16ae5f",
+    "backend/python/smartbi/services/alert_local_ai.py": "a5124475fbbc4a1ff6c782a8dafe420959705421c6636501c5ab656039bf4708",
+    "backend/python/smartbi/services/analysis_distillation.py": "3db425a8caf59d2e865802b0ea2f088af16e88fd02f2be5d32a62895094af381",
+    "backend/python/smartbi/services/analysis_evidence.py": "dd9eb3e944f55b29d96080117e8add48fe1c4ab5ed26b5589564e09cd45e01c8",
+    "backend/python/smartbi/services/analysis_playbook.py": "df6b5bd351e106f7da17ffac4f011d862b72b2a9fdff42bc9e7bece933fdaf82",
+    "backend/python/smartbi/services/dataset_alerts.py": "f6e67ba772930eb9826d008291fcb1786138a48b9fa8ef78e6bea0724e38ed9e",
+    "backend/python/smartbi/services/local_analyst.py": "c568594bfe5d9baed2859eb354c6da2c1bda5c63e0a18b2e7b9d3b8fe7804bba",
+    "backend/python/smartbi/services/period_reports.py": "b05efe53c8872120afa5af2ec8dfa04cf913dff3280f7e8f8d836e75d92f80b1",
+    "backend/python/tests/test_blacklake_periods.py": "f4900b3fabd82e51a8c0a50219739e0f248a4234d38ab416c6021ff1d5bb0965",
+    "backend/python/tests/test_smartbi_ai_queue.py": "2491e8778d4fb30a6fb4da74e0171fc827dda97817a2a5bfc871c5122c726541",
+    "backend/python/tests/test_smartbi_analysis_distillation.py": "6e43a47eeadef111c6a6000063de739a013cc61ff78d922d7ecb18081b6c8b49",
+    "backend/python/tests/test_smartbi_local_analyst.py": "258b305a4e196c2d92523f0f3e3c5ae207c879d92bbf056e9a1460019ab8a780",
+    "backend/python/tests/test_smartbi_shared_alerts.py": "98460ae2f82b5d32ea7ffdbc94552bd3c99bf0ecfe3fdd07bfea16f4c5d4619d",
+    "web-admin/src/api/smartbi/blacklake.ts": "37de18e2e18fe94fe7a9fcfe7d56d2af87d5143037711de090acfad50cd42e41",
+    "web-admin/src/api/smartbi/data-alerts.ts": "34fdb0ec4015ec06b60872363a850a00de1784d869a12c013cc3fabeffba21cc",
+    "web-admin/src/api/smartbi/local-analysis.ts": "d8f39b76f01ad423dd7253bd6b4484cde7ff7a4be1f83c8754c6236312a9de90",
+    "web-admin/src/components/smartbi/__tests__/DataAlertsPanel.spec.ts": "da0e98b6151d513c4b70cc983e7db5d9c04692a0d73d08b748108da8a5ddf6a1",
+    "web-admin/src/components/smartbi/__tests__/PrototypeSectionInsight.spec.ts": "cf496e5b31c88df0e2d8920a31cdf4f2c3ce7ea74dfa61b31fdb3259cb9611cd",
+    "web-admin/src/components/smartbi/DataAlertsPanel.vue": "06b3bcb58572fd28edaf3abef2fc16aabac1c030385b3d65aac3846389035e4e",
+    "web-admin/src/components/smartbi/PrototypeSectionInsight.vue": "f1c92c7a9b260460ac81d495c054671dee8c4031428c00b8031d6499546acc83"
+  },
+  "backend": {
+    "xml": "validation/pytest-sections-final.xml",
+    "exit_code": 0,
+    "log": "validation/pytest-sections-final.log",
+    "passed": 346,
+    "command": "python -m blacklake.test_local",
+    "real_postgresql_scram": true,
+    "skipped": 0,
+    "real_redis": true
+  },
+  "frontend": {
+    "log": "validation/local-analyst-ui-final.log",
+    "passed": 29,
+    "files": 4,
+    "exit_code": 0
+  },
+  "typecheck": {
+    "log": "validation/local-analyst-typecheck-final.log",
+    "exit_code": 0
+  },
+  "builds": {
+    "default": {
+      "log": "validation/local-analyst-build-default.log",
+      "exit_code": 0
+    },
+    "isolated": {
+      "log": "validation/local-analyst-build.log",
+      "exit_code": 0
+    }
+  },
+  "real_model": {
+    "success": true,
+    "reportId": "ac10b12ed9764d6aa4280bea7e6ea892",
+    "profile": "manufacturing-analyst/2026-11-04.5",
+    "status": "ready",
+    "aiStatus": "complete",
+    "sections": 7,
+    "validation": {
+      "allSections": true,
+      "evidenceScope": true,
+      "numbersBoundByProgram": true,
+      "requiredRisks": true,
+      "schema": true
+    },
+    "usage": {
+      "durationSeconds": 679.2452040000001,
+      "estimated": false,
+      "inputTokens": 30057,
+      "outputTokens": 12951,
+      "requestIds": [
+        "cf4e46eb0718414aad2b14eba43494c4",
+        "b7d685df915240f99f893f3ea6def732",
+        "7d92b015c847413aa8fbb29ce28b06c0",
+        "d452c76f135548fd9221c761da3bd73c",
+        "cc79a877fee5452b8e6eba9b35a96b55"
+      ],
+      "source": "ollama_response",
+      "totalTokens": 43008
+    },
+    "currentRequestUsage": {
+      "durationSeconds": 150.262391541,
+      "estimated": false,
+      "inputTokens": 6021,
+      "outputTokens": 2513,
+      "requestIds": [
+        "cc79a877fee5452b8e6eba9b35a96b55"
+      ],
+      "source": "ollama_response",
+      "totalTokens": 8534
+    },
+    "modelCalls": 5,
+    "repairAttempts": 0,
+    "validationFeedback": null,
+    "preservedReady": 26,
+    "sourceBusinessWrites": 0,
+    "sourceRefreshed": false
+  },
+  "api": {
+    "success": true,
+    "reportId": "ac10b12ed9764d6aa4280bea7e6ea892",
+    "fromCache": true,
+    "profile": "manufacturing-analyst/2026-11-04.5",
+    "sections": 7,
+    "sourceBusinessWrites": 0
+  },
+  "browser": {
+    "profile": "manufacturing-analyst/2026-11-04.5",
+    "section_interpretations": 7,
+    "surface": "user in-app browser tab 2",
+    "url": "http://127.0.0.1:5178/blacklake-smartbi.html",
+    "period": "2026-10-29..2026-11-03",
+    "scoped_followup": true,
+    "cached_model_analysis_reused": true,
+    "distilled_measurement_check_visible": true,
+    "private_screenshot": "outputs/local-analyst-20261104/distilled-analysis.jpg"
+  },
+  "calibration": {
+    "first_profile": "reference contract rejected output; original ten-ref ceiling was smaller than thirteen available product facts; explicit section plan and canonical ref checks added",
+    "no_invalid_calibration_explanation_promoted_to_current_profile": true,
+    "second_profile": "manual review caught unsupported no-stock-movements wording; model supplied with available movement facts and contradiction gate added",
+    "prior_full_run": "SQLite setup lock found under concurrency; connection waits five seconds rather than treating it as a quota",
+    "fourth_profile": "Negated unsupported claims were falsely rejected; clause-aware certainty checks fixed and positive/negative tests passed."
+  },
+  "generic": {
+    "cost_metrics_masked_for_restricted_roles": true,
+    "excel_api_paths_integration_tested": true,
+    "enabled_in_isolated_adapter": true,
+    "actual_other_excel_files_replayed": false,
+    "shared_production_services_enabled": false,
+    "operator_flag": "SMARTBI_LOCAL_ANALYST_ENABLED=1",
+    "weighted_statistics_checked": true
+  },
+  "delivery": {
+    "merged": false,
+    "source_business_writes": 0,
+    "draft": true,
+    "pr": 1390,
+    "source_refreshed": false,
+    "production_deployed": false,
+    "all_historical_ranges_recomputed_with_new_profile": false,
+    "source_snapshot_beijing": "2026-11-03 17:21:49",
+    "parity_with_gpt_claimed": false
+  },
+  "distillation": {
+    "targeted_log": "validation/distilled-analyst-guard-final.log",
+    "teacher_cases": 3,
+    "private_teacher_evidence": "outputs/local-analyst-20261104/distillation-teacher-evidence.json",
+    "directions": [
+      "input quantity versus book input valuation and material mix",
+      "candidate upstream unit conversion and missing input linkage",
+      "recorded yield versus measurement source"
+    ],
+    "method": "first look, second-pass investigation, general indicators and prompt examples",
+    "targeted_tests_passed": 24,
+    "generic_examples_without_factory_identifiers": true
+  }
+}

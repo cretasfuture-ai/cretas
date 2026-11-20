@@ -119,6 +119,10 @@ public class SkillExecutorImpl implements SkillExecutor {
     @Autowired(required = false)
     private com.cretas.aims.service.skill.contract.SkillRunStore runStore;
 
+    /** Skill 计划里 LLM 给的客户 / 产品 / 员工等名字到本厂主数据落地 (LlmParameterGrounding 规则 3)。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.entity.FactoryEntityResolver factoryEntityResolver;
+
     /** Steps of the run in progress, per context (parallel tools add from worker threads). */
     private final Map<SkillContext, List<com.cretas.aims.service.skill.contract.SkillRunStore.Step>> runSteps =
             Collections.synchronizedMap(new IdentityHashMap<>());
@@ -522,7 +526,9 @@ public class SkillExecutorImpl implements SkillExecutor {
             globalValues.remove("_reasoning");
             com.cretas.aims.service.execution.LlmParameterGrounding.Result grounded =
                     com.cretas.aims.service.execution.LlmParameterGrounding.ground(
-                            globalValues, trustedParams, context.getUserQuery(), schema);
+                            globalValues, trustedParams, context.getUserQuery(), schema,
+                            com.cretas.aims.service.execution.LlmParameterGrounding.EntityScope.of(
+                                    factoryEntityResolver, context.getFactoryId()));
             safe.putAll(filterCatalogParameters(grounded.accepted(), schema,
                     context.getUserQuery(), trustedParams));
 
@@ -545,7 +551,9 @@ public class SkillExecutorImpl implements SkillExecutor {
                     planTrusted.putAll(safe);
                     com.cretas.aims.service.execution.LlmParameterGrounding.Result planGrounded =
                             com.cretas.aims.service.execution.LlmParameterGrounding.ground(
-                                    rawToolParams, planTrusted, context.getUserQuery(), planSchema);
+                                    rawToolParams, planTrusted, context.getUserQuery(), planSchema,
+                                    com.cretas.aims.service.execution.LlmParameterGrounding.EntityScope.of(
+                                            factoryEntityResolver, context.getFactoryId(), toolName, false));
                     Map<String, Object> cleanToolParams = filterCatalogParameters(planGrounded.accepted(), planSchema,
                             context.getUserQuery(), planTrusted);
                     cleanToolParams.putAll(planTrusted);
@@ -706,14 +714,15 @@ public class SkillExecutorImpl implements SkillExecutor {
         return value != null && (!(value instanceof String text) || !text.isBlank());
     }
 
-    private SkillResult missingParametersResult(String skillName, List<String> missingParams,
+    SkillResult missingParametersResult(String skillName, List<String> missingParams,
                                                 List<String> executedTools, long startTime) {
-        String message = "为了完成操作，还需要以下信息：" + String.join("、", missingParams)
-                + "。请补充后再试。";
-        Map<String, Object> data = new LinkedHashMap<>();
         List<String> questions = missingParams.stream()
                 .map(this::clarificationQuestion)
+                .distinct()   // indicator_code + indicator_codes (单查/对比两个工具) 同问「要查哪个指标」, 只问一遍
                 .toList();
+        // 一线用户看不懂内部字段名 (indicator_code 等): 文案只用问句, 字段名只留在 missingParameters 里给程序读
+        String message = "为了完成操作，还需要以下信息：" + String.join("", questions) + "请补充后再试。";
+        Map<String, Object> data = new LinkedHashMap<>();
         data.put("success", false);
         data.put("status", "NEED_MORE_INFO");
         data.put("needMoreInfo", true);
@@ -780,7 +789,27 @@ public class SkillExecutorImpl implements SkillExecutor {
             case "batchId", "batchNumber" -> "请提供批次号。";
             case "productId", "productTypeId" -> "请提供产品。";
             case "materialTypeId" -> "请提供原材料。";
-            default -> "请提供" + parameter + "。";
+            case "indicator_code", "indicator_codes" -> "请告诉我要查哪个指标（例如销售额、毛利）。";
+            case "customerId", "customerName", "supplierId", "supplierName",
+                 "salesOrderId", "orderId", "orderNumber", "startDate", "endDate", "date",
+                 "productName", "materialName" -> "请提供" + parameterLabel(parameter) + "。";
+            default -> parameter != null && parameter.matches("[A-Za-z0-9_]+")
+                    ? "请补充查询所需的关键信息（例如时间范围、对象名称）。"
+                    : "请提供" + parameter + "。";
+        };
+    }
+
+    /** 参数的中文称呼; 认不出的不拿字段名顶替, 统称「必要信息」。 */
+    static String parameterLabel(String parameter) {
+        return switch (parameter == null ? "" : parameter) {
+            case "batchId", "batchNumber" -> "批次号";
+            case "productId", "productTypeId", "productName" -> "产品";
+            case "materialTypeId", "materialName" -> "原材料";
+            case "customerId", "customerName" -> "客户";
+            case "supplierId", "supplierName" -> "供应商";
+            case "salesOrderId", "orderId", "orderNumber" -> "订单号";
+            case "startDate", "endDate", "date" -> "日期";
+            default -> "必要信息";
         };
     }
 
@@ -1318,7 +1347,8 @@ public class SkillExecutorImpl implements SkillExecutor {
         // Round 9 Fix (R8-β tail): respect factory_tool_configs disable flag.
         // R7b fixed this at ToolDispatchService but Skill orchestration was a 2nd path
         // that still ran disabled tools. Now skills also honor the Canvas switch.
-        if (!toolRegistry.isToolEnabledForFactory(context.getFactoryId(), toolName)) {
+        if (com.cretas.aims.service.execution.ToolExecutionAdmission.toolDisabled(
+                toolRegistry, context.getFactoryId(), toolName)) {
             log.warn("Tool disabled for factory via Canvas: tool={}, factoryId={}, skill path",
                     toolName, context.getFactoryId());
             throw new IllegalStateException("Tool disabled for factory: " + toolName);
@@ -1770,6 +1800,24 @@ public class SkillExecutorImpl implements SkillExecutor {
                 .build();
     }
 
+    /** Same preflight as step 2a of {@link #execute}; exposed so clarification choices never offer a Skill it would refuse. */
+    @Override
+    public Optional<String> permissionRefusal(SkillDefinition skill, SkillContext context) {
+        if (skill == null || context == null) {
+            return Optional.of("权限预检不可用");
+        }
+        try {
+            Preflight preflight = permissionPreflight(skill, context);
+            if (preflight.unavailable()) {
+                return Optional.of("权限预检不可用");
+            }
+            return preflight.denied().isEmpty() ? Optional.empty()
+                    : Optional.of("denied tools: " + preflight.denied());
+        } catch (RuntimeException e) {
+            return Optional.of("权限预检失败");
+        }
+    }
+
     /** Result of the permission preflight: tools checked, tools denied, or the check unavailable. */
     private record Preflight(int checked, List<String> denied, boolean unavailable) {
     }
@@ -1810,6 +1858,34 @@ public class SkillExecutorImpl implements SkillExecutor {
      */
     private Preflight permissionPreflight(SkillDefinition skill, SkillContext context) {
         java.util.LinkedHashSet<String> tools = new java.util.LinkedHashSet<>();
+        if (InventoryAnalysisWorkflow.CANONICAL_SKILL_NAME.equals(skill.getName())) {
+            return inventoryWorkflowPreflight(context);
+        }
+        collectDeclaredTools(skill, tools);
+        return preflightTools(tools, context);
+    }
+
+    /**
+     * #1747 遗留 L-a: 库存分析执行期走固定工作流 ({@link InventoryAnalysisWorkflow}), 跑的是 APPROVED_TOOLS,
+     * 每个工具都经工具网关 (SKILL_WORKFLOW 来源) 准入 —— 定义里的 tools/DAG 不生效 (见 execute 开头)。
+     * 预检按同一个权威问: 对工作流的每个工具做网关准入 (不管是否登记为受治理, 工作流永远走网关)。
+     * 原来按定义里的工具走角色链 ⇒ 库里改过定义时候选按一套、执行按另一套。
+     * 工具没注册 ⇒ 工作流在网关那一步失败 ⇒ 按拒绝算。
+     */
+    private Preflight inventoryWorkflowPreflight(SkillContext context) {
+        List<String> denied = new ArrayList<>();
+        int checked = 0;
+        for (String toolName : InventoryAnalysisWorkflow.APPROVED_TOOLS) {
+            checked++;
+            Optional<ToolExecutor> tool = toolRegistry.getExecutor(toolName);
+            if (tool.isEmpty() || !gatewayAdmits(tool.get(), context)) {
+                denied.add(toolName);
+            }
+        }
+        return new Preflight(checked, List.copyOf(denied), false);
+    }
+
+    private static void collectDeclaredTools(SkillDefinition skill, java.util.Set<String> tools) {
         if (skill.getTools() != null) tools.addAll(skill.getTools());
         if (skill.getExecutionGraph() != null) {
             for (SkillDefinition.ExecutionNode node : skill.getExecutionGraph()) {
@@ -1822,6 +1898,9 @@ public class SkillExecutorImpl implements SkillExecutor {
                 if (step instanceof Map<?, ?> map && map.get("tool") instanceof String tool) tools.add(tool);
             }
         }
+    }
+
+    private Preflight preflightTools(java.util.Set<String> tools, SkillContext context) {
         String factoryId = context.getFactoryId();
         Long userId = parseUserId(context.getUserId());
         String userRole = context.getUserRole();
@@ -1831,6 +1910,13 @@ public class SkillExecutorImpl implements SkillExecutor {
             Optional<ToolExecutor> tool = toolRegistry.getExecutor(toolName);
             if (tool.isEmpty()) {
                 continue;  // missing tools fail at context validation
+            }
+            // #1769 终审第 1 条: 执行期 executeSingleTool 遇工厂关掉的工具抛 "Tool disabled for factory"
+            // (DAG / 契约 / 多工具三路都经过它); 预检按同一个开关判, 候选与关键词抢先才不会放出点了就失败的 Skill。
+            if (com.cretas.aims.service.execution.ToolExecutionAdmission.toolDisabled(toolRegistry, factoryId, toolName)) {
+                checked++;
+                denied.add(toolName);
+                continue;
             }
             if (toolRuntimeRegistry != null && toolRuntimeRegistry.isGoverned(toolName)) {
                 checked++;

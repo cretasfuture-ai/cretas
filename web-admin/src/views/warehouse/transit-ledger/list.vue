@@ -1,17 +1,22 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue';
+import { useRouter } from 'vue-router';
 import { displayUnit } from '@/utils/unitPricing';
 import { useAuthStore } from '@/store/modules/auth';
-import { Search, Refresh } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
+import type { CsTableColumn as TableColumn } from '@/types/csTable';
+import { badgeColor } from '@/utils/csBadge';
 import {
   listTransitLedgers,
   type ProductionTransitLedgerItem,
 } from '@/api/productionPlan';
 
+// 组件全部是 Nuxt UI (UTable / USelect / UInput / UBadge / UButton) + --cs-*；提示仍用 ElMessage（命令式服务）。
+
 // ────────────────────────────────────────────────────────────────────────────
 // Auth
 // ────────────────────────────────────────────────────────────────────────────
+const router = useRouter();
 const authStore = useAuthStore();
 const factoryId = computed(() => authStore.factoryId);
 
@@ -52,6 +57,9 @@ function statusType(val: string) { return statusMap[val]?.type ?? 'info'; }
 function responsibilityLabel(val: string) { return responsibilitySideMap[val] ?? val; }
 function varianceReasonLabel(val: string) { return varianceReasonMap[val] ?? val; }
 function ledgerTypeLabel(val: string) { return ledgerTypeMap[val] ?? val; }
+function responsibilityType(side: string): 'warning' | 'danger' | 'info' {
+  return side === 'PENDING' ? 'warning' : side === 'PRODUCTION' ? 'danger' : 'info';
+}
 
 // ────────────────────────────────────────────────────────────────────────────
 // Filters
@@ -59,11 +67,34 @@ function ledgerTypeLabel(val: string) { return ledgerTypeMap[val] ?? val; }
 const statusFilter = ref('');
 const planNumberSearch = ref('');
 
+// USelect 的选项值不能是空串: 页面内用 ALL 表示全部状态, 请求时还原成空串
+const ALL = 'ALL';
 const statusOptions = [
-  { value: '', label: '全部状态' },
+  { value: ALL, label: '全部状态' },
   { value: 'OPEN', label: '待处理' },
   { value: 'RESOLVED', label: '已清账' },
   { value: 'VOIDED', label: '已作废' },
+];
+const statusSelect = computed({
+  get: () => statusFilter.value || ALL,
+  set: (v: string) => { statusFilter.value = v === ALL ? '' : v; },
+});
+
+const R = { class: { th: 'text-right', td: 'text-right' } };
+const columns: TableColumn<ProductionTransitLedgerItem>[] = [
+  { id: 'planNumber', header: '计划单号' },
+  { id: 'ledgerType', header: '挂账类型' },
+  { id: 'status', header: '状态' },
+  { id: 'reported', header: '报工数量', meta: R },
+  { id: 'confirmed', header: '仓库确认量', meta: R },
+  { id: 'variance', header: '差异量', meta: R },
+  { id: 'tolerance', header: '容差量', meta: R },
+  { id: 'varianceReason', header: '差异原因' },
+  { id: 'responsibility', header: '责任侧' },
+  { id: 'note', header: '备注' },
+  { id: 'createdAt', header: '确认时间' },
+  { id: 'updatedAt', header: '更新时间' },
+  { id: 'actions', header: '操作' },
 ];
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -146,245 +177,98 @@ watch(factoryId, (v) => {
 <template>
   <div class="transit-ledger-list">
     <!-- 页面标题 -->
-    <div class="page-header">
-      <h2 class="page-title">中转挂账对账</h2>
-      <p class="page-subtitle">查询生产→仓库成品入库确认后产生的差异挂账记录，追踪仓库/生产责任判定与清账状态。</p>
+    <div class="cs-page-head">
+      <div>
+        <h2 class="page-title">中转挂账对账</h2>
+        <p class="page-subtitle">查询生产→仓库成品入库确认后产生的差异挂账记录，追踪仓库/生产责任判定与清账状态。</p>
+      </div>
     </div>
 
     <!-- 汇总卡片 -->
-    <el-row :gutter="16" class="summary-row" style="margin-bottom: 16px;">
-      <el-col :span="8">
-        <el-card shadow="never" class="summary-card">
-          <div class="summary-item">
-            <span class="summary-label">待处理挂账</span>
-            <span class="summary-value warning">{{ openCount }}</span>
-          </div>
-        </el-card>
-      </el-col>
-      <el-col :span="8">
-        <el-card shadow="never" class="summary-card">
-          <div class="summary-item">
-            <span class="summary-label">已清账</span>
-            <span class="summary-value success">{{ resolvedCount }}</span>
-          </div>
-        </el-card>
-      </el-col>
-      <el-col :span="8">
-        <el-card shadow="never" class="summary-card">
-          <div class="summary-item">
-            <span class="summary-label">合计记录</span>
-            <span class="summary-value">{{ allLedgers.length }}</span>
-          </div>
-        </el-card>
-      </el-col>
-    </el-row>
+    <div class="summary-row">
+      <section class="cs-card summary-card">
+        <span class="summary-label">待处理挂账</span>
+        <span class="summary-value warning">{{ openCount }}</span>
+      </section>
+      <section class="cs-card summary-card">
+        <span class="summary-label">已清账</span>
+        <span class="summary-value success">{{ resolvedCount }}</span>
+      </section>
+      <section class="cs-card summary-card">
+        <span class="summary-label">合计记录</span>
+        <span class="summary-value">{{ allLedgers.length }}</span>
+      </section>
+    </div>
 
-    <!-- 筛选栏 -->
-    <el-card shadow="never" class="filter-card" style="margin-bottom: 12px;">
-      <el-row :gutter="12" align="middle">
-        <el-col :span="6">
-          <el-select
-            v-model="statusFilter"
-            placeholder="全部状态"
-            clearable
-            @change="handleFilterChange"
-            style="width: 100%;"
-          >
-            <el-option
-              v-for="opt in statusOptions"
-              :key="opt.value"
-              :label="opt.label"
-              :value="opt.value"
-            />
-          </el-select>
-        </el-col>
-        <el-col :span="8">
-          <el-input
-            v-model="planNumberSearch"
-            placeholder="按计划单号搜索"
-            clearable
-            :prefix-icon="Search"
-          />
-        </el-col>
-        <el-col :span="4">
-          <el-button :icon="Refresh" @click="handleRefresh" :loading="loading">刷新</el-button>
-        </el-col>
-      </el-row>
-    </el-card>
-
-    <!-- 数据表格 -->
-    <el-card shadow="never">
-      <el-table
-        v-loading="loading"
-        :data="tableData"
-        stripe
-        border
-        row-key="id"
-        empty-text="暂无中转挂账记录"
-        style="width: 100%;"
-      >
-        <!-- 计划单号 -->
-        <el-table-column label="计划单号" prop="planNumber" min-width="140" fixed="left">
-          <template #default="{ row }">
-            <span class="plan-number">{{ row.planNumber }}</span>
+    <section class="cs-card">
+      <!-- 筛选栏 -->
+      <div class="filters">
+        <USelect v-model="statusSelect" :items="statusOptions" class="w-44" data-testid="transit-status" @update:model-value="handleFilterChange" />
+        <UInput v-model="planNumberSearch" icon="i-lucide-search" placeholder="按计划单号搜索" class="w-60" data-testid="transit-plan-search">
+          <template v-if="planNumberSearch" #trailing>
+            <UButton color="neutral" variant="link" size="xs" icon="i-lucide-x" aria-label="清空" @click="planNumberSearch = ''" />
           </template>
-        </el-table-column>
-
-        <!-- 挂账类型 -->
-        <el-table-column label="挂账类型" prop="ledgerType" width="120">
-          <template #default="{ row }">
-            <el-tag size="small" type="info">{{ ledgerTypeLabel(row.ledgerType) }}</el-tag>
-          </template>
-        </el-table-column>
-
-        <!-- 状态 -->
-        <el-table-column label="状态" prop="status" width="100">
-          <template #default="{ row }">
-            <el-tag size="small" :type="statusType(row.status)">{{ statusLabel(row.status) }}</el-tag>
-          </template>
-        </el-table-column>
-
-        <!-- 报工数量 -->
-        <el-table-column label="报工数量" width="120" align="right">
-          <template #default="{ row }">{{ formatQty(row.reportedQuantity, row.quantityUnit) }}</template>
-        </el-table-column>
-
-        <!-- 仓库确认数量 -->
-        <el-table-column label="仓库确认量" width="120" align="right">
-          <template #default="{ row }">{{ formatQty(row.confirmedQuantity, row.quantityUnit) }}</template>
-        </el-table-column>
-
-        <!-- 差异量 -->
-        <el-table-column label="差异量" width="120" align="right">
-          <template #default="{ row }">
-            <span :class="row.varianceQuantity > row.toleranceQuantity ? 'text-danger' : ''">
-              {{ formatQty(row.varianceQuantity, row.quantityUnit) }}
-            </span>
-          </template>
-        </el-table-column>
-
-        <!-- 容差量 -->
-        <el-table-column label="容差量" width="110" align="right">
-          <template #default="{ row }">{{ formatQty(row.toleranceQuantity, row.quantityUnit) }}</template>
-        </el-table-column>
-
-        <!-- 差异原因 -->
-        <el-table-column label="差异原因" prop="varianceReason" min-width="130">
-          <template #default="{ row }">{{ varianceReasonLabel(row.varianceReason) }}</template>
-        </el-table-column>
-
-        <!-- 责任侧 -->
-        <el-table-column label="责任侧" prop="responsibilitySide" width="110">
-          <template #default="{ row }">
-            <el-tag
-              size="small"
-              :type="row.responsibilitySide === 'PENDING' ? 'warning' : row.responsibilitySide === 'PRODUCTION' ? 'danger' : 'info'"
-            >
-              {{ responsibilityLabel(row.responsibilitySide) }}
-            </el-tag>
-          </template>
-        </el-table-column>
-
-        <!-- 备注 -->
-        <el-table-column label="备注" prop="note" min-width="150" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.note || '—' }}</template>
-        </el-table-column>
-
-        <!-- 确认时间 -->
-        <el-table-column label="确认时间" width="140">
-          <template #default="{ row }">{{ formatDateTime(row.createdAt) }}</template>
-        </el-table-column>
-
-        <!-- 更新时间 -->
-        <el-table-column label="更新时间" width="140">
-          <template #default="{ row }">{{ formatDateTime(row.updatedAt) }}</template>
-        </el-table-column>
-
-        <!-- 操作列：跳转到对应生产计划 -->
-        <el-table-column label="操作" width="120" fixed="right">
-          <template #default="{ row }">
-            <el-button
-              size="small"
-              text
-              type="primary"
-              @click="$router.push(`/production/plans?planId=${row.productionPlanId}`)"
-            >
-              查看计划
-            </el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-
-      <!-- 空状态说明 -->
-      <div v-if="!loading && tableData.length === 0 && !planNumberSearch" class="empty-hint">
-        <el-empty description="暂无中转挂账记录">
-          <template #description>
-            <p>当生产报工与仓库实收数量出现超容差差异时，系统将在此生成挂账记录。</p>
-            <p style="color: #909399; font-size: 12px;">容差范围（默认 10kg）内的差异不产生挂账。</p>
-          </template>
-        </el-empty>
+        </UInput>
+        <UButton icon="i-lucide-refresh-cw" color="neutral" variant="outline" :loading="loading" @click="handleRefresh">刷新</UButton>
       </div>
-    </el-card>
+
+      <!-- 数据表格 -->
+      <UTable :data="tableData" :columns="columns" :loading="loading" class="cs-table" data-testid="transit-ledger-table">
+        <template #empty>
+          <div class="empty-hint">
+            <p>{{ planNumberSearch ? '没有符合条件的挂账记录' : '暂无中转挂账记录' }}</p>
+            <template v-if="!planNumberSearch">
+              <p>当生产报工与仓库实收数量出现超容差差异时，系统将在此生成挂账记录。</p>
+              <p class="small">容差范围（默认 10kg）内的差异不产生挂账。</p>
+            </template>
+          </div>
+        </template>
+        <template #planNumber-cell="{ row }"><span class="plan-number">{{ row.original.planNumber }}</span></template>
+        <template #ledgerType-cell="{ row }">
+          <UBadge color="neutral" variant="soft">{{ ledgerTypeLabel(row.original.ledgerType) }}</UBadge>
+        </template>
+        <template #status-cell="{ row }">
+          <UBadge :color="badgeColor(statusType(row.original.status))" variant="soft">{{ statusLabel(row.original.status) }}</UBadge>
+        </template>
+        <template #reported-cell="{ row }"><span class="num">{{ formatQty(row.original.reportedQuantity, row.original.quantityUnit) }}</span></template>
+        <template #confirmed-cell="{ row }"><span class="num">{{ formatQty(row.original.confirmedQuantity, row.original.quantityUnit) }}</span></template>
+        <template #variance-cell="{ row }">
+          <span class="num" :class="row.original.varianceQuantity > row.original.toleranceQuantity ? 'text-danger' : ''">
+            {{ formatQty(row.original.varianceQuantity, row.original.quantityUnit) }}
+          </span>
+        </template>
+        <template #tolerance-cell="{ row }"><span class="num">{{ formatQty(row.original.toleranceQuantity, row.original.quantityUnit) }}</span></template>
+        <template #varianceReason-cell="{ row }">{{ varianceReasonLabel(row.original.varianceReason) }}</template>
+        <template #responsibility-cell="{ row }">
+          <UBadge :color="badgeColor(responsibilityType(row.original.responsibilitySide))" variant="soft">{{ responsibilityLabel(row.original.responsibilitySide) }}</UBadge>
+        </template>
+        <template #note-cell="{ row }"><span class="note" :title="row.original.note || ''">{{ row.original.note || '—' }}</span></template>
+        <template #createdAt-cell="{ row }">{{ formatDateTime(row.original.createdAt) }}</template>
+        <template #updatedAt-cell="{ row }">{{ formatDateTime(row.original.updatedAt) }}</template>
+        <template #actions-cell="{ row }">
+          <UButton size="xs" variant="link" @click="router.push(`/production/plans?planId=${row.original.productionPlanId}`)">查看计划</UButton>
+        </template>
+      </UTable>
+    </section>
   </div>
 </template>
 
 <style scoped>
-.transit-ledger-list {
-  padding: 16px;
-}
-
-.page-header {
-  margin-bottom: 16px;
-}
-
-.page-title {
-  margin: 0 0 4px;
-  font-size: 20px;
-  font-weight: 600;
-  color: #303133;
-}
-
-.page-subtitle {
-  margin: 0;
-  font-size: 13px;
-  color: #606266;
-}
-
-.summary-card .summary-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.summary-label {
-  font-size: 13px;
-  color: #606266;
-}
-
-.summary-value {
-  font-size: 24px;
-  font-weight: 700;
-  color: #303133;
-}
-
-.summary-value.warning { color: #e6a23c; }
-.summary-value.success { color: #67c23a; }
-
-.filter-card :deep(.el-card__body) {
-  padding: 12px 16px;
-}
-
-.plan-number {
-  font-family: monospace;
-  font-size: 13px;
-}
-
-.text-danger {
-  color: #f56c6c;
-  font-weight: 600;
-}
-
-.empty-hint {
-  margin-top: 8px;
-}
+.transit-ledger-list { padding: var(--cs-space-4); }
+.page-title { margin: 0; font-size: var(--cs-type-title); font-weight: 650; color: var(--cs-text); }
+.page-subtitle { margin: 4px 0 0; font-size: 13px; color: var(--cs-muted); }
+.summary-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--cs-space-3); margin-bottom: var(--cs-space-3); }
+.summary-row .cs-card + .cs-card { margin-top: 0; }
+.summary-card { display: flex; justify-content: space-between; align-items: center; padding: var(--cs-space-4) var(--cs-space-5); }
+.summary-label { font-size: 13px; color: var(--cs-muted); }
+.summary-value { font-size: 24px; font-weight: 700; color: var(--cs-text); }
+.summary-value.warning { color: var(--cs-warning); }
+.summary-value.success { color: var(--cs-success); }
+.filters { display: flex; gap: var(--cs-space-3); align-items: center; flex-wrap: wrap; padding: var(--cs-space-4) var(--cs-space-5); }
+.plan-number { font-family: monospace; font-size: 13px; }
+.text-danger { color: var(--cs-danger); font-weight: 600; }
+.note { display: inline-block; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
+.empty-hint { padding: var(--cs-space-4) 0; color: var(--cs-muted); }
+.empty-hint p { margin: 0 0 4px; }
+.empty-hint .small { font-size: 12px; }
 </style>

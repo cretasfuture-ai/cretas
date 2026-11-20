@@ -15,6 +15,8 @@ vi.mock('@/api/quality-disposition', () => ({
   evaluateDisposition: (...args: unknown[]) => mocks.evaluate(...args),
   executeDisposition: (...args: unknown[]) => mocks.execute(...args),
   approveDisposition: vi.fn(),
+  listHeldGoodsBatches: vi.fn().mockResolvedValue([]),
+  releaseHeldGoods: vi.fn(),
 }));
 import Page from '../list.vue';
 

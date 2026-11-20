@@ -76,6 +76,15 @@ public class ReturnRefundService {
     private com.cretas.aims.service.finance.FinancePaymentReferenceLock paymentReferenceLock;
     @PersistenceContext
     private EntityManager entityManager;
+    /** 纪律排查 B15: 工厂级「允许本人审批」。未注入 = 开关关 (四眼照旧)。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.workflow.FactorySelfApprovalGate selfApprovalGate;
+
+    private com.cretas.aims.service.workflow.FactorySelfApprovalGate.Decision selfDecision(
+            String factoryId, boolean actorIsMaker, String preferredReason, String fallbackReason) {
+        String reason = preferredReason != null && !preferredReason.isBlank() ? preferredReason : fallbackReason;
+        return com.cretas.aims.service.workflow.FactorySelfApprovalGate.decide(selfApprovalGate, factoryId, actorIsMaker, reason);
+    }
 
     @Transactional(readOnly = true)
     public ReturnRefundDTO get(String factoryId, String returnOrderId) {
@@ -175,6 +184,12 @@ public class ReturnRefundService {
 
     @Transactional
     public PaymentRequest approve(String factoryId, String returnOrderId, Long actorId, String note) {
+        return approve(factoryId, returnOrderId, actorId, note, null);
+    }
+
+    @Transactional
+    public PaymentRequest approve(String factoryId, String returnOrderId, Long actorId, String note,
+                                  String selfApprovalReason) {
         requireActor(actorId);
         PaymentRequest request = loadRequest(factoryId, returnOrderId, false);
         ReturnOrder order = loadOrder(factoryId, returnOrderId);
@@ -182,8 +197,12 @@ public class ReturnRefundService {
         lockOrder(order, factoryId);
         request = lockRequest(factoryId, returnOrderId, request.getId());
         requireStatus(request, PaymentRequestStatus.FINANCE_REVIEW, "只有财务审核中的退款申请可以批准");
-        if (Objects.equals(actorId, request.getCreatedBy())) {
-            throw conflict("申请人不能审批自己的退款申请").withCode("RETURN_REFUND_FOUR_EYES");
+        // 纪律排查 B15 (Owner 2026-11-10): 工厂开了「允许本人审批」时申请人可自批, 必须写原因并留痕。
+        var approveDecision = selfDecision(factoryId, Objects.equals(actorId, request.getCreatedBy()),
+                selfApprovalReason, note);
+        if (approveDecision.forbidden()) {
+            throw conflict("申请人不能审批自己的退款申请").withCode("RETURN_REFUND_FOUR_EYES")
+                    .withHint(com.cretas.aims.service.workflow.FactorySelfApprovalGate.SWITCH_HINT);
         }
         Customer customer = lockCustomer(factoryId, order.getCounterpartyId());
         ensureCustomerMatches(order, salesOrder, customer);
@@ -196,6 +215,8 @@ public class ReturnRefundService {
         request.setApprovedBy(actorId);
         request.setApprovedAt(LocalDateTime.now());
         request.setApproveNote(note == null ? null : note.trim());
+        request.setSelfApproved(approveDecision.selfApproved());
+        request.setSelfApprovalReason(approveDecision.selfApproved() ? approveDecision.reason() : null);
         request.setStatus(PaymentRequestStatus.APPROVED);
         return paymentRequestRepository.save(request);
     }
@@ -218,11 +239,17 @@ public class ReturnRefundService {
         lockOrder(order, factoryId);
         request = lockRequest(factoryId, returnOrderId, request.getId());
         requireStatus(request, PaymentRequestStatus.APPROVED, "只有已批准的退款申请可以登记付款");
-        if (Objects.equals(actorId, request.getCreatedBy())) {
-            throw conflict("申请人不能登记自己的退款付款").withCode("RETURN_REFUND_FOUR_EYES");
+        // 纪律排查 B15: 申请人 ≠ 付款登记人 是第二道四眼, 同一个开关; 本人登记须写原因, 单独留痕。
+        var paidDecision = selfDecision(factoryId, Objects.equals(actorId, request.getCreatedBy()),
+                command.getSelfPaidReason(), null);
+        if (paidDecision.forbidden()) {
+            throw conflict("申请人不能登记自己的退款付款").withCode("RETURN_REFUND_FOUR_EYES")
+                    .withHint(com.cretas.aims.service.workflow.FactorySelfApprovalGate.SWITCH_HINT);
         }
+        // 审批证据: 申请人自批只认当时留了痕的本人审批 (标记 + 原因), 不看现在的开关
         if (request.getApprovedBy() == null || request.getApprovedAt() == null
-                || Objects.equals(request.getApprovedBy(), request.getCreatedBy())) {
+                || (Objects.equals(request.getApprovedBy(), request.getCreatedBy())
+                    && !ReturnRefundEvidence.hasSelfApprovalTrace(request))) {
             throw conflict("退款申请缺少独立财务审批证据，付款未登记")
                     .withCode("RETURN_REFUND_APPROVAL_EVIDENCE_MISSING");
         }
@@ -238,6 +265,8 @@ public class ReturnRefundService {
         request.setPaymentReference(reference);
         request.setRemark(command.getRemark().trim());
         request.setPaidBy(actorId);
+        request.setSelfPaid(paidDecision.selfApproved());
+        request.setSelfPaidReason(paidDecision.selfApproved() ? paidDecision.reason() : null);
         LocalDateTime paidAt = LocalDateTime.now();
         request.setPaidAt(paidAt);
 
@@ -281,9 +310,14 @@ public class ReturnRefundService {
                 && request.getStatus() != PaymentRequestStatus.FINANCE_REVIEW) {
             throw conflict("当前退款状态不可拒绝");
         }
-        if (Objects.equals(actorId, request.getCreatedBy())) {
-            throw conflict("申请人不能拒绝自己的退款申请").withCode("RETURN_REFUND_FOUR_EYES");
+        // 纪律排查 B15: 驳回自己的申请同样受开关管, 拒绝原因即本人审批原因
+        var rejectDecision = selfDecision(factoryId, Objects.equals(actorId, request.getCreatedBy()), reason, null);
+        if (rejectDecision.forbidden()) {
+            throw conflict("申请人不能拒绝自己的退款申请").withCode("RETURN_REFUND_FOUR_EYES")
+                    .withHint(com.cretas.aims.service.workflow.FactorySelfApprovalGate.SWITCH_HINT);
         }
+        request.setSelfApproved(rejectDecision.selfApproved());
+        request.setSelfApprovalReason(rejectDecision.selfApproved() ? rejectDecision.reason() : null);
         request.setStatus(PaymentRequestStatus.REJECTED);
         request.setRejectReason(reason.trim());
         return paymentRequestRepository.save(request);
@@ -351,9 +385,13 @@ public class ReturnRefundService {
         LockedRefund locked = lockExactRefund(factoryId, returnOrderId, command.getRequestId());
         PaymentRequest request = locked.request();
         ArApTransaction tx = exactReversal(locked.order(), request, command.getReversalTransactionId());
-        if (Objects.equals(actorId, tx.getOperatedBy())) {
+        // 纪律排查 B15: 撤销申请人自批受开关管, 必须写原因并在反向流水上留痕
+        var reversalDecision = selfDecision(factoryId, Objects.equals(actorId, tx.getOperatedBy()),
+                command.getSelfApprovalReason(), command.getReason());
+        if (reversalDecision.forbidden()) {
             throw conflict("撤销申请人不能审批自己的申请，请由另一位财务人员确认")
-                    .withCode("RETURN_REFUND_REVERSAL_FOUR_EYES");
+                    .withCode("RETURN_REFUND_REVERSAL_FOUR_EYES")
+                    .withHint(com.cretas.aims.service.workflow.FactorySelfApprovalGate.SWITCH_HINT);
         }
         if (request.getStatus() == PaymentRequestStatus.CANCELLED
                 && tx.getApprovalStatus() == ArApApprovalStatus.APPROVED) {
@@ -369,6 +407,8 @@ public class ReturnRefundService {
         tx.setApprovalStatus(ArApApprovalStatus.APPROVED);
         tx.setApprovedBy(actorId);
         tx.setApprovedAt(LocalDateTime.now());
+        tx.setSelfApproved(reversalDecision.selfApproved());
+        tx.setSelfApprovalReason(reversalDecision.selfApproved() ? reversalDecision.reason() : null);
         ReturnRefundReversalEvidence.requireApprovedReversal(locked.order(), request, tx);
         arApTransactionRepository.save(tx);
         locked.customer().setCurrentBalance(tx.getBalanceAfter());
@@ -394,11 +434,19 @@ public class ReturnRefundService {
         requireStatus(request, PaymentRequestStatus.PAID, "原退款当前状态不可驳回撤销申请");
         ArApTransaction tx = exactReversal(locked.order(), request, command.getReversalTransactionId());
         if (tx.getApprovalStatus() != ArApApprovalStatus.PENDING) throw conflict("只有待审核的退款撤销可以驳回");
-        if (Objects.equals(actorId, tx.getOperatedBy())) throw conflict("撤销申请人不能审核自己的申请");
+        // 纪律排查 B15: 驳回自己的撤销申请同样受开关管, 驳回说明即本人审批原因
+        var rejectReversalDecision = selfDecision(factoryId, Objects.equals(actorId, tx.getOperatedBy()),
+                command.getSelfApprovalReason(), command.getReason());
+        if (rejectReversalDecision.forbidden()) {
+            throw conflict("撤销申请人不能审核自己的申请")
+                    .withHint(com.cretas.aims.service.workflow.FactorySelfApprovalGate.SWITCH_HINT);
+        }
         requireOriginalRefund(locked.order(), request);
         tx.setApprovalStatus(ArApApprovalStatus.REJECTED);
         tx.setApprovedBy(actorId);
         tx.setApprovedAt(LocalDateTime.now());
+        tx.setSelfApproved(rejectReversalDecision.selfApproved());
+        tx.setSelfApprovalReason(rejectReversalDecision.selfApproved() ? rejectReversalDecision.reason() : null);
         tx.setRemark(tx.getRemark() + " [驳回：" + command.getReason().trim() + "]");
         arApTransactionRepository.save(tx);
         return request;

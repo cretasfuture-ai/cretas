@@ -2,6 +2,7 @@ package com.cretas.aims.service.impl;
 
 import com.cretas.aims.ai.client.PythonLLMClient;
 import com.cretas.aims.ai.tool.ToolExecutor;
+import com.cretas.aims.ai.tool.ToolParameterGroups;
 import com.cretas.aims.ai.tool.ToolRegistry;
 import com.cretas.aims.config.IntentSlotConfiguration;
 import com.cretas.aims.dto.ai.IntentExecuteRequest;
@@ -68,6 +69,10 @@ public class SlotFillingServiceImpl implements SlotFillingService {
 
     static final String EGRESS_SITE = "slot-filling";
 
+    /** 填槽兜底抽出的客户 / 产品 / 员工等名字到本厂主数据落地 (LlmParameterGrounding 规则 3); 没装配时不做这一条。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.entity.FactoryEntityResolver factoryEntityResolver;
+
     @Autowired(required = false)
     public void setPythonLLMClient(PythonLLMClient pythonLLMClient) {
         this.pythonLLMClient = pythonLLMClient;
@@ -128,7 +133,8 @@ public class SlotFillingServiceImpl implements SlotFillingService {
                     request.getUserInput(),
                     requiredSlots,
                     request.getContext(),
-                    matchResult);
+                    matchResult,
+                    factoryId);
 
             log.debug("从用户输入提取参数: intentCode={}, extracted={}",
                     intent.getIntentCode(), extractedParams.keySet());
@@ -193,12 +199,24 @@ public class SlotFillingServiceImpl implements SlotFillingService {
         Map<String, Object> schema = tool.getParametersSchema();
         if (schema == null) return slots;
 
-        List<String> required = (List<String>) schema.get("required");
+        List<String> required = schema.get("required") instanceof List<?> r
+                ? (List<String>) r : new ArrayList<>();
         Map<String, Object> properties = (Map<String, Object>) schema.get("properties");
 
-        if (required == null || properties == null) return slots;
+        if (properties == null) return slots;
 
-        for (String paramName : required) {
+        // 「至少给一个」组 (批次号/销售单号, 客户编号/客户名称): 组内参数都要抽, 且单个都不是必填 ——
+        // 组里一个都没给由工具自己追问 (validateRequiredParams); 只对 required 里那一个追问, 会把
+        // 「追溯销售单 X」反问成「请提供生产批次号」(BP 问题 39)。
+        java.util.Set<String> anyOfMembers = ToolParameterGroups.memberNames(schema);
+        List<String> names = new ArrayList<>(required);
+        for (String member : anyOfMembers) {
+            if (!names.contains(member)) {
+                names.add(member);
+            }
+        }
+
+        for (String paramName : names) {
             Map<String, Object> propDef = (Map<String, Object>) properties.get(paramName);
             if (propDef == null) continue;
 
@@ -214,7 +232,7 @@ public class SlotFillingServiceImpl implements SlotFillingService {
                     .label(entityLabel != null ? entityLabel
                             : (description != null ? description : getParameterLabel(paramName)))
                     .type(mapJsonTypeToSlotType(type))
-                    .required(true)
+                    .required(!anyOfMembers.contains(paramName))
                     .validationHint(getParameterValidationHint(paramName))
                     .build();
             slots.add(slot);
@@ -239,6 +257,19 @@ public class SlotFillingServiceImpl implements SlotFillingService {
             List<RequiredSlot> slots,
             Map<String, Object> context,
             IntentMatchResult matchResult) {
+        // 接口入口不知道可信工厂 (context 里的 factoryId 是客户端给的) —— 不做实体名落地
+        return extractParameters(userInput, slots, context, matchResult, null);
+    }
+
+    /**
+     * @param trustedFactoryId 服务端认定的工厂 (⛔ 不取请求 context 里的值); 为 null 时不做实体名落地
+     */
+    Map<String, Object> extractParameters(
+            String userInput,
+            List<RequiredSlot> slots,
+            Map<String, Object> context,
+            IntentMatchResult matchResult,
+            String trustedFactoryId) {
 
         Map<String, Object> extracted = new HashMap<>();
 
@@ -283,7 +314,9 @@ public class SlotFillingServiceImpl implements SlotFillingService {
                 // 与 ToolDispatchService 同一条出处校验: 原话里没有的数 / 不是原话的备注不收
                 com.cretas.aims.service.execution.LlmParameterGrounding.Result grounded =
                         com.cretas.aims.service.execution.LlmParameterGrounding.groundSlots(
-                                llmExtractMissingSlots(userInput, stillMissing), extracted, userInput, types);
+                                llmExtractMissingSlots(userInput, stillMissing), extracted, userInput, types,
+                                com.cretas.aims.service.execution.LlmParameterGrounding.EntityScope.of(
+                                        factoryEntityResolver, trustedFactoryId));
                 if (!grounded.dropped().isEmpty()) {
                     log.info("填槽 LLM 抽参未落地, 已丢弃: {}", grounded.dropped());
                 }

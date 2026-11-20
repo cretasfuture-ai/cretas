@@ -121,4 +121,16 @@ public interface WorkProcessTaskRepository extends JpaRepository<WorkProcessTask
             @Param("assignedTo") Long assignedTo,
             Pageable pageable);
 
+
+    /** 执行中且还没有任何称重(YIELD 报工)的工序任务 —— 待称重任务总览的数据源。 */
+    @Query("SELECT t FROM WorkProcessTask t WHERE t.factoryId = :factoryId AND t.deletedAt IS NULL "
+            + "AND t.status = :status "
+            + "AND NOT EXISTS (SELECT 1 FROM ProductionReport r WHERE r.factoryId = :factoryId "
+            + "AND r.workProcessTaskId = t.id AND r.reportType = 'YIELD' AND r.deletedAt IS NULL)")
+    List<WorkProcessTask> findWithoutWeighingByStatus(@Param("factoryId") String factoryId,
+                                                      @Param("status") Status status);
+
+    default List<WorkProcessTask> findInProgressWithoutWeighing(String factoryId) {
+        return findWithoutWeighingByStatus(factoryId, Status.IN_PROGRESS);
+    }
 }

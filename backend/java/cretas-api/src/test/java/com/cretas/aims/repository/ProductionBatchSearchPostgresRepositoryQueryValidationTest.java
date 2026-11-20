@@ -100,7 +100,7 @@ class ProductionBatchSearchPostgresRepositoryQueryValidationTest {
                   created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL, deleted_at TIMESTAMP
                 )
                 """);
-        jdbcTemplate.execute("CREATE TABLE production_plans (id VARCHAR(191) PRIMARY KEY, factory_id VARCHAR(50) NOT NULL, plan_number VARCHAR(100) NOT NULL, deleted_at TIMESTAMP)");
+        jdbcTemplate.execute("CREATE TABLE production_plans (id VARCHAR(191) PRIMARY KEY, factory_id VARCHAR(50) NOT NULL, plan_number VARCHAR(100) NOT NULL, planned_unit VARCHAR(32), deleted_at TIMESTAMP)");
         jdbcTemplate.execute("CREATE TABLE process_sheet_rows (id BIGSERIAL PRIMARY KEY, batch_id BIGINT, plan_id VARCHAR(191), deleted_at TIMESTAMP)");
         jdbcTemplate.update("INSERT INTO production_plans(id,factory_id,plan_number) VALUES (?,?,?)", "PLAN-PG-ONLY", FACTORY, "PB-PG-PLAN-ONLY");
         save("PB-PG-NULL-1", ProductionBatchStatus.IN_PROGRESS, null, FACTORY);

@@ -49,6 +49,25 @@ public class PythonIntentMatchRequest {
      */
     private java.util.List<String> userPermissions;
 
+    /**
+     * INTENT-DISTILL-20261111 第二批: 任务状态摘要 (只含 tasks[].level / intentCode / params, 值已脱敏)。
+     * null = 不带 (开关关 / 没有任务), 请求体与改动前相同。白名单见 TaskStateSummary / TaskStateEgress。
+     */
+    private Map<String, Object> taskState;
+
+    /**
+     * 本厂先问档位 (CONSERVATIVE / AGGRESSIVE), 来自 factory_thresholds {@code ai.intent.ask_policy}
+     * (IntentAskPolicyResolver)。null = 老调用方 / 没装配解析器: Python 按默认档并计数。
+     */
+    private String askPolicy;
+
+    /**
+     * 意图蒸馏第③步 PR-4: 业务域表 {@code ai/intent-domain-table.json} 的 catalog_version
+     * ({@link com.cretas.aims.ai.catalog.IntentDomainTable})。Python 同步副本版本相同才按业务域缩小决策层候选;
+     * null / 不同 ⇒ 不收窄。业务域不授权任何东西。
+     */
+    private String catalogVersion;
+
     @Data
     @Builder
     @NoArgsConstructor

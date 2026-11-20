@@ -9,6 +9,7 @@ import type { ApiData } from '@/types/api';
 import { markClientErrorReported, reportClientError, reportRequestFailure } from '@/utils/clientErrorReporter';
 import { currentActionId } from '@/utils/activityTracker';
 import { sandboxRequestUrl } from '@/demo/f006Sandbox';
+import { timeLimitWarningOf } from '@/utils/processTimeLimit';
 import {
   factoryViewTokenForRequest,
   isFactoryViewRequest,
@@ -134,7 +135,7 @@ const showGateDiagnosisCard = async (message: string, diagnoses: GateDiagnosis[]
       h('div', { style: 'font-weight:600' }, `${d.gateLabel}${d.subjectRef ? ' · ' + d.subjectRef : ''}`),
       d.cause ? h('div', { style: 'color:#909399' }, `原因：${d.cause}`) : null,
       qty(d) ? h('div', null, qty(d)) : null,
-      h('div', { style: 'color:#409eff' }, `怎么解开：${d.howToResolve}`),
+      h('div', { style: 'color:var(--cs-primary)' }, `怎么解开：${d.howToResolve}`),
     ]);
   const route = diagnoses.find(d => d.resolveRoute)?.resolveRoute ?? null;
   try {
@@ -391,6 +392,19 @@ request.interceptors.response.use(
           data.data,
         ));
       }
+      // PROTO-Q41: 工序时限「只警告」档 —— 投料成功了, 但要让人看到超时 / 没登记解冻的那句警告
+      const timeLimitWarning = timeLimitWarningOf(data);
+      if (timeLimitWarning && !(response.config as { _silent?: boolean })._silent) {
+        void import('@/utils/singletonNotification').then(({ showSingletonNotification }) => {
+          showSingletonNotification({
+            title: '投料时限提醒',
+            message: timeLimitWarning,
+            type: 'warning',
+            duration: 0,
+            showClose: true,
+          });
+        });
+      }
       return data;
     }
 
@@ -529,8 +543,10 @@ request.interceptors.response.use(
       const method = String(originalRequest?.method || '').toUpperCase();
       const url = originalRequest?.url || '';
       const isSpringDefault = /资源不存在|no\s*resource|not\s*found/i.test(backendMsg);
+      // 接口路径只写 console，不展示给用户；同一句文案不带路径，并发多个 404 会被 showMessage 去重成一条。
+      if (isSpringDefault || !backendMsg) console.warn(`[api 404] ${method} ${url}`);
       const friendly = isSpringDefault || !backendMsg
-        ? `请求的接口不存在 (${method} ${url})。可能是后端未上线该功能,或当前账号无权访问。`
+        ? '该功能暂未开通或当前账号无权访问，请联系管理员。'
         : backendMsg;
       // Sprint 12 Phase D (#266): business-level 404 (e.g. 指标不存在) carries actionHint +
       // hintTarget — render rich notification with next-action button instead of plain toast.

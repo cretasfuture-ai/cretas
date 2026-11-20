@@ -138,6 +138,23 @@ public class SalesServiceImpl implements SalesService {
     @org.springframework.beans.factory.annotation.Value("${cretas.sales.over-ship-rate:#{null}}")
     private BigDecimal salesOverShipRateProperty;
 
+    private static final String CREDIT_MODE_OFF = "OFF";
+    private static final String CREDIT_MODE_WARN = "WARN";
+    private static final String CREDIT_MODE_BLOCK = "BLOCK";
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.PermissionService permissionService;
+
+    /**
+     * 财务批准后取消 (工厂开关, 2026-11-11)。字段注入 + 可选, 不打断直接 new 的既有测试;
+     * 没注入时等价于开关关闭 (原行为)。@Lazy: 它依赖生产计划服务。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
+    private ApprovedSalesOrderCancellation approvedSalesOrderCancellation;
+
+    private static final ThreadLocal<String> LAST_CANCEL_SUMMARY = new ThreadLocal<>();
+
     /**
      * 阈值中心读取器（可选注入）。
      *
@@ -146,6 +163,108 @@ public class SalesServiceImpl implements SalesService {
      */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.canvas.ThresholdResolverService thresholdResolverService;
+
+    // ==================== 超信用额度检查 (A17) ====================
+
+    /** 取值 OFF(默认, 整体不检查) / WARN(只提示并留痕) / BLOCK(拦截, 可特批)。 */
+    private String resolveCreditCheckMode(String factoryId) {
+        if (thresholdResolverService == null) {
+            return CREDIT_MODE_OFF;
+        }
+        String raw = thresholdResolverService.getString(factoryId,
+                com.cretas.aims.service.canvas.ThresholdKeys.CREDIT_CHECK_MODE, CREDIT_MODE_OFF);
+        String mode = raw == null ? CREDIT_MODE_OFF : raw.trim().toUpperCase();
+        if (CREDIT_MODE_WARN.equals(mode) || CREDIT_MODE_BLOCK.equals(mode)) {
+            return mode;
+        }
+        if (!CREDIT_MODE_OFF.equals(mode)) {
+            log.warn("CREDIT_CHECK_MODE_INVALID: factoryId={}, 配置值 [{}] 不认识, 按关闭处理", factoryId, raw);
+        }
+        return CREDIT_MODE_OFF;
+    }
+
+    /** 当前用户有没有「信用特批」权限 (默认厂长; 拿不到用户或权限服务 ⇒ 没有)。 */
+    private boolean hasCreditOverrideAuthority(Long userId) {
+        if (userId == null || permissionService == null || userRepository == null) {
+            return false;
+        }
+        return userRepository.findById(userId)
+                .map(u -> permissionService.hasPermission(u,
+                        com.cretas.aims.service.PermissionService.CREDIT_OVERRIDE_PERMISSION))
+                .orElse(false);
+    }
+
+    /**
+     * 返回要写进订单备注的留痕文字 (null = 没有需要留痕的)。
+     *
+     * <p>两件事分开: (1) 客户被<b>冻结</b>是账户状态, 不归「超信用额度」开关管 —— 任何模式下都 409 (原有行为);
+     * (2) 「超额」才受开关控制: OFF 不管, WARN 提示留痕, BLOCK 拦截 (可特批)。
+     */
+    private String runCreditCheck(String factoryId, com.cretas.aims.entity.Customer customer,
+                                  CreateSalesOrderRequest request, Long userId, BigDecimal requested) {
+        String mode = resolveCreditCheckMode(factoryId);
+        boolean off = CREDIT_MODE_OFF.equals(mode);
+        boolean block = CREDIT_MODE_BLOCK.equals(mode);
+
+        com.cretas.aims.dto.customer.CreditStatusDTO st = null;
+        String unverified = null;
+        if (customerCreditCheckService == null) {
+            unverified = "额度未核对 (信用检查服务不可用, 不能当作通过)";
+        } else {
+            try {
+                st = customerCreditCheckService.checkCreditAvailable(factoryId, request.getCustomerId(), requested);
+            } catch (Exception e) {
+                log.warn("CREDIT_CHECK_FAILED: factoryId={}, customerId={}, error={}",
+                        factoryId, request.getCustomerId(), e.getMessage());
+                unverified = "额度未核对 (信用检查出错, 不能当作通过)";
+            }
+        }
+
+        // (1) 冻结: 无论开关
+        if (st != null && st.getCreditStatus() == com.cretas.aims.entity.enums.CreditStatus.SUSPENDED) {
+            throw new BusinessException(409,
+                    "客户 " + customer.getName() + " 信用已被冻结, 无法创建新销售单")
+                    .withHint(st.getSuggestedAction())
+                    .withHintTarget("customerId")
+                    .withSeverity("ERROR");
+        }
+        if (off) {
+            return null; // 超额检查整体不做 (检查出错也不影响原有流程)
+        }
+
+        String problem;
+        String hint = null;
+        if (unverified != null) {
+            problem = unverified;
+            hint = "请稍后重试, 或联系有信用特批权限的人确认";
+        } else if (st.isExceeds()) {
+            problem = "本单金额 " + requested + " 超过客户 " + customer.getName()
+                    + " 可用信用额度 " + st.getAvailable();
+            hint = st.getSuggestedAction();
+        } else {
+            return null;
+        }
+        if (!block) {
+            log.warn("CREDIT_WARN: factoryId={}, {}", factoryId, problem);
+            return "[信用提示] " + problem;
+        }
+        String reason = request.getCreditOverrideReason();
+        if (reason != null && !reason.isBlank() && hasCreditOverrideAuthority(userId)) {
+            log.warn("CREDIT_OVERRIDE: factoryId={}, userId={}, {}, 特批原因={}", factoryId, userId, problem, reason);
+            return "[信用特批] " + problem + "; 特批原因: " + reason.trim();
+        }
+        throw new BusinessException(409, problem + ", 无法创建新销售单")
+                .withHint(hint != null ? hint : "需要有信用特批权限的人填写特批原因后才能下单")
+                .withHintTarget("customerId")
+                .withSeverity("ERROR");
+    }
+
+    private static String appendCreditNote(String remark, String note) {
+        if (note == null) {
+            return remark;
+        }
+        return remark == null || remark.isBlank() ? note : remark + " " + note;
+    }
 
     /**
      * 解析本次发货实际生效的超发上限。<b>销售链唯一的取值入口。</b>
@@ -215,6 +334,10 @@ public class SalesServiceImpl implements SalesService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private ArApTransactionRepository arApTransactionRepository;
 
+    /** 发货后应收挂账失败 → 待补账记录 + 告警 (D-S3)。Optional for legacy unit tests。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.finance.ArPostingPendingService receivablePendingService;
+
     /**
      * 自动应收挂账的幂等来源类型 —— 与 DB 唯一键 {@code uk_aat_ar_invoice_per_shipment}
      * (V20261031_06) 的 {@code source_type} 取值一致。对应采购侧的 {@code "PURCHASE_RECEIVE"}。
@@ -263,6 +386,20 @@ public class SalesServiceImpl implements SalesService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.bom.StandardCostService standardCostService;
 
+    /** 委外加工费 (D10): 订单 → 计划 → 委外行。Optional — 未注册时 processingFee 返 null。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
+    private com.cretas.aims.service.outsource.OutsourceService outsourceService;
+
+    private java.math.BigDecimal outsourceProcessingFee(String factoryId, String orderId) {
+        if (outsourceService == null || productionPlanRepository == null) {
+            return null;
+        }
+        java.util.List<String> planIds = productionPlanRepository.findByFactoryIdAndSourceOrderId(factoryId, orderId)
+                .stream().map(com.cretas.aims.entity.ProductionPlan::getId).toList();
+        return outsourceService.processingFeeForPlans(factoryId, planIds);
+    }
+
     /** SP12 实际成本拆分: 订单 → 生产计划. Optional — 未注册时 actualCostSplit 返 null. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.repository.ProductionPlanRepository productionPlanRepository;
@@ -299,6 +436,39 @@ public class SalesServiceImpl implements SalesService {
      */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.inventory.PriceListService priceListService;
+
+    /** 最近成交价 (订单行价格来源回查用). Optional 注入, 同 priceListService。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.CustomerPriceMemoryService customerPriceMemoryService;
+
+    /**
+     * 编辑订单重建行时的价格来源: 价没变沿用原来源, 变了或原行没有来源/是新增行就记手填。
+     * (item 的 unitPrice 已设好; 报价单行沿用 QUOTE。)
+     */
+    /** 复制订单: 价是原样复制的, 来源也原样带上。 */
+    static void copyPriceSource(SalesOrderItem from, SalesOrderItem to) {
+        to.setPriceSource(from.getPriceSource());
+        to.setPriceRef(from.getPriceRef());
+    }
+
+    static void applyPriceSourceOnUpdate(SalesOrderItem item, SalesOrderItem previous) {
+        if (item.getQuotedGrossUnitPrice() != null) {
+            item.setPriceSource("QUOTE");
+            item.setPriceRef(null);
+        } else if (previous != null && previous.getPriceSource() != null
+                && priceMatches(item.getUnitPrice(), previous.getUnitPrice())) {
+            item.setPriceSource(previous.getPriceSource());
+            item.setPriceRef(previous.getPriceRef());
+        } else {
+            item.setPriceSource("MANUAL");
+            item.setPriceRef(null);
+        }
+    }
+
+    /** 前端含税/未税来回折算有舍入, 差 ≤ 0.01 视为同一个价。 */
+    private static boolean priceMatches(BigDecimal a, BigDecimal b) {
+        return a != null && b != null && a.subtract(b).abs().compareTo(new BigDecimal("0.01")) <= 0;
+    }
 
     /**
      * 单位落库归一 —— 「不许英文单位, 用户看到必须是中文」(Steve 2026-08-18).
@@ -377,6 +547,10 @@ public class SalesServiceImpl implements SalesService {
     /** Sprint 6 W2-B: 数据权限解析器 (optional). */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private DataScopeResolver dataScopeResolver;
+
+    /** Factory row policy for the warehouse delivery queue (optional for test ctor). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.security.BusinessRowScope businessRowScope;
 
     /** T126 Phase 1: 成品库存调整日志 Repository (optional for test ctor). */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -527,35 +701,10 @@ public class SalesServiceImpl implements SalesService {
                 .findByIdAndFactoryId(request.getCustomerId(), factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("客户不存在或不属于当前组织"));
 
-        // P1 #23 S-CREDIT-1: 创建前信用预检 (防呆 R1 + R2 + R5)
-        // SUSPENDED → 硬阻塞 409; WARNING (exceeds) → 仅 log soft warn (后端不阻塞, 前端通过 GET credit-status 预呈现).
-        if (customerCreditCheckService != null) {
-            try {
-                com.cretas.aims.dto.customer.CreditStatusDTO creditStatus =
-                        customerCreditCheckService.checkCreditAvailable(
-                                factoryId, request.getCustomerId(), preComputedTotal);
-                if (creditStatus.getCreditStatus() == com.cretas.aims.entity.enums.CreditStatus.SUSPENDED) {
-                    throw new BusinessException(409,
-                            "客户 " + customer.getName() + " 信用已被冻结, 无法创建新销售单")
-                            .withHint(creditStatus.getSuggestedAction())
-                            .withHintTarget("customerId")
-                            .withSeverity("ERROR");
-                }
-                if (creditStatus.isExceeds()) {
-                    // soft warn — 仅 log, 不阻塞 (按 backlog "超期警告" 语义, 销售有权强制下单)
-                    log.warn("P1-23 信用预警: factoryId={}, customer={}, requested={}, available={}, action={}",
-                            factoryId, customer.getName(), preComputedTotal,
-                            creditStatus.getAvailable(), creditStatus.getSuggestedAction());
-                }
-            } catch (BusinessException be) {
-                // 信用阻塞 — 重新抛出
-                throw be;
-            } catch (Exception e) {
-                // 检查本身失败 (e.g. customer 不存在 — 但上面已 fetch) — 仅 log, 不阻塞 SO 创建
-                log.warn("P1-23 信用检查失败 (跳过, 不阻塞 SO): factoryId={}, customerId={}, error={}",
-                        factoryId, request.getCustomerId(), e.getMessage());
-            }
-        }
+        // 超信用额度检查 (2026-11-10 Steve 裁定, 工厂纪律 A17): 整体是一个功能开关, 默认关。
+        // 开了以后工厂再选「只提示并留痕」(WARN) 还是「拦截, 可特批」(BLOCK)。
+        // 检查本身出错 ≠ 通过: 提示「额度未核对」(WARN 留痕放行, BLOCK 拦截)。
+        String creditNote = runCreditCheck(factoryId, customer, request, userId, preComputedTotal);
 
         String orderNumber = generateSalesOrderNumber(factoryId);
 
@@ -567,7 +716,7 @@ public class SalesServiceImpl implements SalesService {
         order.setRequiredDeliveryDate(request.getRequiredDeliveryDate());
         order.setDeliveryAddress(request.getDeliveryAddress());
         order.setDiscountAmount(request.getDiscountAmount() != null ? request.getDiscountAmount() : BigDecimal.ZERO);
-        order.setRemark(request.getRemark());
+        order.setRemark(appendCreditNote(request.getRemark(), creditNote));
         resolveSalespersonField(order, request.getSalesperson(), factoryId);
         order.setShippingIncluded(request.getShippingIncluded());
         order.setShippingFee(request.getShippingFee());
@@ -632,20 +781,42 @@ public class SalesServiceImpl implements SalesService {
             // Resolution: customer-specific selling price → global selling price → caller's value.
             // User-provided price always wins (per May 7 part2 L284-303 — manual override allowed).
             BigDecimal resolvedUnitPrice = itemDTO.getUnitPrice();
-            if (priceListService != null
-                    && (resolvedUnitPrice == null || resolvedUnitPrice.signum() == 0)) {
-                BigDecimal contractPrice = priceListService.findActivePriceForOrder(
+            boolean callerGavePrice = resolvedUnitPrice != null && resolvedUnitPrice.signum() != 0;
+            String priceSource = null;
+            String priceRef = null;
+            if (priceListService != null) {
+                var resolution = priceListService.resolveForOrder(
                         factoryId,
                         request.getCustomerId(),
                         itemDTO.getProductTypeId(),
                         order.getOrderDate()).orElse(null);
-                if (contractPrice != null) {
-                    resolvedUnitPrice = contractPrice;
-                    log.info("Issue #793: auto-applied 协议价 — SO={}, customerId={}, productId={}, "
-                            + "price={}", order.getOrderNumber(), request.getCustomerId(),
-                            itemDTO.getProductTypeId(), contractPrice);
+                if (!callerGavePrice && resolution != null) {
+                    resolvedUnitPrice = resolution.price();
+                    priceSource = resolution.source();
+                    priceRef = resolution.priceListName();
+                    log.info("Issue #793: auto-applied {} price — SO={}, customerId={}, productId={}, "
+                            + "price={}", priceSource, order.getOrderNumber(), request.getCustomerId(),
+                            itemDTO.getProductTypeId(), resolution.price());
+                } else if (callerGavePrice && resolution != null
+                        && priceMatches(resolvedUnitPrice, resolution.price())) {
+                    priceSource = resolution.source();
+                    priceRef = resolution.priceListName();
                 }
             }
+            if (priceSource == null && callerGavePrice) {
+                // 手填价若恰等于该客户该产品最近成交价, 记为 LAST_DEAL (前端「点击采用」走这条)。
+                var lastDeal = customerPriceMemoryService == null
+                        ? java.util.Optional.<com.cretas.aims.entity.CustomerPriceHistory>empty()
+                        : customerPriceMemoryService.getLatest(factoryId, request.getCustomerId(),
+                                itemDTO.getProductTypeId());
+                if (lastDeal.isPresent() && priceMatches(resolvedUnitPrice, lastDeal.get().getUnitPrice())) {
+                    priceSource = "LAST_DEAL";
+                    priceRef = lastDeal.get().getSourceOrderNumber();
+                } else {
+                    priceSource = "MANUAL";
+                }
+            }
+            final BigDecimal priceBeforeStrategy = resolvedUnitPrice;
             // Canvas-Pricing Phase 4b (2026-05-18): apply 价格策略 (TIERED / PROMOTION / MEMBER / BUNDLE).
             // 此处用 calculate() 写 PricingApplicationLog (审计 audit), CYCLE 策略由月底批处理路径处理.
             // pricingEngine 为 null 时 (老 jar 部署), 完全跳过 — 走原 resolvedUnitPrice (legacy fallback).
@@ -744,6 +915,17 @@ public class SalesServiceImpl implements SalesService {
             item.setUnitPrice(quotedGrossUnitPrice == null ? resolvedUnitPrice
                     : resolvedUnitPrice.setScale(4, java.math.RoundingMode.HALF_UP));
             item.setQuotedGrossUnitPrice(quotedGrossUnitPrice);
+            // 来源在最终价定下来之后才判: 报价单价 / 被价格策略(促销、阶梯)改过的价, 不能再挂「客户专属价」。
+            if (quotedGrossUnitPrice != null) {
+                priceSource = "QUOTE";
+                priceRef = null;
+            } else if (priceSource != null
+                    && !priceMatches(item.getUnitPrice(), priceBeforeStrategy)) {
+                priceSource = "PRICING_STRATEGY";
+                priceRef = null;
+            }
+            item.setPriceSource(priceSource);
+            item.setPriceRef(priceRef);
 
             // ── E-5 毛利红线预警 (W1 追溯矩阵 E-5; 非阻断决策修正 2026-06-10) ──────────────
             // 决策 (SP3 spec §6.3 / SP5 spec §8): 低于红线只"预警"不"卡死"
@@ -1027,6 +1209,33 @@ public class SalesServiceImpl implements SalesService {
     }
 
     @Override
+    @DataScope("created_by")
+    public PageResponse<SalesOrder> searchSalesOrders(String factoryId, SalesOrderStatus status, String keyword,
+                                                      LocalDate orderDateFrom, LocalDate orderDateTo,
+                                                      int page, int size) {
+        if (orderDateFrom != null && orderDateTo != null && orderDateFrom.isAfter(orderDateTo)) {
+            throw new BusinessException(400, "订单日期范围不成立: 开始 " + orderDateFrom + " 晚于结束 " + orderDateTo)
+                    .withHint("请把开始日期改成不晚于结束日期");
+        }
+        DataScopeContext dsCtx = DataScopeContext.current();
+        com.cretas.aims.entity.enums.DataScope scope = (dsCtx != null && dsCtx.getUserId() != null)
+                ? dsCtx.getScope() : null;
+        List<Long> createdBy = null;
+        if (scope == com.cretas.aims.entity.enums.DataScope.SELF) {
+            createdBy = List.of(dsCtx.getUserId());
+        } else if (scope == com.cretas.aims.entity.enums.DataScope.SELF_AND_BELOW
+                || scope == com.cretas.aims.entity.enums.DataScope.DEPT_AND_BELOW) {
+            createdBy = dataScopeResolver != null ? dataScopeResolver.resolveCreatedByChain(dsCtx) : null;
+            if (createdBy == null || createdBy.isEmpty()) createdBy = List.of(dsCtx.getUserId());
+        }
+        String escaped = keyword == null ? null : keyword.trim()
+                .replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
+        Page<SalesOrder> result = salesOrderRepository.searchListPage(factoryId, createdBy, status, escaped,
+                orderDateFrom, orderDateTo, PageRequest.of(page - 1, size));
+        return PageResponse.of(result.getContent(), page, size, result.getTotalElements());
+    }
+
+    @Override
     public PageResponse<SalesOrder> getSalesOrdersByStatus(String factoryId, SalesOrderStatus status, int page, int size) {
         PageRequest pageRequest = PageRequest.of(page - 1, size);
         Page<SalesOrder> result = salesOrderRepository.findByFactoryIdAndStatusOrderByCreatedAtDesc(factoryId, status, pageRequest);
@@ -1285,8 +1494,9 @@ public class SalesServiceImpl implements SalesService {
                     factoryId, "SALES_ORDER", order.getId(), context, initiatorUserId);
         }
         if (instanceLookup.isEmpty()) {
+            // 沿用原口径: 订单上的财审人记提交人; 事件另标「系统自动通过」(D-SO-AUTOPLAN-NOAPPROVER)
             return approveFinanceForOrder(
-                    factoryId, order, "当前业务无需审批，系统直接通过", null, initiatorUserId);
+                    factoryId, order, "当前业务无需审批，系统直接通过", null, initiatorUserId, initiatorUserId);
         }
         ApprovalWorkflowInstance instance = instanceLookup.get();
 
@@ -1303,7 +1513,12 @@ public class SalesServiceImpl implements SalesService {
         }
 
         if (instance.getStatus() == InstanceStatus.APPROVED) {
-            return approveFinanceForOrder(factoryId, order, "销售审批工作流自动通过", null, null);
+            // D-SO-AUTOPLAN-NOAPPROVER (2026-11-10): OA 审批流启动即命中自动通过条件, 没有人点「通过」,
+            // 财审人如实为 null (不把提交人冒充成审批人)。但下游自动生成生产计划要一个建单人
+            // (production_plans.created_by NOT NULL + 外键 → users): 事件标「系统自动通过」并带上
+            // 触发这次自动通过的提交人。原来这里只传 null, 计划生成抛「缺少审批人」, 订单通过了计划却没有
+            // (prod F006 SO-20261110-0005/0014/0015)。
+            return approveFinanceForOrder(factoryId, order, "销售审批工作流自动通过", null, null, initiatorUserId);
         }
 
         if (instance.getStatus() == InstanceStatus.REJECTED) {
@@ -1426,8 +1641,19 @@ public class SalesServiceImpl implements SalesService {
         return approveFinanceForOrder(factoryId, order, notes, estimatedCost, reviewerId);
     }
 
+    /** 人工审批 (有审批人)。 */
     private SalesOrder approveFinanceForOrder(String factoryId, SalesOrder order, String notes,
                                               java.math.BigDecimal estimatedCost, Long reviewerId) {
+        return approveFinanceForOrder(factoryId, order, notes, estimatedCost, reviewerId, null);
+    }
+
+    /**
+     * @param autoApprovalTriggeredBy 非 null = 系统自动通过, 值是提交审批、触发自动通过的用户;
+     *                                null = 人工审批 ({@code reviewerId} 是审批人)
+     */
+    private SalesOrder approveFinanceForOrder(String factoryId, SalesOrder order, String notes,
+                                              java.math.BigDecimal estimatedCost, Long reviewerId,
+                                              Long autoApprovalTriggeredBy) {
         org.hibernate.Hibernate.initialize(order.getItems());
         // N9 fix (六扇门财审阈值): 免审/阈值未触发的自动通过路径在 CONFIRMED 状态直接调用本方法,
         // 但 sales_order 状态机只有合法边 CONFIRMED → PENDING_FINANCE_REVIEW → FINANCE_APPROVED,
@@ -1459,9 +1685,13 @@ public class SalesServiceImpl implements SalesService {
 
         // 发布财务审核通过事件 → 触发供应链联动（库存检查+生产计划+采购建议）
         try {
-            applicationEventPublisher.publishEvent(
-                    new SalesOrderFinanceApprovedEvent(this, factoryId, saved.getId(), reviewerId));
-            log.info("已发布SalesOrderFinanceApprovedEvent: SO={}", saved.getId());
+            SalesOrderFinanceApprovedEvent approvedEvent = autoApprovalTriggeredBy != null
+                    ? SalesOrderFinanceApprovedEvent.systemAutoApproved(
+                            this, factoryId, saved.getId(), reviewerId, autoApprovalTriggeredBy, notes)
+                    : new SalesOrderFinanceApprovedEvent(this, factoryId, saved.getId(), reviewerId);
+            applicationEventPublisher.publishEvent(approvedEvent);
+            log.info("已发布SalesOrderFinanceApprovedEvent: SO={}, approvalSource={}, approvedBy={}, triggeredBy={}",
+                    saved.getId(), approvedEvent.getApprovalSource(), reviewerId, autoApprovalTriggeredBy);
         } catch (Exception e) {
             log.error("发布SalesOrderFinanceApprovedEvent失败(不影响审批): SO={}", saved.getId(), e);
         }
@@ -1721,11 +1951,9 @@ public class SalesServiceImpl implements SalesService {
                 .variancePct(orderVariancePct)
                 .belowThreshold(orderBelowThreshold)
                 .alarmMessage(orderAlarmMessage)
-                // P1 #32: 委外加工费独立科目 — 诚实 null.
-                // WorkProcess/WorkProcessTask 当前无 isOutsourced + outsourcedFee 列,
-                // 委外加工费无生产记录来源 → 不伪造数字, 返 null.
-                // 待 WorkProcess 加 is_outsourced 列后接入真实数据.
-                .processingFee(null)
+                // P1 #32: 委外加工费独立科目 — 订单名下计划所挂委外行的累计净加工费 (D10: 只展示,
+                // 半成品单价里已含加工费, 不再并入 actualCost)。没有委外行 ⇒ null (不伪造 0)。
+                .processingFee(outsourceProcessingFee(factoryId, orderId))
                 // SP12: 实际成本拆分 (材料逐料 + 人工 + 制费), 来自生产真实领料/报工.
                 // 诚实 null: 订单未投产 / 未领料 / 未报工时返 null. 不破坏上面聚合字段.
                 .actualCostSplit(buildActualCostSplit(factoryId, orderId))
@@ -2381,6 +2609,7 @@ public class SalesServiceImpl implements SalesService {
                 item.setUnitPrice(quotedGrossUnitPrice == null ? itemDTO.getUnitPrice()
                         : itemDTO.getUnitPrice().setScale(4, java.math.RoundingMode.HALF_UP));
                 item.setQuotedGrossUnitPrice(quotedGrossUnitPrice);
+                applyPriceSourceOnUpdate(item, previous);
                 item.setDiscountRate(itemDTO.getDiscountRate() != null ? itemDTO.getDiscountRate() : BigDecimal.ZERO);
                 // SP4 updateSalesOrder: 同 createSalesOrder 三层 default 链 — item 显式 > SO.defaultTaxRate > 0
                 BigDecimal effectiveTaxRateUpdate = itemDTO.getTaxRate();
@@ -2518,15 +2747,38 @@ public class SalesServiceImpl implements SalesService {
     @Loggable(module = "SALES_ORDER", action = "CANCEL", entityType = "SalesOrder",
               entityIdParam = "orderId")
     public SalesOrder cancelOrder(String factoryId, String orderId, String reason) {
+        return cancelOrder(factoryId, orderId, reason, null);
+    }
+
+    @Override
+    @Transactional
+    @Loggable(module = "SALES_ORDER", action = "CANCEL", entityType = "SalesOrder",
+              entityIdParam = "orderId")
+    public SalesOrder cancelOrder(String factoryId, String orderId, String reason, Long operatorUserId) {
+        LAST_CANCEL_SUMMARY.remove();
         // getSalesOrderById 内部做 factoryId 租户隔离校验 (不属于该工厂 → 403).
         SalesOrder order = getSalesOrderById(factoryId, orderId);
+        ApprovedSalesOrderCancellation.Outcome downstream = null;
         // R39 BUG-8 fix: was only blocking COMPLETED → FINANCE_APPROVED+/PROCESSING/SHIPPED/CANCELLED
         // could be cancelled, breaking AR + production_plan invariants. Use whitelist.
         if (!com.cretas.aims.domain.OrderUsageWhitelists.SO_CANCELLABLE.contains(order.getStatus())) {
-            throw new BusinessException(409,
-                    "当前订单状态(" + order.getStatus().getDisplayName() + ")不允许取消。"
-                  + "财务批准后请通过驳回/退款流程处理")
-                    .withHint("请刷新订单列表查看最新状态");
+            boolean approvedPath = order.getStatus() == SalesOrderStatus.FINANCE_APPROVED
+                    && approvedSalesOrderCancellation != null
+                    && approvedSalesOrderCancellation.enabled(factoryId);
+            if (!approvedPath) {
+                throw new BusinessException(409,
+                        "当前订单状态(" + order.getStatus().getDisplayName() + ")不允许取消。"
+                      + "财务批准后请通过驳回/退款流程处理")
+                        .withHint("请刷新订单列表查看最新状态");
+            }
+        } else if (approvedSalesOrderCancellation != null) {
+            // 取消接口对「取消已批准销售单」权限的持有人也开放入口, 普通状态的单仍须销售写权限
+            approvedSalesOrderCancellation.requireSalesWriteForOrdinaryCancel(factoryId, operatorUserId);
+        }
+        if (!com.cretas.aims.domain.OrderUsageWhitelists.SO_CANCELLABLE.contains(order.getStatus())) {
+            // 工厂开关开了: 锁销售单 (建发货单 / 登记收款拿同一把锁)、锁后重读状态、连带取消下游; 任何一步被拦整单回滚
+            downstream = approvedSalesOrderCancellation.cancelDownstream(factoryId, orderId, reason, operatorUserId);
+            order = downstream.lockedOrder();
         }
         order.setStatus(SalesOrderStatus.CANCELLED);
         // E-FP-2 (fool-proof Rule 3): 取消原因追加到 remark, 无专用字段故复用 remark 追溯.
@@ -2534,6 +2786,12 @@ public class SalesServiceImpl implements SalesService {
             String existing = order.getRemark();
             String tag = "[取消原因: " + reason.trim() + "]";
             order.setRemark(existing == null || existing.isBlank() ? tag : existing + " " + tag);
+        }
+        if (downstream != null) {
+            String existing = order.getRemark();
+            String tag = "[财务批准后取消]";
+            order.setRemark(existing == null || existing.isBlank() ? tag : existing + " " + tag);
+            LAST_CANCEL_SUMMARY.set(downstream.describe());
         }
         log.info("取消销售订单: orderId={}, orderNumber={}, reason={}",
                 orderId, order.getOrderNumber(), reason);
@@ -2549,6 +2807,19 @@ public class SalesServiceImpl implements SalesService {
             log.error("发布SalesOrderCancelledEvent失败(不影响取消): SO={}", saved.getId(), e);
         }
         return saved;
+    }
+
+    @Override
+    public boolean mayCancelApprovedOrders(String factoryId, Long userId) {
+        return approvedSalesOrderCancellation != null
+                && approvedSalesOrderCancellation.currentUserMayCancelApproved(factoryId, userId);
+    }
+
+    @Override
+    public String lastCancelSummary() {
+        String v = LAST_CANCEL_SUMMARY.get();
+        LAST_CANCEL_SUMMARY.remove();
+        return v;
     }
 
     /**
@@ -2728,6 +2999,7 @@ public class SalesServiceImpl implements SalesService {
             newItem.setUnit(storageUnit(factoryId, srcItem.getUnit()));
             newItem.setUnitPrice(srcItem.getUnitPrice());
             newItem.setQuotedGrossUnitPrice(srcItem.getQuotedGrossUnitPrice());
+            copyPriceSource(srcItem, newItem);
             newItem.setDiscountRate(srcItem.getDiscountRate() != null
                     ? srcItem.getDiscountRate() : BigDecimal.ZERO);
             newItem.setCostUnitPrice(srcItem.getCostUnitPrice());
@@ -2911,14 +3183,9 @@ public class SalesServiceImpl implements SalesService {
                 }
             }
 
-            Map<Long, BigDecimal> arrangedByOrderItem = effectiveMasterDeliveries(existing).stream()
-                    .flatMap(delivery -> delivery.getItems().stream())
-                    .filter(item -> item.getSalesOrderItemId() != null)
-                    .collect(Collectors.groupingBy(
-                            SalesDeliveryItem::getSalesOrderItemId,
-                            Collectors.reducing(BigDecimal.ZERO,
-                                    item -> item.getDeliveredQuantity() != null ? item.getDeliveredQuantity() : BigDecimal.ZERO,
-                                    BigDecimal::add)));
+            // A16 第二轮审查: 主单下的分批发运子单可以按上限实发, 超过主单计划 —— 每张主单按
+            // 「本单计划」与「其下有效子单合计」取较大者计入, 否则后开的主单会把多发的那部分再开一遍。
+            Map<Long, BigDecimal> arrangedByOrderItem = arrangedByOrderLine(existing, null, null);
             Map<Long, BigDecimal> requestedByOrderItem = new HashMap<>();
             for (CreateDeliveryRequest.DeliveryItemDTO requested : request.getItems()) {
                 SalesOrderItem source = resolveDeliverySourceOrderItem(
@@ -2931,17 +3198,27 @@ public class SalesServiceImpl implements SalesService {
                 }
                 requestedByOrderItem.merge(source.getId(), requestedQuantity, BigDecimal::add);
             }
+            // A16 (工厂纪律排查 2026-11-10, Steve 11-11 开工): 新建发货单与确认发货走【同一个】超发上限 ——
+            // 累计安排量 (已有有效发货单 + 本次) <= 订单量 x (1 + 超发上限)。原来新建是 0 容差, 称重货
+            // (订 10 kg 称出 10.3 kg) 连单都开不出来, 而确认发货时却允许按上限多发。
+            // 上限不限制 (阈值中心停用、也没配全局属性) 时新建同样不设上限 —— 与确认发货一致。
+            final OverReceiveLimit createOverShipLimit = resolveOverShipLimit(factoryId);
             for (Map.Entry<Long, BigDecimal> requestedLine : requestedByOrderItem.entrySet()) {
                 SalesOrderItem source = sourceOrderItemsById.get(requestedLine.getKey());
                 BigDecimal ordered = source.getQuantity() != null ? source.getQuantity() : BigDecimal.ZERO;
                 BigDecimal arranged = arrangedByOrderItem.getOrDefault(source.getId(), BigDecimal.ZERO);
-                BigDecimal remaining = ordered.subtract(arranged).max(BigDecimal.ZERO);
-                if (requestedLine.getValue().compareTo(remaining) > 0) {
+                BigDecimal maxCumulative = createOverShipLimit.maxAllowed(ordered);
+                if (maxCumulative != null && arranged.add(requestedLine.getValue()).compareTo(maxCumulative) > 0) {
+                    String unit = UnitDisplayNames.display(source.getUnit());
+                    BigDecimal remaining = maxCumulative.subtract(arranged).max(BigDecimal.ZERO);
                     throw new BusinessException(409,
-                            "发货数量超过订单行剩余可安排数量（剩余 " + remaining
-                                    + UnitDisplayNames.display(source.getUnit()) + "）")
+                            "发货数量超过订单行剩余可安排数量（订单 " + plainQty(ordered) + unit
+                                    + "，已安排 " + plainQty(arranged) + unit
+                                    + "，含 " + createOverShipLimit.percentLabel() + " 超发最多还能安排 "
+                                    + plainQty(remaining) + unit + "）")
                             .withCode("DELIVERY_QUANTITY_EXCEEDS_REMAINING")
-                            .withHint("请刷新订单后按剩余可安排数量创建发货单")
+                            .withHint("请按最多还能安排的数量创建发货单；若本厂应当允许多发，"
+                                    + "在「系统设置 → 业务阈值配置 → 销售」调高发货超发上限")
                             .withHintTarget("deliveredQuantity");
                 }
             }
@@ -3227,7 +3504,8 @@ public class SalesServiceImpl implements SalesService {
         // 缺陚42 (owner 拍板 「出库照抄入库」): 子发运单创建后自动按 FIFO 预填成品批次分配，
         // 不等用户另外点「分配批次」才看到推荐 —— 镜像入库侧 PendingPurchaseReceivingPanel.vue
         // openReceive() 的原则: 一开对话框就把每行默认填成 remainingReceivableQuantity。
-        autoPrefillFifoAllocations(factoryId, saved);
+        // Q3: 没能自动分配的行把真实原因带回响应 (规格不一致要确认换算 / 库存不够), 子单本身照样建成
+        saved.setAllocationNotices(autoPrefillFifoAllocations(factoryId, saved));
         return saved;
     }
 
@@ -3247,9 +3525,10 @@ public class SalesServiceImpl implements SalesService {
      * 不报错也不让整张子发运单创建失败 —— 缺口留到「分配批次」手工处理或发货时 shipDelivery 的 P0-13 兵底重试。
      * 分配总量恰守 #484 定的 ≤ 发货行数量天花板 —— {@code autoAllocateFifo} 本身按 requiredQty 做上限, 不会超发。
      */
-    private void autoPrefillFifoAllocations(String factoryId, SalesDeliveryRecord shipment) {
+    private List<Map<String, Object>> autoPrefillFifoAllocations(String factoryId, SalesDeliveryRecord shipment) {
+        List<Map<String, Object>> notices = new ArrayList<>();
         if (batchAllocationService == null || shipment == null || shipment.getItems() == null) {
-            return;
+            return notices;
         }
         for (SalesDeliveryItem item : shipment.getItems()) {
             if (item.getDeliveredQuantity() == null || item.getDeliveredQuantity().signum() <= 0) {
@@ -3261,17 +3540,26 @@ public class SalesServiceImpl implements SalesService {
             if (isMaterialLine(factoryId, item.getProductTypeId())) {
                 continue;
             }
-            try {
-                batchAllocationService.autoAllocateFifo(
-                        factoryId, String.valueOf(item.getId()), item.getProductTypeId(),
-                        item.getDeliveredQuantity(), item.getUnit(), item.getSourceWarehouseCode());
-            } catch (BusinessException e) {
-                // 诚实降级: 预填是便利功能, 不是硬闸 —— 预填失败 (比如单位换算冲突) 不该拖垒
-                // 子发运单创建这个更重要的动作。用户仍能去「分配批次」手工处理。
-                log.warn("[缺陚42] 子发运创建后自动FIFO预填失败, 转手工分配: factoryId={}, itemId={}, reason={}",
-                        factoryId, item.getId(), e.getMessage());
+            // 🔴 Q3 (2026-11-09): 原来这里调 autoAllocateFifo 再 catch BusinessException —— 看着是「预填失败不拖垮
+            //    子单」, 实际异常已经穿过分配服务的事务代理, 把本事务标成只能回滚, 提交时整张子单回滚
+            //    (只剩规格不一致库存时必现)。prefillFifo 不抛业务异常, 原因按值带回来给用户看。
+            com.cretas.aims.service.sales.AutoAllocationOutcome outcome = batchAllocationService.prefillFifo(
+                    factoryId, String.valueOf(item.getId()), item.getProductTypeId(),
+                    item.getDeliveredQuantity(), item.getUnit(), item.getSourceWarehouseCode());
+            if (outcome == null || outcome.allocated()) {
+                continue;
             }
+            log.warn("[缺陷42] 子发运创建后未自动分配, 转手工: factoryId={}, itemId={}, code={}",
+                    factoryId, item.getId(), outcome.code());
+            Map<String, Object> notice = new LinkedHashMap<>();
+            notice.put("deliveryItemId", String.valueOf(item.getId()));
+            notice.put("productName", item.getProductName());
+            notice.put("code", outcome.code());
+            notice.put("message", outcome.message());
+            notice.put("hint", outcome.hint());
+            notices.add(notice);
         }
+        return notices;
     }
 
     @Override
@@ -3440,6 +3728,10 @@ public class SalesServiceImpl implements SalesService {
         assertHaccpReleaseAllowed(factoryId, record);
 
 
+        // 缺价回填(Steve 2026-11-17): 发货行单价为 null(前端缺价/被遮时不再发 0, #1791/#1796)
+        // → 按来源订单行单价回填并计入发货单金额; 订单行也没价的保持 null, 下方挂账段按失败处理(待补账 + 告警)。
+        backfillMissingDeliveryUnitPrices(factoryId, record);
+
         // FIFO 扣减成品库存
         for (SalesDeliveryItem item : record.getItems()) {
             // 🔴 userId 一路透传到血缘边: 出货边的 operator_id 原本硬编码 null,
@@ -3466,9 +3758,28 @@ public class SalesServiceImpl implements SalesService {
 
         // 自动创建应收账款（销售发货 → AR_INVOICE）
         if (record.getSalesOrderId() != null) {
+            final SalesDeliveryRecord shipped = record;
+            BigDecimal postedShippedValue = null;
+            String receivableCustomerId = null;
+            Long receivableOwnerId = null;
+            RuntimeException prepFailure = null;
+            java.util.function.Supplier<ArApTransaction> poster = null;
+            BigDecimal zeroAmountTraceValue = null; // 非 null = 零金额发货, 需写 RESOLVED/ZERO_AMOUNT 追溯行
             try {
-                SalesOrder order = salesOrderRepository.findById(record.getSalesOrderId()).orElse(null);
-                if (order != null && order.getCustomerId() != null) {
+                // 租户: 按 id + factoryId 查(#1789 遗留的裸 findById 会读到别厂订单); 别厂/不存在一律按挂账失败处理
+                SalesOrder order = salesOrderRepository
+                        .findByIdAndFactoryId(record.getSalesOrderId(), factoryId).orElse(null);
+                receivableCustomerId = order != null ? order.getCustomerId() : null;
+                receivableOwnerId = order != null ? order.getCreatedBy() : null;
+                if (order == null) {
+                    // 发货了却查不到(本厂的)销售订单: 不是「无事发生」, 必须留待补账线索
+                    throw new IllegalStateException("无法自动挂账: 销售订单不存在或不属于本工厂 " + record.getSalesOrderId());
+                }
+                if (!hasText(order.getCustomerId())) {
+                    // Steve 2026-11-16 复核口径: 没有客户的订单仍按失败处理(待补账 + 告警), 不静默;
+                    // (#1789 曾把它改成正常跳过, 本次按最终口径恢复)。
+                    throw new IllegalStateException("无法自动挂账: 销售订单没有客户 " + order.getId());
+                } else {
                     // 🔴🔒 2026-08-28 会计正确性修复: 应收金额必须反映【实发】, 不是【订单】。
                     //
                     // 仓管在「确认发货」时可以覆盖实际发货数量 (warehouseConfirmDelivery,
@@ -3529,23 +3840,75 @@ public class SalesServiceImpl implements SalesService {
                         // ⇒ 正确形态 = Σ(实发量 × 单价 × (1 + 税率/100)), 税率从
                         //   sales_delivery_items.salesOrderItemId → sales_order_items.taxRate 借。
                         //   与采购侧 PurchaseServiceImpl#taxInclusiveReceivedValue 同一范式与同一取整。
+                        // 缺价回填后仍缺价(订单行也没价): ⛔ 不能按 0 计入(混合发货会少挂这一行的钱), 按失败处理
+                        String unpricedLine = firstUnpricedDeliveryLine(record);
+                        if (unpricedLine != null) {
+                            throw new IllegalStateException("无法自动挂账: 发货行缺单价且来源订单行也没有单价("
+                                    + unpricedLine + "), 请补单价后补账");
+                        }
                         BigDecimal shippedValue = taxInclusiveShippedValue(order, record);
-                        ArApTransaction ar = arApService.recordReceivableIfAbsent(
-                                factoryId, order.getCustomerId(), order.getId(),
-                                SOURCE_DOC_TYPE_SALES_DELIVERY, record.getId(),
-                                shippedValue, LocalDate.now().plusDays(30), userId,
-                                "销售发货自动挂账-" + record.getDeliveryNumber());
-                        if (ar != null) {
-                            log.info("自动创建应收(实发价税合计): orderId={}, deliveryId={}, 实发含税={}, 发货单未税={}, 订单含税={}, transactionId={}",
-                                    order.getId(), record.getId(), shippedValue,
-                                    record.getTotalAmount(), order.getPayableAmount(), ar.getId());
+                        if (isKnownZeroShipmentValue(order, record, shippedValue)) {
+                            // Steve 2026-11-16 复核口径: 零金额发货(赠品/样品)无需挂账 —— 不调挂账、不告警,
+                            // 但留一行 RESOLVED / ZERO_AMOUNT 追溯行(不进默认的待处理列表), 写入在下方 try 之外。
+                            // 只放开真赠品/样品: 发货行与订单行单价都确定为 0; 缺价/误录/空明细算出的 0 仍按失败处理。
+                            log.info("应收自动挂账跳过(零金额发货, 无需挂账): factoryId={}, salesOrderId={}, deliveryId={}, 实发含税={}",
+                                    factoryId, order.getId(), record.getId(), shippedValue);
+                            zeroAmountTraceValue = shippedValue;
+                        } else {
+                            postedShippedValue = shippedValue;
+                            final SalesOrder postOrder = order;
+                            final BigDecimal postValue = shippedValue;
+                            poster = () -> {
+                                ArApTransaction ar = arApService.recordReceivableIfAbsent(
+                                        factoryId, postOrder.getCustomerId(), postOrder.getId(),
+                                        SOURCE_DOC_TYPE_SALES_DELIVERY, shipped.getId(),
+                                        postValue, LocalDate.now().plusDays(30), userId,
+                                        "销售发货自动挂账-" + shipped.getDeliveryNumber());
+                                if (ar == null) {
+                                    // recordReceivableIfAbsent 的「诚实跳过」(金额缺失或非正 / 客户不存在 / 订单状态不可开票)
+                                    // 返回 null 而不抛。货已发而应收没挂, 属于「真正没挂上」⇒ 当失败落待补账并告警,
+                                    // 由人补单价/补客户后补账; 不能只打一行 warn。
+                                    throw new IllegalStateException("自动挂账被跳过(未生成应收): 实发含税金额="
+                                            + postValue + ", 请检查发货单单价/客户/订单状态");
+                                }
+                                log.info("自动创建应收(实发价税合计): orderId={}, deliveryId={}, 实发含税={}, 发货单未税={}, 订单含税={}, transactionId={}",
+                                        postOrder.getId(), shipped.getId(), postValue,
+                                        shipped.getTotalAmount(), postOrder.getPayableAmount(), ar.getId());
+                                return ar;
+                            };
                         }
                     }
                 }
-            } catch (BusinessException e) {
-                log.warn("应收自动挂账跳过(可能已存在): {}", e.getMessage());
-            } catch (Exception e) {
-                log.error("应收自动挂账失败: deliveryId={}", deliveryId, e);
+            } catch (RuntimeException e) {
+                prepFailure = e; // 算金额/查订单阶段的失败也要落待补账, 不能静默
+            }
+            // 零金额追溯行【故意放在上面的 try/catch 之外】: 它是发货事务的一部分(与发货同提交/同回滚),
+            // 写失败就让异常直接抛出、整个发货回滚 —— ⛔ 不能被上面的 catch 当成「挂账失败」:
+            // 那样会给一张本就无需挂账的单写 PENDING 待补账 + 发「挂账失败」告警(误报), 而且 DB 异常时
+            // 发货事务多半已被标 rollback-only / PG aborted, 发货照样提交不了, 只是死得更难看。
+            if (zeroAmountTraceValue != null && receivablePendingService != null) {
+                receivablePendingService.recordNoPostingNeeded(factoryId, record.getId(),
+                        record.getDeliveryNumber(), record.getSalesOrderId(), receivableCustomerId,
+                        receivableOwnerId, zeroAmountTraceValue, userId, "ZERO_AMOUNT",
+                        "零金额发货(发货行与订单行单价均为 0, 赠品/样品), 无需挂账");
+            }
+            // D-S3 (Steve 2026-11-15): 发货已成功, 挂账失败不回滚发货, 也不能静默。
+            // 挂账放到发货事务【提交之后】的独立事务里做: 挂账的任何失败(含 DB 异常/PG 事务 aborted)
+            // 都碰不到发货事务, 挂账里 lockFactory 也不会与发货事务自锁; 失败写待补账并告警。
+            if (poster != null || prepFailure != null) {
+                if (receivablePendingService != null) {
+                    receivablePendingService.postAfterShipCommit(factoryId, shipped.getId(),
+                            shipped.getDeliveryNumber(), shipped.getSalesOrderId(), receivableCustomerId,
+                            receivableOwnerId, postedShippedValue, userId, prepFailure, poster);
+                } else if (prepFailure != null) {
+                    log.error("应收自动挂账准备阶段失败且无待补账服务(仅 legacy 单测上下文): deliveryId={}", deliveryId, prepFailure);
+                } else {
+                    try {
+                        poster.get();
+                    } catch (RuntimeException e) {
+                        log.error("应收自动挂账失败且无待补账服务(仅 legacy 单测上下文): deliveryId={}", deliveryId, e);
+                    }
+                }
             }
         }
 
@@ -3736,12 +4099,10 @@ public class SalesServiceImpl implements SalesService {
     @Override
     public PageResponse<SalesDeliveryRecord> getPendingWarehouseDeliveries(String factoryId, int page, int size) {
         PageRequest pageRequest = PageRequest.of(page - 1, size, Sort.by(Sort.Direction.DESC, "createdAt"));
-        Page<SalesDeliveryRecord> result = deliveryRecordRepository.findByFactoryIdAndStatusIn(
-                factoryId,
-                List.of(SalesDeliveryStatus.DRAFT,
+        List<SalesDeliveryStatus> statuses = List.of(SalesDeliveryStatus.DRAFT,
                         SalesDeliveryStatus.PENDING_WAREHOUSE_CONFIRM,
-                        SalesDeliveryStatus.PICKED),
-                pageRequest);
+                        SalesDeliveryStatus.PICKED);
+        Page<SalesDeliveryRecord> result = warehouseQueuePage(factoryId, statuses, pageRequest);
         return PageResponse.of(result.getContent(), page, size, result.getTotalElements());
     }
 
@@ -3749,15 +4110,30 @@ public class SalesServiceImpl implements SalesService {
     @Transactional(readOnly = true)
     public PageResponse<SalesDeliveryRecord> getWarehouseDeliveryHistory(String factoryId, int page, int size) {
         PageRequest pageRequest = PageRequest.of(page - 1, size, Sort.by(Sort.Direction.DESC, "createdAt"));
-        Page<SalesDeliveryRecord> result = deliveryRecordRepository.findByFactoryIdAndStatusIn(
-                factoryId,
-                List.of(SalesDeliveryStatus.PARTIALLY_SHIPPED,
+        List<SalesDeliveryStatus> statuses = List.of(SalesDeliveryStatus.PARTIALLY_SHIPPED,
                         SalesDeliveryStatus.SHIPPED,
                         SalesDeliveryStatus.DELIVERED,
                         SalesDeliveryStatus.CANCELLED,
-                        SalesDeliveryStatus.RETURNED),
-                pageRequest);
+                        SalesDeliveryStatus.RETURNED);
+        Page<SalesDeliveryRecord> result = warehouseQueuePage(factoryId, statuses, pageRequest);
         return PageResponse.of(result.getContent(), page, size, result.getTotalElements());
+    }
+
+    /**
+     * Warehouse queue rows the caller may see. Whole-factory scope keeps the factory query; a
+     * narrower factory-configured scope lists only deliveries whose source order (or, for a
+     * standalone delivery, customer) was created inside that scope, matching the confirm guard.
+     */
+    private Page<SalesDeliveryRecord> warehouseQueuePage(String factoryId, List<SalesDeliveryStatus> statuses,
+                                                         PageRequest pageRequest) {
+        List<Long> creators = com.cretas.aims.security.BusinessRowScope.recordCreators(businessRowScope, factoryId);
+        if (creators == null) {
+            return deliveryRecordRepository.findByFactoryIdAndStatusIn(factoryId, statuses, pageRequest);
+        }
+        if (creators.isEmpty()) {
+            return new org.springframework.data.domain.PageImpl<>(List.of(), pageRequest, 0);
+        }
+        return deliveryRecordRepository.findByFactoryIdAndStatusInAndOwnerIn(factoryId, statuses, creators, pageRequest);
     }
 
     /**
@@ -3797,6 +4173,9 @@ public class SalesServiceImpl implements SalesService {
         if (actualQuantities != null && !actualQuantities.isEmpty()) {
             // ⚠️ 循环外解析一次 —— 逐行解析会逐行打 DB/缓存, 且同一次确认里上限可能读出两个值
             final OverReceiveLimit overShipLimit = resolveOverShipLimit(factoryId);
+            // A16: 新建也允许按上限多安排之后, 单看「实发 <= 本单计划 x (1+上限)」会叠成 (1+上限)^2 ——
+            // 确认时再按订单行累计校验一次: 其他有效发货单 + 本次实发 <= 订单量 x (1+上限)。
+            final OrderLineOverShipLedger orderLineLedger = orderLineOverShipLedger(factoryId, record, overShipLimit);
             for (SalesDeliveryItem item : record.getItems()) {
                 String itemIdKey = item.getId() == null ? null : String.valueOf(item.getId());
                 if (itemIdKey == null) continue;
@@ -3815,9 +4194,11 @@ public class SalesServiceImpl implements SalesService {
                     //    ⛔ 它永不抛异常 —— 留痕失败不许把 409 变成 500。
                     try {
                         assertWithinOverShipCap(item, itemIdKey, actual, overShipLimit);
+                        assertWithinOrderLineOverShipCap(orderLineLedger, item, itemIdKey, actual, overShipLimit);
                     } catch (BusinessException capViolation) {
                         recordBlockedOverShipAttempt(factoryId, record, item, actual,
-                                overShipLimit, capViolation, userId);
+                                overShipLimit, capViolation, userId,
+                                orderLineMaxThisLine(orderLineLedger, item, overShipLimit));
                         throw capViolation;
                     }
                     if (item.getDeliveredQuantity() != null
@@ -3848,6 +4229,144 @@ public class SalesServiceImpl implements SalesService {
         return shipDelivery(factoryId, deliveryId, userId);
     }
 
+    /** 确认发货时按订单行累计校验超发用的账本: 订单行 -> 订单量 / 其他有效发货单已安排量。 */
+    private record OrderLineOverShipLedger(Map<Long, SalesOrderItem> orderItems,
+                                           Map<Long, BigDecimal> arrangedByOthers) {
+    }
+
+    /**
+     * 只在【有上限】且发货单挂着销售订单时建账; 否则返回 null (不做累计校验)。
+     * 先锁订单 (与新建发货单同一把锁), 两张发货单同时确认时累计量不会被各算一遍。
+     */
+    private OrderLineOverShipLedger orderLineOverShipLedger(String factoryId, SalesDeliveryRecord record,
+                                                            OverReceiveLimit limit) {
+        if (limit == null || limit.isUnlimited() || record.getSalesOrderId() == null
+                || record.getSalesOrderId().isBlank()) {
+            return null;
+        }
+        salesOrderRepository.findByIdAndFactoryIdForUpdate(record.getSalesOrderId(), factoryId);
+        Map<Long, SalesOrderItem> orderItems = new HashMap<>();
+        salesOrderItemRepository.findBySalesOrderId(record.getSalesOrderId())
+                .forEach(item -> orderItems.put(item.getId(), item));
+        boolean shipmentChild = record.getParentDeliveryId() != null;
+        // 主单: 其他有效主单。分批发运子单 (独立审查 2026-11-11): 它的量算在自己的母单里, 所以排除母单本身,
+        // 改计母单下其他未取消 / 未退回的子单 —— 否则子单各按「本单计划 × (1+上限)」放行,
+        // 母单又可按订单量 × (1+上限) 开出, 合计会叠成 (1+上限)^2。
+        List<SalesDeliveryRecord> deliveries = deliveryRecordRepository.findBySalesOrderId(record.getSalesOrderId())
+                .stream().filter(d -> factoryId.equals(d.getFactoryId())).toList();
+        Map<Long, BigDecimal> arrangedByOthers;
+        if (shipmentChild) {
+            // 其他主单 (各按「计划」与「其下子单合计」取大) + 本母单下的其他有效子单; 本母单与自己不计
+            arrangedByOthers = new HashMap<>(arrangedByOrderLine(deliveries, record.getParentDeliveryId(), record.getId()));
+            sumByOrderLine(activeChildrenOf(deliveries, record.getParentDeliveryId(), record.getId()))
+                    .forEach((line, qty) -> arrangedByOthers.merge(line, qty, BigDecimal::add));
+        } else {
+            arrangedByOthers = arrangedByOrderLine(deliveries, record.getId(), null);
+        }
+        return new OrderLineOverShipLedger(orderItems, arrangedByOthers);
+    }
+
+    /**
+     * 订单行已安排量 (A16 第二轮独立审查 2026-11-11): 每张有效主单 (非取消 / 退回) 按订单行取
+     * max(本单计划, 其下有效子单合计) 再相加。子单确认时可按上限实发、超过母单计划, 而发运子单不回写母单行量;
+     * 只数主单计划会漏掉这部分, 后开的主单就能把它再开一遍 (订 100 发 120)。
+     *
+     * @param excludeMasterId 不计入的主单 (确认主单时是它自己; 确认子单时是它的母单, 母单下的子单由调用方另算)
+     * @param excludeChildId  不计入的子单 (确认子单时是它自己)
+     */
+    private Map<Long, BigDecimal> arrangedByOrderLine(List<SalesDeliveryRecord> deliveries,
+                                                      String excludeMasterId, String excludeChildId) {
+        Map<Long, BigDecimal> total = new HashMap<>();
+        for (SalesDeliveryRecord master : effectiveMasterDeliveries(deliveries)) {
+            if (Objects.equals(master.getId(), excludeMasterId)) {
+                continue;
+            }
+            Map<Long, BigDecimal> planned = sumByOrderLine(List.of(master));
+            Map<Long, BigDecimal> children = sumByOrderLine(activeChildrenOf(deliveries, master.getId(), excludeChildId));
+            Set<Long> lines = new HashSet<>(planned.keySet());
+            lines.addAll(children.keySet());
+            for (Long line : lines) {
+                BigDecimal larger = planned.getOrDefault(line, BigDecimal.ZERO)
+                        .max(children.getOrDefault(line, BigDecimal.ZERO));
+                total.merge(line, larger, BigDecimal::add);
+            }
+        }
+        return total;
+    }
+
+    private static List<SalesDeliveryRecord> activeChildrenOf(List<SalesDeliveryRecord> deliveries,
+                                                              String parentId, String excludeChildId) {
+        if (parentId == null) {
+            return List.of();
+        }
+        return deliveries.stream()
+                .filter(d -> parentId.equals(d.getParentDeliveryId()))
+                .filter(d -> !Objects.equals(d.getId(), excludeChildId))
+                .filter(d -> d.getStatus() != SalesDeliveryStatus.CANCELLED
+                        && d.getStatus() != SalesDeliveryStatus.RETURNED)
+                .toList();
+    }
+
+    private static Map<Long, BigDecimal> sumByOrderLine(List<SalesDeliveryRecord> deliveries) {
+        return deliveries.stream()
+                .flatMap(delivery -> delivery.getItems().stream())
+                .filter(item -> item.getSalesOrderItemId() != null)
+                .collect(Collectors.groupingBy(SalesDeliveryItem::getSalesOrderItemId,
+                        Collectors.reducing(BigDecimal.ZERO,
+                                item -> item.getDeliveredQuantity() != null ? item.getDeliveredQuantity() : BigDecimal.ZERO,
+                                BigDecimal::add)));
+    }
+
+    /** 本发货行按订单行累计还能发多少 (null = 不做订单行累计校验 / 不限制)。 */
+    private BigDecimal orderLineMaxThisLine(OrderLineOverShipLedger ledger, SalesDeliveryItem item,
+                                            OverReceiveLimit limit) {
+        if (ledger == null || item == null || item.getSalesOrderItemId() == null || limit == null) {
+            return null;
+        }
+        SalesOrderItem source = ledger.orderItems().get(item.getSalesOrderItemId());
+        if (source == null || source.getQuantity() == null) {
+            return null;
+        }
+        BigDecimal maxCumulative = limit.maxAllowed(source.getQuantity());
+        if (maxCumulative == null) {
+            return null;
+        }
+        BigDecimal others = ledger.arrangedByOthers().getOrDefault(item.getSalesOrderItemId(), BigDecimal.ZERO);
+        return maxCumulative.subtract(others).max(BigDecimal.ZERO);
+    }
+
+    /** A16: 其他有效发货单 + 本次实发 <= 订单量 x (1+上限)。与新建发货单是同一个上限、同一个算术。 */
+    private void assertWithinOrderLineOverShipCap(OrderLineOverShipLedger ledger, SalesDeliveryItem item,
+                                                  String itemIdKey, BigDecimal actual, OverReceiveLimit limit) {
+        if (ledger == null || item.getSalesOrderItemId() == null) {
+            return;
+        }
+        SalesOrderItem source = ledger.orderItems().get(item.getSalesOrderItemId());
+        if (source == null || source.getQuantity() == null) {
+            return;   // 没有订单量就没有基准 (同 assertWithinOverShipCap 对 planned==null 的处理)
+        }
+        BigDecimal maxCumulative = limit.maxAllowed(source.getQuantity());
+        BigDecimal others = ledger.arrangedByOthers().getOrDefault(item.getSalesOrderItemId(), BigDecimal.ZERO);
+        if (maxCumulative == null || others.add(actual).compareTo(maxCumulative) <= 0) {
+            return;
+        }
+        String unit = UnitDisplayNames.display(item.getUnit());
+        BigDecimal maxThisLine = maxCumulative.subtract(others).max(BigDecimal.ZERO);
+        throw new BusinessException(409, String.format(
+                "实发数量超出超发上限: 发货行 %s 所属订单行订 %s%s, 其他发货单已安排 %s%s, 本次实发 %s%s, 本次最多可发 %s%s (含 %s 超发)",
+                itemIdKey, plainQty(source.getQuantity()), unit, plainQty(others), unit, plainQty(actual), unit,
+                plainQty(maxThisLine), unit, limit.percentLabel()))
+                .withCode("DELIVERY_QUANTITY_EXCEEDS_OVER_SHIP_CAP")
+                .withHint("同一订单行所有发货单合计不能超过订单量加超发上限。请按实际装车量填写,"
+                        + " 或联系业务员追加订单量后再发。"
+                        + " 若本厂应当允许发更多, 在「系统设置 → 业务阈值配置 → 销售」调高发货超发上限。")
+                .withHintTarget("actualQuantities");
+    }
+
+    private static String plainQty(BigDecimal value) {
+        return value == null ? "0" : value.stripTrailingZeros().toPlainString();
+    }
+
     /**
      * 【超发上限】校验 —— 仓管把实发数量改大时，不许无上限地多发。
      *
@@ -3866,7 +4385,8 @@ public class SalesServiceImpl implements SalesService {
      * <p>⇒ 本闸<b>刻意窄</b>：只守「仓管这一步能把数量放大多少」。
      * ⛔ 它<b>不</b>守下面这些，别把它读成守了：
      * <ul>
-     *   <li>创建期绕过（那道闸另在 {@code createDelivery}，是 0%）</li>
+     *   <li>订单行累计（A16, 2026-11-11 起新建发货单也按同一上限放行，订单行累计由
+     *       {@link #assertWithinOrderLineOverShipCap} 另行守住，不在本方法）</li>
      *   <li>直接改库的越权写入</li>
      *   <li>{@code planned == null} 的行 —— 没有计划量就没有基准，本闸跳过；
      *       但那种行原有逻辑<b>本来也不会应用覆盖值</b>，所以不构成新的口子</li>
@@ -3929,6 +4449,16 @@ public class SalesServiceImpl implements SalesService {
     private void recordBlockedOverShipAttempt(String factoryId, SalesDeliveryRecord record,
             SalesDeliveryItem item, BigDecimal actual, OverReceiveLimit limit,
             BusinessException capViolation, Long userId) {
+        recordBlockedOverShipAttempt(factoryId, record, item, actual, limit, capViolation, userId, null);
+    }
+
+    /**
+     * @param orderLineMax 订单行累计还能发多少 (A16); 非 null 时留痕的「最大可发」取两道上限的较小值,
+     *                     否则被订单行累计拦下的那一次会记成「实发 5.5, 最大 5.5」, 读起来像是放行了。
+     */
+    private void recordBlockedOverShipAttempt(String factoryId, SalesDeliveryRecord record,
+            SalesDeliveryItem item, BigDecimal actual, OverReceiveLimit limit,
+            BusinessException capViolation, Long userId, BigDecimal orderLineMax) {
         if (salesExceptionService == null) {
             return;
         }
@@ -3942,6 +4472,9 @@ public class SalesServiceImpl implements SalesService {
             String source = limit == null ? "limit-missing" : limit.source();
             BigDecimal maxAllowed = (limit == null || item == null)
                     ? null : limit.maxAllowed(item.getDeliveredQuantity());
+            if (orderLineMax != null) {
+                maxAllowed = maxAllowed == null ? orderLineMax : maxAllowed.min(orderLineMax);
+            }
             salesExceptionService.recordBlockedOverShip(
                     factoryId, record, item, actual, rate, source, maxAllowed, userId);
         } catch (Exception e) {
@@ -5635,6 +6168,114 @@ public class SalesServiceImpl implements SalesService {
                 "业务员账号 " + user.getId() + " 既没有姓名也没有登录名, 无法记录业务员")
                 .withHint("请先在用户管理里补全该账号的姓名")
                 .withHintTarget("salesperson");
+    }
+
+    /**
+     * 缺价回填(Steve 2026-11-17): 发货行单价为 null 时, 按来源订单行(按 salesOrderItemId 对上)的单价回填,
+     * 并按「Σ 实发量 × 单价」重算发货单头额。订单行按 salesOrderId + factoryId 查(不读别厂订单行)。
+     * 订单行也没价 / 对不上订单行的保持 null —— ⛔ 不记 0, 挂账段由 {@link #firstUnpricedDeliveryLine} 按失败处理。
+     * 发货行已有价(含确定的 0)的一律不动。
+     */
+    private void backfillMissingDeliveryUnitPrices(String factoryId, SalesDeliveryRecord record) {
+        if (salesOrderItemRepository == null || record == null || record.getItems() == null
+                || record.getSalesOrderId() == null
+                || record.getItems().stream().noneMatch(i -> i.getUnitPrice() == null)) {
+            return;
+        }
+        List<SalesOrderItem> orderLines = salesOrderItemRepository
+                .findBySalesOrderIdAndSalesOrderFactoryId(record.getSalesOrderId(), factoryId);
+        java.util.Map<Long, SalesOrderItem> lineById = new java.util.HashMap<>();
+        if (orderLines != null) {
+            for (SalesOrderItem oi : orderLines) {
+                if (oi != null && oi.getId() != null) {
+                    lineById.put(oi.getId(), oi);
+                }
+            }
+        }
+        boolean changed = false;
+        for (SalesDeliveryItem item : record.getItems()) {
+            if (item.getUnitPrice() != null || item.getSalesOrderItemId() == null) {
+                continue;
+            }
+            SalesOrderItem oi = lineById.get(item.getSalesOrderItemId());
+            if (oi != null && oi.getUnitPrice() != null) {
+                item.setUnitPrice(oi.getUnitPrice());
+                changed = true;
+                log.info("发货行缺单价, 按订单行单价回填: factoryId={}, deliveryId={}, salesOrderItemId={}, unitPrice={}",
+                        factoryId, record.getId(), oi.getId(), oi.getUnitPrice());
+            }
+        }
+        if (changed) {
+            BigDecimal total = BigDecimal.ZERO;
+            for (SalesDeliveryItem item : record.getItems()) {
+                if (item.getUnitPrice() != null && item.getDeliveredQuantity() != null) {
+                    total = total.add(item.getDeliveredQuantity().multiply(item.getUnitPrice()));
+                }
+            }
+            record.setTotalAmount(total);
+        }
+    }
+
+    /** 回填后仍缺单价(且实发量非 0)的第一行的产品名; 全有价返回 null。 */
+    static String firstUnpricedDeliveryLine(SalesDeliveryRecord record) {
+        if (record == null || record.getItems() == null) {
+            return null;
+        }
+        for (SalesDeliveryItem item : record.getItems()) {
+            if (item.getUnitPrice() == null && item.getDeliveredQuantity() != null
+                    && item.getDeliveredQuantity().signum() != 0) {
+                return item.getProductName() != null ? item.getProductName()
+                        : (item.getProductTypeId() != null ? item.getProductTypeId() : "未知产品");
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 本次发货是否<b>真赠品/样品</b>(应收确定为 0), Steve 2026-11-16 复核口径: 无需挂账 —— 不调挂账、不告警,
+     * 发货事务内留一行 RESOLVED / ZERO_AMOUNT 追溯行(不进默认的待处理列表)。
+     *
+     * <p>四条同时成立才放行, 否则按失败(待补账 + 告警), 由人补价/核对:
+     * <ol>
+     *   <li>本次应收含税合计 {@code compareTo(0) == 0} (0 与 0.00 都算零, 0.01 不算);</li>
+     *   <li>有发货明细 —— 空明细时头额默认 0, 那个 0 不是「确定为 0」;</li>
+     *   <li>每一行: 实发数量非空, 发货行单价非空且为 0;</li>
+     *   <li>每一行挂得上订单行, 且订单行单价非空且为 0、报价含税单价为空或为 0。
+     *       与提审校验 {@code validatePriceBeforeFinanceReview} 同一缺价口径: 订单行单价为空 = 价格没维护, 不是赠品;
+     *       订单行有价而发货行录成 0 = 误录, 不是赠品。</li>
+     * </ol>
+     * 由此「全额折扣算出 0」「极小单价舍入成 0」都不放行(订单行/发货行单价不为 0)。
+     */
+    static boolean isKnownZeroShipmentValue(SalesOrder order, SalesDeliveryRecord record, BigDecimal shippedValue) {
+        if (order == null || record == null || shippedValue == null
+                || shippedValue.compareTo(BigDecimal.ZERO) != 0) {
+            return false;
+        }
+        if (record.getItems() == null || record.getItems().isEmpty()) {
+            return false;
+        }
+        java.util.Map<Long, SalesOrderItem> orderItemById = new java.util.HashMap<>();
+        if (order.getItems() != null) {
+            for (SalesOrderItem oi : order.getItems()) {
+                if (oi.getId() != null) {
+                    orderItemById.put(oi.getId(), oi);
+                }
+            }
+        }
+        for (SalesDeliveryItem item : record.getItems()) {
+            if (item.getDeliveredQuantity() == null
+                    || item.getUnitPrice() == null || item.getUnitPrice().signum() != 0) {
+                return false;
+            }
+            SalesOrderItem oi = item.getSalesOrderItemId() == null ? null : orderItemById.get(item.getSalesOrderItemId());
+            if (oi == null || oi.getUnitPrice() == null || oi.getUnitPrice().signum() != 0) {
+                return false;
+            }
+            if (oi.getQuotedGrossUnitPrice() != null && oi.getQuotedGrossUnitPrice().signum() != 0) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**

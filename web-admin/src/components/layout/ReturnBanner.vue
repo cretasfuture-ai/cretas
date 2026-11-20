@@ -120,7 +120,7 @@ const handleDismiss = () => {
     color: var(--el-text-color-primary, #303133);
 
     strong {
-      color: var(--el-color-primary, #409eff);
+      color: var(--el-color-primary, var(--cs-primary));
     }
   }
 

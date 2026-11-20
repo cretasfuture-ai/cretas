@@ -271,6 +271,12 @@ public class TraceabilityDTO {
         private String potScopesError;
         /** 下游影响面是否完整（跳数上限截断 / 节点查不到）。见 {@link LineageCompleteness}。 */
         private LineageCompleteness completeness;
+        /**
+         * 在库箱数 / 已发箱数（按包装快照折算，复用 supply-impact 的折算逻辑）。
+         * null = 本次没算成（箱数引擎未接入）；各段 complete=false 时箱数是「无法折算」，
+         * ⛔ 前端不要把 null / 未知显示成 0 箱。
+         */
+        private com.cretas.aims.dto.supplyimpact.SupplyImpactBoxExposure boxExposure;
     }
 
     /**

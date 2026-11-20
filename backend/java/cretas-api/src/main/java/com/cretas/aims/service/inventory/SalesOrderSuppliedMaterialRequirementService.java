@@ -55,6 +55,7 @@ import java.util.UUID;
  */
 @Service
 @RequiredArgsConstructor
+@lombok.extern.slf4j.Slf4j
 public class SalesOrderSuppliedMaterialRequirementService {
 
     private static final EnumSet<SalesOrderStatus> APPROVAL_COMPLETED_STATUSES = EnumSet.of(
@@ -78,6 +79,25 @@ public class SalesOrderSuppliedMaterialRequirementService {
     private final MaterialBatchRepository materialBatchRepository;
     private final MaterialBatchMapper materialBatchMapper;
     private final AttachmentRepository attachmentRepository;
+
+    /** 迁移 P5 R35: 收货日 / 过期判断的「现在」(按北京时间取日期); 不进构造器, 测试用 setter 固定。 */
+    private java.time.Clock clock = java.time.Clock.systemUTC();
+
+    void setClock(java.time.Clock clock) {
+        this.clock = clock;
+    }
+
+    /**
+     * A15 (工厂纪律排查 2026-11-10; Steve 2026-11-11 拍板: 单独做成工厂开关, 默认关)。
+     * 开关 {@code inventory.customer_supplied.allow_over_receive} 关 (默认) = 原行为, 多 1 克也拦;
+     * 开 = 与采购收货同一个超收上限 (工厂设置 purchaseOverReceiveRate > 全局属性 > 不限制,
+     * 梯子只在 OverReceiveLimit.resolve)。
+     * 两个都是可选注入, 只为不改既有构造签名 (切片测试); 任一拿不到时按开关关处理 (原行为, 不放宽)。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.discipline.FactoryDisciplinePolicy disciplinePolicy;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.inventory.PurchaseOverReceivePolicy overReceivePolicy;
 
     @Transactional
     public List<SalesOrderSuppliedMaterialRequirement> createForOrder(
@@ -348,10 +368,44 @@ public class SalesOrderSuppliedMaterialRequirementService {
                         .withHintTarget("unit");
             }
         }
-        if (request.getReceivedQuantity().compareTo(requirement.getRemainingQuantity()) > 0) {
-            throw new BusinessException(409, "本次实收数量超过任务剩余待收数量")
+        boolean overReceiveAllowed = false;
+        if (disciplinePolicy != null && overReceivePolicy != null) {
+            try {
+                overReceiveAllowed = disciplinePolicy.customerSuppliedOverReceiveAllowed(factoryId);
+            } catch (RuntimeException readFailure) {
+                // 读不到开关 = 按关 (原行为, 更严), 绝不放宽。⚠️ 若是真实数据库异常, 仓储调用已把本事务标成
+                // rollback-only, 本次收货会在提交时整体失败 (返回错误、一行不写) —— 安全, 但不是 409。
+                log.warn("CUSTOMER_SUPPLIED_OVER_RECEIVE_SWITCH_UNREADABLE: factoryId={}, 本次按【不允许超收】处理: {}",
+                        factoryId, readFailure.getMessage());
+            }
+        }
+        if (!overReceiveAllowed) {
+            // 开关关 (默认): 原行为, 实收不能超过剩余待收
+            if (request.getReceivedQuantity().compareTo(requirement.getRemainingQuantity()) > 0) {
+                throw new BusinessException(409, "本次实收数量超过任务剩余待收数量")
+                        .withCode("CUSTOMER_SUPPLIED_RECEIPT_EXCEEDS_REMAINING")
+                        .withHint("剩余待收 " + requirement.getRemainingQuantity() + requirement.getUnit()
+                                + "；本厂未开启「客供料允许超收」，多出的部分请与客户确认后另行处理")
+                        .withHintTarget("receivedQuantity");
+            }
+        }
+        OverReceiveLimit overReceiveLimit = overReceiveAllowed
+                ? overReceivePolicy.effectiveLimit(factoryId)
+                : OverReceiveLimit.of(BigDecimal.ZERO, "customer-supplied:over-receive-switch-off");
+        BigDecimal alreadyReceived = requirement.getReceivedQuantity() != null
+                ? requirement.getReceivedQuantity() : BigDecimal.ZERO;
+        BigDecimal maxCumulative = overReceiveLimit.maxAllowed(requirement.getExpectedQuantity());
+        if (maxCumulative != null
+                && alreadyReceived.add(request.getReceivedQuantity()).compareTo(maxCumulative) > 0) {
+            BigDecimal maxThisTime = maxCumulative.subtract(alreadyReceived).max(BigDecimal.ZERO);
+            String unit = requirement.getUnit() == null ? "" : requirement.getUnit();
+            throw new BusinessException(409, "本次实收数量超过客供料可收上限（应收 "
+                    + plainQty(requirement.getExpectedQuantity()) + unit + "，已收 " + plainQty(alreadyReceived) + unit
+                    + "，含 " + overReceiveLimit.percentLabel() + " 超收本次最多 " + plainQty(maxThisTime) + unit + "）")
                     .withCode("CUSTOMER_SUPPLIED_RECEIPT_EXCEEDS_REMAINING")
-                    .withHint("剩余待收 " + requirement.getRemainingQuantity() + requirement.getUnit());
+                    .withHint("请按本次最多可收的数量收货，多出的部分请与客户确认后另行处理；"
+                            + "客供料的超收上限与采购收货共用同一个工厂设置，若本厂应当允许多收，请联系管理员调整")
+                    .withHintTarget("receivedQuantity");
         }
         if (request.getProductionDate() != null && request.getExpireDate() != null
                 && request.getExpireDate().isBefore(request.getProductionDate())) {
@@ -365,7 +419,7 @@ public class SalesOrderSuppliedMaterialRequirementService {
                     .withHint("请在仓储待收货任务中拍照或上传凭证后再确认");
         }
 
-        LocalDate receiptDate = LocalDate.now();
+        LocalDate receiptDate = ExpiredBatchCreationGuard.businessToday(clock);   // 北京时间 (R35 跨日)
         RawMaterialType material = rawMaterialTypeRepository.findById(requirement.getMaterialTypeId())
                 .filter(candidate -> Objects.equals(factoryId, candidate.getFactoryId()))
                 .filter(candidate -> Boolean.TRUE.equals(candidate.getIsActive()))
@@ -384,6 +438,9 @@ public class SalesOrderSuppliedMaterialRequirementService {
         if (expireDate == null && material.getShelfLifeDays() != null) {
             expireDate = receiptDate.plusDays(material.getShelfLifeDays());
         }
+        // 迁移 P5 R35: 到期日已早于今天 ⇒ 允许建, 但必须写原因 (写在任何落库之前)
+        String expiredReason = ExpiredBatchCreationGuard.requireReasonIfExpired(
+                expireDate, receiptDate, request.getExpiredReason());
 
         String deterministicSuffix = UUID.nameUUIDFromBytes(
                         (factoryId + ":" + request.getIdempotencyKey())
@@ -423,6 +480,7 @@ public class SalesOrderSuppliedMaterialRequirementService {
         batch.setBoxCount(request.getBoxCount());
         batch.setOriginPlace(request.getOriginPlace());
         batch.setNotes(request.getNotes());
+        batch.setExpiredOnCreateReason(expiredReason);
         batch.setCreatedBy(userId);
         MaterialBatch savedBatch;
         try {
@@ -708,5 +766,9 @@ public class SalesOrderSuppliedMaterialRequirementService {
                 "salesOrderItemId 不属于当前销售订单: " + salesOrderItemId)
                 .withCode("CUSTOMER_SUPPLIED_ORDER_ITEM_INVALID")
                 .withHintTarget("salesOrderItemId");
+    }
+
+    private static String plainQty(BigDecimal value) {
+        return value == null ? "0" : value.stripTrailingZeros().toPlainString();
     }
 }

@@ -1,6 +1,8 @@
 package com.cretas.aims.ai.tool;
 
+import com.cretas.aims.ai.catalog.FactoryIntentCatalog;
 import com.cretas.aims.entity.User;
+import com.cretas.aims.permission.PermissionModuleCatalog;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.service.PermissionService;
 import lombok.extern.slf4j.Slf4j;
@@ -114,11 +116,54 @@ public class ToolRbacGuard {
      * 拒绝时构造一致的提示文案 (4 位一体: 谁的角色 / 缺什么权限 / 怎么办)。
      */
     public String denyMessage(Map<String, Object> context, String action, String... permissionCodes) {
-        String role = context != null ? String.valueOf(context.getOrDefault("userRole", "未知")) : "未知";
+        return standardDenyMessage(context != null ? String.valueOf(context.getOrDefault("userRole", "")) : "",
+                action, permissionCodes);
+    }
+
+    /** 同上, 不需要实例 (澄清候选全被权限滤掉时按同一格式说明, 见 ClarificationCandidateService)。 */
+    public static String standardDenyMessage(String userRole, String action, String... permissionCodes) {
+        String role = com.cretas.aims.ai.tool.RoleDisplay.of(userRole == null ? "" : userRole);
+        String need = permissionCodes == null || permissionCodes.length == 0 ? ""
+                : "需要的权限: " + java.util.Arrays.stream(permissionCodes).map(ToolRbacGuard::permissionLabel)
+                        .distinct().collect(java.util.stream.Collectors.joining("、"))
+                        // 写权限也走这里: 不说「可以查看」(复审 R2-M5)
+                        + "（拥有其中任一项权限的角色可以使用）。";
         return String.format(
-                "您当前的角色 (%s) 没有权限执行「%s」操作。此操作涉及敏感数据/库存/资金, 需要授权角色。"
-                        + "建议: 请在系统对应页面由有权限的角色 (如仓储主管/财务/管理员) 操作, 或联系工厂管理员申请权限。",
-                role, action);
+                "您当前的角色 (%s) 没有权限使用「%s」。此操作涉及敏感数据/库存/资金, 需要授权角色。%s"
+                        + "建议: 请在系统对应页面由有权限的角色 (如仓储主管/财务/管理员) 操作, 或联系工厂管理员为您的账号开通权限。",
+                role, actionLabel(action), need);
+    }
+
+    /**
+     * 工具名 / 意图码 → 功能名。来源是平台意图目录 {@link FactoryIntentCatalog} 里的中文意图名
+     * (运行时 ai_intent_configs 就是它的投影), 这里不再手写第二份映射 (2026-11-16: 手写表只登记了
+     * 1 个工具, 其余全部显示成「该功能」)。目录里没有 (或一个工具对应多个不同意图名) 才兜底「该功能」,
+     * 不原样显示 ASCII 标识。
+     */
+    static String actionLabel(String action) {
+        if (action == null) return "该功能";
+        java.util.Optional<String> resolved = FactoryIntentCatalog.displayNameForAction(action);
+        if (resolved.isPresent()) return resolved.get();
+        return action.matches("[A-Za-z0-9_:.\\-]+") ? "该功能" : action;
+    }
+
+    /**
+     * 权限码 → 中文名: 模块名取 {@link PermissionModuleCatalog} (权限配置页 / HTTP 403 同一份),
+     * 动作词按码的后缀 (与 PermissionInterceptor 的 读/写/审批 同口径, 写类不说成「查看」)。
+     * 模块名查不到才兜底「对应模块的…权限」。
+     */
+    static String permissionLabel(String code) {
+        boolean write = code != null && (code.endsWith(":read_write") || code.endsWith(":write") || code.contains("write"));
+        String[] parts = code == null ? new String[0] : code.split(":");
+        if (parts.length >= 2 && PermissionModuleCatalog.hasLabel(parts[0])) {
+            String module = PermissionModuleCatalog.label(parts[0]);
+            String last = parts[parts.length - 1];
+            String action = write ? "操作" : "approve".equals(last) ? "审批" : "create".equals(last) ? "创建" : "查看";
+            // 三段码 (如 procurement:price:view) 是模块内的专项权限, 没有可引用的中文名, 不编造子项名
+            return module + (parts.length > 2 ? "（专项" + action + "）" : "（" + action + "）");
+        }
+        // 未登记的码: 写权限不能说成「查看权限」
+        return write ? "对应模块的操作权限" : "对应模块的查看权限";
     }
 
     private User loadUser(Map<String, Object> context) {

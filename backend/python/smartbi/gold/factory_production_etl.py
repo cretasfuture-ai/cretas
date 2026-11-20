@@ -34,7 +34,7 @@ import sys
 import time
 import traceback
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import asyncpg
 
@@ -62,6 +62,12 @@ class FactoryEtlStats:
     """Per-stage row counts for observability."""
     silver_upserted: int = 0
     silver_report_upserted: int = 0
+    external_snapshots_synced: int = 0
+    external_sync_error: Optional[str] = None
+    # 源头已软删 / 已硬删批次对应的 Silver / Gold 行被清掉的数量（见 prune_soft_deleted_fact_batches）
+    silver_pruned: int = 0
+    silver_pruned_hard_deleted: int = 0  # silver_pruned 中源头已硬删（本厂源表无此 id）的部分
+    gold_pruned: int = 0
     gold_product_rows: int = 0
     gold_daily_rollup_rows: int = 0
     errors: List[str] = field(default_factory=list)
@@ -82,6 +88,18 @@ def _to_float_or_none(v) -> Optional[float]:
         return float(v)
     except (TypeError, ValueError):
         return None
+
+
+def batch_yield_rate(good_qty, actual_qty) -> Optional[float]:
+    """批次出成率 (%) = 良品 ÷ 实际产出 × 100；任一缺失或实际产出 ≤ 0 → None (不知道 ≠ 0)。
+
+    唯一实现: Silver ETL 与 /factory/* 读端点都调这里, 两处口径不会漂。
+    """
+    good = _to_float_or_none(good_qty)
+    actual = _to_float_or_none(actual_qty)
+    if good is None or actual is None or actual <= 0:
+        return None
+    return round(good / actual * 100, 4)
 
 
 # ── Stage 1: Silver — sync_fact_production_batch ──────────────────────────────
@@ -168,7 +186,11 @@ async def sync_fact_production_batch(
     other_costs = [_to_float_or_none(r["other_cost"]) for r in rows]
     total_costs = [_to_float_or_none(r["total_cost"]) for r in rows]
     unit_costs = [_to_float_or_none(r["unit_cost"]) for r in rows]
-    yield_rates = [_to_float_or_none(r["yield_rate"]) for r in rows]
+    # 出成率口径 = 良品 ÷ 实际产出 × 100, 与 Java ProductionBatch.calculateMetrics 及 AI 问答
+    # (ReportBatchYieldRankTool) 同一定义。⛔ 不照抄 production_batches.yield_rate 存量列:
+    # 它是派生列, 数量被改后会冻结旧值 (2026-11-18 prod 实测 LSMDEMO/F006: 列均值 80.00,
+    # 按定义 良品÷实际 = 100.00), 页面 80% 与 AI 100% 两个数就是这么来的。
+    yield_rates = [batch_yield_rate(g, a) for g, a in zip(good_qtys, actual_qtys)]
 
     async with smartbi_pool.acquire() as dst:
         async with dst.transaction():
@@ -258,6 +280,180 @@ async def sync_fact_production_batch(
     count = len(result)
     logger.info("[factory-etl] Silver: upserted %d rows for factory=%s", count, factory_id)
     return count
+
+
+# ── Stage 1a: Silver/Gold 清理 — 源头已软删 / 已硬删批次 ──────────────────────
+
+# 不做「源头硬删」清理的工厂：LSMDEMO 是由 F006 整套复制出来的演示厂（2026-11-17），
+# 其 fact 残留另议，演示期间不许被 ETL 顺手清掉。软删清理（#1902）对它照旧。
+_HARD_DELETE_PRUNE_EXCLUDED_FACTORIES = frozenset({"LSMDEMO"})
+
+
+async def _prune_facts_and_product_agg(
+    cretas_pool: asyncpg.Pool,
+    smartbi_pool: asyncpg.Pool,
+    factory_id: str,
+) -> Dict[str, int]:
+    """删掉「源头批次已软删 / 已硬删」对应的 fact_production_batch 行，及因此失去全部事实行的 agg 行。
+
+    背景 (2026-11-18 q49): 上面的 upsert 只增不删。源头 production_batches 被软删
+    (deleted_at 非空) 后，fact / agg 里的旧行一直留着：成本页把它们算进去，产品又已软删
+    取不到名字，显示成「未命名产品」。2026-11-19 (LSM-F006-HARDDEL-RESIDUE) 补上源头
+    **硬删**（物理删除，本厂源表里已没有这个 id）的同类残留：F006 prod 有 30 行。
+
+    每个 fact 行的源头批次判为三态之一（宁可少删，不误删）：
+    - 存在：本厂源表里有这个 id 且 deleted_at 为空 → 不动（状态变了但没删的批次也不动）；
+    - 确认已删：本厂源表里有这个 id 且 deleted_at 非空（软删），或本厂源表里没有这个 id（硬删）；
+    - 不知道：源头查询失败（异常上抛，由编排器记入 errors，0 删除），或源头对本厂 fact 的
+      全部 id 一条都没报回来（库连错 / 源表被清空 / 权限看不到 都长这样）→ 硬删一律跳过并记
+      stats["errors"]；「查不到」绝不当「已删除」。
+    - 全程带 factory_id：fact 读写按 factory_id + RLS 租户；源头查询按 factory_id，
+      别的工厂有同 id 的批次既不能让本厂的硬删残留「复活」，也不会被本厂的清理命中。
+    - _HARD_DELETE_PRUNE_EXCLUDED_FACTORIES（LSMDEMO 演示厂）不做硬删清理，软删清理照旧。
+    - 产品行 agg 只删「本次被清掉的 fact 行所在的 (日期, 产品)」且已没有任何 fact 行的那些行；
+      全产品日汇总行由 _sweep_orphan_rollups 处理。其余 agg 行（含 seed 脚本直接写入的演示数据）
+      不碰。仍有活 fact 行的 (日期, 产品) / 日期交给随后的 materialize_factory_gold 重算。
+      软删与硬删走同一条删除 + 同一套重算，不另写一份。
+    """
+    stats: Dict[str, Any] = {"fact": 0, "agg": 0, "fact_hard_deleted": 0, "errors": []}
+
+    async with smartbi_pool.acquire() as dst:
+        async with dst.transaction():
+            await _set_tenant(dst, factory_id)
+            fact_rows = await dst.fetch(
+                "SELECT source_pk FROM fact_production_batch WHERE factory_id = $1::varchar",
+                factory_id,
+            )
+    source_pks = [r["source_pk"] for r in fact_rows]
+    if not source_pks:
+        return stats
+
+    # 源头查询失败直接上抛（不捕获）：编排器记 errors，本轮 0 删除。
+    async with cretas_pool.acquire() as src:
+        present_rows = await src.fetch(
+            """
+            SELECT id::text AS id, (deleted_at IS NOT NULL) AS soft_deleted
+            FROM production_batches
+            WHERE factory_id = $1::varchar
+              AND id::text = ANY($2::text[])
+            """,
+            factory_id, source_pks,
+        )
+    present = {r["id"]: bool(r["soft_deleted"]) for r in present_rows}
+    soft_pks = [pk for pk, soft in present.items() if soft]
+
+    hard_pks: List[str] = []
+    missing = [pk for pk in source_pks if pk not in present]
+    if missing:
+        if not present:
+            # 不知道：一条都没报回来，不能判定为「已硬删」
+            msg = (f"hard-delete check skipped: source returned none of {len(source_pks)} "
+                   f"fact batch ids for factory={factory_id} (cannot tell deleted from unreadable)")
+            stats["errors"].append(msg)
+            logger.warning("[factory-etl] prune: %s", msg)
+        elif factory_id in _HARD_DELETE_PRUNE_EXCLUDED_FACTORIES:
+            logger.info(
+                "[factory-etl] prune: factory=%s excluded from hard-delete prune; %d fact rows kept",
+                factory_id, len(missing),
+            )
+        else:
+            hard_pks = missing
+
+    gone_pks = soft_pks + hard_pks
+    if not gone_pks:
+        return stats
+
+    async with smartbi_pool.acquire() as dst:
+        async with dst.transaction():
+            await _set_tenant(dst, factory_id)
+            deleted = await dst.fetch(
+                """
+                DELETE FROM fact_production_batch
+                WHERE factory_id = $1::varchar
+                  AND source_pk = ANY($2::text[])
+                RETURNING source_pk, stat_date, product_type_id
+                """,
+                factory_id, gone_pks,
+            )
+            stats["fact"] = len(deleted)
+            hard_set = set(hard_pks)
+            stats["fact_hard_deleted"] = sum(1 for r in deleted if r["source_pk"] in hard_set)
+
+            dated = [(r["stat_date"], r["product_type_id"]) for r in deleted if r["stat_date"] is not None]
+            pair_dates = [d for d, p in dated if p is not None]
+            pair_products = [p for d, p in dated if p is not None]
+
+            if pair_dates:
+                r1 = await dst.execute(
+                    """
+                    DELETE FROM agg_factory_batch_daily a
+                    WHERE a.factory_id = $1::varchar
+                      AND a.product_type_id IS NOT NULL
+                      AND (a.stat_date, a.product_type_id) IN (
+                            SELECT * FROM UNNEST($2::date[], $3::text[]))
+                      AND NOT EXISTS (
+                            SELECT 1 FROM fact_production_batch f
+                            WHERE f.factory_id = a.factory_id
+                              AND f.stat_date = a.stat_date
+                              AND f.product_type_id = a.product_type_id)
+                    """,
+                    factory_id, pair_dates, pair_products,
+                )
+                stats["agg"] += int(r1.split()[-1]) if r1 else 0
+
+    logger.info(
+        "[factory-etl] prune: removed fact=%d (hard-deleted at source=%d) agg=%d for factory=%s",
+        stats["fact"], stats["fact_hard_deleted"], stats["agg"], factory_id,
+    )
+    return stats
+
+
+async def _sweep_orphan_rollups(smartbi_pool: asyncpg.Pool, factory_id: str) -> int:
+    """删掉「全产品日汇总」孤儿行：这一天没有任何 fact 行，且这一天也没有任何分产品 agg 行。
+
+    为什么要单独扫 (2026-11-18 q49 补充): 全产品汇总行 (product_type_id IS NULL) 只有该日期上
+    还有 fact 行时才会被 materialize_factory_gold 重算；一旦某天的 fact 行被删光（不管是
+    本模块清的还是人工删的），这行旧汇总就永远留着 —— 成本页「有出成率批次」因此显示 12/21
+    （21 = 13 个现存批次 + 8 个已删批次），正确是 12/13。
+
+    保守条件：这一天还有任何分产品 agg 行就不动（seed 脚本直写的演示 agg 是成套的产品行 + 汇总行，
+    不会因为没有 fact 行被误删）。仍有 fact 行的日期交给 materialize_factory_gold 用实际 fact 行数重算。
+    """
+    async with smartbi_pool.acquire() as dst:
+        async with dst.transaction():
+            await _set_tenant(dst, factory_id)
+            res = await dst.execute(
+                """
+                DELETE FROM agg_factory_batch_daily a
+                WHERE a.factory_id = $1::varchar
+                  AND a.product_type_id IS NULL
+                  AND NOT EXISTS (
+                        SELECT 1 FROM fact_production_batch f
+                        WHERE f.factory_id = a.factory_id AND f.stat_date = a.stat_date)
+                  AND NOT EXISTS (
+                        SELECT 1 FROM agg_factory_batch_daily p
+                        WHERE p.factory_id = a.factory_id AND p.stat_date = a.stat_date
+                          AND p.product_type_id IS NOT NULL)
+                """,
+                factory_id,
+            )
+    return int(res.split()[-1]) if res else 0
+
+
+async def prune_soft_deleted_fact_batches(
+    cretas_pool: asyncpg.Pool,
+    smartbi_pool: asyncpg.Pool,
+    factory_id: str,
+) -> Dict[str, int]:
+    """清理源头已软删 / 已硬删批次留在 Silver / Gold 里的行（见 _prune_facts_and_product_agg 与 _sweep_orphan_rollups）。
+
+    函数名沿用 #1902（调用方与测试都按这个名字导入）；硬删判定见 _prune_facts_and_product_agg 的三态。
+    返回 {"fact": 删掉的 fact 行数, "fact_hard_deleted": 其中源头已硬删的行数,
+          "agg": 删掉的 agg 行数（分产品 + 全产品日汇总）, "errors": 硬删判定被跳过等不挡流程的问题}。
+    """
+    stats = await _prune_facts_and_product_agg(cretas_pool, smartbi_pool, factory_id)
+    stats["agg"] += await _sweep_orphan_rollups(smartbi_pool, factory_id)
+    return stats
 
 
 # ── Stage 1b: Silver — sync_fact_production_report ───────────────────────────
@@ -574,6 +770,18 @@ async def run_factory_etl(
         # If batch Silver fails, skip Gold (nothing new to materialize)
         return stats
 
+    # Stage 1a: 清掉源头已软删批次留下的 fact / agg 行（失败不挡后面的 Gold 重算，但要记下来）
+    try:
+        pruned = await prune_soft_deleted_fact_batches(cretas_pool, smartbi_pool, factory_id)
+        stats.silver_pruned = pruned["fact"]
+        stats.silver_pruned_hard_deleted = pruned.get("fact_hard_deleted", 0)
+        stats.gold_pruned = pruned["agg"]
+        # 三态里的「不知道」：硬删判定被跳过，要报出来（不挡 Gold）
+        stats.errors.extend(f"prune: {e}" for e in pruned.get("errors", []))
+    except Exception as exc:
+        stats.errors.append(f"prune: {exc}")
+        logger.exception("[factory-etl] prune of soft-deleted batches failed for %s", factory_id)
+
     # Stage 1b: sync process-level reports (independent — failure doesn't block Gold)
     try:
         stats.silver_report_upserted = await sync_fact_production_report(
@@ -615,6 +823,18 @@ async def run_factory_etl_with_retry(
         start = time.monotonic()
         try:
             result = await run_factory_etl(cretas_pool, smartbi_pool, factory_id)
+            # The external source has independent facts and freshness. Its
+            # failure leaves the native ETL result intact and visible.
+            from smartbi.gold.external_production_etl import sync_external_production
+
+            try:
+                result.external_snapshots_synced = await sync_external_production(
+                    cretas_pool, smartbi_pool, factory_id,
+                )
+            except Exception:
+                result.external_sync_error = "黑湖生产快照同步失败"
+                result.errors.append(f"silver_external: {result.external_sync_error}")
+                logger.exception("[factory-etl] External production sync failed for %s", factory_id)
             if attempt > 1:
                 logger.info(
                     "[factory-etl] succeeded on attempt %d for %s", attempt, factory_id

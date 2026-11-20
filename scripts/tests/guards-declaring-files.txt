@@ -31,3 +31,12 @@ test-f006-aurora-runtime.sh
 test-public-repo-hosted-only.sh
 test-backup-copy-retention.sh
 test-pr-test-selection-ratchet.sh
+test-java-gate-shards-cover-selector.sh
+test-tool-access-mode-scanner.sh
+test-merge-queue-ready.sh
+test-ai-live-probe.sh
+test-intent-acceptance-leak-gate.sh
+test-remote-java-build.sh
+test-route-mini-or-hosted.sh
+test-fast-shard-context-cache-cap.sh
+test-mini-job-started-sparse-reset.sh

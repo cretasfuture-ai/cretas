@@ -12,6 +12,8 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 // 一线 AI 助手 (Line B 2026-10-05): 复用 FA 端 AIChatScreen, 熔断开关关掉时连路由都不注册
 import AIChatScreen from '../screens/factory-admin/ai-analysis/AIChatScreen';
 import { useFrontlineAIEntryEnabled } from '../hooks/useFrontlineAIEntry';
+import { useMyTodoEntry } from '../hooks/useMyTodos';
+import { todoTabScreen } from './todoTab';
 
 const Tab = createBottomTabNavigator();
 const RootStack = createNativeStackNavigator();
@@ -34,6 +36,7 @@ export default function WarehouseWorkerNavigator() {
 
 /** 仓库员直接进入收货、发货和库存任务，不开放主管首页、分析、预警治理或管理型个人中心。 */
 function WarehouseWorkerTabNavigator() {
+  const todoEntry = useMyTodoEntry();
   const insets = useSafeAreaInsets();
   const { isScreenEnabled } = useFactoryFeatureStore();
 
@@ -65,6 +68,7 @@ function WarehouseWorkerTabNavigator() {
         component={WHInventoryStackNavigator}
         options={{ title: '库存', tabBarIcon: ({ color, size }) => <Icon source="warehouse" color={color} size={size} /> }}
       />
+      {todoTabScreen(Tab, todoEntry, 'warehouse-worker-tab-oa-todo')}
       <Tab.Screen
         name="WarehouseWorkerProfileTab"
         component={MobileAccountScreen}

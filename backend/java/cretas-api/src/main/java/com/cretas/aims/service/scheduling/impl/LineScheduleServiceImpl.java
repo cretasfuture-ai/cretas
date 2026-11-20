@@ -3,6 +3,7 @@ package com.cretas.aims.service.scheduling.impl;
 import com.cretas.aims.dto.scheduling.*;
 import com.cretas.aims.entity.*;
 import com.cretas.aims.entity.rules.DroolsRule;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.EntityNotFoundException;
 import com.cretas.aims.repository.*;
 import com.cretas.aims.service.NotificationService;
@@ -42,6 +43,7 @@ public class LineScheduleServiceImpl implements LineScheduleService {
     private final SchedulingAIService schedulingAIService;
     @Lazy
     private final SchedulingPlanCrudService schedulingPlanCrudService;
+    private final com.cretas.aims.repository.scheduling.CancelledPlanScheduleRepository cancelledPlanSchedules;
 
     private LineSchedule findScopedSchedule(String factoryId, String scheduleId) {
         LineSchedule schedule = scheduleRepository.findById(scheduleId)
@@ -63,6 +65,11 @@ public class LineScheduleServiceImpl implements LineScheduleService {
     @Transactional
     public LineScheduleDTO updateSchedule(String factoryId, String scheduleId, UpdateScheduleRequest request) {
         LineSchedule schedule = findScopedSchedule(factoryId, scheduleId);
+        // 客户端回传了它读到的版本号: 与库里不一致 = 它读完之后别人改过, 拒绝 (⛔ 不覆盖、不自动重试)。
+        // 抛与 Hibernate 版本冲突同一个异常, 统一由 GlobalExceptionHandler 转成 409「排程已被别人修改，请刷新后再改」。
+        if (request.getVersion() != null && !request.getVersion().equals(schedule.getVersion())) {
+            throw new org.springframework.orm.ObjectOptimisticLockingFailureException(LineSchedule.class, scheduleId);
+        }
 
         if (request.getSequenceOrder() != null) {
             schedule.setSequenceOrder(request.getSequenceOrder());
@@ -80,7 +87,7 @@ public class LineScheduleServiceImpl implements LineScheduleService {
             schedule.setDelayReason(request.getNotes());
         }
 
-        schedule = scheduleRepository.save(schedule);
+        schedule = scheduleRepository.saveAndFlush(schedule); // 当场刷库: 版本冲突在这里抛, 返回的版本号是新的
         return enrichScheduleDTO(schedule);
     }
 
@@ -88,18 +95,34 @@ public class LineScheduleServiceImpl implements LineScheduleService {
     @Transactional
     public LineScheduleDTO startSchedule(String factoryId, String scheduleId) {
         LineSchedule schedule = findScopedSchedule(factoryId, scheduleId);
+        // 先锁它所在的日调度计划, 再锁排程行: 与取消生产计划的级联、重开已取消的调度计划、插单落库同一顺序
+        // (日计划 → 排程行)。反过来 (先锁行、提交时再写日计划) 会和取消级联互相等: 一边拿着行等日计划,
+        // 另一边拿着日计划等行 —— 死锁, 其中一个请求 500。
+        String dayPlanStatus = planRepository.lockStatusForUpdate(schedule.getPlan().getId(), factoryId).orElse(null);
+        // 锁行读最新: 已作废 / 已取消的排程不能开工 (调度计划取消后重开时作废的旧排程, 开工就等于复活)。
+        // 与作废那条 UPDATE 串行: 它先提交 → 这里读到 cancelled 拒绝; 这里先提交 → 它重判条件跳过这条。
+        String current = scheduleRepository.lockStatusForUpdate(scheduleId).orElse(null);
+        if (LineSchedule.ScheduleStatus.cancelled.name().equals(current)) {
+            throw new BusinessException(409, "这条排程已作废，不能开工")
+                    .withHint("请刷新调度计划，按当前的排程开工");
+        }
+        // D-S4-CANCEL-GHOST-DAILY: 所属生产计划 (直接或经批次) 已取消的排程, 开工就等于把取消了的计划复活。
+        // 级联上线之前取消的计划, 它的排程还是待开始, 页面上仍有「开始」按钮 —— 在这里拦住。
+        if (cancelledPlanSchedules.ownerPlanCancelled(factoryId, scheduleId)) {
+            throw new BusinessException(409, "这条排程所属的生产计划已取消，不能开工")
+                    .withHint("如需继续生产，请重新建生产计划再排程");
+        }
 
         schedule.setStatus(LineSchedule.ScheduleStatus.in_progress);
         schedule.setActualStartTime(LocalDateTime.now());
 
-        // 更新计划状态
-        SchedulingPlan plan = schedule.getPlan();
-        if (plan.getStatus() == SchedulingPlan.PlanStatus.confirmed) {
-            plan.setStatus(SchedulingPlan.PlanStatus.in_progress);
-            planRepository.save(plan);
+        // 更新计划状态: 按锁住后读到的最新状态判, 只写状态列 (手里的日计划实体是锁之前读的, 整行保存会把
+        // 等锁期间别人刚重算的批次数 / 派工人数写回旧值)
+        if (SchedulingPlan.PlanStatus.confirmed.name().equals(dayPlanStatus)) {
+            planRepository.markInProgressIfConfirmed(factoryId, schedule.getPlan().getId());
         }
 
-        schedule = scheduleRepository.save(schedule);
+        schedule = scheduleRepository.saveAndFlush(schedule); // 当场刷库: 版本冲突在这里抛, 返回的版本号是新的
         return enrichScheduleDTO(schedule);
     }
 
@@ -125,7 +148,7 @@ public class LineScheduleServiceImpl implements LineScheduleService {
             }
         }
 
-        schedule = scheduleRepository.save(schedule);
+        schedule = scheduleRepository.saveAndFlush(schedule); // 当场刷库: 版本冲突在这里抛, 返回的版本号是新的
         return enrichScheduleDTO(schedule);
     }
 
@@ -213,7 +236,7 @@ public class LineScheduleServiceImpl implements LineScheduleService {
             log.error("效率计算失败: scheduleId={}", scheduleId, e);
         }
 
-        schedule = scheduleRepository.save(schedule);
+        schedule = scheduleRepository.saveAndFlush(schedule); // 当场刷库: 版本冲突在这里抛, 返回的版本号是新的
 
         // ========== 紧急状态监控 (基于完成概率) ==========
         try {

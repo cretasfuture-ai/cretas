@@ -7,6 +7,7 @@ import com.cretas.aims.dto.notification.CreateNotificationRequest;
 import com.cretas.aims.entity.Notification;
 import com.cretas.aims.entity.enums.NotificationType;
 import com.cretas.aims.repository.NotificationRepository;
+import com.cretas.aims.repository.UserRepository;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -41,8 +42,26 @@ public class NotificationController {
 
     private final NotificationRepository notificationRepository;
 
-    public NotificationController(NotificationRepository notificationRepository) {
+    private final UserRepository userRepository;
+
+    public NotificationController(NotificationRepository notificationRepository,
+                                  UserRepository userRepository) {
         this.notificationRepository = notificationRepository;
+        this.userRepository = userRepository;
+    }
+
+    /**
+     * 该用户在本工厂的角色码, 用来过滤「发给某个角色」的通知 (userId 为空且 targetRole 有值的行)。
+     * 查不到这个用户 / 用户不属于本工厂 ⇒ 空串: 只看得到发给自己的和没指定角色的通知, 看不到发给别的角色的。
+     */
+    private String roleCodeOf(String factoryId, Long userId) {
+        if (userRepository == null || userId == null) {
+            return "";
+        }
+        return userRepository.findById(userId)
+                .filter(u -> factoryId != null && factoryId.equals(u.getFactoryId()))
+                .map(u -> u.getRoleCode() == null ? "" : u.getRoleCode())
+                .orElse("");
     }
 
     /**
@@ -68,7 +87,7 @@ public class NotificationController {
         Page<Notification> pageResult;
         if (userId != null) {
             // User-scoped: their own notifications + broadcasts, unread first
-            pageResult = notificationRepository.findForUserUnreadFirst(factoryId, userId, pageable);
+            pageResult = notificationRepository.findForUserUnreadFirst(factoryId, userId, roleCodeOf(factoryId, userId), pageable);
         } else if (type != null) {
             pageResult = notificationRepository.findByFactoryIdAndTypeOrderByCreatedAtDesc(factoryId, type, pageable);
         } else if (isRead != null) {
@@ -100,7 +119,7 @@ public class NotificationController {
 
         long count;
         if (userId != null) {
-            count = notificationRepository.countUnreadForUser(factoryId, userId);
+            count = notificationRepository.countUnreadForUser(factoryId, userId, roleCodeOf(factoryId, userId));
         } else {
             count = notificationRepository.countByFactoryIdAndIsReadFalse(factoryId);
         }
@@ -198,7 +217,7 @@ public class NotificationController {
 
         log.info("标记用户所有通知为已读: factoryId={}, userId={}", factoryId, userId);
 
-        int count = notificationRepository.markAllAsReadForUser(factoryId, userId, LocalDateTime.now());
+        int count = notificationRepository.markAllAsReadForUser(factoryId, userId, roleCodeOf(factoryId, userId), LocalDateTime.now());
 
         Map<String, Integer> result = new HashMap<>();
         result.put("updatedCount", count);

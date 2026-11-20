@@ -20,10 +20,13 @@ import { useFactoryFeatureStore } from '../store/factoryFeatureStore';
 import { useAuthStore } from '../store/authStore';
 import { canAccessWhitelist } from '../utils/permissionHelper';
 import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
+import { useMyTodoEntry } from '../hooks/useMyTodos';
+import { todoTabScreen } from './todoTab';
 
 const Tab = createBottomTabNavigator<HRTabParamList>();
 
 export default function HRTabNavigator() {
+  const todoEntry = useMyTodoEntry();
   const { isScreenEnabled } = useFactoryFeatureStore();
   const { user } = useAuthStore();
 
@@ -116,6 +119,7 @@ export default function HRTabNavigator() {
         }}
       />
       )}
+      {todoTabScreen(Tab, todoEntry, 'hr-tab-oa-todo')}
       <Tab.Screen
         name="ProfileTab"
         component={HRProfileStackNavigator}

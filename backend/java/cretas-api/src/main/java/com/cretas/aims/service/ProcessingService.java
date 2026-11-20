@@ -26,6 +26,16 @@ public interface ProcessingService {
      * 开始生产
       */
     ProductionBatch startProduction(String factoryId, String batchId, Integer supervisorId);
+
+    /**
+     * 批次级开工, 与计划级同一道缺料闸 (纪律排查 A8): 批次挂在一个还没开工的计划上、工厂开了「缺料时拦开工」、
+     * 计划关联的缺料未解决 ⇒ 409 {@code SHORTAGE_CASE_OPEN}; 带 {@code forceStartReason} 可强制开工, 原因记入缺料实例。
+     * 计划已开工 (当时已过闸或已强制开工并留痕) 的批次不再拦。默认实现 = 不过闸 (测试替身用)。
+     */
+    default ProductionBatch startProduction(String factoryId, String batchId, Integer supervisorId,
+                                            String forceStartReason) {
+        return startProduction(factoryId, batchId, supervisorId);
+    }
      /**
      * 暂停生产
       */
@@ -46,6 +56,17 @@ public interface ProcessingService {
      */
     ProductionBatch completeProduction(String factoryId, String batchId, BigDecimal actualQuantity,
                                        BigDecimal goodQuantity, BigDecimal defectQuantity, String finishedUnit);
+
+    /**
+     * 对外入口 (App / web / AI) 的批次完工 (纪律排查 A8): 实际产量超过批次计划量 (同单位) 必须带超产原因,
+     * 没带 ⇒ 409 {@code PRODUCTION_OVER_PLAN_REASON_REQUIRED}, 与计划级直接完工同口径; 原因记入批次备注与自定义字段。
+     * 报工结清里的自动完工 (产出来自已过超收闸的报工) 走不带原因的 6 参重载。
+     */
+    default ProductionBatch completeProductionWithReason(String factoryId, String batchId, BigDecimal actualQuantity,
+                                                         BigDecimal goodQuantity, BigDecimal defectQuantity,
+                                                         String overPlanReason) {
+        return completeProduction(factoryId, batchId, actualQuantity, goodQuantity, defectQuantity);
+    }
      /**
      * 取消生产
       */
@@ -143,6 +164,18 @@ public interface ProcessingService {
      */
     PageResponse<Map<String, Object>> getInspections(
             String factoryId, String batchId, java.util.List<String> results, PageRequest pageRequest);
+    /**
+     * web-admin 列表用: 在结果过滤之外再按关键词 / 日期区间 / 批量批次号过滤, 全部在分页之前由数据库完成。
+     */
+    PageResponse<Map<String, Object>> searchInspections(
+            String factoryId, String batchId, java.util.List<String> results,
+            LocalDate dateFrom, LocalDate dateTo, String keyword, java.util.List<String> batchNos,
+            PageRequest pageRequest);
+
+    /**
+     * 批量批次号查询: 返回本厂内至少有一条质检记录的批次号集合 (精确匹配), 其余视为未找到。
+     */
+    java.util.List<String> findInspectedBatchNumbers(String factoryId, java.util.List<String> batchNos);
      /**
      * 获取质检详情
       */

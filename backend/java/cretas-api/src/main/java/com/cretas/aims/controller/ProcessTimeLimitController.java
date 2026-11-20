@@ -31,12 +31,27 @@ public class ProcessTimeLimitController {
 
     private final ProcessTimeLimitService service;
 
+    /** 只警告档复盘记录判不合格 (PROTO-Q41): 不自动报废, 指到报损入口。 */
+    static final String REVIEW_REJECT_MESSAGE = "已记录判不合格结论。这是只警告档的复盘记录，系统不会自动报废库存；"
+            + "剩余的料要报损请到网页「仓库管理 → 报损管理」或 App「报损单」提交";
+
     @Operation(summary = "这道工序可选来源的时限状态 (App)")
     @RequirePermission({"quality:read_write", "quality:read", "production:read", "production:read_write"})
     @GetMapping("/tasks/{taskId}")
     public ApiResponse<List<ProcessTimeLimitService.SourceStatus>> statusForTask(
             @PathVariable String factoryId, @PathVariable Long taskId) {
-        return ApiResponse.success(service.statusForTask(factoryId, taskId));
+        return view(service.statusViewForTask(factoryId, taskId));
+    }
+
+    /** 归属判不出时仍返回列表 (原料照常), 原因放在 message + severity=WARNING, 页面据此提示。 */
+    static ApiResponse<List<ProcessTimeLimitService.SourceStatus>> view(ProcessTimeLimitService.SourceStatusView view) {
+        if (view.ownershipNotice() == null) {
+            return ApiResponse.success(view.sources());
+        }
+        ApiResponse<List<ProcessTimeLimitService.SourceStatus>> res =
+                ApiResponse.success(view.ownershipNotice(), view.sources());
+        res.setSeverity("WARNING");
+        return res;
     }
 
     @Operation(summary = "计划某道工序可选来源的时限状态 (web 逐道录入)")
@@ -45,10 +60,10 @@ public class ProcessTimeLimitController {
     public ApiResponse<List<ProcessTimeLimitService.SourceStatus>> statusForPlan(
             @PathVariable String factoryId, @PathVariable String planId,
             @RequestParam(required = false) Integer processOrder) {
-        return ApiResponse.success(service.statusForPlan(factoryId, planId, processOrder));
+        return view(service.statusViewForPlan(factoryId, planId, processOrder));
     }
 
-    @Operation(summary = "登记开始解冻 / 开始冷藏暂停 (时刻取服务端当前时间)")
+    @Operation(summary = "登记开始解冻 / 开始冷藏暂停 (默认取服务端当前时间; 开始解冻可带 startedAt + backfillReason 补登)")
     @RequirePermission({"production:read_write", "quality:read_write"})
     @PostMapping("/marks")
     public ApiResponse<ProcessTimeMark> startMark(
@@ -91,7 +106,10 @@ public class ProcessTimeLimitController {
             @RequestAttribute("userId") Long userId,
             @RequestAttribute(value = "username", required = false) String username) {
         ProcessTimeLimitEvent saved = service.decide(factoryId, eventId, body, userId, username);
-        String msg = ProcessTimeLimitEvent.Status.RELEASED.equals(saved.getStatus()) ? "已复检放行" : "已判定不合格";
+        String msg = ProcessTimeLimitEvent.Status.RELEASED.equals(saved.getStatus()) ? "已复检放行"
+                : ProcessTimeLimitEvent.RecordKind.isWarn(saved.getRecordKind())
+                        ? REVIEW_REJECT_MESSAGE
+                        : "已判定不合格";
         return ApiResponse.success(msg, saved);
     }
 }

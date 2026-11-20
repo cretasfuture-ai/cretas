@@ -92,4 +92,23 @@ public class InsertSlotPreview extends BaseEntity {
     @Column(name = "candidate_number", nullable = false, updatable = false)
     private Integer candidateNumber;
 
+    /** 预览时生效配方的 id / 版本: 确认建计划时锁定到计划上, 不跟着之后的配方改动走。 */
+    @Column(name = "bom_recipe_id", length = 191, updatable = false)
+    private String bomRecipeId;
+
+    @Column(name = "bom_version", updatable = false)
+    private Integer bomVersion;
+
+    /** 原料需求 + 缺口指纹 (配方版本/每种料需求/缺口/总判定)。 */
+    @Column(name = "material_fingerprint", length = 64, updatable = false)
+    private String materialFingerprint;
+
+    /** 受影响计划指纹 (每个被挤计划的 id / 顺延后完成时间 / 顺延分钟)。 */
+    @Column(name = "impact_fingerprint", length = 64, updatable = false)
+    private String impactFingerprint;
+
+    /** 排程预览指纹 (插单每天做多少 + 每个被挤计划每天做多少): 确认时重算比对。 */
+    @Column(name = "schedule_fingerprint", length = 64, updatable = false)
+    private String scheduleFingerprint;
+
 }

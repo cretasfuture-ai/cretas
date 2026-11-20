@@ -72,6 +72,12 @@ public class ProcessingBatchCompleteTool extends AbstractBusinessTool {
         defectQuantity.put("minimum", 0);
         properties.put("defectQuantity", defectQuantity);
 
+        // 纪律排查 A8: 实际产量超过批次计划量时必须有原因; 用户没说就不要编, 服务端会 409 追问
+        Map<String, Object> overPlanReason = new HashMap<>();
+        overPlanReason.put("type", "string");
+        overPlanReason.put("description", "实际产量超过计划产量时用户给的超产原因; 用户没说就不要填");
+        properties.put("overPlanReason", overPlanReason);
+
         schema.put("properties", properties);
         schema.put("required", Arrays.asList("batchId", "actualQuantity", "goodQuantity", "defectQuantity"));
 
@@ -101,8 +107,8 @@ public class ProcessingBatchCompleteTool extends AbstractBusinessTool {
         }
 
         // 3. 调用服务完成生产
-        ProductionBatch batch = processingService.completeProduction(
-                factoryId, batchId, actualQuantity, goodQuantity, defectQuantity);
+        ProductionBatch batch = processingService.completeProductionWithReason(
+                factoryId, batchId, actualQuantity, goodQuantity, defectQuantity, getString(params, "overPlanReason"));
 
         // 4. 构建返回结果
         Map<String, Object> result = new HashMap<>();

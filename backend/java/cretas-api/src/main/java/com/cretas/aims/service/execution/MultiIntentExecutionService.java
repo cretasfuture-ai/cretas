@@ -40,6 +40,21 @@ public class MultiIntentExecutionService {
     @Value("${cretas.ai.multi-intent.enabled:true}")
     private boolean multiIntentEnabled;
 
+    /**
+     * 不是多意图时回退的单意图一轮 = 与 /execute 同一条流式管线 (意图蒸馏③ PR-3; 原先回退到编排器的识别分支, 已删)。
+     * null 只在裸构造的单测里出现。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @Lazy
+    private StreamTurnCollector streamTurnCollector;
+
+    private IntentExecuteResponse singleTurn(String factoryId, IntentExecuteRequest request, Long userId, String userRole) {
+        if (streamTurnCollector != null && streamTurnCollector.route(request).viaStream()) {
+            return streamTurnCollector.collect(factoryId, request, userId, userRole);
+        }
+        return orchestrator.execute(factoryId, request, userId, userRole);
+    }
+
     public MultiIntentExecutionService(@Lazy AIIntentService aiIntentService,
                                        @Lazy IntentExecutionOrchestrator orchestrator,
                                        SseStreamingService sseStreamingService,
@@ -73,6 +88,12 @@ public class MultiIntentExecutionService {
     public IntentExecuteResponse executeMultiIntent(String factoryId, IntentExecuteRequest request,
                                                      Long userId, String userRole) {
         requireFactoryIntentAccess(factoryId, userRole);
+        if (com.cretas.aims.ai.tool.PersonalPayRefusalGuard.refuses(request.getUserInput())) {
+            return IntentExecutionOrchestrator.personalPayRefusalResponse();
+        }
+        if (com.cretas.aims.ai.tool.OwnFactoryDataOnlyGuard.refusesBeforeRouting(request.getUserInput())) {
+            return IntentExecutionOrchestrator.externalDataRefusalResponse("multi", factoryId);
+        }
         AuthenticatedActor trustedActor = AuthenticatedActor.fromCurrentExecution().orElse(null);
         log.info("执行多意图识别: factoryId={}, userInput='{}'",
                 factoryId,
@@ -81,7 +102,7 @@ public class MultiIntentExecutionService {
 
         if (!multiIntentEnabled) {
             log.info("多意图功能已禁用，回退到单意图执行");
-            return orchestrator.execute(factoryId, request, userId, userRole);
+            return singleTurn(factoryId, request, userId, userRole);
         }
 
         String userInput = request.getUserInput();
@@ -100,14 +121,14 @@ public class MultiIntentExecutionService {
             multiResult = aiIntentService.recognizeMultiIntent(userInput, factoryId);
         } catch (Exception e) {
             log.error("多意图识别失败: factoryId={}, error={}", factoryId, e.getMessage(), e);
-            return orchestrator.execute(factoryId, request, userId, userRole);
+            return singleTurn(factoryId, request, userId, userRole);
         }
 
         // 2. 回退判断
         if (multiResult == null || !multiResult.isMultiIntent()
                 || multiResult.getIntents() == null || multiResult.getIntents().isEmpty()) {
             log.info("非多意图请求，回退到单意图执行");
-            return orchestrator.execute(factoryId, request, userId, userRole);
+            return singleTurn(factoryId, request, userId, userRole);
         }
 
         log.info("识别到多意图: intentCount={}, strategy={}, confidence={}",
@@ -156,6 +177,12 @@ public class MultiIntentExecutionService {
                                                                     Long userId,
                                                                     String userRole) {
         requireFactoryIntentAccess(factoryId, userRole);
+        if (request != null && com.cretas.aims.ai.tool.PersonalPayRefusalGuard.refuses(request.getUserInput())) {
+            return IntentExecutionOrchestrator.personalPayRefusalResponse();
+        }
+        if (request != null && com.cretas.aims.ai.tool.OwnFactoryDataOnlyGuard.refusesBeforeRouting(request.getUserInput())) {
+            return IntentExecutionOrchestrator.externalDataRefusalResponse("multi-match", factoryId);
+        }
         List<IntentMatchResult.IntentMatch> intents = intentResult.getAdditionalIntents();
         AuthenticatedActor trustedActor = AuthenticatedActor.fromCurrentExecution().orElse(null);
         if (intents == null || intents.isEmpty()) {

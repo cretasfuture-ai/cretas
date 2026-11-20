@@ -751,6 +751,34 @@ public class MaterialBatchController {
         return ApiResponse.success("入库日期已更正, 已记录更正原因与改前改后的日期", batch);
     }
 
+    /**
+     * 解除批次与来源个体的挂载 (#1844 终审 L-d)。
+     *
+     * <p>PUT /{batchId} 的 {@code sourceIndividualId}: null = 不改、空白 = 400 —— 不动这个语义;
+     * 解除只走本端点, 原因必填, service 在同一事务里写操作日志 (old/new 值 + 原因)。
+     */
+    @RequirePermission({"warehouse:read_write", "inventory:read_write"})
+    @RequireModule("warehouse")
+    @PostMapping("/{batchId}/source-individual/unlink")
+    @Operation(summary = "解除批次的来源个体挂载 (原因必填, 写操作日志)")
+    public ApiResponse<MaterialBatchDTO> unlinkSourceIndividual(
+            @Parameter(description = "工厂ID", required = true, example = "F006")
+            @PathVariable @NotBlank String factoryId,
+            @Parameter(description = "批次ID", required = true)
+            @PathVariable @NotBlank String batchId,
+            @Parameter(description = "访问令牌", required = true)
+            @RequestHeader("Authorization") String authorization,
+            @Valid @RequestBody com.cretas.aims.dto.material.UnlinkSourceIndividualRequest request,
+            jakarta.servlet.http.HttpServletRequest httpRequest) {
+        String token = TokenUtils.extractToken(authorization);
+        Long userId = mobileService.getUserFromToken(token).getId();
+        String callerRole = (String) httpRequest.getAttribute("role");
+        log.info("解除批次来源个体: factoryId={}, batchId={}, role={}", factoryId, batchId, callerRole);
+        MaterialBatchDTO batch = materialBatchService.unlinkSourceIndividual(
+                factoryId, batchId, request.getReason(), userId, callerRole);
+        return ApiResponse.success("已解除来源个体挂载, 已记录原因", batch);
+    }
+
     @RequirePermission({"warehouse:read_write", "inventory:read_write", "finance:read_write"})
     @RequireModule("warehouse")
     @PostMapping("/{batchId}/cost-correction")
@@ -804,11 +832,19 @@ public class MaterialBatchController {
             @PathVariable @NotBlank String factoryId,
             @Parameter(description = "批次ID", example = "MB-2025-001")
             @PathVariable @NotBlank String batchId,
-            @Valid @RequestBody UpdateBatchStatusRequest request) {
+            @Valid @RequestBody UpdateBatchStatusRequest request,
+            jakarta.servlet.http.HttpServletRequest httpRequest) {
 
         MaterialBatchStatus status = MaterialBatchStatus.valueOf(request.getStatus());
-        log.info("更新批次状态: factoryId={}, batchId={}, status={}", factoryId, batchId, status);
-        MaterialBatchDTO batch = materialBatchService.updateBatchStatus(factoryId, batchId, status);
+        Object rawUserId = httpRequest.getAttribute("userId");
+        Long userId = rawUserId instanceof Number n ? n.longValue() : null;
+        String callerRole = (String) httpRequest.getAttribute("role");
+        log.info("更新批次状态: factoryId={}, batchId={}, status={}, userId={}, role={}",
+                factoryId, batchId, status, userId, callerRole);
+        MaterialBatchDTO batch = materialBatchService.updateBatchStatus(factoryId, batchId, status,
+                new com.cretas.aims.service.discipline.MaterialBatchReleaseGuard.ManualChange(
+                        com.cretas.aims.entity.material.MaterialBatchRelease.Channel.WAREHOUSE_STATUS_CHANGE,
+                        request.getReason(), userId, callerRole));
         return ApiResponse.success("批次状态更新成功", batch);
     }
 

@@ -47,6 +47,38 @@ class AIConfig:
     rerank_timeout_s: float = 0.6
     rerank_pool_k: int = 50
     rerank_top_k: int = 10
+    # 合并理解 (INTENT-DISTILL E, 2026-11-11): 「目的 + 粗选 (+ 对话动作 / 参数 / 是否先问)」一次结构化调用,
+    # Choice (读概率) 只在需要时才调。缺省关, 行为与旧版一致; 门槛的来由见 ai/matcher/decision.py 的 E 线说明。
+    decision_merged: bool = False
+    # 业务域缩小决策层候选 (意图蒸馏③ PR-4)。缺省开; AI_DOMAIN_SCOPE=0 关 (不重发即可回到全目录, 见 ai/intent_domain.py)。
+    domain_scope_enabled: bool = True
+    # 合并输出的 clarify_probability >= 此值 ⇒ 这一轮先问 (按钮澄清)。
+    # 0.5 取自开发集平台 [0.3, 0.7] 的中点: 该区间内两个方向的错误数都不变 (见 PR 回执), 不靠门槛压某一方向。
+    decision_clarify_threshold: float = 0.5
+    # 合并输出的 target 把握 < 此值, 或给出了同样说得通的 alternatives ⇒ 才调 Choice。
+    decision_choice_below: float = 0.8  # 开发集 [0.7,0.8) 档直出只对 1/4, 交给 Choice 复核
+    # Luna 没启用 / 失败 / 超时之后的退路 (INTENT-DISTILL 批次 2, Steve 2026-11-12 拍板接上):
+    #   "combo"  = 阿里云选意图 ‖ qwen 判动作与是否先问 → qwen 单用 → 保守先问 → 候选按钮 (ai/matcher/fallback_combo.py);
+    #   "legacy" = 旧链 Luna → qwen 读 logprobs → _result_from_probs (回滚用)。
+    # 退路自己的阈值与 Luna 的 decision_auto_threshold 分开, 见 fallback_combo.FallbackThresholds (AI_DECISION_FALLBACK_*)。
+    decision_fallback: str = "combo"
+    # Luna 主路径的结论口径 (INTENT-DISTILL-20261111 第三批, 2026-11-14, 按史浩禾 39 题校准; 保守档 2026-11-19 起改按他的 300 题重校):
+    #   "v3" = Choice 之外并行问 Luna 一道判断题「这一轮是否必须先问」(decision.ASK_PREDICATE_RULES);
+    #          判断题 >= luna_ask_threshold ⇒ 先问; 否则只读目标首选 >= luna_read_threshold 或领先第二名
+    #          >= luna_margin 就按默认值直接办 (Java 写明默认), 写目标首选 >= luna_write_threshold 才交写确认卡。
+    #          「需要先问清楚」选项比所有真实候选都大时仍然先问 (与 v1 相同)。判断题拿不到 ⇒ 这一轮按 v1。
+    #   "v1" = 旧口径 (回滚用): 首选 >= decision_auto_threshold(0.80) 才执行, 否则出按钮。
+    # 0.80 在 Luna 上几乎从不达到 (11-14 线上 39 题首选最高 0.74 ⇒ 38/38 先问), 这是「过度追问」的主因。
+    # 0.6 / 0.15 / 0.3 / 0.4 的来由见 Documents/Cretas意图蒸馏-20261111/third-batch-calibrate-20261114.md。
+    # 2026-11-14 Steve 拍板「先问口径按工厂选」(ai/ask_policy.py): 缺省 "factory" = 按 Java 传来的工厂档位
+    # (conservative 保守 = 上面的 v3 / aggressive 激进 = 按 Steve 300 题校的规则, 默认档)。全局开关优先:
+    #   v1 = 旧口径 (回滚); v3 / conservative = 全部工厂保守; v4 / aggressive = 全部工厂激进。
+    decision_luna_policy: str = "factory"
+    luna_ask_threshold: float = 0.3  # 保守档; 2026-11-19 按史浩禾 300 题重校 (原 0.6 按 39 题定), 见 tests/fixtures/ask_policy
+    luna_ask_threshold_aggressive: float = 0.4  # 激进档; 来由见 steve300-calibrate-20261114.md
+    luna_read_threshold: float = 0.15
+    luna_margin: float = 0.3
+    luna_write_threshold: float = 0.4
 
     def decision_enabled_for(self, business_type: str) -> bool:
         wanted = {b.strip().upper() for b in self.decision_business_types.split(",") if b.strip()}
@@ -80,6 +112,17 @@ class AIConfig:
             rerank_timeout_s=float(os.environ.get("AI_RERANK_TIMEOUT_MS", "600")) / 1000.0,
             rerank_pool_k=int(os.environ.get("AI_RERANK_POOL_K", "50")),
             rerank_top_k=int(os.environ.get("AI_RERANK_TOP_K", "10")),
+            decision_merged=os.environ.get("AI_DECISION_MERGED", "0").strip().lower() in ("1", "true", "yes", "on"),
+            domain_scope_enabled=os.environ.get("AI_DOMAIN_SCOPE", "1").strip().lower() not in ("0", "false", "no", "off"),
+            decision_clarify_threshold=float(os.environ.get("AI_DECISION_CLARIFY_THRESHOLD", "0.5")),
+            decision_choice_below=float(os.environ.get("AI_DECISION_CHOICE_BELOW", "0.8")),
+            decision_fallback=(os.environ.get("AI_DECISION_FALLBACK", "combo").strip().lower() or "combo"),
+            decision_luna_policy=(os.environ.get("AI_DECISION_LUNA_POLICY", "factory").strip().lower() or "factory"),
+            luna_ask_threshold=float(os.environ.get("AI_DECISION_LUNA_ASK_THRESHOLD", "0.3")),
+            luna_ask_threshold_aggressive=float(os.environ.get("AI_DECISION_LUNA_ASK_THRESHOLD_AGGRESSIVE", "0.4")),
+            luna_read_threshold=float(os.environ.get("AI_DECISION_LUNA_READ_THRESHOLD", "0.15")),
+            luna_margin=float(os.environ.get("AI_DECISION_LUNA_MARGIN", "0.3")),
+            luna_write_threshold=float(os.environ.get("AI_DECISION_LUNA_WRITE_THRESHOLD", "0.4")),
         )
 
 

@@ -70,6 +70,11 @@ public abstract class AbstractBusinessTool extends AbstractTool {
         logExecutionStart(toolCall, context);
         validateContext(context);
 
+        // 写入确认三洞 #2: 出错时要分清「确定没写」和「可能已写」。doExecute 前后各数一次本线程成功提交的事务;
+        // 业务逻辑已经开始后的意外异常 (超时、空指针、连接断开) 也按可能已写处理 —— 外部副作用和不经事务管理器的
+        // 写入数不到, 宁可让用户先核对, 也不能报「失败」诱导重做。
+        long commitsBefore = ToolWriteCommitObserver.commitsOnThisThread();
+        boolean businessStarted = false;
         try {
             // 1. 解析参数
             Map<String, Object> params = parseArguments(toolCall);
@@ -90,6 +95,7 @@ public abstract class AbstractBusinessTool extends AbstractTool {
             }
 
             // 3. 执行业务逻辑
+            businessStarted = true;
             Map<String, Object> result = doExecute(factoryId, params, context);
             // 记下这次按哪个状态筛的, 0 条时回复要点名它, 不能说成「暂无记录」
             result = StatusFilter.annotate(getParametersSchema(), params, result);
@@ -105,18 +111,56 @@ public abstract class AbstractBusinessTool extends AbstractTool {
             log.warn("⚠️  参数验证失败: {}", e.getMessage());
             // 脱敏处理：只返回经过安全检查的消息
             String safeMessage = sanitizeErrorMessage(e.getMessage());
-            return buildErrorResult("参数验证失败: " + safeMessage);
+            return markOutcome(buildErrorResult("参数验证失败: " + safeMessage),
+                    committedSince(commitsBefore));
         } catch (com.cretas.aims.exception.BusinessException e) {
             // BusinessException 消息本就面向用户(GlobalExceptionHandler 也直接展示), 不脱敏,
             // 让工具的友好提示(如"找不到原料 X"/"匹配到多条")透传给用户, 而非笼统"操作执行失败"。
             log.warn("业务规则: {}", e.getMessage());
             // 带上业务码: 403 (权限) 要在对话里报成 PERMISSION_DENIED, 不是笼统的失败
-            return buildErrorResult(e.getMessage(), e.getCode());
+            return markOutcome(buildErrorResult(e.getMessage(), e.getCode()), committedSince(commitsBefore));
         } catch (Exception e) {
             logExecutionFailure(toolCall, e);
             // 脱敏处理：不暴露具体异常信息
-            return buildSanitizedErrorResult(e);
+            String sanitized = buildSanitizedErrorResult(e);
+            boolean possiblyWritten = businessStarted || committedSince(commitsBefore);
+            // 脱敏后的通用话是「操作执行失败，请稍后重试」—— 和「可能已写入、勿重复提交」放一起会诱导重做, 换成中性原因
+            return markOutcome(possiblyWritten ? buildErrorResult(UNEXPECTED_FAILURE_REASON) : sanitized,
+                    possiblyWritten);
         }
+    }
+
+    /** 结果里的标记: 这次失败发生时写入可能已经落下 (由确认流程记「结果不明」, 不许按失败重做)。 */
+    public static final String OUTCOME_UNKNOWN_FLAG = "outcomeUnknown";
+
+    public static final String OUTCOME_UNKNOWN_NOTICE_FIELD = "outcomeUnknownNotice";
+
+    static final String UNEXPECTED_FAILURE_REASON = "执行过程中出现异常";
+
+    static final String OUTCOME_UNKNOWN_ERROR =
+            "操作结果暂时无法确认（可能已经写入），请先在业务页面核对，勿重复提交";
+
+    private static boolean committedSince(long commitsBefore) {
+        return ToolWriteCommitObserver.commitsOnThisThread() != commitsBefore;
+    }
+
+    private String markOutcome(String errorJson, boolean possiblyWritten) {
+        if (!possiblyWritten) {
+            return errorJson;
+        }
+        log.error("⚠️ 工具失败时写入可能已经落下, 标记结果不明: toolName={}", getToolName());
+        try {
+            com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(errorJson);
+            if (node instanceof com.fasterxml.jackson.databind.node.ObjectNode object) {
+                // 原始出错原因留在 error 里 (用户要知道为什么停下), 结果不明另起一个字段说
+                object.put(OUTCOME_UNKNOWN_FLAG, true);
+                object.put(OUTCOME_UNKNOWN_NOTICE_FIELD, OUTCOME_UNKNOWN_ERROR);
+                return objectMapper.writeValueAsString(object);
+            }
+        } catch (Exception markFailure) {
+            log.warn("结果不明标记写入失败, 退回固定结构: {}", markFailure.getMessage());
+        }
+        return "{\"success\":false,\"" + OUTCOME_UNKNOWN_FLAG + "\":true,\"error\":\"" + OUTCOME_UNKNOWN_ERROR + "\"}";
     }
 
     /**
@@ -241,10 +285,48 @@ public abstract class AbstractBusinessTool extends AbstractTool {
             Map.entry("supplierId", "供应商"),
             Map.entry("warningDays", "预警天数"),
             Map.entry("page", "页码"),
-            Map.entry("size", "每页数量")
+            Map.entry("size", "每页数量"),
+            Map.entry("productTypeId", "产品"),
+            Map.entry("productId", "产品"),
+            Map.entry("productName", "产品"),
+            Map.entry("recipeId", "配方"),
+            Map.entry("bomRecipeId", "配方"),
+            Map.entry("customerId", "客户"),
+            Map.entry("orderId", "订单"),
+            Map.entry("productionBatchId", "生产批次"),
+            Map.entry("materialBatchId", "原料批次"),
+            Map.entry("equipmentId", "设备"),
+            Map.entry("deviceId", "设备"),
+            Map.entry("employeeId", "员工"),
+            Map.entry("userId", "员工")
         );
 
-        return displayNames.getOrDefault(paramName, paramName);
+        String known = displayNames.get(paramName);
+        if (known != null) {
+            return known;
+        }
+        // 没登记的字段名 (全是英文字母 / 数字) 不原样发给用户: 取 schema 里写的中文说明的第一段, 再没有就说「相关信息」
+        if (paramName == null || !paramName.matches("[A-Za-z][A-Za-z0-9_.]*")) {
+            return paramName;
+        }
+        return schemaDescriptionLabel(paramName);
+    }
+
+    /** schema 里该参数的中文说明, 截到第一个分隔符 (— 。 ； ( 空格) 之前, 过长或没有中文就用「相关信息」。 */
+    private String schemaDescriptionLabel(String paramName) {
+        try {
+            Object props = getParametersSchema() == null ? null : getParametersSchema().get("properties");
+            if (props instanceof Map<?, ?> pm && pm.get(paramName) instanceof Map<?, ?> spec
+                    && spec.get("description") instanceof String desc) {
+                String head = desc.split("[—。；;(（,，\\s]", 2)[0].trim();
+                if (!head.isEmpty() && head.length() <= 12 && head.matches(".*[\u4e00-\u9fa5].*")) {
+                    return head;
+                }
+            }
+        } catch (RuntimeException ignored) {
+            // 取不到说明就用通用说法, 不影响追问本身
+        }
+        return "相关信息";
     }
 
     /**

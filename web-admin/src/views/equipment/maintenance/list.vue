@@ -412,7 +412,7 @@ function getUrgencyText(days: number | null | undefined) {
   .stat-value {
     font-size: 28px;
     font-weight: 600;
-    color: #409eff;
+    color: var(--el-color-primary);
   }
 
   .stat-label {

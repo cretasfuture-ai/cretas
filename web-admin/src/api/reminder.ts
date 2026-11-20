@@ -4,6 +4,7 @@
  * 对应后端 ReminderController. Base: /api/mobile/{factoryId}/reminders.
  */
 import request from './request';
+import { requireFactoryId } from './currentFactoryId';
 import type { ApiResponse } from '@/types/api';
 
 export type ReminderType = 'PAYMENT_DUE';
@@ -33,15 +34,7 @@ export interface ReminderPage {
   size: number;
 }
 
-function getFactoryId(factoryId?: string): string {
-  if (factoryId) return factoryId;
-  const raw = localStorage.getItem('user');
-  if (!raw) throw new Error('未登录');
-  const parsed = JSON.parse(raw) as { factoryId?: string; factoryUser?: { factoryId?: string } };
-  const fid = parsed?.factoryUser?.factoryId ?? parsed?.factoryId;
-  if (!fid) throw new Error('当前账号未绑定工厂');
-  return fid;
-}
+const getFactoryId = requireFactoryId;
 
 function basePath(factoryId?: string): string {
   return `/${getFactoryId(factoryId)}/reminders`;
@@ -65,7 +58,8 @@ export function listReminders(params: {
 export function getReminderBadge(
   factoryId?: string,
 ): Promise<{ success: boolean; data: { pending: number } }> {
-  return request.get(`${basePath(factoryId)}/badge`);
+  // _silent: 无 reminder 读权限的角色会收到 403，由铃铛自行隐藏，不弹全局阻断弹窗
+  return request.get(`${basePath(factoryId)}/badge`, { _silent: true } as Record<string, unknown>);
 }
 
 /** Snooze. */

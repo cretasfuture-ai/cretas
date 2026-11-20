@@ -1,4 +1,5 @@
 import { ref, computed } from 'vue';
+import { CS_TOKENS } from '@/styles/csTokens';
 
 export type ThemeName = 'business' | 'tech' | 'warm' | 'minimal';
 
@@ -16,11 +17,12 @@ const THEMES: Record<ThemeName, ThemeConfig> = {
   business: {
     name: 'business',
     label: '商务蓝',
-    colors: ['#2D8B57', '#2B98D1', '#5BC0EB', '#9AD4E8', '#2E86AB', '#A23B72', '#F18F01', '#C73E1D'],
-    backgroundColor: '#ffffff',
-    textColor: '#303133',
-    axisColor: '#909399',
-    splitLineColor: '#E4E7ED'
+    // 默认主题跟随 Cretas System v1（P1）：首色 = --cs-primary，文字/轴/分隔线 = --cs-text/muted/border
+    colors: [CS_TOKENS.primary, '#2B98D1', '#5BC0EB', '#9AD4E8', '#2E86AB', '#A23B72', '#F18F01', '#C73E1D'],
+    backgroundColor: CS_TOKENS.surface,
+    textColor: CS_TOKENS.text,
+    axisColor: CS_TOKENS.muted,
+    splitLineColor: CS_TOKENS.border
   },
   tech: {
     name: 'tech',

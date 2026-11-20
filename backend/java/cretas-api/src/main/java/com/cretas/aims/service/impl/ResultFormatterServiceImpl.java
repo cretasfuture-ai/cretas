@@ -56,7 +56,9 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
         }
         String formatted = format(view);
         if (formatted != null && !formatted.isEmpty()) {
-            response.setFormattedText(formatted);
+            // 只读执行写明的默认 / 被替换的口径 (metadata.readNotices) 不能被重新格式化冲掉 (Steve 2026-11-12 口径)
+            response.setFormattedText(com.cretas.aims.ai.tool.ReadReplyNotices.prefix(formatted,
+                    com.cretas.aims.ai.tool.ReadReplyNotices.texts(response.getMetadata())));
         }
         return response;
     }
@@ -103,11 +105,20 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
             if (emptyFiltered != null) {
                 return emptyFiltered;
             }
+            // 口径规则 8: 名字命中多个 (或 0 个) 时列出全部并标区分字段, 不走各意图模板 (模板会把列表吞成「查询成功」)
+            String sameName = com.cretas.aims.ai.tool.SameNameMatches.reply(resultData);
+            if (sameName != null) {
+                return sameName;
+            }
             // 用户说了时间, 这个工具却不能按时间筛: 回复开头说出来, 再给不限时间的结果 (⛔ 不静默当成按时间查过)
             String timeNotice = com.cretas.aims.ai.tool.TimeRangeFilter.notAppliedNotice(resultData);
             if (timeNotice != null) {
                 String rest = formatIgnoringTimeNotice(response);
                 return rest == null ? timeNotice : timeNotice + "\n" + rest;
+            }
+            String shortageOverview = formatShortageOverview(resultData);
+            if (shortageOverview != null) {
+                return shortageOverview;
             }
             // 根据意图分类选择格式化器
             String formatted = switch (intentCategory) {
@@ -267,6 +278,12 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
     }
 
     private String formatTraceResult(Map<String, Object> data) {
+        // 按销售单追溯 / 查不到：工具已经写好分段文字，原样给用户，不再退回只剩「批次号」的壳
+        String message = getString(data, "message");
+        if (message != null && !message.isBlank()
+                && (data.containsKey("salesOrderNo") || Boolean.FALSE.equals(data.get("found")))) {
+            return message;
+        }
         StringBuilder sb = new StringBuilder("溯源信息：\n");
         String batchNumber = getString(data, "batchNumber");
         if (batchNumber != null) {
@@ -358,20 +375,42 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
     }
 
     private String formatLowStockAlert(Map<String, Object> data) {
-        List<Map<String, Object>> alerts = getList(data, "alerts");
+        // 工具实际返回的是 warnings / safetyStock (旧版读 alerts / minStock, 有预警也会说「库存充足」)
+        List<Map<String, Object>> alerts = getList(data, "warnings");
+        if (alerts == null) alerts = getList(data, "alerts");
+        StringBuilder sb = new StringBuilder();
         if (alerts == null || alerts.isEmpty()) {
-            return "库存预警检查完成：当前所有原材料库存充足，暂无低库存预警项。系统将持续监控库存水位。";
+            sb.append("库存预警检查完成：当前所有原材料库存都在安全库存以上，暂无低库存预警项。");
+        } else {
+            sb.append(String.format("有 %d 种原料低于安全库存：\n\n", alerts.size()));
+            for (Map<String, Object> alert : alerts) {
+                BigDecimal currentStock = getBigDecimal(alert, "currentStock");
+                BigDecimal safety = getBigDecimal(alert, "safetyStock");
+                if (safety == null) safety = getBigDecimal(alert, "minStock");
+                String unit = getString(alert, "unit") == null ? "" : getString(alert, "unit");
+                sb.append(String.format("• %s：当前 %s%s，安全库存 %s%s\n",
+                        getString(alert, "materialName"),
+                        currentStock != null ? QUANTITY_FORMATTER.format(currentStock) : "?", unit,
+                        safety != null ? QUANTITY_FORMATTER.format(safety) : "?", unit));
+            }
         }
-
-        StringBuilder sb = new StringBuilder(String.format("发现 %d 项库存预警：\n\n", alerts.size()));
-        for (Map<String, Object> alert : alerts) {
-            String materialName = getString(alert, "materialName");
-            BigDecimal currentStock = getBigDecimal(alert, "currentStock");
-            BigDecimal minStock = getBigDecimal(alert, "minStock");
-            sb.append(String.format("• %s：当前 %s，低于最低库存 %s\n",
-                    materialName,
-                    currentStock != null ? QUANTITY_FORMATTER.format(currentStock) : "?",
-                    minStock != null ? QUANTITY_FORMATTER.format(minStock) : "?"));
+        if (data.get("expiringBatches") instanceof List<?>) {
+            List<Map<String, Object>> expiring = getList(data, "expiringBatches");
+            Integer days = getInteger(data, "expiringWarningDays");
+            sb.append("\n");
+            if (expiring == null || expiring.isEmpty()) {
+                sb.append(String.format("未来 %d 天内没有即将过期的原料批次。", days == null ? 7 : days));
+            } else {
+                sb.append(String.format("未来 %d 天内将过期的原料批次（%d 个）：\n\n", days == null ? 7 : days, expiring.size()));
+                for (Map<String, Object> batch : expiring) {
+                    BigDecimal qty = getBigDecimal(batch, "currentQuantity");
+                    sb.append(String.format("• %s（批次 %s）：剩 %s%s，%s 到期（还有 %s 天）\n",
+                            getString(batch, "materialName"), getString(batch, "batchNumber"),
+                            qty != null ? QUANTITY_FORMATTER.format(qty) : "?",
+                            getString(batch, "unit") == null ? "" : getString(batch, "unit"),
+                            getString(batch, "expireDate"), getInteger(batch, "remainingDays")));
+                }
+            }
         }
         return sb.toString();
     }
@@ -427,6 +466,16 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
     }
 
     private String formatExpiringAlert(Map<String, Object> data) {
+        String expiring = formatExpiringAlertBody(data);
+        if (data.get("lowStockWarnings") instanceof List<?>) {
+            Map<String, Object> low = new java.util.LinkedHashMap<>();
+            low.put("warnings", data.get("lowStockWarnings"));
+            return formatLowStockAlert(low) + "\n" + expiring;
+        }
+        return expiring;
+    }
+
+    private String formatExpiringAlertBody(Map<String, Object> data) {
         List<Map<String, Object>> batches = getList(data, "batches");
         if (batches == null) batches = getList(data, "content");
         if (batches == null || batches.isEmpty()) {
@@ -441,8 +490,10 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
                 break;
             }
             String name = getString(batch, "materialName");
-            String expDate = getString(batch, "expirationDate");
-            BigDecimal qty = getBigDecimal(batch, "quantity");
+            String expDate = getString(batch, "expireDate");
+            if (expDate == null) expDate = getString(batch, "expirationDate");
+            BigDecimal qty = getBigDecimal(batch, "currentQuantity");
+            if (qty == null) qty = getBigDecimal(batch, "quantity");
             sb.append(String.format("• %s：%s%s，过期日期 %s\n",
                     name != null ? name : "未知",
                     qty != null ? QUANTITY_FORMATTER.format(qty) : "?",
@@ -612,8 +663,20 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
             case "INCOME_STATEMENT_QUERY" -> formatIncomeStatement(topLevel);
             case "BALANCE_SHEET_QUERY" -> formatBalanceSheet(topLevel);
             case "CASHFLOW_STATEMENT_QUERY" -> formatCashflowStatement(topLevel);
-            default -> formatReportGeneric(data);
+            default -> formatReportDefault(topLevel, data);
         };
+    }
+
+    /**
+     * 报表类意图没有专用格式化器时: 工具自己写好的那句话 (message) 优先, 它按权限决定了金额写不写;
+     * 没有 message 才退回只含中文标签指标的通用拼接。⛔ 不把 data 里的字段名 (owingCustomerCount 等) 打给用户。
+     */
+    private String formatReportDefault(Map<String, Object> topLevel, Map<String, Object> data) {
+        String message = getString(topLevel, "message");
+        if (message != null && !message.isBlank() && message.trim().length() >= 10) {
+            return message.trim();
+        }
+        return formatReportGeneric(data);
     }
 
     // Sprint 12: finance 3-statement formatters — emit ≥80-char business-content message
@@ -697,7 +760,14 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
         return sb.toString();
     }
 
-    private String buildPeriodLabel(String period, String startDate, String endDate) {
+    static String buildPeriodLabel(String period, String startDate, String endDate) {
+        // 2026-11-17 F006「上个月毛利率多少？」: 工具拿到的是显式日期 10-01~10-31, period 却是默认的 month,
+        // 标题写成「本月 (10-01 ~ 10-31)」。「本月 / 本周 …」只在窗口截到今天时成立; 窗口在今天之前结束 = 过去的一段, 只写日期。
+        if (startDate != null && endDate != null && endsBeforeToday(endDate)) {
+            String start = startDate.length() >= 10 ? startDate.substring(0, 10) : startDate;
+            String end = endDate.length() >= 10 ? endDate.substring(0, 10) : endDate;
+            return start + " ~ " + end;
+        }
         if (period == null) return "";
         String periodName = switch (period) {
             case "today" -> "今日";
@@ -713,6 +783,15 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
             return periodName + " (" + start + " ~ " + end + ")";
         }
         return periodName;
+    }
+
+    private static boolean endsBeforeToday(String endDate) {
+        try {
+            String day = endDate.length() >= 10 ? endDate.substring(0, 10) : endDate;
+            return java.time.LocalDate.parse(day).isBefore(java.time.LocalDate.now());
+        } catch (RuntimeException e) {
+            return false;
+        }
     }
 
     private String formatInventoryReport(Map<String, Object> data, String periodLabel) {
@@ -1177,8 +1256,11 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
             if (val instanceof Number && metricCount < 6) {
                 double dval = ((Number) val).doubleValue();
                 if (dval != 0.0) {
+                    String label = humanizeKey(entry.getKey());
+                    // 不认识的字段名 (驼峰英文) 不给用户看: 宁可少一项也不外露内部字段名
+                    if (label.equals(entry.getKey())) continue;
                     if (metricCount > 0) sb.append(" | ");
-                    sb.append(entry.getKey()).append(": ").append(QUANTITY_FORMATTER.format(dval));
+                    sb.append(label).append(": ").append(QUANTITY_FORMATTER.format(dval));
                     metricCount++;
                 }
             }
@@ -1335,7 +1417,81 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
         return sb.toString();
     }
 
+    /** 全厂缺料总览 (shortage_analyze 不指定订单): 订单号 + 缺的物料与数量; 没有缺口 / 有分析失败的订单都明说。 */
+    private String formatShortageOverview(Object resultData) {
+        Map<String, Object> data = asMap(com.cretas.aims.ai.tool.TimeRangeFilter.toolResultOf(resultData));
+        if (data == null || !(data.get("orderShortages") instanceof List<?>)) {
+            return null;
+        }
+        List<Map<String, Object>> rows = getList(data, "orderShortages");
+        Integer checked = getInteger(data, "checkedOrderCount");
+        Integer open = getInteger(data, "openOrderCount");
+        Integer failed = getInteger(data, "failedOrderCount");
+        StringBuilder sb = new StringBuilder();
+        if (rows == null || rows.isEmpty()) {
+            sb.append(String.format("已检查 %d 个在途销售订单（共 %d 个），没有发现原料缺口。", checked == null ? 0 : checked, open == null ? 0 : open));
+        } else {
+            sb.append(String.format("在途销售订单里有 %d 个存在原料缺口：\n", rows.size()));
+            for (Map<String, Object> row : rows) {
+                sb.append("\n").append(getString(row, "orderNumber"));
+                if (getString(row, "customerName") != null) sb.append("（").append(getString(row, "customerName")).append("）");
+                if (getString(row, "requiredDeliveryDate") != null) sb.append("，交期 ").append(getString(row, "requiredDeliveryDate"));
+                sb.append("，缺：");
+                List<Map<String, Object>> materials = getList(row, "shortages");
+                List<String> parts = new java.util.ArrayList<>();
+                if (materials != null) {
+                    for (Map<String, Object> m : materials) {
+                        BigDecimal q = getBigDecimal(m, "shortfallQuantity");
+                        parts.add(getString(m, "materialName") + " " + (q == null ? "?" : QUANTITY_FORMATTER.format(q))
+                                + (getString(m, "unit") == null ? "" : getString(m, "unit")));
+                    }
+                }
+                sb.append(String.join("、", parts));
+            }
+        }
+        if (checked != null && open != null && open > checked) {
+            sb.append(String.format("\n\n在途订单共 %d 个，这里按交期最近的先查了 %d 个。", open, checked));
+        }
+        if (failed != null && failed > 0) {
+            sb.append(String.format("\n\n另有 %d 个订单分析失败，没有计入上面的结果。", failed));
+        }
+        return sb.toString();
+    }
+
     private String formatOrderList(Map<String, Object> data) {
+        String windowNotice = getString(data, "windowNotice");
+        String body = formatOrderListBody(data);
+        return windowNotice == null || body == null ? body : windowNotice + "\n\n" + body;
+    }
+
+    /** 按客户汇总: 订单数多的在前, 合计一行; 汇总被截断 (>100 单) 时明说。 */
+    private String formatCustomerSummary(Map<String, Object> data, List<Map<String, Object>> summary) {
+        int orderTotal = 0;
+        BigDecimal amountTotal = BigDecimal.ZERO;
+        StringBuilder sb = new StringBuilder();
+        sb.append("按客户汇总（订单数从多到少）：\n\n| 客户 | 订单数 | 金额 |\n| --- | ---: | ---: |\n");
+        for (Map<String, Object> row : summary) {
+            Integer count = getInteger(row, "orderCount");
+            BigDecimal amount = getBigDecimal(row, "totalAmount");
+            orderTotal += count == null ? 0 : count;
+            if (amount != null) amountTotal = amountTotal.add(amount);
+            sb.append("| ").append(getString(row, "customerName")).append(" | ").append(count).append(" | ¥")
+                    .append(amount == null ? "0" : AMOUNT_FORMATTER.format(amount)).append(" |\n");
+        }
+        sb.append(String.format("\n共 %d 位客户、%d 单，合计 ¥%s。", summary.size(), orderTotal, AMOUNT_FORMATTER.format(amountTotal)));
+        if (Boolean.TRUE.equals(data.get("summaryTruncated"))) {
+            sb.append("订单很多，这里只汇总了最近的 100 单。");
+        }
+        Map<String, Object> top = summary.get(0);
+        sb.append(String.format("\n下单最多的是 %s（%s 单）。", getString(top, "customerName"), getInteger(top, "orderCount")));
+        return sb.toString();
+    }
+
+    private String formatOrderListBody(Map<String, Object> data) {
+        List<Map<String, Object>> summary = getList(data, "customerSummary");
+        if (summary != null && !summary.isEmpty()) {
+            return formatCustomerSummary(data, summary);
+        }
         List<Map<String, Object>> content = getList(data, "content");
         if (content == null) content = getList(data, "orders");
         Integer total = getInteger(data, "totalElements");
@@ -1971,6 +2127,25 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
             case "utilizationRate" -> "利用率(%)";
             case "activeCount" -> "活跃数量";
             case "pendingCount" -> "待处理数量";
+            case "owingCustomerCount" -> "欠款客户数";
+            case "totalAmount" -> "合计金额";
+            case "totalCount" -> "总数";
+            case "highRiskAmount" -> "60天以上高风险金额";
+            case "highRiskCount" -> "60天以上高风险客户数";
+            case "productCount" -> "产品数";
+            case "revenue" -> "销售额";
+            case "costedRevenue" -> "已回填成本的销售额";
+            case "cost" -> "成本";
+            case "grossProfit" -> "毛利";
+            case "marginRate" -> "毛利率(%)";
+            case "costCoverage" -> "成本覆盖率(%)";
+            // 趋势分析兜底摘要 (ProcessingServiceImpl 趋势分析的 5 条序列 + 周期天数): 原先直接露英文字段名 (BP 问题 47)
+            case "period" -> "统计周期(天)";
+            case "productionTrend" -> "产量趋势数据点";
+            case "qualityTrend" -> "质量趋势数据点";
+            case "costTrend" -> "成本趋势数据点";
+            case "materialTrend" -> "原料趋势数据点";
+            case "equipmentTrend" -> "设备趋势数据点";
             default -> key;
         };
     }
@@ -2057,8 +2232,23 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
             case "in_stock" -> "在库";
             case "consumed" -> "已消耗";
             case "expired" -> "已过期";
-            default -> status;
+            default -> orderStatusDisplayName(status);
         };
+    }
+
+    /** 销售订单 / 采购订单状态枚举的中文名 (复用枚举自带的 displayName); 认不出原样返回。 */
+    private static String orderStatusDisplayName(String status) {
+        String code = status.trim().toUpperCase();
+        try {
+            return com.cretas.aims.entity.enums.SalesOrderStatus.valueOf(code).getDisplayName();
+        } catch (IllegalArgumentException ignored) {
+            // 不是销售订单状态, 继续试采购订单
+        }
+        try {
+            return com.cretas.aims.entity.enums.PurchaseOrderStatus.valueOf(code).getDisplayName();
+        } catch (IllegalArgumentException ignored) {
+            return status;
+        }
     }
 
     private String translateQualityResult(String result) {

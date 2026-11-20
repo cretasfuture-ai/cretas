@@ -9,6 +9,7 @@ import {
   endProcessTimeMark,
   getPlanTimeLimits,
   startProcessTimeMark,
+  timeLimitOwnershipNotice,
   type ProcessTimeLimitStatus,
 } from '@/api/processTimeLimit';
 import type { WorkflowPortDescriptor } from '@/api/processSheet';
@@ -19,8 +20,10 @@ import {
   TIME_LIMIT_STATE_TAGS,
   crossedDeadline,
   hasPartialExpiry,
+  parseBackendTime,
   remainingMinutesAt,
   remainingText,
+  timeLimitBlocks,
 } from '@/utils/processTimeLimit';
 
 const props = defineProps<{
@@ -33,6 +36,8 @@ const props = defineProps<{
 
 const rows = ref<ProcessTimeLimitStatus[]>([]);
 const loadFailed = ref(false);
+/** 缺口 16: 本计划归属判不出时后端给的原因 (在制品/半成品没列出来的原因)。 */
+const ownershipNotice = ref<string | null>(null);
 const nowMs = ref(Date.now());
 const busyKey = ref<string | null>(null);
 /** 已为哪些截止时间重新问过后端: 手机/电脑时钟不准时不至于每分钟都问一遍。 */
@@ -62,6 +67,7 @@ async function reload(): Promise<void> {
     if (seq !== loadSeq) return;
     if (res.success && Array.isArray(res.data)) {
       rows.value = res.data;
+      ownershipNotice.value = timeLimitOwnershipNotice(res);
       loadFailed.value = false;
       nowMs.value = Date.now();
     } else {
@@ -98,6 +104,46 @@ async function startThaw(row: ProcessTimeLimitStatus): Promise<void> {
   await runMark(row, async () => {
     await startProcessTimeMark(props.factoryId, {
       targetType: row.targetType, targetId: row.targetId, kind: 'START', code: 'THAW',
+    });
+  });
+}
+
+// 纪律排查 A13: 解冻开始可补登实际时间 (要原因并留痕; 最多往前补多久由本厂配置, 超出时服务端说明上限)
+const backfillRow = ref<ProcessTimeLimitStatus | null>(null);
+const backfillAt = ref<string>('');
+const backfillReason = ref('');
+/** 防呆 Rule 3: 常用原因可选, 也允许直接输入。 */
+const BACKFILL_REASONS = ['开始解冻时忘了当场登记', '交接班漏登', '设备或网络故障当时登记不了'];
+const backfillVisible = computed({
+  get: () => backfillRow.value !== null,
+  set: (open: boolean) => { if (!open) backfillRow.value = null; },
+});
+const backfillDisabledReason = computed(() => {
+  if (!backfillAt.value) return '请选择实际开始解冻的时间';
+  // 补登时间是工厂本地时间 (东八区, 与后端 LocalDateTime 同口径), ⛔ 不用 new Date(字符串) 按浏览器时区解析
+  const at = parseBackendTime(backfillAt.value);
+  if (at === null) return '请选择实际开始解冻的时间';
+  if (at > Date.now()) return '开始时间不能晚于现在';
+  if (!backfillReason.value.trim()) return '请填写补登原因';
+  return '';
+});
+
+function openBackfill(row: ProcessTimeLimitStatus): void {
+  backfillRow.value = row;
+  backfillAt.value = '';
+  backfillReason.value = '';
+}
+
+async function submitBackfill(): Promise<void> {
+  const row = backfillRow.value;
+  if (!row || backfillDisabledReason.value) return;
+  const startedAt = backfillAt.value;
+  const reason = backfillReason.value.trim();
+  backfillRow.value = null;
+  await runMark(row, async () => {
+    await startProcessTimeMark(props.factoryId, {
+      targetType: row.targetType, targetId: row.targetId, kind: 'START', code: 'THAW',
+      startedAt, backfillReason: reason,
     });
   });
 }
@@ -142,7 +188,7 @@ defineExpose({ reload });
 
 <template>
   <section
-    v-if="rows.length > 0 || loadFailed"
+    v-if="rows.length > 0 || loadFailed || ownershipNotice"
     class="time-limit-panel"
     data-testid="process-time-limit-panel"
     aria-label="工序时限"
@@ -154,6 +200,9 @@ defineExpose({ reload });
     <p v-if="loadFailed" class="time-limit-failed" data-testid="time-limit-load-failed">
       时限状态没读到，保存时系统仍会判定。
       <el-button link type="primary" size="small" @click="reload">重新读取</el-button>
+    </p>
+    <p v-if="ownershipNotice" class="time-limit-owner-notice" data-testid="time-limit-owner-notice">
+      {{ ownershipNotice }}
     </p>
     <table v-if="rows.length > 0" class="time-limit-table">
       <thead>
@@ -171,7 +220,12 @@ defineExpose({ reload });
           <td>
             <div v-if="row.reason">{{ row.reason }}</div>
             <div v-if="hasPartialExpiry(row)" data-testid="time-limit-partial">
-              可领 {{ qty(row.drawableQuantity, row) }}，已超时 {{ qty(row.expiredQuantity, row) }}
+              <template v-if="timeLimitBlocks(row)">
+                可领 {{ qty(row.drawableQuantity, row) }}，已超时 {{ qty(row.expiredQuantity, row) }}
+              </template>
+              <template v-else>
+                未超时 {{ qty(row.drawableQuantity, row) }}，已超时 {{ qty(row.expiredQuantity, row) }}（本厂只警告，都能投料）
+              </template>
             </div>
           </td>
           <td class="time-limit-actions">
@@ -183,6 +237,15 @@ defineExpose({ reload });
               data-testid="time-limit-start-thaw"
               @click="startThaw(row)"
             >开始解冻</el-button>
+            <el-button
+              v-if="row.state === 'START_MISSING'"
+              size="small"
+              link
+              type="primary"
+              :disabled="busyKey === rowKey(row)"
+              data-testid="time-limit-backfill-thaw"
+              @click="openBackfill(row)"
+            >补登实际开始时间</el-button>
             <el-button
               v-if="canPause(row)"
               size="small"
@@ -202,25 +265,79 @@ defineExpose({ reload });
         </tr>
       </tbody>
     </table>
+      <el-dialog
+      v-model="backfillVisible"
+      :title="`补登开始解冻 — ${backfillRow?.batchNumber ?? '这批料'}`"
+      width="420px"
+      append-to-body
+      data-testid="time-limit-backfill-dialog"
+    >
+      <p class="time-limit-backfill-tip">
+        早于现在开始解冻却没当场登记时用。计时从你填的时间算（更早 = 更快到期），登记后不能改；补登原因会留痕。
+      </p>
+      <el-form label-position="top">
+        <el-form-item label="实际开始解冻时间" required>
+          <el-date-picker
+            v-model="backfillAt"
+            type="datetime"
+            value-format="YYYY-MM-DDTHH:mm:ss"
+            format="MM-DD HH:mm"
+            placeholder="选择时间"
+            :disabled-date="(d: Date) => d.getTime() > Date.now() + 86_400_000"
+            style="width: 100%"
+            data-testid="time-limit-backfill-at"
+          />
+        </el-form-item>
+        <el-form-item label="补登原因" required>
+          <el-select
+            v-model="backfillReason"
+            filterable
+            allow-create
+            default-first-option
+            placeholder="选择常用原因，或直接输入"
+            style="width: 100%"
+            data-testid="time-limit-backfill-reason"
+          >
+            <el-option v-for="r in BACKFILL_REASONS" :key="r" :label="r" :value="r" />
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <span v-if="backfillDisabledReason" class="time-limit-backfill-tip">{{ backfillDisabledReason }}</span>
+        <el-button @click="backfillVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :disabled="!!backfillDisabledReason"
+          data-testid="time-limit-backfill-submit"
+          @click="submitBackfill"
+        >登记</el-button>
+      </template>
+    </el-dialog>
   </section>
 </template>
 
 <style scoped>
+.time-limit-backfill-tip {
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+  margin-right: 8px;
+}
 .time-limit-panel {
   margin-bottom: 8px;
-  border: 1px solid var(--el-border-color-lighter, #e4e7ed);
+  border: 1px solid var(--el-border-color-lighter, var(--cs-border));
   border-radius: 6px;
   padding: 8px 12px;
   background: var(--el-fill-color-blank, #fff);
   font-size: 13px;
 }
 .time-limit-title { display: flex; gap: 8px; align-items: baseline; margin-bottom: 4px; }
-.time-limit-sub { color: var(--el-text-color-secondary, #909399); font-size: 12px; }
-.time-limit-failed { margin: 0; color: var(--el-color-danger, #f56c6c); }
+.time-limit-sub { color: var(--el-text-color-secondary, var(--cs-muted)); font-size: 12px; }
+.time-limit-failed { margin: 0; color: var(--el-color-danger, var(--cs-danger)); }
+.time-limit-owner-notice { margin: 0; color: var(--el-color-warning, var(--cs-warning)); }
 .time-limit-table { width: 100%; border-collapse: collapse; }
 .time-limit-table th, .time-limit-table td {
   padding: 3px 12px 3px 0; text-align: left; vertical-align: top; font-variant-numeric: tabular-nums;
 }
-.time-limit-table th { color: var(--el-text-color-secondary, #909399); font-weight: normal; }
+.time-limit-table th { color: var(--el-text-color-secondary, var(--cs-muted)); font-weight: normal; }
 .time-limit-actions { white-space: nowrap; }
 </style>

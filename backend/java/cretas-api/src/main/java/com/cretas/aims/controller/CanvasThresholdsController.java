@@ -6,6 +6,7 @@ import com.cretas.aims.entity.canvas.FactoryThreshold;
 import com.cretas.aims.entity.canvas.ThresholdCategory;
 import com.cretas.aims.entity.canvas.ThresholdValueType;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.service.canvas.ThresholdKeys;
 import com.cretas.aims.repository.canvas.FactoryThresholdRepository;
 import com.cretas.aims.service.canvas.ThresholdResolverService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -252,6 +253,8 @@ public class CanvasThresholdsController {
         ThresholdValueType type = parseValueType(valueType);
         validateValueAgainstType(thresholdValue, type, "thresholdValue");
         validateValueAgainstType(defaultValue, type, "defaultValue");
+        validateKeySemantics(thresholdKey, thresholdValue, "thresholdValue");
+        validateKeySemantics(thresholdKey, defaultValue, "defaultValue");
 
         FactoryThreshold t = FactoryThreshold.builder()
                 .factoryId(factoryId)
@@ -315,6 +318,7 @@ public class CanvasThresholdsController {
                         .withHintTarget("thresholdValue");
             }
             validateValueAgainstType(newValue, t.getValueType(), "thresholdValue");
+            validateKeySemantics(t.getThresholdKey(), newValue, "thresholdValue");
             t.setThresholdValue(newValue);
         }
         if (body.containsKey("defaultValue")) {
@@ -506,6 +510,17 @@ public class CanvasThresholdsController {
      * 值类型预校验: thresholdValue 必须可被 valueType 解析, 否则抛 400.
      * 防止存入"NaN" / "abc" 这类 service 层 parse 时崩溃的值。
      */
+    /** 岗位名单 / 信用模式这类带语义的 key: 打错岗位码或模式名当场拒绝, 不让它静默变成「只有厂长」。 */
+    private static void validateKeySemantics(String thresholdKey, String value, String fieldName) {
+        String error = ThresholdKeys.validateSemantics(thresholdKey, value);
+        if (error != null) {
+            throw new BusinessException(400, error)
+                    .withHint("请改正后再保存")
+                    .withSeverity("warning")
+                    .withHintTarget(fieldName);
+        }
+    }
+
     private static void validateValueAgainstType(String value, ThresholdValueType type, String fieldName) {
         if (value == null) return;
         try {

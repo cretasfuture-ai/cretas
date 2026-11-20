@@ -254,11 +254,17 @@ describe('L1 / L2 / L4: 版式', () => {
     const oldMessage = cssBlock(style, '.chat-message');
     expect(oldMessage).toContain('width: 40px;'); // .message-avatar
     expect(oldMessage).toContain('border-radius: 0 12px 12px 12px;'); // 旧助手气泡圆角
-    // 阴性对照: 没有改全局 --font-family
+    // 阴性对照: 对话区的字体栈只留在对话区, 没有被写进全局 --font-family。
+    // 全局字体自 P1（迁移方案, 2026-11-13）起由设计系统 token --cs-font-family 统一管
+    // (styles/tokens.css), 所以这里守「全局指向设计系统 token、不是对话区那套栈」这个性质,
+    // 不再钉旧字面量 Noto Sans SC。
     const globalCss = readFileSync(resolve(__dirname, '../../../style.css'), 'utf8');
     const fam = globalCss.match(/--font-family:\s*([^;]+);/);
     expect(fam).not.toBeNull();
-    expect(fam![1]).toMatch(/^\s*['"]?Noto Sans SC/);
+    expect(fam![1].trim()).toBe('var(--cs-font-family)');
+    const chatStack = std.match(/font-family:\s*([^;]+);/)?.[1];
+    expect(chatStack, '对话区自己的字体栈应仍在').toBeTruthy();
+    expect(fam![1]).not.toContain('Hiragino Sans GB');
   });
 
   it('S2/S3/S4: 工厂按钮、芯片是 default(32px) 档, 输入框 large', async () => {

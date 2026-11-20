@@ -265,13 +265,13 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
   it('groups workdesks by management and execution roles without duplicate quality titles', () => {
     expect(childGroupLabels('/workdesk')).toEqual(['经营管理', '一线执行']);
     expect(childTitles('/workdesk')).toEqual([
-      '销售老板工作台',
-      '财务主管工作台',
-      '质量主管工作台',
-      '生产经理工作台',
-      '仓管员工作台',
-      '采购员工作台',
-      '质检主管工作台',
+      '销售数字专员工作台',
+      '财务数字专员工作台',
+      '质量追溯数字专员工作台',
+      '生产数字专员工作台',
+      '库存数字专员工作台',
+      '采购数字专员工作台',
+      '质检数字专员工作台',
     ]);
   });
 
@@ -494,12 +494,11 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
     expect(childPaths('/quality')).toContain('/quality/label-qc');
     expect(childPaths('/quality')).toContain('/quality/disposition');
     expect(childTitles('/quality')).toContain('包装标签拍检');
-    expect(findDescendant('/quality', '/quality/disposition')?.roles).toEqual([
-      'quality_manager',
-      'factory_super_admin',
-      'platform_admin',
-      'permission_admin',
-    ]);
+    // B14: 不良品处置 / 批次召回按质检模块权限放行, 菜单项上不再有岗位白名单
+    expect(findDescendant('/quality', '/quality/disposition')?.roles).toBeUndefined();
+    expect(findDescendant('/quality', '/quality/disposition')?.module).toBe('quality');
+    expect(findDescendant('/quality', '/quality/recalls')?.roles).toBeUndefined();
+    expect(findDescendant('/quality', '/quality/recalls')?.module).toBe('quality');
     expect(childGroupLabels('/equipment')).toEqual(['设备台账', '维护监控']);
     expect(childGroupLabels('/scheduling')).toEqual(['日常调度', '基础资料', '工厂智能调度', '资源与预警', '调度配置']);
     expect(childGroupLabels('/system')).toEqual(['系统运维', '工厂配置', '平台治理', '平台建厂']);
@@ -513,7 +512,7 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
       '/scheduling/logistics/resources',
     ];
     expect(paths.map((path) => findDescendant('/scheduling', path)?.title)).toEqual([
-      '排线工作台', '调度记录', '门店与订单', '车辆与司机',
+      '排线数字专员工作台', '调度记录', '门店与订单', '车辆与司机',
     ]);
     for (const path of paths) {
       expect(findDescendant('/scheduling', path)?.hideForFactoryTypes).toEqual(['FACTORY']);

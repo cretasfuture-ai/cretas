@@ -79,7 +79,7 @@ class RecallLossEstimateToolTest {
         // 冻结库存批次 — totalCost = unitPrice * receiptQuantity = 100 * 50 = 5000
         MaterialBatch mb = new MaterialBatch();
         mb.setBatchNumber("B-1");
-        mb.setStatus(MaterialBatchStatus.FROZEN);
+        mb.setStatus(InventoryFreezeTool.HOLD_STATUS);   // 召回点名的批次被冻结工具扣住 (质检中)
         mb.setReceiptQuantity(new BigDecimal("50"));
         mb.setUnitPrice(new BigDecimal("100"));
         when(materialBatchRepository.findByFactoryIdAndBatchNumber(FACTORY_ID, "B-1"))

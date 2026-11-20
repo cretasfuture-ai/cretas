@@ -53,9 +53,9 @@ class ToolDescriptorInventoryDriftTest {
 
         // 2026-11-04: restaurant-only source classes were retired; 8 explicit
         // factory/common tools were added, and the existing supply-impact tool
-        // was restored to the source-derived inventory. 483 + 8 + 1 = 493.
-        assertThat(sourceTools).hasSize(493);
-        assertThat(inventory.expectedToolCount()).isEqualTo(493);
+        // was restored to the source-derived inventory. 483 + 8 + 1 = 493; 2026-11-15 +1 report_batch_yield_rank = 494; +3 (AI 问答 BI 第 2 段: report_bom_cost_rank / report_labor_cost_share / report_sales_margin_summary) = 497.
+        assertThat(sourceTools).hasSize(501); // 2026-11-18 v3 复核缺口: +3 EXPLICIT 新工具 (my_wage_query / employee_work_location_query READ·LOW; ssop_schedule_plan WRITE·MEDIUM·preview), customer_create 补 preview
+        assertThat(inventory.expectedToolCount()).isEqualTo(501);
         assertThat(inventoryByClass.keySet()).isEqualTo(sourceTools.keySet());
         assertThat(sourceTools.values())
                 .extracting(SourceTool::toolName)
@@ -164,7 +164,7 @@ class ToolDescriptorInventoryDriftTest {
                 .filter(tool -> !tool.literalToolName())
                 .toList();
 
-        assertThat(tools.stream().filter(SourceTool::literalToolName)).hasSize(491);
+        assertThat(tools.stream().filter(SourceTool::literalToolName)).hasSize(499);
         assertThat(constantNames).hasSize(2);
         assertThat(constantNames).anySatisfy(tool -> {
             assertThat(tool.implementationClass()).isEqualTo(
@@ -195,37 +195,38 @@ class ToolDescriptorInventoryDriftTest {
         // getActionType()=UPDATE (原先按工具名后缀推断成 READ, 确认卡影响说明措辞不对); 下面 actions 桶
         // READ 445 → 443 / UPDATE 26 → 28 是同一处改动。
         // 2026-10-29 S6-04: alert_rule_toggle declares UPDATE/MEDIUM/v2/roles and gets the first SCHEDULER write policy.
-        assertThat(countOverride(tools, flags -> flags.actionType())).isEqualTo(81);
-        assertThat(countOverride(tools, flags -> flags.riskLevel())).isEqualTo(52);
+        assertThat(countOverride(tools, flags -> flags.actionType())).isEqualTo(87); // +1 ssop_schedule_plan (2026-11-18)
+        assertThat(countOverride(tools, flags -> flags.riskLevel())).isEqualTo(58); // +1 ssop_schedule_plan
         // 2026-10-04: +2 work_process_task_start / work_process_task_complete 只读预览 (报工对话确认) → 44
         // 2026-10-06: 44 → 52 (+8): 一线默认开放的 8 个日常写工具补只读预览 (clock_in / clock_out / material_batch_create /
         // material_batch_use / reusable_container_ship_out / reusable_container_return_in / quality_check_create /
         // quality_defect_record)。此前它们 supportsPreview=false, 一线点了只会看到「预览模式暂不支持此意图类型」。
         // 2026-10-20: canonical purchase_order_create adds preview/permission/version (+1 each).
-        assertThat(countOverride(tools, flags -> flags.supportsPreview())).isEqualTo(65);
+        assertThat(countOverride(tools, flags -> flags.supportsPreview())).isEqualTo(72); // +2 ssop_schedule_plan / customer_create
         // 2026-10-06: 52 → 53 / 12 → 13 (+1): report_sku_gross_margin 声明 procurement:price:view (售价/收入/成本门)
         // 2026-10-20: supplier_price_comparison declares the existing supplier READ matrix and v2 (+1 each).
         // 2026-10-29 S6 gated-data rule: 107 tools declare the codes / role gate of the direct API serving their data; S5-12 adds purchase_statistics requiresPermission.
         // Re-review: lineage_query loses its role gate (-1 / -1); the 2 HACCP tools swap role gate for codes (-2 / -2 / +2).
         // 2026-11-03 strict sweep + organizer rulings: role gates and declared codes per GatedDataToolAiPathPermissionTest.
-        assertThat(countOverride(tools, flags -> flags.requiresPermission())).isEqualTo(91);
+        assertThat(countOverride(tools, flags -> flags.requiresPermission())).isEqualTo(92);
         assertThat(countOverride(tools, flags -> flags.hasPermission())).isEqualTo(71);
-        assertThat(countOverride(tools, flags -> flags.requiredPermissions())).isEqualTo(184);
+        assertThat(countOverride(tools, flags -> flags.requiredPermissions())).isEqualTo(191); // +3 三个新工具
         // 2026-11-05: canvas_product_process_workflow_config explicitly versions fixed-share preview (v1.1.0).
-        assertThat(countOverride(tools, flags -> flags.version())).isEqualTo(19);
-        assertThat(countOverride(tools, flags -> flags.domainTags())).isEqualTo(30);
+        assertThat(countOverride(tools, flags -> flags.version())).isEqualTo(24);
+        assertThat(countOverride(tools, flags -> flags.domainTags())).isEqualTo(35);
 
         assertThat(countActions(tools)).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolExecutor.ActionType.READ, 358L,
-                ToolExecutor.ActionType.WRITE, 62L,
+                // 2026-11-18 v3 复核缺口: +2 READ (my_wage_query / employee_work_location_query), +1 WRITE·MEDIUM (ssop_schedule_plan)
+                ToolExecutor.ActionType.READ, 365L,
+                ToolExecutor.ActionType.WRITE, 63L,
                 ToolExecutor.ActionType.UPDATE, 31L,
                 ToolExecutor.ActionType.DELETE, 11L,
                 ToolExecutor.ActionType.ANALYZE, 11L,
                 ToolExecutor.ActionType.GENERATE, 15L,
                 ToolExecutor.ActionType.NOTIFY, 5L));
         assertThat(countRisks(tools)).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolExecutor.RiskLevel.LOW, 417L,
-                ToolExecutor.RiskLevel.MEDIUM, 68L,
+                ToolExecutor.RiskLevel.LOW, 424L,
+                ToolExecutor.RiskLevel.MEDIUM, 69L,
                 ToolExecutor.RiskLevel.HIGH, 8L,
                 ToolExecutor.RiskLevel.CRITICAL, 0L));
     }

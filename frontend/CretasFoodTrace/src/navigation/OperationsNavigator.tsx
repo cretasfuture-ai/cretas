@@ -13,6 +13,8 @@ import PurchaseOrderDetailScreen from '../screens/factory-admin/inventory/Purcha
 import FinishedGoodsListScreen from '../screens/factory-admin/inventory/FinishedGoodsListScreen';
 import MobileAccountScreen from '../screens/common/MobileAccountScreen';
 import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
+import { useMyTodoEntry } from '../hooks/useMyTodos';
+import { todoTabScreen } from './todoTab';
 
 const Tab = createBottomTabNavigator();
 const BusinessStack = createNativeStackNavigator();
@@ -32,6 +34,7 @@ function OperationsBusinessStack() {
 }
 
 export default function OperationsNavigator() {
+  const todoEntry = useMyTodoEntry();
   const insets = useSafeAreaInsets();
 
   return (
@@ -70,6 +73,7 @@ export default function OperationsNavigator() {
           ),
         }}
       />
+      {todoTabScreen(Tab, todoEntry, 'operations-tab-oa-todo')}
       <Tab.Screen
         name="OperationsProfileTab"
         component={MobileAccountScreen}

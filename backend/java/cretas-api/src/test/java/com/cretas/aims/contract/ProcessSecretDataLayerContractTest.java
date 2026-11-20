@@ -80,6 +80,7 @@ class ProcessSecretDataLayerContractTest {
             "percent", // 影响分析: 用户输入的原料涨价假设百分比, 不是配方份额
             "metricPct", "thresholdPct", // 成本损耗异常: 差异率读数与告警阈值, 不是配方份额
             "deviationRate", // 工艺参数偏离汇总: 偏离次数 / 填了该参数的次数, 是质量读数不是配方份额
+            "materialBalanceWarnPct", "materialBalanceRedPct", // 建厂对话: 物料平衡告警线(厂级阈值), 不是配方份额
             "maxReworkRatioPercent", "limitPercent", "actualPercent", // 缺口03: 回料占比上限/实际占比 (阈值与实测, 不是配方份额)
             "acceptanceRate", "accuracyRate", "achievementRate", "achievementRatePct", "activationRate",
             "actualAuxCostPerUnit", "actualCostPerUnit", "actualDurationHours", "actualEquipmentCostRatio",
@@ -234,9 +235,14 @@ class ProcessSecretDataLayerContractTest {
             // 质量处置 V1 的固定合格率/缺陷率判定阈值与空值动作，不是物料配比或标准出成。
             "releasePassRateMin", "conditionalPassRateMin", "reworkPassRateMin",
             "scrapDefectRateMin", "nullPassRateAction",
+            // ProcessYieldViews: 布尔标志「出成率是否已按产品筛选」, 不含任何比率值
+            "productFilteredYield",
+            // ProductSalesRankingTool: 两月销售额增量百分比, 销售指标不是配方
+            "totalGrowthPct",
             // 质量 / 运营 / 系统监控 / 意图识别 / 人事薪资 / 财务指标 / 设备 / 计划进度
             "percent", // 影响分析 Tool 参数: 涨价假设百分比, 不是配方份额
-            "availabilityRate", "averagePassRate", "averageUsageHours", "avgMatchRate", "avgStrongSignalRate",
+            "availabilityRate", "averagePassRate", "inspectionPassRatePct", // 质检合格率 (检验结果合格次数÷检验次数), 与配方无关
+             "averageUsageHours", "avgMatchRate", "avgStrongSignalRate",
             "baudRate", "bracketRate", "brandLossRate", "budgetVarianceRate", "completionPct", "complianceRate",
             "complianceRatePct", "configuredMaxRatio", "constantBitRate", "costChangeRate", "coverageRate",
             "currentRatio", "debtRatio", "decisionPassRate", "directExecuteRate", "epsilonPct", "equipmentRatio",
@@ -252,8 +258,20 @@ class ProcessSecretDataLayerContractTest {
             "totalPieceRate", "totalPieceRateWage", "totalUsageHours", "usage", "usageAvailable", "usageCount",
             "usageHistory", "usageId", "usageUnit", "usedPct", "variancePercent", "weeklyUtilizationRate",
             "yoyGrowthRate",
+            // 纪律排查 B11: 改价审批阈值 (降价 / 涨价超过多少百分比要审批), 销售价格规则, 不是配方配比
+            "priceDecreaseApprovalPct", "priceIncreaseApprovalPct",
             // 成本构成占比 (金额口径, 价格另受价格权限), 不是用量配比
             "materialRatio", "otherCostRatio", "overheadRatio", "equipmentCostRatio", "rawMaterialPercentage",
+            // report_cost_query (只读成本查询): sharePct = 某成本分项(原料/人工/设备/其他)占期间总成本的金额占比,
+            // changePct = 与上一等长周期相比的成本涨跌百分比; 都是金额口径 (无成本查看权限时整份金额与图不出,
+            // 保密产品批次对无权调用者整批剔除), 不是用量配比。
+            "sharePct", "changePct",
+            // report_labor_cost_share (只读): laborSharePct = 人工成本金额占总成本金额的百分比 (金额口径, 不是用量配比);
+            // 无成本查看权限整份不出, 保密产品批次对无权调用者整批剔除 (见 ReportLaborCostShareToolContractTest)。
+            "laborSharePct",
+            // price_history_query 涨价排名 (PriceHistoryQueryTool): risePct = 某原料近期均价相对基期均价的涨跌百分比,
+            // 采购价格口径 (金额), 不是用量配比 / 出成
+            "risePct",
             // 「yield」= 首检良品率 (质量), 不是出成; 其余是单位换算 / 排程 / 意图里的同名词
             "yield", "conversion", "conversionCandidates", "conversionDate", "conversionEvidence",
             // blendRatio 是整个配比核对快照对象, 里面的配方份额字段已在词表里
@@ -266,7 +284,9 @@ class ProcessSecretDataLayerContractTest {
             // APS 按天排: 某天这个计划占当天产线产能的比例, 是排程量, 不是配方
             "shareOfDay",
             // 物料平衡阈值 (缺口 #07), 厂级配置数, 不是配方
-            "warnPct", "redPct");
+            "warnPct", "redPct",
+            // 车间大屏: 计划的时间进度 (已过天数 ÷ 计划天数), 是排程进度, 不是配方
+            "timeProgressPct");
 
     @Test
     void everyRatioLikeMapKeyIsClassified() throws IOException {

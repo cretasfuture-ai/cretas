@@ -16,7 +16,7 @@ import AnalyticsReportStackNavigator from './AnalyticsReportStackNavigator';
 import ProfileStackNavigator from "./ProfileStackNavigator";
 import { useAuthStore } from "../store/authStore";
 import { getUserRole } from "../types/auth";
-import { useMyTodoCount } from "../hooks/useMyTodos";
+import { useMyTodoEntry } from "../hooks/useMyTodos";
 import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
 import { getMobileFinancialScope } from '../utils/mobileFinancialAccess';
 
@@ -61,7 +61,8 @@ export default function FinanceNavigator() {
   const financeScope = getMobileFinancialScope(user, 'finance');
   const priceScope = getMobileFinancialScope(user, 'price');
   const role = getUserRole(user);
-  const { count: todoCount } = useMyTodoCount(undefined, 30000);
+  // B4 第二步: 待办入口只认后端 /my-todos/types (同各岗位底栏); 路由名仍是 FinanceTodoTab (首页「待办审批」卡指向它)
+  const todoEntry = useMyTodoEntry();
   const isCashier = role === "cashier";
   const smartBiEnabled = useFactoryFeatureStore((state) => state.isScreenEnabled('SmartBI'));
   const operatingReportsEnabled = smartBiEnabled && canAccessOperatingReports(user);
@@ -90,16 +91,18 @@ export default function FinanceNavigator() {
           options={{ title: '账务', tabBarButtonTestID: 'finance-tab-workspace',
             tabBarIcon: ({ color, size }) => <Icon source="book-open-outline" color={color} size={size} /> }} />
       )}
-      <Tab.Screen
-        name="FinanceTodoTab"
-        component={OATodoStackNavigator}
-        options={{
-          title: "待办",
-          tabBarButtonTestID: "finance-tab-oa-todo",
-          tabBarIcon: ({ color, size }) => <Icon source="clipboard-check-outline" size={size} color={color} />,
-          tabBarBadge: todoCount > 0 ? todoCount : undefined,
-        }}
-      />
+      {todoEntry.visible && (
+        <Tab.Screen
+          name="FinanceTodoTab"
+          component={OATodoStackNavigator}
+          options={{
+            title: "待办",
+            tabBarButtonTestID: "finance-tab-oa-todo",
+            tabBarIcon: ({ color, size }) => <Icon source="clipboard-check-outline" size={size} color={color} />,
+            tabBarBadge: todoEntry.count > 0 ? todoEntry.count : undefined,
+          }}
+        />
+      )}
       {isCashier && (
         <Tab.Screen
           name="CashierPaymentTab"

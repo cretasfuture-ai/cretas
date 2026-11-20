@@ -208,4 +208,67 @@ A: 减小 `--batch-size` (如 4) 或增加 `--freeze-layers`
 
 额度中断后先停止原进程，再用 `factory_generalization_recovery.py freeze --evidence <原目录>` 保存原始ledger、锁定本地预测并隔离无完整HTTP回执的请求。它们永不重发、按预留上界计额度，最终保守计错（即使真值是澄清也不算答对），所有题保留在分母。额度允许后才执行 `recover`：仅发送原先未发送的请求，完成请求按原payload哈希缓存复用，保持同一权重、策略、候选、提示词与确认集。恢复入口不提高每日额度、不授予额外付费许可。完整确认后才允许 `regression` 打开旧保护集；诊断结果不得反向拟合。第二轮状态见 `docs/dispatch/archive/2026-11-05-intent266-generalization.md`。
 
-第二轮最终796条本地87.94%／混合97.11%，预设泛化检查通过；旧1637条本地81.80%→86.07%。仍有明确缺口：旧35条本地16/35、混合27/35，澄清26/40；不能用总体达标代替这些质量指标或生产验收。全部评测数据保持保护，不替换线上模型。用户本轮额外付费$1授权仅覆盖已锁定的恢复/旧35诊断，新增请求未缓存价格保守折算约$0.277，默认每日源码上限不变。
+第二轮最终796条本地87.94%／混合97.11%，预设泛化检查通过；旧1637条本地81.80%→86.07%。仍有明确缺口：旧35条本地16/35、混合27/35，澄清26/40；不能用总体达标代替这些质量指标或生产验收。全部评测数据保持保护，不替换线上模型。此前$1追加授权先用于已锁定的恢复/旧35诊断，新增请求未缓存价格保守折算约$0.277；后续用户允许的教师指导仍受同一总额约束，默认每日源码上限不变。
+
+配额核算按UTC日期和官方共享模型组进行（北京时间08:00重置）；组内多个模型合计，两个组独立。分组快照在 `factory_quota_accounting.py`，不代表模型当前可调用或项目已加入免费计划。旧回执缺日期时，需要与原文件SHA绑定的 `.utc-days.json` 证据，不能按目录名猜日期；未知分组/日期明确停止。跨UTC日需等待在途请求完成后重建client，已完成请求按原payload缓存复用。停止时排空在途请求，避免仅因提前关闭HTTP连接造成未知状态。
+
+GPT6.1 Terra→GPT6 Luna的源码规则教师影子试验：12条独立探针前后均12/12，未证明净增益，未接入当前模型/路由；12条全部入保护名单。GPT6 Luna按当前帮助表保守纳入100万组；Terra免费归属未列明，单列付费预留。具体额度、缓存写入计价更正和main冻结事项见 `docs/dispatch/archive/2026-11-05-intent-quota-teacher.md`。
+
+
+## 带上下文的蒸馏数据管线（INTENT-DISTILL-20261111，P3）
+
+学生要学的是「状态 + 当前句 → 对话动作 + 意图」，不是「单句 → 标签」。管线只生成与标注数据，不训练、不换线上模型、不碰 `backend/` 与 prod 数据。代码：`distill_common.py`（样本 schema 校验、Tool 读写表、带美元上限的可续跑 API 客户端）、`distill_leak_check.py`（防泄漏）、`distill_pipeline.py`（generate / label / assemble / split / report / validate）、`test_distill_pipeline.py`（离线测试，`python -m pytest scripts/finetune/test_distill_pipeline.py`）。
+
+样本字段：`utterance` 当前句；`state` 上轮任务状态（`prev_intent`、`confirmed_params[{name,value,source}]`，source 为 explicit_turn / confirmed / default，`pending_fields`、`last_action`；全新会话为 null）；`candidates` 候选意图 ID；`dialogue_act` 取 NEW_TASK / CHANGE_PARAM / PAGE / CANCEL / NEED_CLARIFY；`intent`（CANCEL 与 NEED_CLARIFY 必须为空，CHANGE_PARAM 与 PAGE 必须等于 `state.prev_intent`）；`teacher_probs` Luna Choice 对候选（加 `__NONE__`）的归一化概率；`teachers` 两位老师各自的结论；`agreement`；`family`（意图编码的业务域前缀，切分按它，同族不跨集合）；`read_only`；`generator_plan`（生成时的计划，仅作诊断，不是标签）。`validate_sample` 对 raw / labeled / review 三个阶段分别校验。
+
+`read_only` 取自 Tool 源码里声明的 `getAccessMode()`（CI 强制全量覆盖的二值声明，未声明按 WRITE）；SKILL 意图要求绑定的全部 Tool 都是 READ 才算只读。源码由 `tool_access_modes.py` 读取（去注释、沿父类查找、常量工具名；方法体不是单一 `return AccessMode.X;` 记 DYNAMIC，整条继承链都没声明记 UNDECLARED，二者都不当 READ）；任何训练标签意图解析不出读写，`build_intent_table` 直接报错拒绝建表，不猜（F-pre 之前 `GATE_DIAGNOSE_BATCH`、`PAGINATION_PREVIOUS` 因注释和继承被误读为未解析，Java 里二者都声明 READ）。闸：Java `ToolAccessModeDeclarationTest`（PR fast-contracts 选中）+ `scripts/tests/test-tool-access-mode-scanner.sh`。没有意图的样本按 `state.prev_intent` 对应任务取值，二者都没有则为 null，报告里记为 `no_target`（不适用），与 `unresolved` 分开。
+
+澄清判定标准：`clarify_rubric.json` 由 `build_clarify_rubric.py` 从源码生成（`--check` 检查是否过期）：8 条判定规则（引用 `backend/python/ai/matcher/decision.py` 与本管线动作定义的行号）；每个只读意图的 `must_ask`（必填且无默认值）/ `defaults` / `optional` 取自绑定 Tool 的 `getParametersSchema()`、`getRequiredParameters()` 并带 文件:行号；18 组易混口径，只能引用真实标签意图。`label --rubric clarify_rubric.json` 把同一份标准给 Luna 和 Terra，二者仍各自独立、互不看对方结论和生成计划。`--rubric-mode brief` 是压缩措辞，实测在难例上一致率更低（见下），扩充用 full。
+
+生成：`gpt-5.4`（强模型，独立于两位老师）按语义族逐组写 6 条一组的多轮样本（续句改参数、翻页或取消、切换目标、含糊需澄清、一对「查/改只差一两个字」的全新会话对照），生成时只看到本族意图，不看任何受保护集合；偏离计划的条目直接丢弃。标注：Luna Choice（Decisions API，两道题：对话动作、意图，带概率）与 Terra（Responses，结构化输出）各自独立调用，互相看不到对方，也看不到生成计划。两者的对话动作和意图都一致、且都满足标签规则 ⇒ 银标训练集；不一致、或任一方违反标签规则 ⇒ `review-queue.jsonl`，只给人工审核，不进训练集，label 字段置空。老师一致不是人工真值，验收集另建。第一批 100 条标注后一致率低于 70% 会自动停止（退出码 3），不靠放宽判定凑数。
+
+防泄漏：`python distill_leak_check.py --in raw.jsonl --out clean.jsonl --dropped dropped.jsonl --report r.json` 对 35 / 796 / 1637 评测集、冻结的 holdout 登记、教师探针和已打开的多轮开发对话（`Cretas意图架构只读审计-20261105` 下全部文件）做精确匹配加近邻匹配（字符比率 ≥ .85，沿用 `OverlapIndex`；再加字符二元组 Jaccard ≥ .6 兜底），命中即剔除并计数；任一受保护来源缺失直接报错而不是静默缩小范围。`--self-test` 与报告里的 `self_test` 主动构造精确命中与近邻命中并断言被拦。注意：这是字面相似度，不是向量语义近邻；真正的语义近邻需要另行用嵌入复核。
+
+预算：`DollarClient` 每次调用前按保守上界预留，超过 `--cap`（本线 10 美元）立即停；账本 `api-ledger.json` 与回执 `api-results.jsonl`（不含密钥）在 `--work` 目录，已有回执同 payload 命中缓存、失败回执和未决预留永不自动重发。价格是上界（Terra 按缓存写入价、生成模型按最高输出价、Luna Decisions 只计输入），不是发票。
+
+第一批试点（500 条，数据在仓外 `C:\Users\Steve\Documents\Cretas意图蒸馏-20261111\`，Git 不收）：
+
+| 文件 | SHA256 |
+|---|---|
+| silver.jsonl（380 条银标） | 35bb760f25def54a028ac6f1eb0fec661ab031e6f79216317a3bc9743bbbc69e |
+| silver-train.jsonl | d7c7b89e946a19c0e169f5c589e359599bf2fa930784c4301b6d886b2bb3ff4c |
+| silver-validation.jsonl | b9fd5b313245fdc73c554f1eb83a6c651b452aaef1461d7fecb904e3dc8554cf |
+| silver-calibration.jsonl | b10883eea52fd86675bbc444c27a1021d5ea9d855f0ce17168cd3132d90a04fc |
+| review-queue.jsonl（120 条人工审核） | 989dad436bf79a2b61fcc8a87c90a4145ef70bc26075c1446b5388395f1fb818 |
+| labeled-raw.jsonl（两位老师原始结论） | 7e1e30ed98733c41bfeb52ba8a840cb4b6b2aef94c74f4039c5463b5c01ba3e9 |
+| raw.jsonl / clean.jsonl | 4e903c2796e80a28b75ee9cc6a89f2f0edb57bb5851641d0fc1f5e90d3cc3f69 / 2ac0acdd11a6ce4b157f8553ea228610dbd7acb8ca65df338fa8b8c208a1ebc7 |
+| pilot-report.json | e51d919f686acd39902daa6cc2fbb4bd4587e3bfbf5164f931575388f23e135b |
+
+独立验收集：`distill_leak_check.py` 另用 `--sealed-fingerprints`（默认 `Cretas意图独立验收-20261111/sealed/fingerprints.jsonl`，只读其中的 `hash` 字段，算法 sha256(NFKC→lower→去掉空白与非字母数字字符 的 UTF-8)，不打开 sealed 下任何其他文件）；文件不存在时照常检查并打印「独立验收集指纹未提供」，不静默跳过。试点补跑命中 26 条并已剔除。
+
+读数见 `pilot-report.json`。要点：老师一致率 76.0%；NEED_CLARIFY 只有 47.2% 一致（Luna 倾向直接选一个意图、Terra 倾向要求澄清），所以银标集里「该澄清」的样本偏少，这是学生训练时必须单独补审的部分，不能把银标集当作澄清判定的代表。
+
+### v2（F-前置：读写来源 + 澄清标准 + 扩充 + 第三位老师；数据在仓外 `Cretas意图蒸馏-202611112\`，路径与 SHA256 见该目录 README.md）
+
+- 澄清标准后，试点那 89 条计划为澄清的样本一致率 47.2% → 83.2%（样本内，标准按这批调过）；不含调标准那 131 条的 452 条计划为澄清的样本 83.6%（样本外）。`agreed()` 未改。
+- 已标注 2991 条：银标 2489（train 1760 / validation 364 / calibration 365，按语义族切，37 族），审核队列 502；总一致率 83.2%，只读 84.0% / 写 81.4% / 无目标意图 86.6%。防泄漏共剔除 126 条（封存验收集指纹 65）。
+- 第三位老师 `distill_claude_teacher.py`（claude-fable-5-2，输入与 Terra 相同、互不看结论）：审核队列 502 条中 462 条二比一 → `silver-adjudicated.jsonl`（与一致银标分开存、用 `adjudicated` 阶段单独校验），40 条仍待人工；对一致银标抽 127 条对照，Claude 相同 97.6%（NEED_CLARIFY 27/30）。
+- 花费上界：OpenAI 25.02 美元（本线上限 40），Claude 26.86 美元（本线上限 80）。
+
+## 带上下文的本地决策学生 student-v1（INTENT-DISTILL-20261111 任务 F）
+
+只训练与离线评测，不接线、不换线上模型。权重与回执在仓外 `Documents/Cretas意图蒸馏-20261111/models/student-v1/{known,unseen}/`，报告 `student-v1-report.md`。
+
+- `ctx_student.py`（不依赖 torch）：冻结输入 SHA256 校验；两种切分（`known` 每个目标内按说法聚类切开、每个评测意图训练里都有；`unseen` 沿用 F-前置按族切分）；固定格式的状态与候选序列化；直出规则 `decide`（动作是新任务/改参数/翻页且过门槛、目标是候选里的只读意图且过门槛、写候选概率和不超上限，否则升级）；门槛选择 `select_policy`（校准集上，准确率 ≥ 98% 且写任务直出 0 次时覆盖率最大；`hard='nonread_gold_direct'` 为严格口径）；温度、Wilson 区间、几何平均集成。
+- `ctx_student_train.py`：`fit / compare / calibrate / evaluate / old / latency`，`--mode known|unseen`，`--extra <补数据 silver>`。验证集只由 `evaluate` 读一次，权重、门槛或判定代码变了就拒绝重跑。
+- `ctx_student_report.py`：从 `evaluation.json` 生成表格。
+- `distill_pipeline.py generate --targets <意图清单> --per-target N`：定向补数据（每个意图 3 句全新会话 + 切换 + 改参数 + 翻页/取消）。
+- 离线测试：`python -m pytest scripts/finetune/test_ctx_student.py scripts/finetune/test_distill_pipeline.py`（不需要 GPU、权重和网络）。
+
+## 学生 v2 数据与分类门槛（INTENT-DISTILL-20261111）
+
+- `distill_v4.py`：定向生成（Claude Sonnet；覆盖翻页、换说法续句、写转只读、澄清/新任务对照）。硬标签由两位老师标（`claude-opus-5-5`@low 为主，`gpt-6-sol`@medium 为辅），`gpt-6-luna` 出软标签；`--teachers main|second` 可以分批补标，按 id 合并。`dataset` 把 v1、v3 两套标签放进同一个数据池，两位老师意见不一的样本只用软标签（`hard_weight=0`），并写上 `split_known` 和 `split_family` 两种切分。
+- `build_clarify_rubric.py --version 3` 生成 `clarify_rubric_v3.json`，依据是 Steve 8 问的口径规则；v1 的 `clarify_rubric.json` 不变。
+- `sensitive_intents.py`：直出风险分三类（普通只读错误率 ≤ 2%；敏感只读的 95% 上界 ≤ 0.5%，否则不直出；写入一律不直出）；`check_complete` 防止新增的只读意图漏分类。
+- `ctx_student_train.py --mode pool --pool pool-v4.jsonl --label-version 1|3`；评测时额外报分类门槛（`direct_classed`）和 `Recall@k`。
+- 离线测试：`python -m pytest scripts/finetune/test_ctx_student.py scripts/finetune/test_distill_v4.py`。

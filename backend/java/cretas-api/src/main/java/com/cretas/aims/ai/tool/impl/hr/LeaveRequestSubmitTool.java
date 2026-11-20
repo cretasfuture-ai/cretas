@@ -110,6 +110,12 @@ public class LeaveRequestSubmitTool extends AbstractBusinessTool {
         return true;
     }
 
+    /** 只新建记录、不改已有业务行 (确认前状态核对按新建型处理, 见 ToolExecutor#previewCreatesNewRecordOnly)。 */
+    @Override
+    public boolean previewCreatesNewRecordOnly() {
+        return true;
+    }
+
     /**
      * Override naming convention default (returns READ for non-_create/_update/_delete suffix).
      * This Tool genuinely creates + submits a LeaveRequest → WRITE semantics.

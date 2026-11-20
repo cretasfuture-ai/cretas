@@ -198,6 +198,41 @@ class SaltedWarehouseServiceImplTest {
         verify(batchRepo, never()).save(any());
     }
 
+    // ── T4b: 冻结扣住 / 判不合格 / 过期的批次有余量也不能扣 (#1590 遗留: 出库不拦已挡投产的批次) ──
+
+    @Test
+    @DisplayName("T4b: 质检中(含冻结) / 不良品 / 过期 → 409 中文原因, 不扣量; 阳性对照: 冻品照扣")
+    void createDeduction_blockedBatch_refusedWithChineseReason() {
+        when(deductionRepo.existsByFactoryIdAndOrderNumberAndDeletedAtIsNull(FACTORY_ID, ORDER_NO))
+                .thenReturn(false);
+        when(warehouseRepo.findByIdAndFactoryIdAndDeletedAtIsNull(WH_SALTED_ID, FACTORY_ID))
+                .thenReturn(Optional.of(saltedWarehouse));
+        when(batchRepo.findByIdAndFactoryId(BATCH_ID, FACTORY_ID))
+                .thenReturn(Optional.of(availableBatch));
+        availableBatch.setReceiptQuantity(new BigDecimal("30.000"));
+        availableBatch.setUsedQuantity(BigDecimal.ZERO);
+
+        for (MaterialBatchStatus st : new MaterialBatchStatus[]{MaterialBatchStatus.INSPECTING,
+                MaterialBatchStatus.DEFECTIVE, MaterialBatchStatus.EXPIRED}) {
+            availableBatch.setStatus(st);
+            assertThatThrownBy(() -> service.createDeduction(FACTORY_ID, buildRequest("5", null), OPERATOR_ID))
+                    .as(st.name())
+                    .isInstanceOfSatisfying(BusinessException.class, ex -> {
+                        assertThat(ex.getCode()).isEqualTo(409);
+                        assertThat(ex.getMessage()).contains(st.getDisplayName()).contains("不可用于生产");
+                    });
+            assertThat(availableBatch.getUsedQuantity()).as(st.name()).isEqualByComparingTo("0");
+        }
+        verify(batchRepo, never()).save(any());
+
+        // 阳性对照: 冻品 (FROZEN) 是正常库存, 照扣
+        when(batchRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(deductionRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        availableBatch.setStatus(MaterialBatchStatus.FROZEN);
+        service.createDeduction(FACTORY_ID, buildRequest("5", null), OPERATOR_ID);
+        assertThat(availableBatch.getUsedQuantity()).isEqualByComparingTo("5");
+    }
+
     // ── T5: 重复 orderNumber ──────────────────────────────────────────────────
 
     @Test

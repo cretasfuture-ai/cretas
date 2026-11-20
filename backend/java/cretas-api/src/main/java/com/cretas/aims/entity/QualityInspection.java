@@ -38,6 +38,19 @@ public class QualityInspection extends BaseEntity {
     @Id
     @Column(name = "id", nullable = false, length = 191)
     private String id;
+
+    /**
+     * 质检业务编号 QI-YYYYMMDD-NNNN (同厂同日递增, 含软删行不复用), 给用户看、可搜索。
+     *
+     * <p>由数据库 BEFORE INSERT 触发器 {@code trg_quality_inspection_number} 发号
+     * (V20261119_86: 同厂同日 advisory 锁串行 + 唯一索引兜底), 所以这里 insertable/updatable=false,
+     * Hibernate 插入后回读。应用代码不写也改不了它; 存量行由同一迁移按 created_at 回填。
+     * 为 null = 没编上号 (H2 单测无触发器 / 两个日期都缺的历史行), 界面显示「未编号」, ⛔ 不拿 id 顶替。</p>
+     */
+    @org.hibernate.annotations.Generated(event = org.hibernate.generator.EventType.INSERT)
+    @Column(name = "inspection_number", length = 40, insertable = false, updatable = false)
+    private String inspectionNumber;
+
     @Column(name = "factory_id", nullable = false)
     private String factoryId;
     @Column(name = "production_batch_id", nullable = false)

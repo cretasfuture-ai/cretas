@@ -25,6 +25,22 @@ import java.util.Objects;
 public final class ReturnRefundEvidence {
     private static final String SOURCE = "RETURN_REFUND";
 
+    /**
+     * 退款申请人自己审批的留痕 (纪律排查 B15, V20261110_47): 当时工厂开了「允许本人审批」并写了原因。
+     * 证据只认<b>持久化的标记 + 原因</b>, 不看现在的开关 —— 开关后来关掉, 历史单据照样成立;
+     * 没有标记的「申请人 = 审批人」仍然是缺证据。
+     */
+    public static boolean hasSelfApprovalTrace(PaymentRequest request) {
+        return request != null && request.isSelfApproved()
+                && request.getSelfApprovalReason() != null && !request.getSelfApprovalReason().isBlank();
+    }
+
+    /** 退款申请人自己登记付款的留痕, 口径同 {@link #hasSelfApprovalTrace}。 */
+    public static boolean hasSelfPaidTrace(PaymentRequest request) {
+        return request != null && request.isSelfPaid()
+                && request.getSelfPaidReason() != null && !request.getSelfPaidReason().isBlank();
+    }
+
     private ReturnRefundEvidence() {
     }
 
@@ -62,8 +78,8 @@ public final class ReturnRefundEvidence {
                 && request.getCreatedBy() != null && request.getApprovedBy() != null
                 && request.getApprovedAt() != null && request.getPaidBy() != null
                 && request.getPaidAt() != null
-                && !Objects.equals(request.getCreatedBy(), request.getApprovedBy())
-                && !Objects.equals(request.getCreatedBy(), request.getPaidBy())
+                && (!Objects.equals(request.getCreatedBy(), request.getApprovedBy()) || hasSelfApprovalTrace(request))
+                && (!Objects.equals(request.getCreatedBy(), request.getPaidBy()) || hasSelfPaidTrace(request))
                 && request.getPaymentMethod() != null && !request.getPaymentMethod().isBlank()
                 && request.getPaymentReference() != null && !request.getPaymentReference().isBlank()
                 && tx.getFactoryId() != null && tx.getSourceId() != null

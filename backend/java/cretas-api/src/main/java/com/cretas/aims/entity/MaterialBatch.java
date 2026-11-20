@@ -140,12 +140,36 @@ public class MaterialBatch extends BaseEntity {
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false)
     private MaterialBatchStatus status = MaterialBatchStatus.AVAILABLE;
+
+    /**
+     * 扣留 (冻结 / CCP 偏离扣留 / 冷链转待检 / 仓库页改成质检中) 之前的状态; 解除扣留 (放行) 时据此还原
+     * (#1590 遗留 M5)。只经 {@link com.cretas.aims.service.quality.release.MaterialBatchHoldService} 写。
+     *
+     * <p>不变式: 只有状态是质检中 (INSPECTING) 时才可能非空 —— {@link #setStatus} 改成任何别的状态都会清掉它,
+     * 所以判不合格 / 报废 / 放行之后不会留下一个过期的「原状态」。为空的质检中 = 收货 / 产出后的首检 (不是扣留)。
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "hold_prior_status", length = 32)
+    private MaterialBatchStatus holdPriorStatus;
+
+    /** 见 {@link #holdPriorStatus} 的不变式: 离开质检中就清掉扣留前状态。 */
+    public void setStatus(MaterialBatchStatus status) {
+        this.status = status;
+        if (status != MaterialBatchStatus.INSPECTING) {
+            this.holdPriorStatus = null;
+        }
+    }
+
     @Column(name = "storage_location", length = 100)
     private String storageLocation;
     @Column(name = "quality_certificate", length = 100)
     private String qualityCertificate;
     @Column(name = "notes", columnDefinition = "TEXT")
     private String notes;
+
+    /** 迁移 P5 (R35): 建批次时到期日已早于今天、仍确认要建的原因; null = 建时没过期。 */
+    @Column(name = "expired_on_create_reason", length = 200)
+    private String expiredOnCreateReason;
 
     /**
      * SP4-A4: 生产厂家编号 (factory_number) — 用于一物一码标签.

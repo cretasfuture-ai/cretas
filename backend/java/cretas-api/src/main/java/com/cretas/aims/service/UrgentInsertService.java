@@ -39,8 +39,11 @@ public interface UrgentInsertService {
     /**
      * Create an immutable server-owned preview snapshot for confirmation.
      * Unlike the GET impact analysis this is an explicit write operation.
+     *
+     * @param operatorId 操作人 (本厂用户 id): 排程预览要用它建一条会被回滚的临时计划 (created_by 非空且外键到 users)
      */
-    Map<String, Object> createInsertPreview(String factoryId, String slotId, GetInsertSlotsRequest request);
+    Map<String, Object> createInsertPreview(String factoryId, Long operatorId, String slotId,
+                                            GetInsertSlotsRequest request);
 
     /**
      * 确认紧急插单（创建生产计划）
@@ -125,6 +128,18 @@ public interface UrgentInsertService {
      */
     ProductionPlanDTO approveForceInsert(
             String factoryId, String planId, Long approverId, boolean approved, String comment);
+
+    /**
+     * 1551-11: OA 审批中心对强制插单画布实例的批准 / 驳回。画布走完「通过」才插入并顺延排程,
+     * 走到「驳回」作废计划并释放时段; 中间节点只推进流程。
+     */
+    ProductionPlanDTO applyWorkflowAction(
+            String factoryId, String planId, String workflowInstanceId, Long actorId, String actorRole,
+            String expectedNodeId, com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction action, String notes);
+
+    /** 1551-11: 强制插单实例「按当前审批流重新发起」, 新实例创建即终态时投影回计划 (通过排入 / 其余回滚)。 */
+    com.cretas.aims.entity.workflow.ApprovalWorkflowInstance restartWorkflowBinding(
+            String factoryId, String workflowInstanceId, Long operatorId, String reason);
 
     /**
      * 获取待审批的强制插单列表

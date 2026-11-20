@@ -498,7 +498,8 @@ public class VoucherServiceImpl implements VoucherService {
                 || reversal.getApprovalStatus() != ArApApprovalStatus.APPROVED
                 || !Objects.equals(actorId, reversal.getApprovedBy())
                 || reversal.getOperatedBy() == null
-                || Objects.equals(actorId, reversal.getOperatedBy())) {
+                || (Objects.equals(actorId, reversal.getOperatedBy())
+                    && !ReturnRefundReversalEvidence.hasSelfApprovalTrace(reversal))) {
             throw reversalEvidenceInvalid("退款撤销反向流水未通过审批、金额或四眼校验");
         }
         ReturnRefundReversalEvidence.requireApprovedReversal(order, request, reversal);

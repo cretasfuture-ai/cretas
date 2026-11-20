@@ -7,7 +7,17 @@ set -euo pipefail
 # The package auto-starts a 5432 cluster; this helper uses its own cluster on a free port.
 if [ "${RUNNER_ENVIRONMENT:-}" = github-hosted ] && [ ! -x /usr/lib/postgresql/17/bin/initdb ]; then
     sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y >/dev/null
-    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q postgresql-17 postgresql-17-pgvector >/dev/null
+    if ! sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q postgresql-17 postgresql-17-pgvector >/dev/null; then
+        # 2026-11-12 实测: PGDG 先发了要求 postgresql-17 (> 17.12) 的 pgvector, 服务端包还没跟上,
+        # apt 依赖无解 (exit 100), 全部 PG 闸在装库这步就红。服务端照装, pgvector 改从官方源码按已装版本编译。
+        echo "::warning::PGDG 的 postgresql-17-pgvector 与 postgresql-17 暂时不匹配, 改为源码编译 pgvector"
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q postgresql-17 postgresql-server-dev-17 build-essential >/dev/null
+        pgv_src=$(mktemp -d "${RUNNER_TEMP:-/tmp}/pgvector.XXXXXX")
+        git clone -q --depth 1 --branch v0.8.0 https://github.com/pgvector/pgvector.git "$pgv_src"
+        make -s -C "$pgv_src" PG_CONFIG=/usr/lib/postgresql/17/bin/pg_config >/dev/null
+        sudo make -s -C "$pgv_src" PG_CONFIG=/usr/lib/postgresql/17/bin/pg_config install >/dev/null
+        rm -rf -- "$pgv_src"
+    fi
 fi
 for candidate in "${CRETAS_CI_PG_BIN:-}" /usr/lib/postgresql/17/bin /opt/homebrew/opt/postgresql@17/bin; do
     if [ -n "$candidate" ] && [ -x "$candidate/initdb" ]; then export PATH="$candidate:$PATH"; break; fi
@@ -39,7 +49,12 @@ initdb -D "$cluster_root/data" --username=cretas_ci --auth-local=trust --auth-ho
 # canada-mini-cretas 的顺序下超过 3 个, 30 就会 `too many clients`。2026-10-03 在那台 VM 上
 # 同一组 7 个类对照: 30 -> 20 个里 3 个错误(16 次 too many clients), 200 -> 20/20。
 # 这是随跑随删的临时实例, 提高上限不掩盖泄漏(真泄漏会持续增长, 200 也会撞上)。
-pg_ctl -D "$cluster_root/data" -l "$cluster_root/server.log" -o "-h 127.0.0.1 -p $port -k $cluster_root -c shared_buffers=32MB -c max_connections=200" -w start
+# 2026-11-16: 200 又不够。PR #1780 postgres-reversal-concurrency-shard (1/4) 第 1 次尝试, 池编号涨到 HikariPool-25
+# (24 个缓存上下文 x 默认 10 条空闲 > 200), PG 日志每 5s 一条 `FATAL: sorry, too many clients already`,
+# AttachmentSopRepositoryStartupGuardTest 取连接 30s 超时。曾试过把测试池 minimum-idle 降到 1, 反而让
+# UrgentInsertScheduleReopenPostgresContractTest(两线程等行锁) 在 CI 稳定变红, 故改抬上限而不动池配置。
+# 空闲后端只占几 MB, 500 条在 16GB runner 上无压力; AttachmentSopRepositoryStartupGuardTest 钉住该值不被改回。
+pg_ctl -D "$cluster_root/data" -l "$cluster_root/server.log" -o "-h 127.0.0.1 -p $port -k $cluster_root -c shared_buffers=32MB -c max_connections=500" -w start
 database=cretas_workflow_verify_test
 createdb -h 127.0.0.1 -p "$port" -U cretas_ci "$database"
 export SMARTBI_PG_DSN="postgresql://cretas_ci@127.0.0.1:$port/$database"

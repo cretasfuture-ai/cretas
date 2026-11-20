@@ -78,6 +78,15 @@ class DecisionTypeMetadataRegistryTest {
     }
 
     @Test
+    @DisplayName("1551-11: 强制插单已接入画布运行时 (建实例 + OA 动作投影回计划与排程)")
+    void forceInsertIsCanvasWired() {
+        DecisionTypeMetadata m = registry.get(DecisionType.FORCE_INSERT);
+        assertNotNull(m);
+        assertEquals("FORCE_INSERT", m.getModuleCode());
+        assertTrue(m.isWired(), "未接入时有画布的工厂提交强制插单恒 409 OA_BUSINESS_NOT_WIRED");
+    }
+
+    @Test
     @DisplayName("报工修正审批已接入且不预设任何审批角色")
     void productionReportCorrectionApprovalMetadata() {
         DecisionTypeMetadata m = registry.get(DecisionType.PRODUCTION_REPORT_CORRECTION_APPROVAL);

@@ -32,6 +32,17 @@ class ReleaseDecisionToolPublishesShortageEventContractTest {
         tool = new ReleaseDecisionTool();
         ReflectionTestUtils.setField(tool, "materialBatchRepository", batches);
         ReflectionTestUtils.setField(tool, "eventPublisher", publisher);
+        // 纪律排查 A3: release_decision 须有质检权限 (quality:read_write) 并写放行台账
+        com.cretas.aims.ai.tool.ToolRbacGuard qcRbac = org.mockito.Mockito.mock(com.cretas.aims.ai.tool.ToolRbacGuard.class);
+        org.mockito.Mockito.lenient().when(qcRbac.hasAnyPermission(org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(String[].class))).thenReturn(true);
+        ReflectionTestUtils.setField(tool, "rbacGuard", qcRbac);
+        ReflectionTestUtils.setField(tool, "releaseGuard",
+                org.mockito.Mockito.mock(com.cretas.aims.service.discipline.MaterialBatchReleaseGuard.class));
+        ReflectionTestUtils.setField(tool, "qcReleaseRecordRepository",
+                mock(com.cretas.aims.repository.quality.QcReleaseRecordRepository.class));   // 没有质检放行记录
+        ReflectionTestUtils.setField(tool, "processTimeLimitEventRepository",
+                org.mockito.Mockito.mock(com.cretas.aims.repository.foodsafety.ProcessTimeLimitEventRepository.class));
         batch = new MaterialBatch();
         batch.setId("MB-1");
         batch.setFactoryId("F1");
@@ -62,11 +73,24 @@ class ReleaseDecisionToolPublishesShortageEventContractTest {
                 e -> assertThat(e.getMaterialTypeId()).isEqualTo("M1"));
     }
 
+    /**
+     * 原名 rejectingDoesNotPublish (什么都不发)。复审 R1: 判退把质检中改成不良品, 「质检中数量」不会再来了 ——
+     * 不发放行事件, 但要发离开质检中事件, 缺料实例才会重算 (与质检放行判不合格同一个发布函数)。
+     */
     @Test
-    void rejectingDoesNotPublish() throws Exception {
+    void rejectingPublishesInspectionClosedNotARelease() throws Exception {
         run("REJECTED", "外观不合格");
 
-        verify(publisher, never()).publishEvent(any(ApplicationEvent.class));
+        assertThat(batch.getStatus()).isEqualTo(MaterialBatchStatus.DEFECTIVE);
+        verify(batches).save(batch);
+        ArgumentCaptor<ApplicationEvent> event = ArgumentCaptor.forClass(ApplicationEvent.class);
+        verify(publisher).publishEvent(event.capture());
         verify(publisher, never()).publishEvent(any(Object.class));
+        assertThat(event.getValue()).isNotInstanceOf(MaterialBatchReleasedEvent.class)
+                .isInstanceOfSatisfying(com.cretas.aims.event.MaterialBatchInspectionClosedEvent.class, e -> {
+                    assertThat(e.getMaterialTypeId()).isEqualTo("M1");
+                    assertThat(e.getMaterialBatchId()).isEqualTo("MB-1");
+                    assertThat(e.getNewStatus()).isEqualTo(MaterialBatchStatus.DEFECTIVE);
+                });
     }
 }

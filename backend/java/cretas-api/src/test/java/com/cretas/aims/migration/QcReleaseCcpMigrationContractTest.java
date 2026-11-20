@@ -81,4 +81,26 @@ class QcReleaseCcpMigrationContractTest {
         assertThat(upper).doesNotContain("UPDATE HACCP_MONITORING_RECORDS");
         assertThat(upper).contains("CREATE INDEX IF NOT EXISTS IDX_HACCP_MONITORING_OPEN_DEVIATION_PLAN");
     }
+
+    @Test
+    @DisplayName("V20261110_31 (D-S411-04): target_type 的 CHECK 取值 == QcReleaseRecord.TargetType 全部常量, 一个不多一个不少")
+    void rawMaterialTargetMigration() throws Exception {
+        String sql = read("V20261110_31__qc_release_raw_material_target.sql");
+        java.util.Set<String> inCheck = new java.util.TreeSet<>();
+        Matcher q = Pattern.compile("'([A-Z_]+)'").matcher(checkList(sql, "target_type"));
+        while (q.find()) {
+            inCheck.add(q.group(1));
+        }
+        java.util.Set<String> constants = new java.util.TreeSet<>();
+        for (java.lang.reflect.Field f : QcReleaseRecord.TargetType.class.getDeclaredFields()) {
+            if (java.lang.reflect.Modifier.isStatic(f.getModifiers()) && f.getType() == String.class) {
+                constants.add((String) f.get(null));
+            }
+        }
+        assertThat(constants).as("反射读到的常量为空 ⇒ 下面是恒真式").contains(QcReleaseRecord.TargetType.RAW_MATERIAL_BATCH);
+        assertThat(inCheck).isEqualTo(constants);
+        // 内联 CHECK 名字是 PG 自动起的: 按定义找出来删, 不靠猜名字; 新约束有名字
+        String upper = sql.toUpperCase(Locale.ROOT);
+        assertThat(upper).contains("PG_GET_CONSTRAINTDEF").contains("ADD CONSTRAINT CK_QC_RELEASE_RECORDS_TARGET_TYPE");
+    }
 }

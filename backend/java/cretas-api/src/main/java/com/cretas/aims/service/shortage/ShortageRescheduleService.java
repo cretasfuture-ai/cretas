@@ -12,6 +12,8 @@ import com.cretas.aims.entity.shortage.ShortageCaseAction;
 import com.cretas.aims.entity.shortage.ShortageCaseEvent;
 import com.cretas.aims.entity.shortage.ShortageCaseLine;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.entity.ProductType;
+import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionLineRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
@@ -23,6 +25,8 @@ import com.cretas.aims.repository.shortage.ShortageCaseRepository;
 import com.cretas.aims.repository.shortage.ShortageScheduleQueryRepository;
 import com.cretas.aims.security.ActorRef;
 import com.cretas.aims.service.ImpactAnalysisService.ResourceCheckResult;
+import com.cretas.aims.service.discipline.FactoryDisciplinePolicy;
+import com.cretas.aims.service.discipline.FactoryDisciplinePolicy.PackageUnitCapacityMode;
 import com.cretas.aims.service.scheduling.LineCapacityEquipmentCheck;
 import com.cretas.aims.service.scheduling.ScheduleLineLocks;
 import com.cretas.aims.service.unit.UnitContractService;
@@ -82,6 +86,9 @@ public class ShortageRescheduleService {
     private final ScheduleLineLocks lineLocks;
     private final UnitContractService unitContractService;
     private final EntityManager entityManager;
+    /** 包装单位 (袋 / 盒) 计划换线怎么核对产能: 工厂开关 production.capacity.package_unit_mode (2026-11-11)。 */
+    private final FactoryDisciplinePolicy disciplinePolicy;
+    private final ProductTypeRepository productTypeRepository;
 
     /** 生成预览并存下基线。 */
     @Transactional
@@ -388,8 +395,7 @@ public class ShortageRescheduleService {
                 }
                 // 这个任务自己的量 (一个计划可拆成多段任务); 单位按单位字典认, 认不出 (盒 / 袋 …) 就如实判产能未验证
                 BigDecimal qty = ls.getPlannedQuantity() != null ? BigDecimal.valueOf(ls.getPlannedQuantity()) : pp.getPlannedQuantity();
-                ResourceCheckResult cap = capacityCheck.checkCapacity(factoryId, pp.getProductTypeId(), qty,
-                        capacityUnit(factoryId, pp.getPlannedUnit()), line.getId(), start, end);
+                ResourceCheckResult cap = targetLineCapacity(factoryId, pp, qty, line.getId(), start, end);
                 if (!LineCapacityEquipmentCheck.READY.equals(LineCapacityEquipmentCheck.status(cap))) {
                     why.add(line.getName() + ": " + cap.getMessage());
                     continue;
@@ -628,6 +634,70 @@ public class ShortageRescheduleService {
             return "BATCH";
         }
         return raw;
+    }
+
+    /**
+     * 目标线产能核对。计划单位是 件 / kg / 批 (或与之等价的写法) ⇒ 原样核对; 是包装单位 (袋 / 盒 …) 时按工厂开关:
+     * <ul>
+     *   <li>NONE (默认) —— 原样交给产能核对, 如实判「产能未验证」, 只能同线顺延 (= 原行为);</li>
+     *   <li>NET_CONTENT —— 计划单位必须与产品单位等价, 产品净含量是质量单位 (kg / g), 折成 kg 后核对 kg 产能;
+     *       任何一项缺 / 对不上都判未验证并说清缺什么, ⛔ 不猜;</li>
+     *   <li>FACTORY_UNIT —— 只认按同一包装单位配置的产线产能 (单位按单位契约判等价, ⛔ 不比字符串)。</li>
+     * </ul>
+     */
+    ResourceCheckResult targetLineCapacity(String factoryId, ProductionPlan pp, BigDecimal qty, String lineId,
+                                           LocalDateTime start, LocalDateTime end) {
+        String code = capacityUnit(factoryId, pp.getPlannedUnit());
+        if (code == null || code.isBlank() || LineCapacityEquipmentCheck.parseUnit(code) != null) {
+            return capacityCheck.checkCapacity(factoryId, pp.getProductTypeId(), qty, code, lineId, start, end);
+        }
+        PackageUnitCapacityMode mode = disciplinePolicy.packageUnitCapacityMode(factoryId);
+        return switch (mode) {
+            case NONE -> capacityCheck.checkCapacity(factoryId, pp.getProductTypeId(), qty, code, lineId, start, end);
+            case FACTORY_UNIT -> capacityCheck.checkCapacityInPackageUnit(factoryId, pp.getProductTypeId(), qty, code,
+                    (a, b) -> unitContractService.areEquivalent(factoryId, a, b), lineId, start, end);
+            case NET_CONTENT -> netContentCapacity(factoryId, pp, qty, code.trim(), lineId, start, end);
+        };
+    }
+
+    private ResourceCheckResult netContentCapacity(String factoryId, ProductionPlan pp, BigDecimal qty, String planUnit,
+                                                   String lineId, LocalDateTime start, LocalDateTime end) {
+        String prefix = "产能未验证: 本厂按产品净含量折算「" + planUnit + "」, 但";
+        if (qty == null || pp.getProductTypeId() == null) {
+            return ResourceCheckResult.unverified("CAPACITY", "产能未验证: 缺少产品或计划数量", qty);
+        }
+        ProductType product = productTypeRepository.findByIdAndFactoryId(pp.getProductTypeId(), factoryId).orElse(null);
+        if (product == null) {
+            return ResourceCheckResult.unverified("CAPACITY", prefix + "找不到产品", qty);
+        }
+        BigDecimal net = product.getNetContentQuantity();
+        String netUnit = product.getNetContentUnit();
+        if (net == null || net.signum() <= 0 || netUnit == null || netUnit.isBlank()) {
+            return ResourceCheckResult.unverified("CAPACITY", prefix + "产品「" + product.getName() + "」没有填净含量", qty);
+        }
+        if (product.getUnit() == null || !unitContractService.areEquivalent(factoryId, planUnit, product.getUnit())) {
+            return ResourceCheckResult.unverified("CAPACITY", prefix + "计划单位与产品单位「"
+                    + (product.getUnit() == null ? "未填" : product.getUnit()) + "」不同, 净含量是按产品单位填的, 无法折算", qty);
+        }
+        BigDecimal perUnitKg;
+        if (unitContractService.areEquivalent(factoryId, netUnit, "kg")) {
+            perUnitKg = net;
+        } else if (unitContractService.areEquivalent(factoryId, netUnit, "g")) {
+            perUnitKg = net.movePointLeft(3);
+        } else {
+            return ResourceCheckResult.unverified("CAPACITY", prefix + "净含量单位「" + netUnit
+                    + "」不是质量单位, 不能折成 kg 核对产能", qty);
+        }
+        BigDecimal kg = qty.multiply(perUnitKg);
+        ResourceCheckResult r = capacityCheck.checkCapacity(factoryId, pp.getProductTypeId(), kg, "KG", lineId, start, end);
+        String msg = "按净含量 " + net.stripTrailingZeros().toPlainString() + " " + netUnit + "/" + planUnit + " 折合 "
+                + kg.stripTrailingZeros().toPlainString() + " kg; " + r.getMessage();
+        if (!r.isVerified()) {
+            return ResourceCheckResult.unverified(r.getResourceType(), msg, r.getRequiredAmount());
+        }
+        return r.isAvailable()
+                ? ResourceCheckResult.available(r.getResourceType(), r.getAvailableAmount(), r.getRequiredAmount(), msg)
+                : ResourceCheckResult.unavailable(r.getResourceType(), msg, r.getAvailableAmount(), r.getRequiredAmount());
     }
 
     /** 工序时间线 start / end (ISO 本地时间) 平移 delta; 读不懂的条目原样保留。 */

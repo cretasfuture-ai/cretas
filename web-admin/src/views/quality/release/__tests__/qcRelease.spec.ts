@@ -1,6 +1,7 @@
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import ElementPlus from 'element-plus';
+import { h } from 'vue';
 
 /**
  * 质检放行页 (缺口 11): 待检清单 → 放行 / 不合格, 结论必填; 有未处理 CCP 偏离的批次不能放行。
@@ -29,8 +30,37 @@ const pendingRows = [
   },
 ];
 
+// vitest 没装 Nuxt UI 插件: 只给「超时处置」Tab 用到的 Nuxt UI 组件最小桩 (表格按列渲染 cell 插槽, 弹窗按 open 内联渲染)。
+type Col = { id?: string; accessorKey?: string };
+const nuxtUiStubs = {
+  UTable: {
+    props: ['data', 'columns'],
+    setup(props: { data: Record<string, unknown>[]; columns: Col[] }, { slots }: { slots: Record<string, (a?: unknown) => unknown> }) {
+      return () => h('div', [
+        h('table', [h('tbody', (props.data ?? []).map(original => h('tr', props.columns.map((c) => {
+          const key = c.id ?? c.accessorKey ?? '';
+          const cell = slots[`${key}-cell`];
+          return h('td', cell ? cell({ row: { original } }) as never : String(original[c.accessorKey ?? ''] ?? ''));
+        }))))]),
+        !(props.data ?? []).length && slots.empty ? h('div', slots.empty() as never) : null,
+      ]);
+    },
+  },
+  UModal: {
+    props: ['open', 'title'],
+    setup(props: { open: boolean; title: string }, { slots }: { slots: Record<string, () => unknown> }) {
+      return () => (props.open ? h('div', [h('h3', props.title), slots.body?.() as never, slots.footer?.() as never]) : null);
+    },
+  },
+  UButton: { props: ['disabled'], template: '<button :disabled="disabled"><slot /></button>' },
+  UBadge: { template: '<span><slot /></span>' },
+  UAlert: { props: ['title'], template: '<div>{{ title }}</div>' },
+  UFormField: { template: '<div><slot /></div>' },
+  UTextarea: { props: ['modelValue'], emits: ['update:modelValue'], template: `<textarea :value="modelValue" @input="$emit('update:modelValue', $event.target.value)" />` },
+};
+
 function mountPage() {
-  return mount(Page, { global: { plugins: [ElementPlus] }, attachTo: document.body });
+  return mount(Page, { global: { plugins: [ElementPlus], stubs: nuxtUiStubs }, attachTo: document.body });
 }
 
 function submitButton(): HTMLButtonElement {
@@ -151,6 +181,56 @@ describe('质检放行页', () => {
       });
       wrapper.unmount();
     });
+  });
+
+  it('D-S411-04 原料收货批次: 行里显示物料名 / 批次号 / 数量单位, 放行发出 RAW_MATERIAL_BATCH', async () => {
+    const rawRow = {
+      targetType: 'RAW_MATERIAL_BATCH', targetId: 'mb-raw-1', formLabel: '原料', batchNumber: 'MT-20261110-0001',
+      productTypeId: null, productName: '冻猪蹄', quantity: 120, unit: 'kg', producedAt: '2026-11-10 08:00',
+      openDeviationCount: 0, materialTypeId: 'RMT-PORK',
+    };
+    state.get.mockImplementation((url: string) =>
+      Promise.resolve(ok(url.endsWith('/pending') ? [...pendingRows, rawRow] : [])));
+    const wrapper = mountPage();
+    await flushPromises();
+    expect(wrapper.text()).toContain('待检 (3)');
+    const rawTr = wrapper.findAll('[data-testid="qc-pending-table"] tbody tr')
+      .find(tr => tr.text().includes('MT-20261110-0001'));
+    expect(rawTr, '原料行要渲染出来').toBeTruthy();
+    const rowText = rawTr!.text();
+    expect(rowText).toContain('原料');
+    expect(rowText).toContain('冻猪蹄');
+    expect(rowText).toContain('120 kg');
+    expect(rowText).toContain('原料不能领用投产');
+
+    await openFor(wrapper, 'mb-raw-1');
+    expect(document.body.textContent).toContain('放行后原料可以领用投产');
+    const textarea = (document.querySelector('textarea[data-testid="qc-conclusion"]') ?? document.querySelector('[data-testid="qc-conclusion"] textarea')) as HTMLTextAreaElement;
+    textarea.value = '感官检验合格';
+    textarea.dispatchEvent(new Event('input'));
+    await flushPromises();
+    expect(submitButton().disabled).toBe(false);
+    submitButton().click();
+    await flushPromises();
+    expect(state.post).toHaveBeenCalledWith('/F-QC/qc-release/decisions', {
+      targetType: 'RAW_MATERIAL_BATCH', targetId: 'mb-raw-1', decision: 'RELEASED', conclusion: '感官检验合格',
+    });
+    wrapper.unmount();
+  });
+
+  it('放行记录里原料形态显示「原料」, 不是英文码', async () => {
+    state.get.mockImplementation((url: string) => Promise.resolve(ok(url.endsWith('/records') ? [{
+      id: 9, targetType: 'RAW_MATERIAL_BATCH', targetId: 'mb-raw-1', batchNumber: 'MT-REC-1', productTypeId: null,
+      quantity: 120, unit: 'kg', decision: 'RELEASED', conclusion: '合格', releasedBy: 3, releasedByName: '王质检',
+      releasedAt: '2026-11-10 09:00',
+    }] : [])));
+    const wrapper = mountPage();
+    await flushPromises();
+    const recordsText = wrapper.findAll('.el-table').map(t => t.text()).find(t => t.includes('MT-REC-1'));
+    expect(recordsText).toBeTruthy();
+    expect(recordsText).toContain('原料');
+    expect(recordsText).not.toContain('RAW_MATERIAL_BATCH');
+    wrapper.unmount();
   });
 
   it('有未处理 CCP 偏离: 默认选「不合格」, 「放行」被禁用, 提示去处理偏离', async () => {

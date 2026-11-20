@@ -23,6 +23,8 @@ import { describe, expect, it } from 'vitest';
  * 而现场表现只是「数量怎么自己变成 1 了」, 没人会怀疑到一个输入框属性上。
  */
 const source = readFileSync(resolve(__dirname, '..', 'list.vue'), 'utf8');
+// 快速发货的发货行构造已抽到 deliveryPricePayload.ts (单价缺失不发 0), 数量口径断言读它。
+const builderSource = readFileSync(resolve(__dirname, '..', 'deliveryPricePayload.ts'), 'utf8');
 
 /**
  * 「计划发货数量」表单项到下一个 form-item 之间的片段, <b>已剥掉 HTML 注释</b>。
@@ -33,7 +35,7 @@ const source = readFileSync(resolve(__dirname, '..', 'list.vue'), 'utf8');
 function planQuantityBlock(): string {
   const start = source.indexOf('label="计划发货数量"');
   expect(start, '找不到「计划发货数量」表单项 —— 结构变了, 这条闸需要重写').toBeGreaterThan(-1);
-  const end = source.indexOf('</el-form-item>', start);
+  const end = source.indexOf('</UFormField>', start);
   expect(end).toBeGreaterThan(start);
   return source.slice(start, end).replace(/<!--[\s\S]*?-->/g, '');
 }
@@ -49,14 +51,15 @@ describe('创建发货单 · 计划发货数量', () => {
 
   it('② 允许小数 —— precision 必须显式给, 且不能是 0', () => {
     const block = planQuantityBlock();
-    const precision = block.match(/:precision="(\d+)"/);
-    expect(precision, '没有 :precision 时, 步进/失焦的取整行为随版本变, 必须显式声明').not.toBeNull();
-    expect(Number(precision![1]), 'precision=0 等于禁止小数, 与缺陷同效').toBeGreaterThan(0);
+    // Nuxt UI UInputNumber 用 format-options 的小数位声明精度 (原 el-input-number 的 :precision)
+    const precision = block.match(/maximumFractionDigits:\s*(\d+)/);
+    expect(precision, '没有显式小数位时, 失焦的取整行为随版本变, 必须显式声明').not.toBeNull();
+    expect(Number(precision![1]), '小数位=0 等于禁止小数, 与缺陷同效').toBeGreaterThan(0);
   });
 
   it('③ 有上限, 且上限来自订单行下单量 (否则能随手填出必然 409 的数)', () => {
     expect(planQuantityBlock()).toMatch(/:max="item\.maxQuantity"/);
-    expect(source, 'maxQuantity 必须在构造 items 时按下单量填好')
+    expect(builderSource, 'maxQuantity 必须在构造 items 时按下单量填好')
       .toContain('maxQuantity: Number(item.quantity) > 0 ? Number(item.quantity) : undefined');
   });
 
@@ -65,7 +68,7 @@ describe('创建发货单 · 计划发货数量', () => {
    * 断言它没被改成「取整」之类的「顺手修复」。
    */
   it('④ 预填仍然是订单行原值, 不做任何取整', () => {
-    expect(source).toContain('deliveredQuantity: item.quantity || 0,');
+    expect(builderSource).toContain('deliveredQuantity: item.quantity || 0,');
   });
 });
 
@@ -82,7 +85,7 @@ describe('对照: 仓库确认发货的实际数量输入', () => {
 
   it('实际数量允许小数且有上限 (销售端向它看齐)', () => {
     expect(warehouseSource).toMatch(/:min="0"/);
-    expect(warehouseSource).toMatch(/:max="row\.plannedQty"/);
-    expect(warehouseSource).toMatch(/:precision="2"/);
+    expect(warehouseSource).toMatch(/:max="row(\.original)?\.plannedQty"/);
+    expect(warehouseSource).toMatch(/:precision="2"|step="0\.01"/); // el-input-number 2 位小数 / UInput 原生 number 步长 0.01
   });
 });

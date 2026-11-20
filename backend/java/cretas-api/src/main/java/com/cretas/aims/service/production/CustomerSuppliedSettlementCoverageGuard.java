@@ -308,21 +308,36 @@ public class CustomerSuppliedSettlementCoverageGuard {
         return response;
     }
 
+    /**
+     * 一键确认前拦<b>本守卫自己</b>的客供阻塞 (不在清单 / 超出收货)。
+     *
+     * <p>D-N-01 (2026-11-09): 旧版只要预填有任何 BLOCKER 就抛, 而且一律带
+     * {@code CUSTOMER_SUPPLIED_MATERIAL_NOT_ON_ORDER} —— 非客供的返工计划因「超产」被拦时收到客供的码,
+     * 并且在调用方按确认请求放行可解阻塞 (如已填超产原因) <b>之前</b>就抛了, 填了原因也过不去。
+     * 其它阻塞交给调用方的统一判定 (含可由确认请求解除的那几类)。
+     */
     public void requireCleanForOneClick(ProductionSettlementPrefillResponse response) {
-        if (response != null && response.getAudit() != null && !response.getAudit().isClean()) {
-            String reasons = response.getAudit().getIssues() == null ? ""
-                    : response.getAudit().getIssues().stream()
-                            .filter(issue -> issue != null
-                                    && issue.getSeverity() == ProductionSettlementPrefillResponse.Severity.BLOCKER)
-                            .map(ProductionSettlementPrefillResponse.Issue::getMessage)
-                            .filter(message -> !isBlank(message))
-                            .collect(Collectors.joining("；"));
-            throw new BusinessException(409, isBlank(reasons)
-                    ? "结单自动带入不完整，请先在核对页补齐。" : reasons)
-                    .withCode(ISSUE_CODE_MATERIAL_NOT_LISTED)
-                    .withHint("请返回核对结单页，补齐或修正客供原料/辅料批次")
-                    .withHintTarget("rawMaterialConsumptions");
+        if (response == null || response.getAudit() == null || response.getAudit().getIssues() == null) {
+            return;
         }
+        List<ProductionSettlementPrefillResponse.Issue> own = response.getAudit().getIssues().stream()
+                .filter(issue -> issue != null
+                        && issue.getSeverity() == ProductionSettlementPrefillResponse.Severity.BLOCKER
+                        && (ISSUE_CODE_MATERIAL_NOT_LISTED.equals(issue.getCode())
+                            || ISSUE_CODE_MATERIAL_OVER_RECEIVED.equals(issue.getCode())))
+                .toList();
+        if (own.isEmpty()) {
+            return;
+        }
+        String reasons = own.stream()
+                .map(ProductionSettlementPrefillResponse.Issue::getMessage)
+                .filter(message -> !isBlank(message))
+                .collect(Collectors.joining("；"));
+        throw new BusinessException(409, isBlank(reasons)
+                ? "结单自动带入不完整，请先在核对页补齐。" : reasons)
+                .withCode(own.get(0).getCode())
+                .withHint("请返回核对结单页，补齐或修正客供原料/辅料批次")
+                .withHintTarget("rawMaterialConsumptions");
     }
 
     // ------------------------------------------------------------------

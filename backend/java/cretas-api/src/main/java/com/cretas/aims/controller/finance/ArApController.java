@@ -175,7 +175,8 @@ public class ArApController {
      * R23 audit C2: approve a PENDING adjustment. Applies amount delta to counterparty
      * balance + flips approval_status to APPROVED. Requires elevated permission
      * 'finance:approve_adjustment' (distinct from 'finance:read_write' that submits).
-     * Approver must differ from submitter (4-eyes principle, enforced in service).
+     * Approver must differ from submitter (4-eyes principle, enforced in service) —— 除非工厂开了
+     * 「允许本人审批」, 此时 body {@code {"selfApprovalReason": "..."}} 必填 (红线 4)。
      */
     @RequirePermission("finance:approve_adjustment")
     @PostMapping("/adjustment/{transactionId}/approve")
@@ -183,10 +184,23 @@ public class ArApController {
     public ApiResponse<ArApTransaction> approveAdjustment(
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String transactionId,
-            @RequestHeader("Authorization") String authorization) {
+            @RequestHeader("Authorization") String authorization,
+            @RequestBody(required = false) Map<String, Object> body) {
         Long approverId = extractUserId(authorization);
-        ArApTransaction transaction = arApService.approveAdjustment(factoryId, transactionId, approverId);
+        // 红线 4: 提交人本人审批时的原因; 不是本人时不传, 无 body 与改动前一致
+        String selfApprovalReason = selfApprovalReasonFrom(body);
+        ArApTransaction transaction = arApService.approveAdjustment(
+                factoryId, transactionId, approverId, selfApprovalReason);
         return ApiResponse.success("调整已审批通过", projectTransaction(factoryId, transaction));
+    }
+
+    /**
+     * 红线 4: 本人审批原因只接受字符串。对象/数字/数组用 {@code toString()} 会变成 "{}"、"1" 之类的非空串,
+     * 绕过「原因必填」; 非字符串一律按没写原因处理 (本人审批时由开关抛 422 SELF_APPROVAL_REASON_REQUIRED)。
+     */
+    static String selfApprovalReasonFrom(Map<String, Object> body) {
+        Object raw = body == null ? null : body.get("selfApprovalReason");
+        return raw instanceof String text ? text : null;
     }
 
     /**
@@ -262,7 +276,9 @@ public class ArApController {
         Long approverId = extractUserId(authorization);
         @SuppressWarnings("unchecked")
         java.util.List<String> ids = (java.util.List<String>) body.get("ids");
-        Map<String, Object> result = arApService.batchApproveAdjustments(factoryId, ids, approverId);
+        String selfApprovalReason = selfApprovalReasonFrom(body);
+        Map<String, Object> result = arApService.batchApproveAdjustments(
+                factoryId, ids, approverId, selfApprovalReason);
         return ApiResponse.success("批量审批完成", result);
     }
 

@@ -419,7 +419,7 @@ function getScoreColor(score?: number) {
     <div class="statistics-row" v-if="statistics">
       <el-card class="stat-card" shadow="hover">
         <div class="stat-content">
-          <div class="stat-icon" style="background: linear-gradient(135deg, #409EFF, #66b1ff)">
+          <div class="stat-icon" style="background: linear-gradient(135deg, var(--cs-primary), #66b1ff)">
             <el-icon><Histogram /></el-icon>
           </div>
           <div class="stat-info">
@@ -544,7 +544,7 @@ function getScoreColor(score?: number) {
         <el-table-column prop="sessionName" label="会话名称" min-width="180">
           <template #default="{ row }">
             <div class="session-name-cell">
-              <el-icon :style="{ color: '#409EFF' }">
+              <el-icon :style="{ color: 'var(--cs-primary)' }">
                 <component :is="getSessionTypeIcon(row.sessionType)" />
               </el-icon>
               <span class="session-name">{{ row.sessionName }}</span>

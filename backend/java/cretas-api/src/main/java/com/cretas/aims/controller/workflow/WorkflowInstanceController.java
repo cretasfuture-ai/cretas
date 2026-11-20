@@ -102,6 +102,10 @@ public class WorkflowInstanceController {
     @Autowired(required = false)
     private com.cretas.aims.service.ProductionReportCorrectionService productionReportCorrectionService;
 
+    /** 1551-11: 强制插单画布审批的业务适配器。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.UrgentInsertService urgentInsertService;
+
     /** 业务类型中文名解析 — 权威表在 DecisionTypeMetadataRegistry, 前端不再维护第二份。 */
     @Autowired(required = false)
     private OaModuleLabelResolver oaModuleLabelResolver;
@@ -166,6 +170,9 @@ public class WorkflowInstanceController {
             @PathVariable @NotBlank String factoryId,
             @RequestHeader("Authorization") String authorization,
             @RequestParam(required = false) String moduleCode,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) String approverRole,
+            @RequestParam(required = false) String initiator,
             @RequestParam(defaultValue = "1") @Min(1) int page,
             @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
 
@@ -182,7 +189,8 @@ public class WorkflowInstanceController {
         }
 
         // 2. 查 pending instances (Spring Data 0-based pageable, 但暴露给前端用 1-based)
-        Pageable pageable = PageRequest.of(page - 1, size);
+        boolean scan = hasTextFilter(keyword, approverRole, initiator);
+        Pageable pageable = scan ? PageRequest.of(0, FILTER_SCAN_CAP) : PageRequest.of(page - 1, size);
         Page<ApprovalWorkflowInstance> instances = workflowEngine.findPendingForRole(
                 factoryId, userRole, moduleCode, pageable);
 
@@ -243,18 +251,20 @@ public class WorkflowInstanceController {
         // 3d. 仓库名 hydrate — 调拨摘要不能把 UUID 甩给审批人
         Map<String, String> warehouseNameById = loadWarehouseNames(factoryId);
 
+        Map<String, Map<String, Object>> corrById = correctionSummaries(factoryId, instances.getContent());
+
         // 4. 构造 final DTO list
         List<WorkflowInstancePendingDTO> dtos = new ArrayList<>();
         for (ApprovalWorkflowInstance inst : instances.getContent()) {
             WorkflowInstancePendingDTO dto = partial.get(inst.getId());
 
             // businessSummary
-            dto.setBusinessSummary(buildBusinessSummary(inst, poById, soById, warehouseNameById, stocktakeById, true));
+            dto.setBusinessSummary(buildBusinessSummary(inst, poById, soById, warehouseNameById, stocktakeById, true, corrById));
 
             // M-12: 除了那句拼好的摘要, 再把单号/金额/往来单位**分开**下发。
             // 前端要拆成三列(金额得能右对齐+排序), ⛔ 不许它从 businessSummary 正则反解。
             fillStructuredBusinessFields(dto, inst, poById, soById, stocktakeById, warehouseNameById, true);
-            fillReportCorrectionDetails(dto, inst, factoryId);
+            fillReportCorrectionDetails(dto, inst, factoryId, corrById);
 
             // currentNodeId + label
             if (inst.getCurrentNodeIds() != null && !inst.getCurrentNodeIds().isEmpty()) {
@@ -295,9 +305,139 @@ public class WorkflowInstanceController {
             dtos.add(dto);
         }
 
+        if (scan) {
+            boolean truncated = warnIfScanTruncated("pending", instances);
+            return ApiResponse.success(sliceFiltered(
+                    applyTextFilters(dtos, keyword, approverRole, initiator), page, size, truncated));
+        }
         PageResponse<WorkflowInstancePendingDTO> response = PageResponse.of(
                 dtos, page, size, instances.getTotalElements());
         return ApiResponse.success(response);
+    }
+
+    /** 兼容旧调用点 (无附加筛选)。 */
+    public ApiResponse<PageResponse<WorkflowInstancePendingDTO>> getPendingForUser(
+            String factoryId, String authorization, String moduleCode, int page, int size) {
+        return getPendingForUser(factoryId, authorization, moduleCode, null, null, null, page, size);
+    }
+
+    // ───── 筛选 (G9, 2026-11-18) ─────
+    // 筛选是后端真实过滤 (不是前端本地筛): 先扫描最多 FILTER_SCAN_CAP 条再筛再分页,
+    // 否则「第 1 页 20 条里本地筛」会漏掉其它页的命中。超过上限只告警, 不静默当全量。
+    private static final int FILTER_SCAN_CAP = 2000;
+
+    /** 一次批量取出本批实例的报工修正审批摘要, 避免带筛选扫描 2000 条时逐条查库 (M4)。 */
+    private Map<String, Map<String, Object>> correctionSummaries(
+            String factoryId, List<ApprovalWorkflowInstance> instances) {
+        if (productionReportCorrectionService == null) return Map.of();
+        Set<String> ids = new HashSet<>();
+        for (ApprovalWorkflowInstance i : instances) {
+            if ("PRODUCTION_REPORT_CORRECTION".equals(i.getModuleCode()) && i.getBusinessEntityId() != null) {
+                ids.add(i.getBusinessEntityId());
+            }
+        }
+        if (ids.isEmpty()) return Map.of();
+        Map<String, Map<String, Object>> m = productionReportCorrectionService.approvalSummaries(factoryId, ids);
+        return m == null ? Map.of() : m;
+    }
+
+    /** 批量结果里没有就退回逐条查 (保持旧行为: 记录不存在照旧抛 404)。 */
+    private Map<String, Object> correctionSummary(
+            String factoryId, String id, Map<String, Map<String, Object>> corrById) {
+        Map<String, Object> hit = corrById == null ? null : corrById.get(id);
+        return hit != null ? hit : productionReportCorrectionService.approvalSummary(factoryId, id);
+    }
+
+    private static boolean hasText(String s) {
+        return s != null && !s.isBlank();
+    }
+
+    private static boolean hasTextFilter(String keyword, String approverRole, String initiator) {
+        return hasText(keyword) || hasText(approverRole) || hasText(initiator);
+    }
+
+    /** 扫描是否被上限截断; 截断时除了服务端告警, 还要在响应里标 truncated, 让前端提示「仅在最近 N 条中筛选」。 */
+    private boolean warnIfScanTruncated(String view, Page<?> scanned) {
+        if (scanned.getTotalElements() > FILTER_SCAN_CAP) {
+            log.warn("OA {} 带筛选只扫描前 {} 条, 实际共 {} 条, 结果可能不全",
+                    view, FILTER_SCAN_CAP, scanned.getTotalElements());
+            return true;
+        }
+        return false;
+    }
+
+    private static boolean containsIgnoreCase(String hay, String needle) {
+        return hay != null && hay.toLowerCase(java.util.Locale.ROOT)
+                .contains(needle.trim().toLowerCase(java.util.Locale.ROOT));
+    }
+
+    static List<WorkflowInstancePendingDTO> applyTextFilters(
+            List<WorkflowInstancePendingDTO> in, String keyword, String approverRole, String initiator) {
+        List<WorkflowInstancePendingDTO> out = new ArrayList<>();
+        for (WorkflowInstancePendingDTO d : in) {
+            if (hasText(approverRole)
+                    && (d.getApproverRoles() == null || !d.getApproverRoles().contains(approverRole.trim()))) {
+                continue;
+            }
+            if (hasText(initiator) && !containsIgnoreCase(d.getInitiatedByUsername(), initiator)) {
+                continue;
+            }
+            if (hasText(keyword)
+                    && !(containsIgnoreCase(d.getBusinessSummary(), keyword)
+                    || containsIgnoreCase(d.getBusinessCode(), keyword)
+                    || containsIgnoreCase(d.getBusinessEntityId(), keyword)
+                    || containsIgnoreCase(d.getCounterpartyName(), keyword)
+                    || containsIgnoreCase(d.getModuleLabel(), keyword)
+                    || containsIgnoreCase(d.getCurrentNodeLabel(), keyword)
+                    || containsIgnoreCase(d.getInitiatedByUsername(), keyword))) {
+                continue;
+            }
+            out.add(d);
+        }
+        return out;
+    }
+
+    static PageResponse<WorkflowInstancePendingDTO> sliceFiltered(
+            List<WorkflowInstancePendingDTO> filtered, int page, int size) {
+        return sliceFiltered(filtered, page, size, false);
+    }
+
+    static PageResponse<WorkflowInstancePendingDTO> sliceFiltered(
+            List<WorkflowInstancePendingDTO> filtered, int page, int size, boolean truncated) {
+        int total = filtered.size();
+        int from = (int) Math.min((long) (page - 1) * size, total);
+        int to = Math.min(from + size, total);
+        PageResponse<WorkflowInstancePendingDTO> r =
+                PageResponse.of(new ArrayList<>(filtered.subList(from, to)), page, size, (long) total);
+        if (truncated) {
+            r.setTruncated(true);
+            r.setScanLimit(FILTER_SCAN_CAP);
+        }
+        return r;
+    }
+
+    /** 个人视图 (我发起/已处理/抄送我) 的统一筛选分页: 无筛选走原分页, 有筛选先扫描再筛再分页。 */
+    private ApiResponse<PageResponse<WorkflowInstancePendingDTO>> personalView(
+            String view, int page, int size,
+            String moduleCode, String keyword, String approverRole, String initiator,
+            java.util.function.Function<Pageable, Page<ApprovalWorkflowInstance>> fetch,
+            java.util.function.Function<List<ApprovalWorkflowInstance>, List<WorkflowInstancePendingDTO>> hydrate) {
+        boolean scan = hasText(moduleCode) || hasTextFilter(keyword, approverRole, initiator);
+        if (!scan) {
+            Page<ApprovalWorkflowInstance> instances = fetch.apply(PageRequest.of(page - 1, size));
+            return ApiResponse.success(PageResponse.of(
+                    hydrate.apply(instances.getContent()), page, size, instances.getTotalElements()));
+        }
+        Page<ApprovalWorkflowInstance> scanned = fetch.apply(PageRequest.of(0, FILTER_SCAN_CAP));
+        boolean truncated = warnIfScanTruncated(view, scanned);
+        List<ApprovalWorkflowInstance> content = scanned.getContent();
+        if (hasText(moduleCode)) {
+            content = content.stream()
+                    .filter(i -> moduleCode.trim().equals(i.getModuleCode()))
+                    .toList();
+        }
+        return ApiResponse.success(sliceFiltered(
+                applyTextFilters(hydrate.apply(content), keyword, approverRole, initiator), page, size, truncated));
     }
 
     /**
@@ -335,8 +475,11 @@ public class WorkflowInstanceController {
         }
         if (instance.getStatus() == ApprovalWorkflowInstance.InstanceStatus.RUNNING
                 && !workflowEngine.canTransition(instance, user)) {
+            // 审批权限码 (如盘点差异审批) 只管「能不能批」; OA 流程里谁处理哪个节点仍由审批流模板决定。
+            // 给新岗位授了审批权限后, 还要把它加进审批流模板的这个节点 (#1580 复核 2)。
             throw new BusinessException(403, "您不属于当前审批节点的处理角色")
-                    .withCode("OA_TASK_FORBIDDEN");
+                    .withCode("OA_TASK_FORBIDDEN")
+                    .withHint("请工厂管理员在审批流模板里把你的岗位加入当前审批节点; 只在「谁能审批」里授权还不够");
         }
         HistoryAction action;
         try {
@@ -364,7 +507,8 @@ public class WorkflowInstanceController {
                         request.notes());
         Map<String, Object> result = oaActionIdempotencyService.execute(
                 actionContext,
-                () -> executeDomainAction(factoryId, instanceId, instance, user, action, request.notes()));
+                () -> executeDomainAction(factoryId, instanceId, instance, user, action, request.notes(),
+                        request.expectedNodeId()));
         return ApiResponse.success(result);
     }
 
@@ -432,8 +576,11 @@ public class WorkflowInstanceController {
         }
         if (instance.getStatus() == ApprovalWorkflowInstance.InstanceStatus.RUNNING
                 && !workflowEngine.canTransition(instance, user)) {
+            // 审批权限码 (如盘点差异审批) 只管「能不能批」; OA 流程里谁处理哪个节点仍由审批流模板决定。
+            // 给新岗位授了审批权限后, 还要把它加进审批流模板的这个节点 (#1580 复核 2)。
             throw new BusinessException(403, "您不属于当前审批节点的处理角色")
-                    .withCode("OA_TASK_FORBIDDEN");
+                    .withCode("OA_TASK_FORBIDDEN")
+                    .withHint("请工厂管理员在审批流模板里把你的岗位加入当前审批节点; 只在「谁能审批」里授权还不够");
         }
         if (purchaseOrderRepository == null) {
             throw new BusinessException(503, "演示订单校验服务不可用")
@@ -496,9 +643,11 @@ public class WorkflowInstanceController {
             ApprovalWorkflowInstance instance,
             User user,
             HistoryAction action,
-            String notes) {
+            String notes,
+            String expectedNodeId) {
         String businessEntityId;
         String businessStatus;
+        Map<String, Object> extra = null;
         if ("PURCHASE_ORDER".equals(instance.getModuleCode())) {
             PurchaseOrder order = purchaseService.applyWorkflowAction(
                     factoryId,
@@ -563,6 +712,26 @@ public class WorkflowInstanceController {
                             user.getId(), user.getRoleCode(), action, notes);
             businessEntityId = correction.getId();
             businessStatus = correction.getStatus();
+        } else if ("FORCE_INSERT".equals(instance.getModuleCode())) {
+            if (urgentInsertService == null) {
+                throw new BusinessException(503, "插单服务暂不可用，请稍后重试")
+                        .withCode("OA_URGENT_INSERT_SERVICE_UNAVAILABLE");
+            }
+            com.cretas.aims.dto.production.ProductionPlanDTO plan = urgentInsertService.applyWorkflowAction(
+                    factoryId, instance.getBusinessEntityId(), instanceId,
+                    user.getId(), user.getRoleCode(), expectedNodeId, action, notes);
+            businessEntityId = instance.getBusinessEntityId();
+            businessStatus = plan.getApprovalStatus() != null ? String.valueOf(plan.getApprovalStatus())
+                    : plan.getStatus() == null ? "UNKNOWN" : String.valueOf(plan.getStatus());
+            // 批准走完画布那一刻才真正排入: 把排进哪条线、哪天、挤了谁带回给审批人 (之前被这里丢掉了)
+            extra = new java.util.LinkedHashMap<>();
+            if (plan.getScheduleOutcome() != null) {
+                extra.put("scheduleOutcome", jsonSafe(plan.getScheduleOutcome()));
+                extra.put("productionLineId", plan.getSuggestedProductionLineId());
+                extra.put("productionLineName", plan.getSuggestedProductionLineName());
+                extra.put("planNumber", plan.getPlanNumber());
+                extra.put("uncheckedWarnings", jsonSafe(plan.getUncheckedWarnings()));
+            }
         } else {
             throw new BusinessException(422, "该业务域尚未迁移到统一 OA 动作适配器")
                     .withCode("OA_DOMAIN_ADAPTER_REQUIRED");
@@ -570,11 +739,35 @@ public class WorkflowInstanceController {
         ApprovalWorkflowInstance updated = workflowEngine.getLatestInstance(
                 factoryId, instance.getModuleCode(), instance.getBusinessEntityId())
                 .orElse(instance);
-        return Map.of(
-                "instanceId", updated.getId(),
-                "workflowStatus", updated.getStatus().name(),
-                "businessEntityId", businessEntityId,
-                "businessStatus", businessStatus);
+        Map<String, Object> result = new java.util.LinkedHashMap<>();
+        result.put("instanceId", updated.getId());
+        result.put("workflowStatus", updated.getStatus().name());
+        result.put("businessEntityId", businessEntityId);
+        result.put("businessStatus", businessStatus);
+        if (extra != null) {
+            extra.values().removeIf(java.util.Objects::isNull);
+            result.putAll(extra);
+        }
+        return result;
+    }
+
+    /**
+     * 动作结果会原样写进幂等账本的 JSON 列, 那里的序列化器不一定认 java.time —— 日期一律转成 ISO 字符串,
+     * 否则「审批已通过但账本写不进去」会把整次审批回滚。
+     */
+    static Object jsonSafe(Object value) {
+        if (value instanceof Map<?, ?> map) {
+            Map<String, Object> out = new java.util.LinkedHashMap<>();
+            map.forEach((k, v) -> out.put(String.valueOf(k), jsonSafe(v)));
+            return out;
+        }
+        if (value instanceof java.util.Collection<?> items) {
+            return items.stream().map(WorkflowInstanceController::jsonSafe).collect(java.util.stream.Collectors.toList());
+        }
+        if (value instanceof java.time.temporal.TemporalAccessor || value instanceof java.time.Duration) {
+            return value.toString();
+        }
+        return value;
     }
 
     public record WorkflowActionRequest(
@@ -605,6 +798,10 @@ public class WorkflowInstanceController {
     public ApiResponse<PageResponse<WorkflowInstancePendingDTO>> getMyCreated(
             @PathVariable @NotBlank String factoryId,
             @RequestHeader("Authorization") String authorization,
+            @RequestParam(required = false) String moduleCode,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) String approverRole,
+            @RequestParam(required = false) String initiator,
             @RequestParam(defaultValue = "1") @Min(1) int page,
             @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
 
@@ -613,15 +810,15 @@ public class WorkflowInstanceController {
             throw new BusinessException(401, "未授权 — JWT 解析失败");
         }
 
-        Pageable pageable = PageRequest.of(page - 1, size);
-        Page<ApprovalWorkflowInstance> instances = workflowEngine.findCreatedBy(
-                factoryId, user.getId(), pageable);
+        return personalView("my-created", page, size, moduleCode, keyword, approverRole, initiator,
+                pageable -> workflowEngine.findCreatedBy(factoryId, user.getId(), pageable),
+                content -> hydrateInstances(factoryId, content, user));
+    }
 
-        List<WorkflowInstancePendingDTO> dtos = hydrateInstances(factoryId, instances.getContent(), user);
-
-        PageResponse<WorkflowInstancePendingDTO> response = PageResponse.of(
-                dtos, page, size, instances.getTotalElements());
-        return ApiResponse.success(response);
+    /** 兼容旧调用点 (无附加筛选)。 */
+    public ApiResponse<PageResponse<WorkflowInstancePendingDTO>> getMyCreated(
+            String factoryId, String authorization, int page, int size) {
+        return getMyCreated(factoryId, authorization, null, null, null, null, page, size);
     }
 
     /**
@@ -670,18 +867,25 @@ public class WorkflowInstanceController {
     public ApiResponse<PageResponse<WorkflowInstancePendingDTO>> getActed(
             @PathVariable @NotBlank String factoryId,
             @RequestHeader("Authorization") String authorization,
+            @RequestParam(required = false) String moduleCode,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) String approverRole,
+            @RequestParam(required = false) String initiator,
             @RequestParam(defaultValue = "1") @Min(1) int page,
             @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
         User user = resolveCurrentUser(authorization);
         if (user == null) {
             throw new BusinessException(401, "未授权 — JWT 解析失败");
         }
-        Pageable pageable = PageRequest.of(page - 1, size);
-        Page<ApprovalWorkflowInstance> instances = workflowEngine.findActedBy(
-                factoryId, user.getId(), pageable);
-        return ApiResponse.success(PageResponse.of(
-                hydrateInstances(factoryId, instances.getContent(), true),
-                page, size, instances.getTotalElements()));
+        return personalView("acted", page, size, moduleCode, keyword, approverRole, initiator,
+                pageable -> workflowEngine.findActedBy(factoryId, user.getId(), pageable),
+                content -> hydrateInstances(factoryId, content, true));
+    }
+
+    /** 兼容旧调用点 (无附加筛选)。 */
+    public ApiResponse<PageResponse<WorkflowInstancePendingDTO>> getActed(
+            String factoryId, String authorization, int page, int size) {
+        return getActed(factoryId, authorization, null, null, null, null, page, size);
     }
 
     /**
@@ -693,6 +897,10 @@ public class WorkflowInstanceController {
     public ApiResponse<PageResponse<WorkflowInstancePendingDTO>> getCopied(
             @PathVariable @NotBlank String factoryId,
             @RequestHeader("Authorization") String authorization,
+            @RequestParam(required = false) String moduleCode,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) String approverRole,
+            @RequestParam(required = false) String initiator,
             @RequestParam(defaultValue = "1") @Min(1) int page,
             @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
         User user = resolveCurrentUser(authorization);
@@ -700,12 +908,15 @@ public class WorkflowInstanceController {
             throw new BusinessException(401, "未授权 — JWT 解析失败");
         }
         String role = user.getRoleCode() == null ? "" : user.getRoleCode();
-        Pageable pageable = PageRequest.of(page - 1, size);
-        Page<ApprovalWorkflowInstance> instances = workflowEngine.findCopiedTo(
-                factoryId, user.getId(), role, pageable);
-        return ApiResponse.success(PageResponse.of(
-                hydrateInstances(factoryId, instances.getContent(), user),
-                page, size, instances.getTotalElements()));
+        return personalView("copied", page, size, moduleCode, keyword, approverRole, initiator,
+                pageable -> workflowEngine.findCopiedTo(factoryId, user.getId(), role, pageable),
+                content -> hydrateInstances(factoryId, content, user));
+    }
+
+    /** 兼容旧调用点 (无附加筛选)。 */
+    public ApiResponse<PageResponse<WorkflowInstancePendingDTO>> getCopied(
+            String factoryId, String authorization, int page, int size) {
+        return getCopied(factoryId, authorization, null, null, null, null, page, size);
     }
 
     /**
@@ -786,8 +997,12 @@ public class WorkflowInstanceController {
         if (user == null) {
             throw new BusinessException(401, "未授权 — JWT 解析失败");
         }
-        ApprovalWorkflowInstance restarted = workflowEngine.restartWithCurrentDefinition(
-                factoryId, instanceId, user.getId(), request.getReason());
+        // 1551-11: 强制插单的新实例可能在创建时就结束, 要投影回计划与排程, 走插单适配器
+        boolean forceInsert = urgentInsertService != null && workflowEngine.getInstance(factoryId, instanceId)
+                .map(i -> "FORCE_INSERT".equals(i.getModuleCode())).orElse(false);
+        ApprovalWorkflowInstance restarted = forceInsert
+                ? urgentInsertService.restartWorkflowBinding(factoryId, instanceId, user.getId(), request.getReason())
+                : workflowEngine.restartWithCurrentDefinition(factoryId, instanceId, user.getId(), request.getReason());
         log.warn("按当前审批流重开: factoryId={}, previousInstanceId={}, newInstanceId={}, operator={}",
                 factoryId, instanceId, restarted.getId(), user.getUsername());
         List<WorkflowInstancePendingDTO> hydrated = hydrateInstances(factoryId, List.of(restarted), user);
@@ -864,6 +1079,7 @@ public class WorkflowInstanceController {
         Map<String, Map<String, ApprovalWorkflowNode>> wfNodesCache = new HashMap<>();
 
         // 5. 构造 DTO list
+        Map<String, Map<String, Object>> corrById = correctionSummaries(factoryId, instances);
         Map<String, String> warehouseNameById = loadWarehouseNames(factoryId);
         List<WorkflowInstancePendingDTO> dtos = new ArrayList<>();
         for (ApprovalWorkflowInstance inst : instances) {
@@ -872,11 +1088,11 @@ public class WorkflowInstanceController {
                     .moduleCode(inst.getModuleCode())
                     .businessEntityId(inst.getBusinessEntityId())
                     .initiatedAt(inst.getInitiatedAt())
-                    .businessSummary(buildBusinessSummary(inst, poById, soById, warehouseNameById, stocktakeById, showPurchaseAmounts))
+                    .businessSummary(buildBusinessSummary(inst, poById, soById, warehouseNameById, stocktakeById, showPurchaseAmounts, corrById))
                     .status(inst.getStatus().name())
                     .completedAt(inst.getCompletedAt())
                     .build();
-            fillReportCorrectionDetails(dto, inst, factoryId);
+            fillReportCorrectionDetails(dto, inst, factoryId, corrById);
             if (oaModuleLabelResolver != null) {
                 dto.setModuleLabel(oaModuleLabelResolver.resolve(
                         inst.getModuleCode(), inst.getContextJson()));
@@ -1028,13 +1244,13 @@ public class WorkflowInstanceController {
                                         Map<String, SalesOrder> soById,
                                         Map<String, String> warehouseNameById,
                                         Map<String, com.cretas.aims.entity.factory.FactoryStocktake> stocktakeById,
-                                        boolean showPurchaseAmounts) {
+                                        boolean showPurchaseAmounts,
+                                        Map<String, Map<String, Object>> corrById) {
         String moduleCode = inst.getModuleCode();
         String bizId = inst.getBusinessEntityId();
         if ("PRODUCTION_REPORT_CORRECTION".equals(moduleCode)
                 && productionReportCorrectionService != null) {
-            Map<String, Object> details = productionReportCorrectionService.approvalSummary(
-                    inst.getFactoryId(), bizId);
+            Map<String, Object> details = correctionSummary(inst.getFactoryId(), bizId, corrById);
             return "报工 #" + details.get("reportId") + " 修正"
                     + (details.get("processCategory") == null ? "" : "（" + details.get("processCategory") + "）");
         }
@@ -1115,6 +1331,18 @@ public class WorkflowInstanceController {
             }
             return sb.toString();
         }
+        if ("FORCE_INSERT".equals(moduleCode)) {
+            // 强制插单: context 由 UrgentInsertServiceImpl#startForceInsertWorkflow 写入
+            Map<String, Object> context = inst.getContextJson();
+            Object number = context == null ? null : context.get("planNumber");
+            Object qty = context == null ? null : context.get("plannedQuantity");
+            Object unit = context == null ? null : context.get("plannedUnit");
+            Object impact = context == null ? null : context.get("impactLevel");
+            StringBuilder sb = new StringBuilder("强制插单 ").append(number == null ? bizId : number);
+            if (qty != null) sb.append(" ").append(qty).append(unit == null ? "" : String.valueOf(unit));
+            if (impact != null) sb.append("（影响等级 ").append(impact).append("）");
+            return sb.toString();
+        }
         if ("BUDGET".equals(moduleCode)) {
             // 会计期间的 context 本来就带 year / month(AccountingPeriodServiceImpl#tryStartWorkflow
             // 写入), 所以不必回查 accounting_periods —— 与上面 INVENTORY_TRANSFER 同样直接读 context。
@@ -1152,11 +1380,11 @@ public class WorkflowInstanceController {
 
     private void fillReportCorrectionDetails(WorkflowInstancePendingDTO dto,
                                              ApprovalWorkflowInstance inst,
-                                             String factoryId) {
+                                             String factoryId,
+                                             Map<String, Map<String, Object>> corrById) {
         if (!"PRODUCTION_REPORT_CORRECTION".equals(inst.getModuleCode())
                 || productionReportCorrectionService == null) return;
-        Map<String, Object> details = productionReportCorrectionService.approvalSummary(
-                factoryId, inst.getBusinessEntityId());
+        Map<String, Object> details = correctionSummary(factoryId, inst.getBusinessEntityId(), corrById);
         dto.setReportCorrectionDetails(details);
         dto.setBusinessCode("报工 #" + details.get("reportId"));
     }

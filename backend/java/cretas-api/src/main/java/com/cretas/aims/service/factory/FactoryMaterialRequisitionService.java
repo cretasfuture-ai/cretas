@@ -34,15 +34,61 @@ public interface FactoryMaterialRequisitionService {
      *
      * @param plannedRawInputKg 可选。{@code null} 或非正数 = 沿用旧行为
      *      (辅料/包材需求量留空「按实际领用」，不猜、不编 0)。
+     * @return 新单据; {@link FactoryMaterialRequisition#getSeasoningItemsStatus()} 说明调料行这一段的结果
+     *      ({@link #SEASONING_ITEMS_OK} / {@link #SEASONING_ITEMS_UNAVAILABLE})
      */
     FactoryMaterialRequisition generateFromPlan(String factoryId, String productionPlanId, Long requestedBy,
                                                 BigDecimal plannedRawInputKg);
 
+    /**
+     * {@link FactoryMaterialRequisition#getSeasoningItemsStatus()} 的取值 (只有 {@code generateFromPlan} 填)。
+     * 调料表读取成功: 有调料就已按配方追加, 配方没有调料则本来就没有调料行。
+     */
+    String SEASONING_ITEMS_OK = "OK";
+    /**
+     * 调料表读取失败: 领料单 (原料 / 包材等 BOM 行) 照常生成并保存, 但<b>一行调料都没有追加</b>,
+     * 需要人工补上调料 (或稍后重新按计划生成)。⛔ 不是「这个配方没有调料」。
+     */
+    String SEASONING_ITEMS_UNAVAILABLE = "UNAVAILABLE";
+
     /** 详情 (含明细). */
     FactoryMaterialRequisition getById(String factoryId, String id);
 
+    /** {@link FactoryMaterialRequisition#getAuxiliaryAutoCalc()} 的四个取值。 */
+    String AUX_AUTO_CALC_AVAILABLE = "AVAILABLE";
+    String AUX_AUTO_CALC_NO_RATIO = "NO_RATIO";
+    String AUX_AUTO_CALC_PROCESS_SECRET = "PROCESS_SECRET";
+    /** 读配比时出错 (计划 / BOM / 保密名单查询失败): 详情照常返回, 辅料改人工填。 */
+    String AUX_AUTO_CALC_UNAVAILABLE = "UNAVAILABLE";
+
+    /**
+     * 详情接口用: {@link #getById} + 给辅料行填确认领料要用的配比
+     * ({@code FactoryMaterialRequisitionItem#dosagePerKgG}) 和 {@code auxiliaryAutoCalc}。
+     *
+     * <p>仓管只读得到领料单 (读不了生产计划 / BOM), 所以配比由这里按建单同一份 BOM 调料表带出来;
+     * 产品工艺保密时按调用者的完整查看权判 ({@code ProcessSecretAccessService#permitsViewFull}),
+     * 无权就不给配比, 状态为 {@code PROCESS_SECRET}。
+     *
+     * @param actor 调用者 (从请求取); null 时受保护产品一律不给配比
+     */
+    FactoryMaterialRequisition getDetailForPicking(String factoryId, String id,
+                                                   com.cretas.aims.security.AuthenticatedActor actor);
+
     /** 分页列表, status 可为 null. */
     Page<FactoryMaterialRequisition> list(String factoryId, Status status, Pageable pageable);
+
+    /** 带 关键词 / 计划号 / 需求日期范围 的列表。 */
+    Page<FactoryMaterialRequisition> list(String factoryId, Status status, String keyword, String planNumber,
+                                          java.time.LocalDate fromDate, java.time.LocalDate toDate, Pageable pageable);
+
+    /** 一行 = 一种物料 (按单位分开, 不同单位不相加): 已备 / 已发 / 退回 / 净领用 (= 已发 − 退回)。 */
+    record MaterialSummaryRow(String materialTypeId, String materialName, String unit,
+                              java.math.BigDecimal pickedQty, java.math.BigDecimal issuedQty,
+                              java.math.BigDecimal returnedQty, java.math.BigDecimal netIssuedQty) {
+    }
+
+    List<MaterialSummaryRow> summarizeByMaterial(String factoryId, Status status, String keyword, String planNumber,
+                                                 java.time.LocalDate fromDate, java.time.LocalDate toDate);
 
     /** 按计划反查. */
     List<FactoryMaterialRequisition> listByPlan(String factoryId, String productionPlanId);
@@ -69,4 +115,17 @@ public interface FactoryMaterialRequisitionService {
 
     /** 取消. */
     FactoryMaterialRequisition cancel(String factoryId, String id, Long operatorId, String reason);
+
+    /**
+     * C1 (Steve 2026-11-10 裁定 B): 整单撤回报工把 {@code qty} 放回了生产仓批次 {@code workshopBatchId};
+     * 如果这批料属于一张<b>已关单</b>的领料单, 生产仓已没有出路, 就把这 {@code qty} 直接退回原料仓源批次,
+     * 留一笔退料流水 (负数 MATERIAL_RETURN 消耗 + 已执行的生产退料单), 并把生产仓批次重新划平。
+     *
+     * <p>必须在调用方事务内、且调用方<b>已锁住</b>该生产仓批次之后调用 (锁序: 生产仓批次 → 领料单 → 原料批次,
+     * 与关单一致), 这样「是否已关单」读到的是并发关单提交后的状态, 不会重复退料。
+     *
+     * @return 实际退回原料仓的量; 不是领料单物化的生产仓批次、或领料单未关单 ⇒ 0 (料留在生产仓, 原路径不变)
+     */
+    BigDecimal returnToSourceIfRequisitionClosed(String factoryId, String workshopBatchId, BigDecimal qty,
+                                                 Long operatorId, String reasonRef);
 }

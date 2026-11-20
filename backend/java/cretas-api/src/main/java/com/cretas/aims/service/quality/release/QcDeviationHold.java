@@ -124,7 +124,7 @@ public class QcDeviationHold {
             for (MaterialBatch mb : materialBatchRepo.lockWipBatchesForDeviationHold(
                     factoryId, wipPbIds.stream().map(String::valueOf).toList())) {
                 if (mb.getStatus() == MaterialBatchStatus.AVAILABLE) {
-                    mb.setStatus(MaterialBatchStatus.INSPECTING);
+                    MaterialBatchHoldService.hold(mb);   // 记下扣留前状态 (M5), 放行时还原; 也让缺料不把它算成新供应 (M3)
                     materialBatchRepo.save(mb);
                     wipHeld++;
                 }

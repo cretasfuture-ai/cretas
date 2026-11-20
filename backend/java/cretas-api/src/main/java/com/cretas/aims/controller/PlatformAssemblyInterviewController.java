@@ -481,6 +481,20 @@ public class PlatformAssemblyInterviewController {
         }
 
         @Data
+        public static class FactoryPolicyItem {
+            /** 有缺料没解决时是否拦住开工(默认关) */
+            private Boolean blockStartOnOpenShortage;
+            /** 报工前必须有生产领料单(默认关) */
+            private Boolean requireRequisitionBeforeReport;
+            /** 报工时默认可跳过工序报工(默认关) */
+            private Boolean skipProcessReportingDefault;
+            /** 物料平衡差额黄色线 % (系统默认 5), 与红色线成对校验 0 < 黄 < 红 <= 100 */
+            private BigDecimal materialBalanceWarnPct;
+            /** 物料平衡差额红色线 % (系统默认 15) */
+            private BigDecimal materialBalanceRedPct;
+        }
+
+        @Data
         public static class SuggestedData {
             private List<TypeItem> productTypes;
             private List<TypeItem> materialTypes;
@@ -490,6 +504,12 @@ public class PlatformAssemblyInterviewController {
             private List<HaccpItem> haccpCheckpoints;
             /** 模块开关 —— key 取自 factory_settings 的 enableXxx 字段名 */
             private Map<String, Boolean> modules;
+            /**
+             * 厂规开关与阈值(缺料拦截 / 领料单 / 物料平衡告警线)—— 显式白名单字段, 见 {@link FactoryPolicyItem}。
+             * 与 modules 分开: modules 只放行 enableXxx, 这里逐个点名, ⛔ 不放宽成「所有字段都放」。
+             * 字段为 null = 建厂时没问到, 保留现值(没有现值就是系统默认), 不覆盖。
+             */
+            private FactoryPolicyItem policy;
             /** 预警阈值 —— key 必须在 ThresholdKeyCatalog 的合法集合里 */
             private List<ThresholdItem> thresholds;
             /** 存放区(仓库/库位) —— 没有它就无法入库出库 */
@@ -796,6 +816,12 @@ public class PlatformAssemblyInterviewController {
              * 该字段决定 SKU 是否能进入 Workflow、销售等下游选择器，不能只靠名称猜测。
              */
             private String productCategory;
+
+            /** 产品出产后是否要先检验才能放行(仅产品; null=没问到, 不动现值) */
+            private Boolean inspectionRequired;
+
+            /** 回料比例上限 %, 0 < x <= 100(仅产品; null=没问到/不设上限, 不动现值) */
+            private BigDecimal maxReworkRatioPercent;
 
             /**
              * 一级(包装)单位原文, 如「箱」。与 boxConversionCoefficient 联用:

@@ -89,6 +89,9 @@ class BatchConsumptionShortfallContractTest {
                 bomExpansionService, materialBatchService, materialBatchRepository,
                 consumptionRepository, productionBatchRepository, rawMaterialTypeRepository,
                 warehouseResolver);
+        // 排查 2026-11-10 A9: 缺料会挂待办 (生产告警), 告警仓储必注入
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "productionAlertRepository",
+                mock(com.cretas.aims.repository.ProductionAlertRepository.class));
         persistedConsumptions = new ArrayList<>();
 
         batch = new ProductionBatch();

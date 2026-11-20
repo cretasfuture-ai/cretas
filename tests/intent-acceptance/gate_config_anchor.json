@@ -1,0 +1,10 @@
+{
+  "_comment": "Steve 300 题锚点 (单句、无任务状态、对抗性选题) 只看相对基线不退步, 不设绝对线: 该集 168/300 是老师分歧题, 绝对值天然偏低。",
+  "min_n_overall": 30,
+  "min_slice_n": 25,
+  "max_regress_overall": 0.03,
+  "max_regress_slice": 0.08,
+  "max_unmeasured_rate": 0.02,
+  "floors": {},
+  "ceilings": {}
+}

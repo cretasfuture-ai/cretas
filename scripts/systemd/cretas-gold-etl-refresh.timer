@@ -1,5 +1,5 @@
 [Unit]
-Description=Trigger Cretas gold ETL daily refresh at 03:30 CST
+Description=Trigger Cretas factory Gold ETL daily at 03:30 China Standard Time
 Documentation=https://github.com/Stevenjxie/cretas/blob/main/backend/python/scripts/gold_etl_daily_refresh.py
 
 [Timer]

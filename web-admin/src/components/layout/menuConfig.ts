@@ -1,4 +1,5 @@
 import type { ModuleName } from '@/store/modules/permission';
+import { digitalSpecialistTitles } from '@/components/workdesk/digitalSpecialistRoles';
 // 菜单配置
 export interface MenuItem {
   path: string;
@@ -11,13 +12,37 @@ export interface MenuItem {
   allowedFactoryTypes?: string[];
   /** Require a concrete non-platform factory context before showing this item. */
   requiresFactoryContext?: boolean;
+  /** 报废审批资格 (disposal:approve): 菜单按后端 approval-permission 判, 不按岗位名。 */
+  requiresDisposalApproval?: boolean;
   children?: MenuItem[];
   groupLabel?: string;
   /** Backend-authoritative feature gate for platform-only assembly surfaces. */
   assemblyFeature?: boolean;
   /** 真实待办计数 key。接口失败时隐藏，不允许用 0 伪装成功。 */
   badgeKey?: import('@/store/modules/taskBadges').TaskBadgeKey;
+  /**
+   * P2 原型侧栏分区（只在 groupedMenuConfig 的顶层项上出现）：
+   * top = 今天/待办/发现的问题这类独立入口；all = 「全部功能」；settings = 底部「设置」。
+   */
+  section?: MenuSection;
+  /**
+   * P2 纯展示分组（概览 / 数据与分析 / 主数据）：不是路由、本身不带任何权限判据，
+   * 子项全部不可见时整组隐藏。⛔ 不要给 container 加 module/roles —— 判据只在叶子与 guardAncestors 上。
+   */
+  container?: boolean;
+  /**
+   * P2 从原分组搬出来的叶子：原来那几层父分组（去掉 children）。侧栏判可见时这些父分组也必须可见，
+   * 与搬家前「父组被隐藏 ⇒ 子项跟着隐藏」逐项等价（disabledMenuPaths 写父路径、menuVisible、模块开关都算）。
+   */
+  guardAncestors?: MenuItem[];
 }
+
+export type MenuSection = 'top' | 'all' | 'settings';
+export const MENU_SECTION_TITLES: Record<MenuSection, string> = {
+  top: '',
+  all: '全部功能',
+  settings: '设置',
+};
 
 const PLATFORM_ADMIN_ONLY = ['platform_admin'];
 const FACTORY_ASSEMBLY_ROLES = ['platform_admin'];
@@ -53,7 +78,7 @@ export const financeManagerMenu: MenuItem[] = [
   // 工厂财务只保留本职工作台。销售/采购审批统一在个人 OA，财务菜单不再重复挂审批索引。
   { path: '/finance/ar-ap', title: '应收应付', icon: 'Wallet', module: 'finance', hideForFactoryTypes: ['RESTAURANT'] },
   { path: '/finance/adjustments', title: '调整审批', icon: 'Checked', module: 'finance', hideForFactoryTypes: ['RESTAURANT'] },
-  { path: '/finance/disposal-approvals', title: '报废审批', icon: 'DocumentChecked', module: 'finance', roles: ['finance_manager', 'factory_super_admin', 'platform_admin'], hideForFactoryTypes: ['RESTAURANT'] },
+  { path: '/finance/disposal-approvals', title: '报废审批', icon: 'DocumentChecked', module: 'finance', requiresDisposalApproval: true, hideForFactoryTypes: ['RESTAURANT'] },
   { path: '/finance/invoices?status=REQUESTED', title: '销售开票', icon: 'Tickets', module: 'finance', hideForFactoryTypes: ['RESTAURANT'] },
   { path: '/finance/purchase-invoices', title: '采购收票', icon: 'DocumentChecked', module: 'finance', hideForFactoryTypes: ['RESTAURANT'] },
   { path: '/finance/payments', title: '收款管理', icon: 'Money', module: 'finance', hideForFactoryTypes: ['RESTAURANT'] },
@@ -92,7 +117,7 @@ const rawMenuConfig: MenuItem[] = [
   //   两个判据不是同一个, 中间的差就是「看得见点不开」。
   // ⛔ 不是给销售加 AI 权限: owner 明确「数据分析应该是管理员或者老板这样子阶级的」。
   {
-    path: '/dashboard/ai-value', title: 'AI 工作台', icon: 'MagicStick', module: 'dashboard',
+    path: '/dashboard/ai-value', title: digitalSpecialistTitles['/dashboard/ai-value'], icon: 'MagicStick', module: 'dashboard',
     roles: ['factory_super_admin', 'platform_admin', 'permission_admin'],
   },
   {
@@ -101,13 +126,13 @@ const rawMenuConfig: MenuItem[] = [
     icon: 'Odometer',
     module: 'dashboard',
     children: [
-      { path: '/workdesk/sales-owner', title: '销售老板工作台', icon: '', module: 'sales', groupLabel: '经营管理' },
-      { path: '/workdesk/finance-manager', title: '财务主管工作台', icon: '', module: 'finance' },
-      { path: '/workdesk/quality-manager', title: '质量主管工作台', icon: '', module: 'quality' },
-      { path: '/workdesk/production-manager', title: '生产经理工作台', icon: '', module: 'production' },
-      { path: '/workdesk/warehouse-keeper', title: '仓管员工作台', icon: '', module: 'warehouse', groupLabel: '一线执行' },
-      { path: '/workdesk/purchaser', title: '采购员工作台', icon: '', module: 'procurement' },
-      { path: '/workdesk/quality-chief', title: '质检主管工作台', icon: '', module: 'quality' },
+      { path: '/workdesk/sales-owner', title: digitalSpecialistTitles['/workdesk/sales-owner'], icon: '', module: 'sales', groupLabel: '经营管理' },
+      { path: '/workdesk/finance-manager', title: digitalSpecialistTitles['/workdesk/finance-manager'], icon: '', module: 'finance' },
+      { path: '/workdesk/quality-manager', title: digitalSpecialistTitles['/workdesk/quality-manager'], icon: '', module: 'quality' },
+      { path: '/workdesk/production-manager', title: digitalSpecialistTitles['/workdesk/production-manager'], icon: '', module: 'production' },
+      { path: '/workdesk/warehouse-keeper', title: digitalSpecialistTitles['/workdesk/warehouse-keeper'], icon: '', module: 'warehouse', groupLabel: '一线执行' },
+      { path: '/workdesk/purchaser', title: digitalSpecialistTitles['/workdesk/purchaser'], icon: '', module: 'procurement' },
+      { path: '/workdesk/quality-chief', title: digitalSpecialistTitles['/workdesk/quality-chief'], icon: '', module: 'quality' },
     ],
   },
   {
@@ -261,6 +286,8 @@ const rawMenuConfig: MenuItem[] = [
       // —— 判据见 workflow/__tests__/bomMenuRetired.source.spec.ts。
       // (副产 2026-08-07 阶段 2 起是工序上的真实产出节点, 不再是 BOM 的一类 cell。)
       { path: '/production/bom/ecns', title: '工程变更通知', icon: '', module: 'production' },
+      // D-S5-09: 采购价变动生成的 BOM 调价建议在这里批准 / 驳回 (此前只能调接口)
+      { path: '/production/bom/price-adjustments', title: 'BOM调价建议', icon: '', module: 'production' },
       // 2026-09-02 同上收拢: 生产分析 hub = 车间实时生产报表 + 生产数据分析 +
       // BOM达成率分析 + 工序投入产出对比 + 人效双口径对比 + 成品出厂核算。
       // 6 个旧路径 (/analytics/production-report、/production-analytics/production、
@@ -346,13 +373,14 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/quality/defects', title: '工序质检不良', icon: '', module: 'quality' },
       // Sprint4-H Q-RETURN-1: 质检退回单 (上游退回, 不含客户销售退货)
       { path: '/quality/returns', title: '质检退回单', icon: '', module: 'quality' },
+      // 纪律排查 B14 (Steve 2026-11-10): 不良品处置 / 批次召回按「质检模块权限」出入口, 不再另加岗位白名单。
+      // 后端这两组接口的门槛就是 quality:read / quality:read_write (召回后端本来没有岗位限制),
+      // 前端多叠的一层岗位名单只会把有质检权限的人挡在外面。要收紧就改权限配置, 不在这里写岗位名。
       {
         path: '/quality/disposition', title: '不良品处置', icon: '', module: 'quality', groupLabel: '处置闭环',
-        roles: ['quality_manager', 'factory_super_admin', 'platform_admin', 'permission_admin'],
       },
       {
         path: '/quality/recalls', title: '批次召回', icon: '', module: 'quality',
-        roles: ['quality_manager', 'factory_super_admin', 'platform_admin', 'permission_admin'],
       },
       { path: '/quality/disposals', title: '废弃处理', icon: '', module: 'quality' },
       // S4 缺料异常: 质检放行会减少缺口, 质检也要能看; 与生产组同一页面, 本组自己的路由 (面包屑=质量管理)
@@ -419,10 +447,11 @@ const rawMenuConfig: MenuItem[] = [
       //    餐饮租户不从这里管账号。⛔ 不要把它当成待修缺陷「顺手修好」。
       { path: '/system/users', title: '账号管理', icon: '', module: 'system', groupLabel: '账号权限' },
       { path: '/system/roles', title: '角色权限', icon: '', module: 'system' },
-      // 权限矩阵只读页 (ARCH-PERMISSION-ADMIN-L1-EDITOR-20260906)。
-      // module: 'system' 与后端端点的 @RequirePermission 同码 —— ⛔ 不加 roles 白名单,
-      // 否则「菜单可见」与「接口可进」会分叉。
-      { path: '/system/permission-matrix', title: '权限矩阵', icon: '', module: 'system' },
+      // 权限矩阵 (ARCH-PERMISSION-ADMIN-L1-EDITOR-20260906)。改的是全平台表 ⇒ 平台专属
+      // (2026-11-18 PROTO-DEMO-PERM): 后端读写两个端点都叠了 @RequireRole({"platform_admin"}),
+      // 这里的 roles 与它同一份名单 —— 工厂账号 (含 factory_super_admin / permission_admin) 菜单不可见、接口 403。
+      // 闸: permissionGateMatchesBackend.spec.ts 对着后端源文件钉住两侧一致。
+      { path: '/system/permission-matrix', title: '权限矩阵', icon: '', module: 'system', roles: ['platform_admin'] },
       { path: '/hr/employees', title: '员工档案', icon: '', module: 'hr', groupLabel: '员工组织' },
       { path: '/hr/departments', title: '部门管理', icon: '', module: 'hr' },
       { path: '/hr/work-types', title: '工种字典', icon: '', module: 'hr' },
@@ -447,7 +476,7 @@ const rawMenuConfig: MenuItem[] = [
     children: [
       { path: '/finance/adjustments', title: '调整审批', icon: '', module: 'finance', groupLabel: '审核队列' },
       { path: '/finance/disposal-approvals', title: '报废审批', icon: '', module: 'finance',
-        roles: ['finance_manager', 'factory_super_admin', 'platform_admin'] },
+        requiresDisposalApproval: true },
       { path: '/finance/costs', title: '财务概览', icon: '', module: 'finance', groupLabel: '财务核算' },
       { path: '/finance/three-statements', title: '财务报表', icon: '', module: 'finance' },
       { path: '/finance/reports', title: '财务分析(Excel)', icon: '', module: 'finance' },
@@ -547,7 +576,7 @@ const rawMenuConfig: MenuItem[] = [
   {
     path: '/scheduling', title: '智能调度', icon: 'Calendar', module: 'scheduling',
     children: [
-      { path: '/scheduling/logistics/workbench', title: '排线工作台', icon: '', module: 'scheduling', groupLabel: '日常调度',
+      { path: '/scheduling/logistics/workbench', title: digitalSpecialistTitles['/scheduling/logistics/workbench'], icon: '', module: 'scheduling', groupLabel: '日常调度',
         hideForFactoryTypes: ['FACTORY'] },
       { path: '/scheduling/logistics/records', title: '调度记录', icon: '', module: 'scheduling',
         hideForFactoryTypes: ['FACTORY'] },
@@ -580,11 +609,13 @@ const rawMenuConfig: MenuItem[] = [
     // 「经营分析」(BusinessAnalysisHub, 4 tab) — 菜单项移除, 由 redirect 桥接。
     // 删 AI分析报告 (#9)。AI 运维 3 项收 platform_admin/permission_admin 门控 (移 admin 区)。
     // 经营驾驶舱置顶主入口。各页后端不变 (部分页 Java reports + Python 混合)。
-    // 🔴 2026-08-22 owner:「数据分析全部隐藏, 工厂暂时用不着」
-    // ⇒ 整组对**工厂租户**隐藏(餐饮不受影响 —— 那是另一个体系)。
-    // ⚠️ 菜单级隐藏, ⛔ 不等于关权限: analytics 模块未动, 手输 URL 仍进得去。
-    //    owner 说的是**暂时**, 所以选可逆的这一档。
-    path: '/smart-bi', title: '数据与分析', icon: 'TrendCharts', module: 'analytics', hideForFactoryTypes: ['FACTORY'],
+    // 2026-08-22 owner 曾令「数据分析全部隐藏, 工厂暂时用不着」(hideForFactoryTypes: ['FACTORY'])。
+    // P2b（迁移方案 M3，2026-11-14 Steve 定）：对工厂**默认显示，按厂可关**。
+    //   关 = feature-config analytics 行 config.showInSidebar === false（平台「工厂菜单」页写入），
+    //   判据在 factoryMenuVisibility.isFactoryAnalyticsGroupHidden；模块/角色判据不变。
+    //   路由 meta 从来没对工厂挡这些页（只挡菜单），所以放出菜单不会「看得见点不开」。
+    // 闸 menuPermissionParity.spec.ts 的 EXPECTED_CHANGES 逐条列了这次变化的 14 个叶子。
+    path: '/smart-bi', title: '数据与分析', icon: 'TrendCharts', module: 'analytics',
    
     children: [
       // ★ 主入口 (无 groupLabel, 置顶)
@@ -652,6 +683,17 @@ function sortTopLevelMenu(items: MenuItem[]): MenuItem[] {
 export const menuConfig: MenuItem[] = sortTopLevelMenu(rawMenuConfig);
 
 /**
+ * roles 恰为 ['platform_admin'] 但不进「平台工具」的叶子:
+ *   · /system/llm-usage 已在「平台管理」组里, 不重复;
+ *   · /system/permission-matrix 读写的是工厂级 (L2) 表头, 页面要 factoryId; 平台账号不进工厂时打开即报错,
+ *     所以不放进平台侧栏 (PR #1872 终审 M-1)。平台编辑 L1 走平台自己的角色权限入口。
+ */
+export const PLATFORM_TOOLS_EXCLUDED_PATHS: ReadonlySet<string> = new Set([
+  '/system/llm-usage',
+  '/system/permission-matrix',
+]);
+
+/**
  * Platform operators have a separate daily workspace. Keep this list made
  * from real platform routes; factory operations are intentionally not part of
  * the platform sidebar. A factory read-only context switches back to the
@@ -679,7 +721,7 @@ export const platformMenuConfig: MenuItem[] = [
     module: 'system',
     roles: ['platform_admin'],
     children: collectPlatformOnlyItems(menuConfig)
-      .filter((item) => item.path !== '/system/llm-usage'),
+      .filter((item) => !PLATFORM_TOOLS_EXCLUDED_PATHS.has(item.path)),
   },
 ];
 
@@ -700,3 +742,328 @@ function collectPlatformOnlyItems(items: MenuItem[]): MenuItem[] {
 export const platformWorkspacePaths: string[] = platformMenuConfig
   .flatMap((group) => group.children ?? [])
   .map((item) => item.path);
+
+// ============================================================================
+// P2（MIGRATION-PLAN 第一块 1.2 / DECISIONS 第十八节 M1–M8）：统一原型的侧栏分组。
+//
+// 原则：上面的 rawMenuConfig / menuConfig 一字不改，仍是每个菜单项（path + 权限字段）的唯一来源；
+// 这里只是把同一批对象重新摆位置。
+//   · 整组搬：直接引用原分组对象（权限字段天然相同）。
+//   · 单个叶子搬出原分组：带上 guardAncestors = 原来那几层父分组，侧栏判可见时父组也要过，
+//     所以「关掉父组路径 / 模块 ⇒ 子项跟着消失」的行为不变。
+//   · 新分组（概览 / 数据与分析 / 主数据）是 container：纯展示，本身不带判据。
+// 闸：__tests__/gates/menuPermissionParity.spec.ts 拿改前快照逐项比对每个叶子的
+//     「自身 + 祖先链」权限字段，数量也要相等。
+//
+// 本批的取舍（P2 brief 要求写清）：
+//   · 顶层「今天 /today」「待办 /todo」P3 已加，「发现的问题 /issues」P4 已加（TOP_ENTRIES）；
+//     P4 同时把概览里的「异常中心 /workspaces/exceptions」拿掉（旧路由跳到 /issues），闸里 EXPECTED_REMOVALS 登记。
+//   · （P2 原文：三页要到 P3/P4 才有，当时不显示。）
+//     不指向现有近似页的理由：那样会让同一 path 在菜单里出现两次（选中高亮/面包屑二义），
+//     而新 path 又还没有路由。section 'top' 的位置已留好，P3/P4 只加条目。
+//   · 「数字班组」组 P8 已加（M4，见 CREW_LEAVES）。委外收发/客户价目表/库存调整单/协同任务 4 页不做（M7）。
+//   · 「数据与分析」对工厂默认显示（M3）在 P2b 落地：/smart-bi 去掉 hideForFactoryTypes FACTORY，
+//     按厂关闭改为 feature-config showInSidebar === false；闸里 EXPECTED_CHANGES 白名单逐条列出。
+//   · 餐饮 / 物流工厂与平台侧栏不在原型范围（MIGRATION-PLAN 1.4）：继续用原分组，只换 token 与外壳。
+//   · 财务主管专用菜单 financeManagerMenu 不动（P9 财务换外壳时再看）。
+// ============================================================================
+
+function stripChildren(item: MenuItem): MenuItem {
+  const { children: _children, ...rest } = item;
+  return rest;
+}
+
+interface Located { node: MenuItem; ancestors: MenuItem[] }
+
+function locate(items: readonly MenuItem[], path: string, ancestors: MenuItem[] = []): Located | null {
+  for (const item of items) {
+    if (item.path === path) return { node: item, ancestors };
+    if (item.children?.length) {
+      const hit = locate(item.children, path, [...ancestors, item]);
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
+function mustLocate(path: string): Located {
+  const hit = locate(menuConfig, path);
+  if (!hit) throw new Error(`groupedMenuConfig: 菜单项 ${path} 不在 menuConfig 里（改了 path 要同步这里）`);
+  return hit;
+}
+
+/** 把一个叶子从原分组里拿出来，带上原父组判据。groupLabel（原组内小标题）不带走。 */
+function moveLeaf(path: string): MenuItem {
+  const { node, ancestors } = mustLocate(path);
+  if (node.children?.length) throw new Error(`groupedMenuConfig: ${path} 是分组，整组搬用 takeGroup`);
+  const { groupLabel: _groupLabel, ...leaf } = node;
+  const guards = [...(node.guardAncestors ?? []), ...ancestors.map(stripChildren)];
+  return guards.length ? { ...leaf, guardAncestors: guards } : leaf;
+}
+
+/** 一个分组的全部子项都按 moveLeaf 搬出（父组本身不再出现，但作为 guardAncestors 继续把关）。 */
+function moveAllChildren(groupPath: string): MenuItem[] {
+  const { node } = mustLocate(groupPath);
+  return (node.children ?? []).map((child) => {
+    if (child.children?.length) throw new Error(`groupedMenuConfig: ${child.path} 有下级，不能平铺`);
+    const { node: c, ancestors } = mustLocate(child.path);
+    return { ...c, guardAncestors: [...(c.guardAncestors ?? []), ...ancestors.map(stripChildren)] };
+  });
+}
+
+/** 整组引用，去掉搬走的子项；被搬走的子项若带小标题，交给下一个留下的兄弟。 */
+function takeGroup(path: string, removed: ReadonlySet<string>, overrides: Partial<MenuItem> = {}): MenuItem {
+  const { node } = mustLocate(path);
+  if (!node.children?.length) return { ...node, ...overrides };
+  const kept: MenuItem[] = [];
+  let pendingLabel: string | undefined;
+  for (const child of node.children) {
+    if (removed.has(child.path)) {
+      if (child.groupLabel) pendingLabel = child.groupLabel;
+      continue;
+    }
+    if (pendingLabel && !child.groupLabel) kept.push({ ...child, groupLabel: pendingLabel });
+    else kept.push(child);
+    pendingLabel = undefined;
+  }
+  return { ...node, ...overrides, children: kept };
+}
+
+function container(path: string, title: string, icon: string, children: MenuItem[], section: MenuSection = 'all'): MenuItem {
+  // module 只为满足类型；container 在侧栏 canSeeMenuItem 里直接放行，不按它判。
+  return { path, title, icon, module: 'dashboard', container: true, section, children };
+}
+
+/** 设置 › 主数据：只改菜单位置，路由不变（MIGRATION-PLAN 1.2）。 */
+const MASTER_DATA_PATHS = [
+  '/system/products',
+  '/procurement/suppliers',
+  '/sales/customers',
+  '/warehouse/material-types',
+  '/warehouse/material-segments',
+  '/sales/vehicles',
+  '/unit-dictionary',
+] as const;
+const SETTINGS_LEAF_PATHS = ['/quality/vision-training'] as const;
+
+/**
+ * P6：搬进「数据与分析」的生产 / 仓储叶子（只改菜单位置，路由与权限字段不变，原父组作 guardAncestors 继续把关）。
+ *   · 成本分析入口（D1）：成本差异 / 成本损耗异常 / 成本汇总，原在「生产管理」下。
+ *   · 物料均价趋势（D6）：原在「仓储管理」下，放「经营分析」。
+ */
+const COST_ANALYSIS_PATHS = [
+  '/production/cost-variance',
+  '/production/cost-deviation-cases',
+  '/production-analytics/cost-summary',
+] as const;
+const PRICE_TREND_PATH = '/warehouse/material-price-trend';
+
+const MOVED_OUT = new Set<string>([
+  ...MASTER_DATA_PATHS, ...SETTINGS_LEAF_PATHS, ...COST_ANALYSIS_PATHS, PRICE_TREND_PATH,
+]);
+
+/**
+ * P6：「在制品」/warehouse/wip-batches 路由早已存在但原菜单没有入口，只在原型分组侧栏的「仓储管理」里挂一项。
+ * 权限 = 路由自己的 module: 'warehouse'（与「仓储管理」父组同判据），不另加 roles；闸里 EXPECTED_ADDITIONS 登记。
+ * 原分组 menuConfig（餐饮 / 物流在用）不动。
+ */
+const WIP_MENU_ITEM: MenuItem = { path: '/warehouse/wip-batches', title: '在制品', icon: '', module: 'warehouse' };
+
+function warehouseGroupWithWip(): MenuItem {
+  const group = takeGroup('/warehouse', MOVED_OUT);
+  const kids = [...(group.children ?? [])];
+  const at = kids.findIndex((c) => c.path === '/warehouse/materials');
+  kids.splice(at < 0 ? kids.length : at + 1, 0, WIP_MENU_ITEM);
+  return { ...group, children: kids };
+}
+
+/**
+ * P3：顶层独立入口「今天」「待办」。两页只读聚合各来源接口，自己没有数据权限；
+ * 每个来源在页面里按各自模块权限决定读不读（权限不够的来源不发请求、写明原因），所以入口本身对所有工厂账号开放，
+ * 与「个人 OA」同判据（module: 'dashboard'，人人都有）。新增项的权限字段在 menuPermissionParity 里列为预期新增。
+ * P4：「发现的问题 /issues」同判据——问题从各来源接口读（各按自己的模块权限），处置写入时后端再按来源查权限。
+ */
+const TOP_ENTRIES: MenuItem[] = [
+  { path: '/today', title: '今天', icon: 'Sunny', module: 'dashboard', section: 'top' },
+  { path: '/todo', title: '待办', icon: 'Finished', module: 'dashboard', section: 'top' },
+  { path: '/issues', title: '发现的问题', icon: 'WarningFilled', module: 'dashboard', hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'], section: 'top' },
+];
+
+/**
+ * P5：生产管理下新加「称重报工 /production/weigh」（原型 R23/R34：逐笔称重、带皮重、数据疑点）。
+ * 只加在原型分组侧栏；原分组 menuConfig（餐饮 / 物流在用）不动。写入走已有报工接口（production:read_write），
+ * 入口与「报工审批」同判据（module: 'production'）。闸里 EXPECTED_ADDITIONS 登记。
+ */
+const P5_WEIGH_LEAF: MenuItem = { path: '/production/weigh', title: '称重报工', icon: '', module: 'production' };
+
+/**
+ * 委外（DECISIONS 第十九节，Steve 11-14）：委外并入生产主链，**不新增委外菜单组**，生产管理 → 生产过程
+ * 下放「委外单 /production/outsource」（排在交付风险之后）。只加在原型分组侧栏；原分组 menuConfig 不动。
+ * 后端 OutsourceOrderController 是 @RequireModule("production_plan") → 权限模块 production，与本项同一个判据，不加 roles。
+ * 闸里 EXPECTED_ADDITIONS 登记。
+ */
+const OUTSOURCE_LEAF: MenuItem = { path: '/production/outsource', title: '委外单', icon: '', module: 'production' };
+
+/**
+ * 工序首检（原型统一 E 线 BL17）：质量管理 → 质量检验下放「工序首检 /quality/first-article」（排在质检记录之后）。
+ * 只加在原型分组侧栏；原分组 menuConfig 不动。后端 FirstArticleController 是 @RequireModule("quality_inspection")，
+ * 读接口认 quality / production 读权限，菜单与质检记录同判据 module: 'quality'，不加 roles。闸里 EXPECTED_ADDITIONS 登记。
+ */
+const FIRST_ARTICLE_LEAF: MenuItem = { path: '/quality/first-article', title: '工序首检', icon: '', module: 'quality' };
+
+/**
+ * P8「数字班组」（MIGRATION-PLAN 2.7，DECISIONS 第十八节 M4：P8 上菜单）。只加在原型分组侧栏；原分组 menuConfig 不动。
+ * 组是 container（纯展示）；两个叶子与「待办」同判据（module: 'dashboard'，餐饮 / 物流不显示），
+ * 页面数据由 DigitalCrewController 按登录人权限逐件判。「等我确认」不另开页，并入「待办 › 等我确认」。
+ * 设置 › 数字班组配置：module: 'system'（与「系统管理」同模块）；改配置后端再要 system:read_write。
+ * 闸里 EXPECTED_ADDITIONS 登记。
+ */
+const CREW_LEAVES: MenuItem[] = [
+  { path: '/crew', title: '班组首页', icon: '', module: 'dashboard', hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'] },
+  { path: '/crew/ledger', title: '工作记录与额度', icon: '', module: 'dashboard', hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'] },
+];
+const CREW_SETTINGS_LEAF: MenuItem = {
+  path: '/crew/settings', title: '数字班组配置', icon: 'UserFilled', module: 'system', hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'],
+};
+
+/**
+ * P10 外部软件（MIGRATION-PLAN 第四块）：「数据与分析」末尾放「外部软件对照 /external-software」。
+ * 只在平台授权了外部软件接口的工厂显示：AppSidebar 用 feature-config integrations 行（externalHiddenMenuPaths）隐藏，
+ * 路由守卫与后端同样按授权拦。后端接口 @RequirePermission production:read → module: 'production'，不加 roles。
+ * 只加在原型分组侧栏；原分组 menuConfig 不动。闸里 EXPECTED_ADDITIONS 登记。
+ */
+const EXTERNAL_SOFTWARE_LEAF: MenuItem = { path: '/external-software', title: '外部软件对照', icon: '', module: 'production', groupLabel: '外部数据' };
+
+function insertAfter(group: MenuItem, afterPath: string, leaf: MenuItem): MenuItem {
+  const children = [...(group.children ?? [])];
+  const at = children.findIndex((c) => c.path === afterPath);
+  if (at < 0) throw new Error(`groupedMenuConfig: ${afterPath} 不在 ${group.path} 下（改了 path 要同步这里）`);
+  children.splice(at + 1, 0, leaf);
+  return { ...group, children };
+}
+
+/** P4：原「异常中心」由顶层「发现的问题」取代，概览里不再列（原分组 menuConfig 不动，餐饮 / 物流本来就看不到它）。 */
+const REPLACED_BY_ISSUES = new Set<string>(['/workspaces/exceptions']);
+
+/** 「数据与分析」子项：原 /smart-bi 全部子项，经营分析段后插入物料均价趋势（D6），其后接「成本分析」三项（D1）。 */
+function analyticsChildren(): MenuItem[] {
+  const base = moveAllChildren('/smart-bi');
+  const at = base.findIndex((c) => c.path === '/analytics/supply-chain');
+  const cost = COST_ANALYSIS_PATHS.map((p, i) => (i === 0 ? { ...moveLeaf(p), groupLabel: '成本分析' } : moveLeaf(p)));
+  base.splice(at < 0 ? base.length : at + 1, 0, moveLeaf(PRICE_TREND_PATH), ...cost);
+  return base;
+}
+
+function buildGroupedMenu(): MenuItem[] {
+  const overview = container('#group/overview', '概览', 'House', [
+    mustLocate('/dashboard').node,
+    mustLocate('/workdesk').node,
+    takeGroup('/workspaces', REPLACED_BY_ISSUES),
+    mustLocate('/dashboard/ai-value').node,
+  ]);
+  const analytics = container('#group/analytics', '数据与分析', 'DataAnalysis', [
+    mustLocate('/analytics/ai-reports').node,
+    mustLocate('/analytics/indicators').node,
+    ...analyticsChildren(),
+    EXTERNAL_SOFTWARE_LEAF,
+  ]);
+  const all: MenuItem[] = [
+    overview,
+    takeGroup('/workflow', MOVED_OUT),
+    takeGroup('/procurement', MOVED_OUT),
+    takeGroup('/sales', MOVED_OUT),
+    insertAfter(
+      insertAfter(takeGroup('/production', MOVED_OUT), '/production/approval', P5_WEIGH_LEAF),
+      '/production/delivery-risks', OUTSOURCE_LEAF,
+    ),
+    warehouseGroupWithWip(),
+    insertAfter(takeGroup('/quality', MOVED_OUT), '/quality/inspections', FIRST_ARTICLE_LEAF),
+    analytics,
+    container('#group/crew', '数字班组', 'UserFilled', CREW_LEAVES),
+    // 原型关掉、正式端保留的模块（第三块）：只换外观与位置
+    takeGroup('/rd', MOVED_OUT),
+    takeGroup('/hr', MOVED_OUT),
+    takeGroup('/equipment', MOVED_OUT),
+    takeGroup('/finance', MOVED_OUT),
+    takeGroup('/scheduling', MOVED_OUT),
+  ].map((item) => ({ ...item, section: 'all' as const }));
+
+  const settings: MenuItem[] = [
+    container('#group/master-data', '主数据', 'Tickets', MASTER_DATA_PATHS.map(moveLeaf), 'settings'),
+    ...SETTINGS_LEAF_PATHS.map((p) => ({ ...moveLeaf(p), icon: 'Aim', section: 'settings' as const })),
+    { ...CREW_SETTINGS_LEAF, section: 'settings' as const },
+    { ...takeGroup('/system', MOVED_OUT), section: 'settings' as const },
+  ];
+  return [...TOP_ENTRIES, ...all, ...settings];
+}
+
+/** FACTORY / CENTRAL_KITCHEN（及未带工厂类型的工厂账号）用的原型分组侧栏。 */
+export const groupedMenuConfig: MenuItem[] = buildGroupedMenu();
+
+/** Catalog both layouts: factory-only leaves must also be configurable by platform admins. */
+export const configurableMenuConfig: MenuItem[] = [...menuConfig, ...groupedMenuConfig];
+
+export type FactoryMenuProfile = 'wholesale';
+
+export const wholesaleWorkdeskTitles: Record<string, string> = {
+  '/workdesk/sales-owner': digitalSpecialistTitles['/workdesk/sales-owner'],
+  '/workdesk/purchaser': digitalSpecialistTitles['/workdesk/purchaser'],
+  '/workdesk/warehouse-keeper': digitalSpecialistTitles['/workdesk/warehouse-keeper'],
+};
+const wholesaleDesk = (path: string): MenuItem => ({ ...moveLeaf(path), title: wholesaleWorkdeskTitles[path] });
+
+/**
+ * Layout only: keep the original paths, permissions and ancestor guards.
+ * 批发商的数字员工已嵌在各自模块里（#1734/#1753），不另出顶层「数字班组」组：P8 的两个叶子（判据不变）并进「概览」。
+ */
+export const wholesalerMenuConfig: MenuItem[] = groupedMenuConfig.filter((item) => item.path !== '#group/crew').map((item) => {
+  if (item.path === '/procurement') {
+    return { ...item, children: [wholesaleDesk('/workdesk/purchaser'), ...(item.children ?? []), moveLeaf('/procurement/suppliers')] };
+  }
+  if (item.path === '/sales') {
+    return { ...item, children: [wholesaleDesk('/workdesk/sales-owner'), ...(item.children ?? []), moveLeaf('/sales/customers')] };
+  }
+  if (item.path === '/warehouse') {
+    return { ...item, children: [wholesaleDesk('/workdesk/warehouse-keeper'), ...(item.children ?? [])] };
+  }
+  if (item.path === '#group/overview') {
+    return { ...item, children: [...(item.children?.map((child) => child.path === '/workdesk'
+      ? { ...child, children: child.children?.filter((desk) => !wholesaleWorkdeskTitles[desk.path]) } : child) ?? []),
+    ...CREW_LEAVES.map((leaf) => (leaf.path === '/crew' ? { ...leaf, title: '数字班组' } : leaf))] };
+  }
+  if (item.path === '#group/master-data') {
+    return { ...item, title: '基础资料', children: item.children?.filter((child) =>
+      !['/procurement/suppliers', '/sales/customers'].includes(child.path)) };
+  }
+  return item;
+});
+
+/** 餐饮 / 物流不在原型范围，继续用原分组。 */
+const LEGACY_LAYOUT_FACTORY_TYPES = new Set(['RESTAURANT', 'LOGISTICS']);
+
+export function factoryMenuForType(factoryType: string | null | undefined, profile?: FactoryMenuProfile): MenuItem[] {
+  if (factoryType && LEGACY_LAYOUT_FACTORY_TYPES.has(factoryType)) return menuConfig;
+  return profile === 'wholesale' ? wholesalerMenuConfig : groupedMenuConfig;
+}
+
+/** 面包屑「组 › 项 › 子项」：按菜单树找当前路径的祖先标题；section 不进面包屑。找不到返回 null。 */
+export function menuTrail(items: readonly MenuItem[], path: string): MenuItem[] | null {
+  const pathname = path.split(/[?#]/)[0];
+  let best: MenuItem[] | null = null;
+  const visit = (nodes: readonly MenuItem[], trail: MenuItem[]) => {
+    for (const node of nodes) {
+      const next = [...trail, node];
+      if (node.children?.length) {
+        visit(node.children, next);
+        continue;
+      }
+      const leafPath = node.path.split(/[?#]/)[0];
+      if (pathname === leafPath || pathname.startsWith(leafPath + '/')) {
+        // 取最长匹配（/finance/invoices 与 /finance/invoices/123 之类）
+        if (!best || leafPath.length > best[best.length - 1].path.split(/[?#]/)[0].length) best = next;
+      }
+    }
+  };
+  visit(items, []);
+  return best;
+}

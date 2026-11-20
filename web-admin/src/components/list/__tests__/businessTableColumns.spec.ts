@@ -45,8 +45,13 @@ describe('sales, procurement and production list integration', () => {
   const procurementSource = readSource('../../../views/procurement/orders/list.vue');
   const productionSource = readSource('../../../views/production/plans/list.vue');
 
+  it('sales list (Nuxt UI UTable) keeps the shared grid class and limited column selector', () => {
+    expect(salesSource).toContain('business-list-table');
+    expect(salesSource).toContain('<ListColumnSelector');
+    expect(salesSource).toContain('<UTable');
+  });
+
   it.each([
-    ['sales', salesSource],
     ['procurement', procurementSource],
     ['production', productionSource],
   ])('%s list uses the shared fixed-grid and limited column selector', (_name, source) => {
@@ -59,7 +64,8 @@ describe('sales, procurement and production list integration', () => {
     expect(salesSource).not.toContain('<RowMarkerCell');
     expect(procurementSource).not.toContain('<RowMarkerCell');
     expect(procurementSource).not.toContain('type="selection"');
-    expect(salesSource).toContain('v-if="salesBatchMode" type="selection"');
+    // Nuxt UI 版: 勾选列只在 salesBatchMode 下进列定义
+    expect(salesSource).toContain("salesBatchMode.value && { id: 'select' }");
     expect(productionSource).toContain('v-if="productionBatchMode" type="selection"');
   });
 
@@ -67,7 +73,8 @@ describe('sales, procurement and production list integration', () => {
     expect(procurementSource).toContain('prop="orderNumber" label="订单编号" width="170" sortable');
     expect(procurementSource).toContain(':filters="purchaseTypeColumnFilters"');
     expect(procurementSource).toContain('prop="orderDate"');
-    expect(procurementSource).toContain('label="总金额"');
+    // PROTO-DEMO-PO-TAX: totalAmount 是未税总额, 列名照实写 (原「总金额」看不出含不含税)。
+    expect(procurementSource).toContain('label="未税总额"');
     expect(procurementSource).toContain(':filters="purchaseStatusColumnFilters"');
   });
 });

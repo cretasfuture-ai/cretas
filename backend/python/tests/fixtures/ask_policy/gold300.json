@@ -1,0 +1,6856 @@
+[
+ {
+  "qno": 1,
+  "id": "Q001",
+  "utterance": "这个客户的量给我弄一下",
+  "role": "sales_manager",
+  "rw": "read",
+  "history": [
+   {
+    "role": "assistant",
+    "content": "上一轮在处理「7 天销售预测」；已确认：客户=华盛商超；系统刚追问要看哪个产品的7天预测。；还缺：产品"
+   }
+  ],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 2,
+  "id": "Q002",
+  "utterance": "帮我看下今天产能汇总",
+  "role": "workshop_supervisor",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "other",
+   "note": "系统首先给出产能汇总的预设字段，问用户是否确认这个范围，以及时间范围。",
+   "expected": "show",
+   "mapped_by": "备注: 先给产能汇总的预设字段, 问用户是否确认范围"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 3,
+  "id": "Q003",
+  "utterance": "查下这批可可粉",
+  "role": "warehouse_worker",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 4,
+  "id": "Q004",
+  "utterance": "把库房北门那个加我",
+  "role": "warehouse_worker",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "other",
+   "note": "一般不会这么问",
+   "expected": "unscored"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "shi_only",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 5,
+  "id": "Q005",
+  "utterance": "改成这周排班",
+  "role": "workshop_supervisor",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "other",
+   "note": "一般不会这么问",
+   "expected": "unscored"
+  },
+  "shi": {
+   "choice": "other",
+   "note": "不用再问是否要看本周排班表，直接问如何修改，因为问题已经确定了改的动作。",
+   "expected": "ask",
+   "mapped_by": "备注: 不再问看不看排班, 直接问怎么改"
+  },
+  "status": "shi_only",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 6,
+  "id": "Q006",
+  "utterance": "汇总一下今天各工序任务",
+  "role": "workshop_supervisor",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "other",
+   "note": "在列出数量后，追问用户是否还需要分析、生成结论。因为“汇总”首先是用户看，意味着后续用户可能进行分析。",
+   "expected": "show",
+   "mapped_by": "备注: 先列数量, 再追问是否要分析"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 7,
+  "id": "Q007",
+  "utterance": "别查名称了，改看这款果冻配方合不合规",
+  "role": "quality_inspector",
+  "rw": "read",
+  "history": [
+   {
+    "role": "assistant",
+    "content": "上一轮在处理「添加剂智能匹配」；已确认：添加剂名称=山梨酸钾；系统刚返回了该添加剂的匹配结果"
+   }
+  ],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "other",
+   "note": "不止要问是哪个产品，还需要问标准核对是什么，是国家标准，还是企业内部标准。",
+   "expected": "ask",
+   "mapped_by": "备注: 既要问哪款产品, 也要问按国标还是企标"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 8,
+  "id": "Q008",
+  "utterance": "看牛C308来路",
+  "role": "quality_inspector",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 9,
+  "id": "Q009",
+  "utterance": "把常一起用的那个弄出来",
+  "role": "workshop_supervisor",
+  "rw": "write",
+  "history": [
+   {
+    "role": "assistant",
+    "content": "上一轮在处理「工具使用模式分析」；已确认：统计范围=包装车间；系统已确认统计范围为包装车间，正在询问时间范围。；还缺：时间范围"
+   }
+  ],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 10,
+  "id": "Q010",
+  "utterance": "库存",
+  "role": "warehouse_worker",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 11,
+  "id": "Q011",
+  "utterance": "今天产线异常告警有哪些",
+  "role": "workshop_supervisor",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 12,
+  "id": "Q012",
+  "utterance": "汇总一下今天蒸煮工序任务",
+  "role": "workshop_supervisor",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 13,
+  "id": "Q013",
+  "utterance": "我要看三车间上季度的利润情况",
+  "role": "factory_super_admin",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 14,
+  "id": "Q014",
+  "utterance": "把我上次那单接着弄",
+  "role": "procurement_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 15,
+  "id": "Q015",
+  "utterance": "采购单处理一下",
+  "role": "procurement_manager",
+  "rw": "read",
+  "history": [
+   {
+    "role": "assistant",
+    "content": "上一轮在处理「采购订单查询」；已确认：状态=已提交；系统已展示已提交采购订单列表"
+   }
+  ],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 16,
+  "id": "Q016",
+  "utterance": "开票情况给我导",
+  "role": "finance_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 17,
+  "id": "Q017",
+  "utterance": "查下昨晚停机原因",
+  "role": "workshop_supervisor",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 18,
+  "id": "Q018",
+  "utterance": "把这几个托盘做成手机扫码单",
+  "role": "warehouse_worker",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 19,
+  "id": "Q019",
+  "utterance": "把成本那个报表调出来",
+  "role": "finance_manager",
+  "rw": "read",
+  "history": [
+   {
+    "role": "assistant",
+    "content": "上一轮在处理「财务报表」；已确认：时间范围=上月；系统正在补充财务成本分析报表所需的统计范围。；还缺：统计范围"
+   }
+  ],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 20,
+  "id": "Q020",
+  "utterance": "开工前检查给我看下",
+  "role": "workshop_supervisor",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 21,
+  "id": "Q021",
+  "utterance": "还按上次那个来",
+  "role": "workshop_supervisor",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "other",
+   "note": "",
+   "expected": "unscored",
+   "mapped_by": "other 且没写备注"
+  },
+  "status": "steve_only",
+  "aggressive_scored": true,
+  "conservative_scored": false
+ },
+ {
+  "qno": 22,
+  "id": "Q022",
+  "utterance": "看看今天到货的批次",
+  "role": "warehouse_worker",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 23,
+  "id": "Q023",
+  "utterance": "东门仓那批周转框丢了，给我登记赔偿",
+  "role": "warehouse_worker",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 24,
+  "id": "Q024",
+  "utterance": "查袋码批次",
+  "role": "quality_inspector",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 25,
+  "id": "Q025",
+  "utterance": "看看冷柜那个异常",
+  "role": "warehouse_worker",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 26,
+  "id": "Q026",
+  "utterance": "排明天到期的单子",
+  "role": "production_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 27,
+  "id": "Q027",
+  "utterance": "算算召回亏多少",
+  "role": "factory_super_admin",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 28,
+  "id": "Q028",
+  "utterance": "我说的是已过期的，不是快过期",
+  "role": "warehouse_worker",
+  "rw": "read",
+  "history": [
+   {
+    "role": "user",
+    "content": "查一下在库的原料批次"
+   },
+   {
+    "role": "assistant",
+    "content": "已为您查询「原料批次查询」：在库原料批次共 10 批（含快过期的批次）。"
+   }
+  ],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 29,
+  "id": "Q029",
+  "utterance": "把三车间这批糖浆做放行决定",
+  "role": "quality_inspector",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 30,
+  "id": "Q030",
+  "utterance": "看下成品入库这条规则跑不跑得通",
+  "role": "production_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "other",
+   "note": "",
+   "expected": "unscored"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "shi_only",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 31,
+  "id": "Q031",
+  "utterance": "样品单S20上下游给我看看",
+  "role": "sales_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 32,
+  "id": "Q032",
+  "utterance": "把最近三天没接的电话找出来",
+  "role": "sales_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 33,
+  "id": "Q033",
+  "utterance": "改下这批可可粉",
+  "role": "warehouse_worker",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 34,
+  "id": "Q034",
+  "utterance": "看看这批关键点情况",
+  "role": "quality_inspector",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 35,
+  "id": "Q035",
+  "utterance": "改算三车间这次召回的损失",
+  "role": "factory_super_admin",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "other",
+   "note": "改算先展示结果，不真正录入进系统，必须待用户做决定。",
+   "expected": "show",
+   "mapped_by": "备注: 改算先展示结果, 不录入, 等用户决定"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 36,
+  "id": "Q036",
+  "utterance": "查一下这家供应商交期多久",
+  "role": "procurement_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 37,
+  "id": "Q037",
+  "utterance": "发酵间的摄像头，视频流链接发我一下",
+  "role": "workshop_supervisor",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 38,
+  "id": "Q038",
+  "utterance": "那个样品弄一下",
+  "role": "sales_manager",
+  "rw": "unknown",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 39,
+  "id": "Q039",
+  "utterance": "查下包装线本周工序任务汇总",
+  "role": "workshop_supervisor",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "先展示字段范围，待用户确认后生成汇总。",
+   "expected": "show",
+   "mapped_by": "按钮 direct, 备注: 先展示字段范围, 待确认后生成"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 40,
+  "id": "Q040",
+  "utterance": "过下待财务审核的采购单",
+  "role": "finance_manager",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "show",
+   "note": "",
+   "expected": "show",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 41,
+  "id": "Q041",
+  "utterance": "把那个常用组合弄一下",
+  "role": "production_manager",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 42,
+  "id": "Q042",
+  "utterance": "把采购订单240318那张打出来",
+  "role": "procurement_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "show",
+   "note": "",
+   "expected": "show",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 43,
+  "id": "Q043",
+  "utterance": "把关键指标那个弄出来",
+  "role": "factory_super_admin",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "show",
+   "note": "",
+   "expected": "show",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 44,
+  "id": "Q044",
+  "utterance": "改下上月考勤",
+  "role": "hr_manager",
+  "rw": "unknown",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "show",
+   "note": "",
+   "expected": "show",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 45,
+  "id": "Q045",
+  "utterance": "这个批次怎么投不了料",
+  "role": "workshop_supervisor",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "需要在效率和准确度之间做一个平衡，因为投不了料是偶发事件，可以默认为最近一次投料失败的批次。也就是先给出答案，然后再反问用户是否指的是这个批次，还是别的批次。",
+   "expected": "show",
+   "mapped_by": "按钮 direct, 备注: 先给默认答案(最近一次投料失败批次), 再反问是不是这一批"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 46,
+  "id": "Q046",
+  "utterance": "看看明天生产那个",
+  "role": "production_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "show",
+   "note": "",
+   "expected": "show",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 47,
+  "id": "Q047",
+  "utterance": "看一下还差哪些货",
+  "role": "production_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 48,
+  "id": "Q048",
+  "utterance": "帮我看下考勤",
+  "role": "hr_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 49,
+  "id": "Q049",
+  "utterance": "调下本月复盘",
+  "role": "finance_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "复盘最大概率是企业生产经营活动的复盘，极小概率为具体事件（因为用户没有指定）、卫生检查等。所以可以默认并直接给出经营复盘，然后询问用户范围是否正确、需要补充什么字段。",
+   "expected": "show",
+   "mapped_by": "按钮 direct, 备注: 先默认给经营复盘, 再问范围对不对、要补什么字段"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 50,
+  "id": "Q050",
+  "utterance": "把二厂六月关一下",
+  "role": "finance_manager",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 51,
+  "id": "Q051",
+  "utterance": "今天到的那些赶紧处理下",
+  "role": "warehouse_worker",
+  "rw": "read",
+  "history": [
+   {
+    "role": "assistant",
+    "content": "上一轮在处理「今日待质检批次」；已确认：时间范围=今天；系统刚展示今日相关批次列表"
+   }
+  ],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "show",
+   "note": "",
+   "expected": "show",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 52,
+  "id": "Q052",
+  "utterance": "看下二号冷库这个告警怎么处理",
+  "role": "warehouse_worker",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 53,
+  "id": "Q053",
+  "utterance": "看看昨晚那个报警",
+  "role": "workshop_supervisor",
+  "rw": "read",
+  "history": [
+   {
+    "role": "assistant",
+    "content": "上一轮在处理「告警统计」；已确认：时间范围=昨天全天；系统正在等待用户补充告警统计的统计维度。；还缺：统计维度"
+   }
+  ],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 54,
+  "id": "Q054",
+  "utterance": "同意C772",
+  "role": "production_manager",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 55,
+  "id": "Q055",
+  "utterance": "过下待财务审核的单子",
+  "role": "finance_manager",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "show",
+   "note": "",
+   "expected": "show",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 56,
+  "id": "Q056",
+  "utterance": "这个月那个检查给我弄一下",
+  "role": "quality_inspector",
+  "rw": "read",
+  "history": [
+   {
+    "role": "assistant",
+    "content": "上一轮在处理「SSOP 月度审计报告」；已确认：月份=本月；系统刚询问要查看哪个车间的月度审计内容。；还缺：车间"
+   }
+  ],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 57,
+  "id": "Q057",
+  "utterance": "开一下还差哪些货",
+  "role": "production_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 58,
+  "id": "Q058",
+  "utterance": "订单状态是什么",
+  "role": "sales_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 59,
+  "id": "Q059",
+  "utterance": "把王强那张请假单批了",
+  "role": "workshop_supervisor",
+  "rw": "write",
+  "history": [
+   {
+    "role": "assistant",
+    "content": "上一轮在处理「假期余额查询」；已确认：月份=本月，假期类型=病假；系统已展示本月病假余额。"
+   }
+  ],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 60,
+  "id": "Q060",
+  "utterance": "查一下夜班这个月考勤统计",
+  "role": "hr_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 61,
+  "id": "Q061",
+  "utterance": "拿样品生成个草稿",
+  "role": "production_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 62,
+  "id": "Q062",
+  "utterance": "查发货单",
+  "role": "sales_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 63,
+  "id": "Q063",
+  "utterance": "这台秤怎么弄一下",
+  "role": "workshop_supervisor",
+  "rw": "read",
+  "history": [
+   {
+    "role": "assistant",
+    "content": "上一轮在处理「电子秤校准」；已确认：秤设备=灌装线5号秤；系统询问灌装线5号秤要使用哪种校准方式。；还缺：校准方式"
+   }
+  ],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 64,
+  "id": "Q064",
+  "utterance": "登记下冷却线设备维护情况",
+  "role": "workshop_supervisor",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 65,
+  "id": "Q065",
+  "utterance": "把成品率和吨料电耗对一下",
+  "role": "production_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 66,
+  "id": "Q066",
+  "utterance": "查产品规格",
+  "role": "sales_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 67,
+  "id": "Q067",
+  "utterance": "把这批豆油收进去",
+  "role": "warehouse_worker",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 68,
+  "id": "Q068",
+  "utterance": "订单怎么样",
+  "role": "sales_manager",
+  "rw": "read",
+  "history": [
+   {
+    "role": "assistant",
+    "content": "上一轮在处理「订单列表」；已确认：客户=宏达超市；系统追问了筛选条件"
+   }
+  ],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 69,
+  "id": "Q069",
+  "utterance": "我要改信息",
+  "role": "operator",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 70,
+  "id": "Q070",
+  "utterance": "改下五号线这批耗料",
+  "role": "workshop_supervisor",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 71,
+  "id": "Q071",
+  "utterance": "我要看昨班次的不良率",
+  "role": "quality_inspector",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 72,
+  "id": "Q072",
+  "utterance": "看看排产状态",
+  "role": "production_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 73,
+  "id": "Q073",
+  "utterance": "批开票申请",
+  "role": "finance_manager",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "show",
+   "note": "",
+   "expected": "show",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 74,
+  "id": "Q074",
+  "utterance": "这批筐少了，做下赔付",
+  "role": "warehouse_worker",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 75,
+  "id": "Q075",
+  "utterance": "这个账号弄一下",
+  "role": "operator",
+  "rw": "unknown",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 76,
+  "id": "Q076",
+  "utterance": "排产设置成自动",
+  "role": "production_manager",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "other",
+   "note": "自动意味着所有风险等级的都全自动，所以应该先问、告知用户：改成全自动后，所有排产计划会不经人工确认直接生效。是否要按照风险等级设置自动权限？例如低风险全自动。",
+   "expected": "ask",
+   "mapped_by": "备注: 自动=所有风险等级全自动, 应先问并告知后果, 问是否按风险分级"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 77,
+  "id": "Q077",
+  "utterance": "撤下冷库门口那个",
+  "role": "warehouse_worker",
+  "rw": "unknown",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 78,
+  "id": "Q078",
+  "utterance": "这个批次给我处理一下",
+  "role": "quality_inspector",
+  "rw": "read",
+  "history": [
+   {
+    "role": "assistant",
+    "content": "上一轮在处理「批次完整追溯」；已确认：批次号=B24051503；系统刚追溯完这个批次的完整链路信息。"
+   }
+  ],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 79,
+  "id": "Q079",
+  "utterance": "查下销售订单SO230815的开票状态",
+  "role": "finance_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 80,
+  "id": "Q080",
+  "utterance": "看前一页那屏",
+  "role": "operator",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 81,
+  "id": "Q081",
+  "utterance": "今晚豆奶计划改一下",
+  "role": "production_manager",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "相比起列出数据让用户手动修改，问用户要改什么从而自动修改是更好的。因为用户希望手动修改的话就不会走这个路径。",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 82,
+  "id": "Q082",
+  "utterance": "这个秤现在怎么弄",
+  "role": "workshop_supervisor",
+  "rw": "read",
+  "history": [
+   {
+    "role": "assistant",
+    "content": "上一轮在处理「电子秤校准」；已确认：设备编号=二号秤；系统已确认要处理二号秤，并询问采用哪种校准方式。；还缺：校准方式"
+   }
+  ],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 83,
+  "id": "Q083",
+  "utterance": "把乳粉这批先冻住",
+  "role": "quality_inspector",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 84,
+  "id": "Q084",
+  "utterance": "先帮我发货",
+  "role": "sales_manager",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 85,
+  "id": "Q085",
+  "utterance": "把昨天那个出货弄出来",
+  "role": "sales_manager",
+  "rw": "read",
+  "history": [
+   {
+    "role": "assistant",
+    "content": "上一轮在处理「出货统计」；已确认：统计日期=昨天；系统询问要按客户还是按产品查看昨天的出货统计；还缺：统计维度"
+   }
+  ],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 86,
+  "id": "Q086",
+  "utterance": "看看成本账",
+  "role": "factory_super_admin",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "show",
+   "note": "",
+   "expected": "show",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 87,
+  "id": "Q087",
+  "utterance": "这批猪蹄先弄卤制",
+  "role": "operator",
+  "rw": "write",
+  "history": [
+   {
+    "role": "assistant",
+    "content": "上一轮在处理「开始工序」；已确认：产品=猪蹄；系统上一轮在询问要开工的具体批次和工序；还缺：生产批次、工序"
+   }
+  ],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "other",
+   "note": "不是反问用户有几个批次，而是读取数据库展示已知的批次给用户，让用户做选择。",
+   "expected": "show",
+   "mapped_by": "备注: 不反问有几个批次, 读库展示已知批次让用户选"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 88,
+  "id": "Q088",
+  "utterance": "要下发手机扫料任务，按这几个条目出码",
+  "role": "warehouse_worker",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 89,
+  "id": "Q089",
+  "utterance": "查下永辉的质量标准",
+  "role": "quality_inspector",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 90,
+  "id": "Q090",
+  "utterance": "来个退货单",
+  "role": "sales_manager",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 91,
+  "id": "Q091",
+  "utterance": "这个供方多久能到货",
+  "role": "procurement_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 92,
+  "id": "Q092",
+  "utterance": "看看供应商那个证",
+  "role": "procurement_manager",
+  "rw": "unknown",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 93,
+  "id": "Q093",
+  "utterance": "帮我看看生产这块",
+  "role": "factory_super_admin",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 94,
+  "id": "Q094",
+  "utterance": "改下这批留样状态",
+  "role": "quality_inspector",
+  "rw": "unknown",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 95,
+  "id": "Q095",
+  "utterance": "把这个月考勤弄出来",
+  "role": "hr_manager",
+  "rw": "read",
+  "history": [
+   {
+    "role": "assistant",
+    "content": "上一轮在处理「月度考勤」；已确认：月份=2026年10月；系统正在询问要查询谁的月度考勤记录。；还缺：人员范围"
+   }
+  ],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 96,
+  "id": "Q096",
+  "utterance": "新增现在这台冷链设备",
+  "role": "warehouse_worker",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 97,
+  "id": "Q097",
+  "utterance": "查下这个饮料配方里的添加剂合不合规",
+  "role": "quality_inspector",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 98,
+  "id": "Q098",
+  "utterance": "把明早的物料需求单做一下",
+  "role": "workshop_supervisor",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 99,
+  "id": "Q099",
+  "utterance": "把后天包装车间火腿片的生产安排调一下",
+  "role": "production_manager",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 100,
+  "id": "Q100",
+  "utterance": "把三号线告警给我看下",
+  "role": "workshop_supervisor",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 101,
+  "id": "Q101",
+  "utterance": "看下订单装态",
+  "role": "sales_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 102,
+  "id": "Q102",
+  "utterance": "把退货单弄一下",
+  "role": "warehouse_worker",
+  "rw": "unknown",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 103,
+  "id": "Q103",
+  "utterance": "建下这批退回单",
+  "role": "quality_inspector",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 104,
+  "id": "Q104",
+  "utterance": "推下华北区本月商机漏斗",
+  "role": "sales_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 105,
+  "id": "Q105",
+  "utterance": "猪蹄卤制完工没",
+  "role": "workshop_supervisor",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "不止今天，应是近7天，并标明日期，按日期逆序排序",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 106,
+  "id": "Q106",
+  "utterance": "先别调耗料了，改查客户投诉那天对应的批次",
+  "role": "quality_inspector",
+  "rw": "read",
+  "history": [
+   {
+    "role": "assistant",
+    "content": "上一轮在处理「生产耗料调整」；已确认：生产批次=B24031506，耗料项目=白砂糖，调整数量=-25公斤；系统已记录待调整的耗料信息，准备执行耗料修改。"
+   }
+  ],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 107,
+  "id": "Q107",
+  "utterance": "看看这台秤怎么回事",
+  "role": "warehouse_worker",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 108,
+  "id": "Q108",
+  "utterance": "帮我看看清洁这块的情况",
+  "role": "quality_inspector",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 109,
+  "id": "Q109",
+  "utterance": "把三车间这批成品做放行决定",
+  "role": "quality_inspector",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 110,
+  "id": "Q110",
+  "utterance": "判这个配方的添加剂合规",
+  "role": "quality_inspector",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 111,
+  "id": "Q111",
+  "utterance": "别审了，给纸箱那批开个采购退货单",
+  "role": "procurement_manager",
+  "rw": "write",
+  "history": [
+   {
+    "role": "assistant",
+    "content": "上一轮在处理「退货单审批」；已确认：退货单号=THD20261111003，审批动作=通过；系统展示了退货单详情并等待确认审批。"
+   }
+  ],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 112,
+  "id": "Q112",
+  "utterance": "查这期关账没",
+  "role": "finance_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 113,
+  "id": "Q113",
+  "utterance": "帮我看看假期那个",
+  "role": "operator",
+  "rw": "unknown",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 114,
+  "id": "Q114",
+  "utterance": "看下猪肉的库存数量",
+  "role": "warehouse_worker",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 115,
+  "id": "Q115",
+  "utterance": "查下味精先用哪批",
+  "role": "warehouse_worker",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 116,
+  "id": "Q116",
+  "utterance": "六箱二十公斤，登上",
+  "role": "warehouse_worker",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 117,
+  "id": "Q117",
+  "utterance": "今天有哪些货要发出去",
+  "role": "warehouse_worker",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 118,
+  "id": "Q118",
+  "utterance": "采购单弄一下",
+  "role": "procurement_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "首先要问：是哪一张",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 119,
+  "id": "Q119",
+  "utterance": "先别做模板了，直接把销售订单打印出来",
+  "role": "sales_manager",
+  "rw": "read",
+  "history": [
+   {
+    "role": "assistant",
+    "content": "上一轮在处理「生成打印模板」；已确认：模板用途=销售出库单排版，纸张=A4竖版；系统刚记录了模板需求并追问页眉和明细字段；还缺：页眉内容、明细字段"
+   }
+  ],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 120,
+  "id": "Q120",
+  "utterance": "领料单打一下",
+  "role": "workshop_supervisor",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "other",
+   "note": "只需要问需要打印哪一张领料单，不需要问是否要新开一张领料单，因为用户的需求是“打”。",
+   "expected": "ask",
+   "mapped_by": "备注: 只需问打印哪一张领料单"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 121,
+  "id": "Q121",
+  "utterance": "把快到期的给我处理一下",
+  "role": "production_manager",
+  "rw": "read",
+  "history": [
+   {
+    "role": "assistant",
+    "content": "上一轮在处理「交货预警查询」；已确认：时间窗口=7天；系统刚按默认7天窗口准备查询交货预警，并等待用户明确筛选条件。；还缺：预警等级"
+   }
+  ],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 122,
+  "id": "Q122",
+  "utterance": "先查今天未收的采购到货",
+  "role": "warehouse_worker",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 123,
+  "id": "Q123",
+  "utterance": "帮我看下今天那个出货",
+  "role": "sales_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 124,
+  "id": "Q124",
+  "utterance": "先别管那个了，看看这月能耗排行",
+  "role": "production_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 125,
+  "id": "Q125",
+  "utterance": "看下我的手机号",
+  "role": "operator",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "手机号不需要遮住",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 126,
+  "id": "Q126",
+  "utterance": "这台秤现在啥情况",
+  "role": "warehouse_worker",
+  "rw": "read",
+  "history": [
+   {
+    "role": "assistant",
+    "content": "上一轮在处理「电子秤故障排查」；已确认：设备名称=成品库门口秤；系统在收集故障现象，准备继续排查。；还缺：异常现象"
+   }
+  ],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "用户在排查故障，故应该由系统告知用户异常，而不是向用户索求异常描述。",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 127,
+  "id": "Q127",
+  "utterance": "先别签字了，改做配料间今天的清洁记录",
+  "role": "quality_inspector",
+  "rw": "read",
+  "history": [
+   {
+    "role": "assistant",
+    "content": "上一轮在处理「SSOP 清洁完成 + 检验员签字」；已确认：车间=配料间，日期=今天；系统刚让用户确认清洁完成并补检验员签字；还缺：检验员签字"
+   }
+  ],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 128,
+  "id": "Q128",
+  "utterance": "看待发清单",
+  "role": "warehouse_worker",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 129,
+  "id": "Q129",
+  "utterance": "先收这批货",
+  "role": "warehouse_worker",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 130,
+  "id": "Q130",
+  "utterance": "不知道订单号，查最近那张",
+  "role": "sales_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 131,
+  "id": "Q131",
+  "utterance": "找下永辉昨天投诉那批货",
+  "role": "quality_inspector",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 132,
+  "id": "Q132",
+  "utterance": "看质检不良",
+  "role": "quality_inspector",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 133,
+  "id": "Q133",
+  "utterance": "玉米价近俩月",
+  "role": "procurement_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "other",
+   "note": "需要调取数据库字段判断玉米是产品吗、是采购品吗，并由此自行做出判断。如果不是，那就不需要询问用户是否想知道，直接给出对应价格；如果都是，那就都给出对应价格。",
+   "expected": "direct",
+   "mapped_by": "备注: 自行查库判断玉米是产品还是采购品, 直接给价格, 不问"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 134,
+  "id": "Q134",
+  "utterance": "把这次召回的监管上报材料出一下",
+  "role": "quality_inspector",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 135,
+  "id": "Q135",
+  "utterance": "看看常一起用的那个",
+  "role": "factory_super_admin",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 136,
+  "id": "Q136",
+  "utterance": "确认冷链报警",
+  "role": "warehouse_worker",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "show",
+   "note": "",
+   "expected": "show",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 137,
+  "id": "Q137",
+  "utterance": "把这批多出来的原料做盘盈入库",
+  "role": "warehouse_worker",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 138,
+  "id": "Q138",
+  "utterance": "今天待收的批次给我入掉",
+  "role": "warehouse_worker",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 139,
+  "id": "Q139",
+  "utterance": "这个码咋看",
+  "role": "sales_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 140,
+  "id": "Q140",
+  "utterance": "我想请假",
+  "role": "operator",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 141,
+  "id": "Q141",
+  "utterance": "往前翻页",
+  "role": "operator",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 142,
+  "id": "Q142",
+  "utterance": "讲个笑话",
+  "role": "operator",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "other",
+   "note": "边界究竟在哪里，宽松的边界是否会引发更严重的问题，需要思考讨论。",
+   "expected": "unscored",
+   "mapped_by": "other, 备注讨论「边界」, 没给动作"
+  },
+  "status": "steve_only",
+  "aggressive_scored": true,
+  "conservative_scored": false
+ },
+ {
+  "qno": 143,
+  "id": "Q143",
+  "utterance": "哪道工序老拖后腿",
+  "role": "production_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "other",
+   "note": "拖后腿的工序限定时间范围不应是近7天，“老”意味着过往几乎都是如此，因此应将时间范围至少限定在一个季度、一年内等，依据判定条件去找到拖后腿的工序，其中判定条件未必是实际工时比计划工时多，也有可能是等待开工的时间过多，如调机、维修、物料未按时转运到位等开工的前置准备时间多。该工序完工后的转运也会影响下一道工序开工时间。",
+   "expected": "direct",
+   "mapped_by": "备注: 默认时间范围应更长, 按判定条件直接去找, 没说要问"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 144,
+  "id": "Q144",
+  "utterance": "查收货",
+  "role": "warehouse_worker",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "不仅是今天的，应该列出近一段时间的，并标明按时间逆序排序。",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 145,
+  "id": "Q145",
+  "utterance": "做下这批的质检放行",
+  "role": "quality_inspector",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 146,
+  "id": "Q146",
+  "utterance": "别看规格了，查下面包销量排名",
+  "role": "sales_manager",
+  "rw": "read",
+  "history": [
+   {
+    "role": "assistant",
+    "content": "上一轮在处理「产品类型查询」；已确认：产品名称=面包；系统刚展示面包的产品类型信息"
+   }
+  ],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 147,
+  "id": "Q147",
+  "utterance": "建一下开工前检查",
+  "role": "workshop_supervisor",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 148,
+  "id": "Q148",
+  "utterance": "飞轮销量看下",
+  "role": "sales_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 149,
+  "id": "Q149",
+  "utterance": "查下销售单1088关联了哪些单子",
+  "role": "sales_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 150,
+  "id": "Q150",
+  "utterance": "看看过期的原料",
+  "role": "warehouse_worker",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 151,
+  "id": "Q151",
+  "utterance": "建下这批货留样记录",
+  "role": "quality_inspector",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 152,
+  "id": "Q152",
+  "utterance": "卤制开工没",
+  "role": "workshop_supervisor",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 153,
+  "id": "Q153",
+  "utterance": "这批货的留样",
+  "role": "quality_inspector",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 154,
+  "id": "Q154",
+  "utterance": "给我看这周包装工序任务摘要",
+  "role": "workshop_supervisor",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 155,
+  "id": "Q155",
+  "utterance": "接着刚才的查",
+  "role": "sales_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 156,
+  "id": "Q156",
+  "utterance": "那批饼干原料先别压着，给个放不放的结果",
+  "role": "quality_inspector",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 157,
+  "id": "Q157",
+  "utterance": "给杀菌机登一条维护记录",
+  "role": "workshop_supervisor",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 158,
+  "id": "Q158",
+  "utterance": "这个在哪弄",
+  "role": "operator",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 159,
+  "id": "Q159",
+  "utterance": "查下打卡情况",
+  "role": "operator",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 160,
+  "id": "Q160",
+  "utterance": "帮我评估下这个批次该怎么处理",
+  "role": "quality_inspector",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 161,
+  "id": "Q161",
+  "utterance": "这个添加剂给我看看行不行",
+  "role": "quality_inspector",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 162,
+  "id": "Q162",
+  "utterance": "这条客户需求直接转销售单",
+  "role": "sales_manager",
+  "rw": "write",
+  "history": [
+   {
+    "role": "assistant",
+    "content": "上一轮在处理「发货批次分配」；已确认：发货单=出库单2088，产品=原味酸奶；系统正在等待为该发货单选择批次；还缺：分配批次"
+   }
+  ],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 163,
+  "id": "Q163",
+  "utterance": "帮我看下这单发票",
+  "role": "finance_manager",
+  "rw": "read",
+  "history": [
+   {
+    "role": "assistant",
+    "content": "上一轮在处理「申请开票」；系统说明人工开票申请已停止，并询问是否改查自动生成发票信息；还缺：销售订单ID或开票记录ID"
+   }
+  ],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 164,
+  "id": "Q164",
+  "utterance": "建下冷链监控",
+  "role": "warehouse_worker",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 165,
+  "id": "Q165",
+  "utterance": "帮我按客户和投诉日期倒查批次",
+  "role": "quality_inspector",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 166,
+  "id": "Q166",
+  "utterance": "建生产计划",
+  "role": "production_manager",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 167,
+  "id": "Q167",
+  "utterance": "给我讲个笑话",
+  "role": "operator",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "other",
+   "note": "边界需要分析讨论。",
+   "expected": "unscored",
+   "mapped_by": "other, 备注「边界需要分析讨论」, 没给动作"
+  },
+  "status": "steve_only",
+  "aggressive_scored": true,
+  "conservative_scored": false
+ },
+ {
+  "qno": 168,
+  "id": "Q168",
+  "utterance": "现在做下每日卫生清洁记录",
+  "role": "workshop_supervisor",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 169,
+  "id": "Q169",
+  "utterance": "看看出货那个",
+  "role": "sales_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 170,
+  "id": "Q170",
+  "utterance": "把五厂九月关了吧",
+  "role": "finance_manager",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 171,
+  "id": "Q171",
+  "utterance": "帮我看一下白砂糖的库存情况",
+  "role": "procurement_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 172,
+  "id": "Q172",
+  "utterance": "登记这家的HACCP资质",
+  "role": "procurement_manager",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 173,
+  "id": "Q173",
+  "utterance": "把奶粉最近三个月均价翻出来",
+  "role": "procurement_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 174,
+  "id": "Q174",
+  "utterance": "这个生产单串到哪了",
+  "role": "production_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 175,
+  "id": "Q175",
+  "utterance": "帮我看看打卡考勤",
+  "role": "operator",
+  "rw": "read",
+  "history": [
+   {
+    "role": "assistant",
+    "content": "上一轮在处理「打卡状态」；已确认：查询对象=本人；系统刚返回当前打卡状态"
+   }
+  ],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 176,
+  "id": "Q176",
+  "utterance": "冷库那个异常你处理下",
+  "role": "warehouse_worker",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 177,
+  "id": "Q177",
+  "utterance": "先收这车面粉",
+  "role": "warehouse_worker",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 178,
+  "id": "Q178",
+  "utterance": "临期过期原料怎么处理",
+  "role": "warehouse_worker",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "用户已经限定了临期和过期，不需要再问用户二选一。默认时间范围不应是7天内快过期的原料，而是截止今天保质期在7天内的原料。前者范围更广，还没到快过期的范围。",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 179,
+  "id": "Q179",
+  "utterance": "把这批告警先处理掉",
+  "role": "workshop_supervisor",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 180,
+  "id": "Q180",
+  "utterance": "先别结案了，看看包装线温控报警是什么毛病",
+  "role": "workshop_supervisor",
+  "rw": "read",
+  "history": [
+   {
+    "role": "assistant",
+    "content": "上一轮在处理「解决告警」；已确认：告警编号=A-20318，处理结果=已解决；系统刚准备将指定告警标记为已解决。"
+   }
+  ],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 181,
+  "id": "Q181",
+  "utterance": "把我这月单子提下",
+  "role": "operator",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "other",
+   "note": "单子范围太广，应首先确认用户身份、所属部门、职务、常用模块，判断可能性、缩小单子范围，然后询问用户是这其中什么单吗、需要做什么操作。",
+   "expected": "ask",
+   "mapped_by": "备注: 单子范围太广, 先缩小范围再询问是哪种单、做什么操作"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 182,
+  "id": "Q182",
+  "utterance": "供应商资质查询",
+  "role": "procurement_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 183,
+  "id": "Q183",
+  "utterance": "看看订单",
+  "role": "sales_manager",
+  "rw": "unknown",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 184,
+  "id": "Q184",
+  "utterance": "把灌装报工这条流转跑一下",
+  "role": "workshop_supervisor",
+  "rw": "unknown",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 185,
+  "id": "Q185",
+  "utterance": "仓库那笔调拨给我审批了",
+  "role": "production_manager",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 186,
+  "id": "Q186",
+  "utterance": "看看三号秤现在啥状态",
+  "role": "warehouse_worker",
+  "rw": "read",
+  "history": [
+   {
+    "role": "assistant",
+    "content": "上一轮在处理「电子秤校准」；已确认：设备名称=二号秤；系统正在询问二号秤的校准方式。；还缺：校准方式"
+   }
+  ],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 187,
+  "id": "Q187",
+  "utterance": "这个码怎么弄",
+  "role": "operator",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 188,
+  "id": "Q188",
+  "utterance": "再看看订单",
+  "role": "sales_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 189,
+  "id": "Q189",
+  "utterance": "看看肉类供应商",
+  "role": "procurement_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 190,
+  "id": "Q190",
+  "utterance": "看看工序任务那个情况",
+  "role": "operator",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 191,
+  "id": "Q191",
+  "utterance": "导下销售订单八八零一的发票",
+  "role": "finance_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 192,
+  "id": "Q192",
+  "utterance": "批调拨单",
+  "role": "production_manager",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "show",
+   "note": "",
+   "expected": "show",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 193,
+  "id": "Q193",
+  "utterance": "把这批布丁样品审一下",
+  "role": "quality_inspector",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 194,
+  "id": "Q194",
+  "utterance": "批一下我的请假申请",
+  "role": "workshop_supervisor",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 195,
+  "id": "Q195",
+  "utterance": "记客户需求",
+  "role": "sales_manager",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 196,
+  "id": "Q196",
+  "utterance": "先别翻客户了，查下海盛餐饮的收货标准",
+  "role": "quality_inspector",
+  "rw": "read",
+  "history": [
+   {
+    "role": "assistant",
+    "content": "上一轮在处理「客户列表」；已确认：客户状态=全部；系统已展示一页客户列表"
+   }
+  ],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 197,
+  "id": "Q197",
+  "utterance": "别看待销毁了，查这批原料召回牵连哪些成品",
+  "role": "quality_inspector",
+  "rw": "read",
+  "history": [
+   {
+    "role": "assistant",
+    "content": "上一轮在处理「查待销毁留样」；已确认：查询范围=待销毁留样；系统已展示待销毁留样列表"
+   }
+  ],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 198,
+  "id": "Q198",
+  "utterance": "按红豆面包那个样品，生成一份BOM草稿，糖少放一点",
+  "role": "production_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 199,
+  "id": "Q199",
+  "utterance": "先别看订单了，看看今天停机告警",
+  "role": "workshop_supervisor",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 200,
+  "id": "Q200",
+  "utterance": "这箱试吃赠品做入库",
+  "role": "warehouse_worker",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 201,
+  "id": "Q201",
+  "utterance": "今天告警处理一下",
+  "role": "workshop_supervisor",
+  "rw": "unknown",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 202,
+  "id": "Q202",
+  "utterance": "快过期的",
+  "role": "warehouse_worker",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 203,
+  "id": "Q203",
+  "utterance": "别按整批，改成按这张质检单评估",
+  "role": "quality_inspector",
+  "rw": "read",
+  "history": [
+   {
+    "role": "assistant",
+    "content": "上一轮在处理「处置评估」；已确认：批次号=B24081506，评估范围=整批；系统已根据该批次生成处置评估方案。"
+   }
+  ],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 204,
+  "id": "Q204",
+  "utterance": "周转筐那个给我弄一下",
+  "role": "warehouse_worker",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 205,
+  "id": "Q205",
+  "utterance": "那个异常的给我看看",
+  "role": "production_manager",
+  "rw": "read",
+  "history": [
+   {
+    "role": "assistant",
+    "content": "上一轮在处理「指标告警扫描」；已确认：扫描范围=全厂启用指标；系统返回了当前红色和黄色告警指标列表"
+   }
+  ],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "show",
+   "note": "",
+   "expected": "show",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 206,
+  "id": "Q206",
+  "utterance": "别的先不管，拿奶黄包那个样品出个草稿",
+  "role": "production_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 207,
+  "id": "Q207",
+  "utterance": "我想看样品单都关联了什么单据",
+  "role": "sales_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 208,
+  "id": "Q208",
+  "utterance": "这个批次处理一下",
+  "role": "warehouse_worker",
+  "rw": "unknown",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 209,
+  "id": "Q209",
+  "utterance": "这个先给我弄一下",
+  "role": "sales_manager",
+  "rw": "unknown",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 210,
+  "id": "Q210",
+  "utterance": "把订单A5821的真实税率分组明细给我看看",
+  "role": "finance_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 211,
+  "id": "Q211",
+  "utterance": "查下订单缺料",
+  "role": "production_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 212,
+  "id": "Q212",
+  "utterance": "看看这批留样走到哪步了",
+  "role": "quality_inspector",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 213,
+  "id": "Q213",
+  "utterance": "查一下批次B240318的质检汇总",
+  "role": "quality_inspector",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 214,
+  "id": "Q214",
+  "utterance": "看看这个客户的要求",
+  "role": "sales_manager",
+  "rw": "read",
+  "history": [
+   {
+    "role": "assistant",
+    "content": "上一轮在处理「客户质量标准查询」；已确认：客户名称=宏达商贸；系统在询问要查看该客户哪个产品的质量要求；还缺：产品名称"
+   }
+  ],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 215,
+  "id": "Q215",
+  "utterance": "把本周质检不合格统计拉一下",
+  "role": "quality_inspector",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 216,
+  "id": "Q216",
+  "utterance": "把这个摄像头处理一下",
+  "role": "workshop_supervisor",
+  "rw": "read",
+  "history": [
+   {
+    "role": "assistant",
+    "content": "上一轮在处理「摄像头流媒体地址」；已确认：摄像头=配料间西侧摄像头；系统返回了配料间西侧摄像头的流媒体地址"
+   }
+  ],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 217,
+  "id": "Q217",
+  "utterance": "三厂八月开了吧",
+  "role": "finance_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 218,
+  "id": "Q218",
+  "utterance": "查下这批去哪了",
+  "role": "warehouse_worker",
+  "rw": "unknown",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 219,
+  "id": "Q219",
+  "utterance": "把卡住的商机弄一下",
+  "role": "sales_manager",
+  "rw": "read",
+  "history": [
+   {
+    "role": "assistant",
+    "content": "上一轮在处理「商机超 SLA 警告」；已确认：超期天数=30天；系统正在追问要筛选的销售区域。；还缺：销售区域"
+   }
+  ],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 220,
+  "id": "Q220",
+  "utterance": "周转筐发出去 40 个",
+  "role": "warehouse_worker",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 221,
+  "id": "Q221",
+  "utterance": "把重点客户按商机阶段排个先后",
+  "role": "sales_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 222,
+  "id": "Q222",
+  "utterance": "帮我看下这家供应商可不可以开单",
+  "role": "procurement_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 223,
+  "id": "Q223",
+  "utterance": "审批采购单",
+  "role": "factory_super_admin",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 224,
+  "id": "Q224",
+  "utterance": "仓库那张调拨单给我审批通过",
+  "role": "production_manager",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 225,
+  "id": "Q225",
+  "utterance": "开开排班安排",
+  "role": "workshop_supervisor",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 226,
+  "id": "Q226",
+  "utterance": "查下这个配方的添加剂合不合规",
+  "role": "quality_inspector",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 227,
+  "id": "Q227",
+  "utterance": "这批的HACCP再看一下",
+  "role": "quality_inspector",
+  "rw": "read",
+  "history": [
+   {
+    "role": "assistant",
+    "content": "上一轮在处理「HACCP 检查」；已确认：批次=F240509；系统刚展示该批次的CCP检查明细。"
+   }
+  ],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 228,
+  "id": "Q228",
+  "utterance": "给这批箱码生成扫码任务",
+  "role": "warehouse_worker",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 229,
+  "id": "Q229",
+  "utterance": "把九八码那批的全流程给我调出来",
+  "role": "quality_inspector",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 230,
+  "id": "Q230",
+  "utterance": "看看供应商那个情况",
+  "role": "procurement_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 231,
+  "id": "Q231",
+  "utterance": "看下订单那个情况",
+  "role": "sales_manager",
+  "rw": "read",
+  "history": [
+   {
+    "role": "assistant",
+    "content": "上一轮在处理「订单列表」；已确认：客户=惠民超市；系统正在等待用户补充要查询的日期范围。；还缺：日期"
+   }
+  ],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 232,
+  "id": "Q232",
+  "utterance": "看下批次耗料",
+  "role": "workshop_supervisor",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 233,
+  "id": "Q233",
+  "utterance": "把采购单弄一下",
+  "role": "procurement_manager",
+  "rw": "unknown",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 234,
+  "id": "Q234",
+  "utterance": "我想看看请假的情况",
+  "role": "hr_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 235,
+  "id": "Q235",
+  "utterance": "回到刚才查库存那个",
+  "role": "warehouse_worker",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 236,
+  "id": "Q236",
+  "utterance": "过掉工单C9",
+  "role": "workshop_supervisor",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 237,
+  "id": "Q237",
+  "utterance": "记一下东门店还欠多少筐",
+  "role": "warehouse_worker",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 238,
+  "id": "Q238",
+  "utterance": "换成二月份出厂的那批吧",
+  "role": "quality_inspector",
+  "rw": "read",
+  "history": [
+   {
+    "role": "assistant",
+    "content": "上一轮在处理「公开溯源」；已确认：批号=B240115，产品=桂花糕；生成了批号B240115的消费者公开溯源信息"
+   }
+  ],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 239,
+  "id": "Q239",
+  "utterance": "订单撤回",
+  "role": "sales_manager",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 240,
+  "id": "Q240",
+  "utterance": "看下黑椒鸡柳的毛利率",
+  "role": "finance_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 241,
+  "id": "Q241",
+  "utterance": "这周出货看下",
+  "role": "warehouse_worker",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 242,
+  "id": "Q242",
+  "utterance": "别转单了，给这张发货单分下批次",
+  "role": "sales_manager",
+  "rw": "write",
+  "history": [
+   {
+    "role": "assistant",
+    "content": "上一轮在处理「客户需求转销售订单」；已确认：客户需求单号=XQ20240518012；系统已准备把这条已确认客户需求转成销售订单。"
+   }
+  ],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "other",
+   "note": "取消转单、找到、展示XQ20240518012对应的发货单，然后询问用户按什么要求分批次。",
+   "expected": "show",
+   "mapped_by": "备注: 取消转单, 找到并展示发货单, 再问按什么要求分批"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 243,
+  "id": "Q243",
+  "utterance": "用无人机帮我盘点仓库",
+  "role": "warehouse_worker",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "other",
+   "note": "",
+   "expected": "unscored"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "shi_only",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 244,
+  "id": "Q244",
+  "utterance": "把远成商贸的质量要求给我看看",
+  "role": "sales_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 245,
+  "id": "Q245",
+  "utterance": "想反映一下标签打印不好用",
+  "role": "operator",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 246,
+  "id": "Q246",
+  "utterance": "这个飞轮弄一下",
+  "role": "production_manager",
+  "rw": "read",
+  "history": [
+   {
+    "role": "assistant",
+    "content": "上一轮在处理「产品类型查询」；已确认：产品名称=C5飞轮；系统已返回C5飞轮的规格和转换率信息"
+   }
+  ],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 247,
+  "id": "Q247",
+  "utterance": "帮我看看采购退货单前后链路",
+  "role": "procurement_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 248,
+  "id": "Q248",
+  "utterance": "这个批次的HACCP再看看",
+  "role": "quality_inspector",
+  "rw": "read",
+  "history": [
+   {
+    "role": "assistant",
+    "content": "上一轮在处理「HACCP 检查」；已确认：批次号=D3305；系统已展示批次D3305的CCP全记录与偏离情况。"
+   }
+  ],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 249,
+  "id": "Q249",
+  "utterance": "查下华丰食品的验收标准",
+  "role": "quality_inspector",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 250,
+  "id": "Q250",
+  "utterance": "今儿该给哪几个客户打电话",
+  "role": "sales_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 251,
+  "id": "Q251",
+  "utterance": "查订单",
+  "role": "sales_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 252,
+  "id": "Q252",
+  "utterance": "查我的请假",
+  "role": "operator",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 253,
+  "id": "Q253",
+  "utterance": "查下废品率现在多少",
+  "role": "workshop_supervisor",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 254,
+  "id": "Q254",
+  "utterance": "别弄别的了，先把这批问题货的监管上报文件做出来",
+  "role": "quality_inspector",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 255,
+  "id": "Q255",
+  "utterance": "把最近的数据给我看看",
+  "role": "factory_super_admin",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 256,
+  "id": "Q256",
+  "utterance": "别看绩效了，查下这周灭菌段质检",
+  "role": "quality_inspector",
+  "rw": "read",
+  "history": [
+   {
+    "role": "assistant",
+    "content": "上一轮在处理「KPI指标报表」；已确认：时间范围=本月，车间=包装车间；已展示包装车间本月的KPI绩效指标报表。"
+   }
+  ],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "other",
+   "note": "根据上文用户查看包装车间数据，因此可以默认灭菌段质检是包装车间的，而不是全厂的。",
+   "expected": "direct",
+   "mapped_by": "备注: 上文是包装车间, 默认就是包装车间, 不问"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 257,
+  "id": "Q257",
+  "utterance": "那个产品弄一下",
+  "role": "workshop_supervisor",
+  "rw": "unknown",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 258,
+  "id": "Q258",
+  "utterance": "告警处理了",
+  "role": "workshop_supervisor",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 259,
+  "id": "Q259",
+  "utterance": "接上回那个",
+  "role": "warehouse_worker",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 260,
+  "id": "Q260",
+  "utterance": "看看这批质量咋样",
+  "role": "quality_inspector",
+  "rw": "unknown",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 261,
+  "id": "Q261",
+  "utterance": "库存批次列表切回上一页",
+  "role": "warehouse_worker",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 262,
+  "id": "Q262",
+  "utterance": "顺便把冷库入口那个摄像头的视频地址给我",
+  "role": "warehouse_worker",
+  "rw": "read",
+  "history": [
+   {
+    "role": "assistant",
+    "content": "上一轮在处理「取消摄像头事件订阅」；已确认：摄像头=成品库二号口，事件类型=越界告警；已取消成品库二号口摄像头的越界告警订阅"
+   }
+  ],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 263,
+  "id": "Q263",
+  "utterance": "看看今天发了多少筐",
+  "role": "warehouse_worker",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 264,
+  "id": "Q264",
+  "utterance": "设一下待备料",
+  "role": "workshop_supervisor",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 265,
+  "id": "Q265",
+  "utterance": "这批不合格原料要办退回",
+  "role": "quality_inspector",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 266,
+  "id": "Q266",
+  "utterance": "把王记食品上周的单子找出来",
+  "role": "sales_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "other",
+   "note": "应搜索王记食品是供应商还是客户，然后展示对应单子，不需要将问题退还给用户，也不能默认就是客户。",
+   "expected": "direct",
+   "mapped_by": "备注: 查它是供应商还是客户并展示对应单子, 不退还给用户"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 267,
+  "id": "Q267",
+  "utterance": "我想连着看留样状态和批次去向",
+  "role": "quality_inspector",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 268,
+  "id": "Q268",
+  "utterance": "这个码的溯源给我看下",
+  "role": "quality_inspector",
+  "rw": "read",
+  "history": [
+   {
+    "role": "assistant",
+    "content": "上一轮在处理「批次溯源」；已确认：批次号=20240512C；系统询问还需要补充哪个查询对象。；还缺：查询对象"
+   }
+  ],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 269,
+  "id": "Q269",
+  "utterance": "下周能卖多少",
+  "role": "sales_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 270,
+  "id": "Q270",
+  "utterance": "把物料单处理一下",
+  "role": "workshop_supervisor",
+  "rw": "unknown",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 271,
+  "id": "Q271",
+  "utterance": "指标这块帮我看看",
+  "role": "production_manager",
+  "rw": "unknown",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 272,
+  "id": "Q272",
+  "utterance": "把三车间这批货先冻结",
+  "role": "quality_inspector",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 273,
+  "id": "Q273",
+  "utterance": "先别处理留样了，改查批号20240918这批召回影响",
+  "role": "quality_inspector",
+  "rw": "read",
+  "history": [
+   {
+    "role": "assistant",
+    "content": "上一轮在处理「销毁/送检留样」；已确认：留样编号=LY20240918007，处置方式=按期销毁；系统刚询问这份留样的处置原因；还缺：处置原因"
+   }
+  ],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "系统应默认暂存销毁申请并告知用户，同时显示召回影响。",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 274,
+  "id": "Q274",
+  "utterance": "订单 XS20261105007 发出去了吗",
+  "role": "sales_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 275,
+  "id": "Q275",
+  "utterance": "换成牛肉",
+  "role": "warehouse_worker",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 276,
+  "id": "Q276",
+  "utterance": "我要看二车间上季度的利润情况",
+  "role": "factory_super_admin",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 277,
+  "id": "Q277",
+  "utterance": "查三车间薪资规则",
+  "role": "hr_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 278,
+  "id": "Q278",
+  "utterance": "上个月的",
+  "role": "finance_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 279,
+  "id": "Q279",
+  "utterance": "把卡住太久的商机弄一下",
+  "role": "sales_manager",
+  "rw": "read",
+  "history": [
+   {
+    "role": "assistant",
+    "content": "上一轮在处理「商机漏斗统计」；已确认：统计范围=华北区；系统已返回华北区商机漏斗统计结果"
+   }
+  ],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 280,
+  "id": "Q280",
+  "utterance": "看下那个批次",
+  "role": "warehouse_worker",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 281,
+  "id": "Q281",
+  "utterance": "这批先别发，冻上",
+  "role": "warehouse_worker",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 282,
+  "id": "Q282",
+  "utterance": "查这批怎么来的",
+  "role": "quality_inspector",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 283,
+  "id": "Q283",
+  "utterance": "看看把哪些商机推进了",
+  "role": "sales_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 284,
+  "id": "Q284",
+  "utterance": "把今天那个处理一下",
+  "role": "workshop_supervisor",
+  "rw": "read",
+  "history": [
+   {
+    "role": "assistant",
+    "content": "上一轮在处理「待备料查询」；已确认：工厂=一车间，查询日期=今天；系统正在根据工厂和日期查询待备料，并追问物料类别；还缺：物料类别"
+   }
+  ],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 285,
+  "id": "Q285",
+  "utterance": "退货单那个给我弄一下",
+  "role": "sales_manager",
+  "rw": "read",
+  "history": [
+   {
+    "role": "assistant",
+    "content": "上一轮在处理「退货单查询」；已确认：查询范围=最近七天；系统已展示最近七天的退货单列表"
+   }
+  ],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 286,
+  "id": "Q286",
+  "utterance": "给问题牛奶这单做监管上报",
+  "role": "quality_inspector",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 287,
+  "id": "Q287",
+  "utterance": "我要看下午那批的偏离告警",
+  "role": "quality_inspector",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 288,
+  "id": "Q288",
+  "utterance": "这个月那个先处理一下",
+  "role": "finance_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 289,
+  "id": "Q289",
+  "utterance": "建下今天卖得最好的产品",
+  "role": "sales_manager",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 290,
+  "id": "Q290",
+  "utterance": "先别的了，改成生成这批扫码任务",
+  "role": "warehouse_worker",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 291,
+  "id": "Q291",
+  "utterance": "预留那批白砂糖现在核销掉",
+  "role": "warehouse_worker",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 292,
+  "id": "Q292",
+  "utterance": "改这批去向",
+  "role": "warehouse_worker",
+  "rw": "unknown",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 293,
+  "id": "Q293",
+  "utterance": "样品批一下",
+  "role": "production_manager",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 294,
+  "id": "Q294",
+  "utterance": "今天那锅产品用掉的原料有多少",
+  "role": "workshop_supervisor",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 295,
+  "id": "Q295",
+  "utterance": "做下今天出货单",
+  "role": "warehouse_worker",
+  "rw": "write",
+  "history": [],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 296,
+  "id": "Q296",
+  "utterance": "我的考勤打卡情况",
+  "role": "operator",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 297,
+  "id": "Q297",
+  "utterance": "订单情况怎么样了",
+  "role": "sales_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 298,
+  "id": "Q298",
+  "utterance": "刚那个弄完了，帮我用新到的巧克力样品出一份BOM草稿",
+  "role": "production_manager",
+  "rw": "read",
+  "history": [],
+  "steve": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ },
+ {
+  "qno": 299,
+  "id": "Q299",
+  "utterance": "把这个弄一下",
+  "role": "workshop_supervisor",
+  "rw": "unknown",
+  "history": [],
+  "steve": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask"
+  },
+  "shi": {
+   "choice": "ask",
+   "note": "",
+   "expected": "ask",
+   "mapped_by": "按钮"
+  },
+  "status": "agree",
+  "aggressive_scored": true,
+  "conservative_scored": true
+ },
+ {
+  "qno": 300,
+  "id": "Q300",
+  "utterance": "卤制这道让老刘先弄一下",
+  "role": "workshop_supervisor",
+  "rw": "write",
+  "history": [
+   {
+    "role": "assistant",
+    "content": "上一轮在处理「分配工序责任人」；已确认：产品=盐焗鸡，工序=卤制；系统在询问盐焗鸡卤制这道工序要分给谁。；还缺：负责人"
+   }
+  ],
+  "steve": {
+   "choice": "show",
+   "note": "",
+   "expected": "show"
+  },
+  "shi": {
+   "choice": "direct",
+   "note": "",
+   "expected": "direct",
+   "mapped_by": "按钮"
+  },
+  "status": "disputed",
+  "aggressive_scored": false,
+  "conservative_scored": true
+ }
+]

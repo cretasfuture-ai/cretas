@@ -332,6 +332,9 @@ class IntentMatchResultDto(_CamelBase):
     timingMs: Optional[Dict[str, int]] = None
     # 19
     preprocessedQuery: Optional[PreprocessedQueryDto] = None
+    # 20 — 意图飞轮决策痕迹 (INTENT-DISTILL-20261111): 问没问 Luna / 退路哪一跳 / 旧四级出口 / optionSetHash。
+    # 只用于 Java 落飞轮记录, 不参与任何判断; Java 侧 IntentMatchResult.decisionTrace。
+    decisionTrace: Optional[Dict[str, Any]] = None
 
     # ----- Static factory methods (mirror Java IntentMatchResult.empty(...)) -----
 
@@ -430,6 +433,15 @@ class IntentMatchRequest(_CamelBase):
     # OPERATE+userPermissions 剔除无权限写意图; None=老客户端不过滤。
     mode: Optional[str] = None
     userPermissions: Optional[List[str]] = None
+    # 本厂先问档位 (Steve 2026-11-14): Java 读 factory_thresholds ai.intent.ask_policy 后传来,
+    # CONSERVATIVE 保守 / AGGRESSIVE 激进; 没带 / 认不出 ⇒ 默认档并计数 (ai/ask_policy.py)。
+    askPolicy: Optional[str] = None
+    # INTENT-DISTILL-20261111 第二批: 服务端任务状态摘要 (Java TaskStateSummary, 值已脱敏)。
+    # 只加字段; None = 老客户端 / 开关关。进提示词前再按白名单清洗一次 (decision.sanitize_task_state)。
+    taskState: Optional[Dict[str, Any]] = None
+    # 意图蒸馏第③步 PR-4: Java 业务域表 (ai/intent-domain-table.json) 的 catalog_version。与 Python 同步副本
+    # 版本相同才按业务域缩小决策层候选; None (老 Java) / 不同 ⇒ 不收窄。
+    catalogVersion: Optional[str] = None
 
 
 T = TypeVar("T")

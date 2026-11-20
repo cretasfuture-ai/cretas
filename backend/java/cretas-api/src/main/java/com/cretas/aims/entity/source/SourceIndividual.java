@@ -153,6 +153,26 @@ public class SourceIndividual extends BaseEntity {
     @Column(name = "notes", columnDefinition = "TEXT")
     private String notes;
 
+    /** 个体类型: LIVE(活体) / CARCASS(胴体), 可空(存量未登记)。 */
+    @Column(name = "individual_type", length = 16)
+    private String individualType;
+
+    /** 入场(入库)日期, 可空。 */
+    @Column(name = "entry_date")
+    private LocalDate entryDate;
+
+    /** 撤销原因; 撤销 = 写入原因后软删, 行仍保留可查。 */
+    @Column(name = "revoke_reason", length = 255)
+    private String revokeReason;
+
+    /** 撤销人(用户 ID 字符串)。 */
+    @Column(name = "revoked_by", length = 64)
+    private String revokedBy;
+
+    /** 撤销时间。 */
+    @Column(name = "revoked_at")
+    private java.time.LocalDateTime revokedAt;
+
     @Version
     @Column(name = "version", nullable = false)
     @Builder.Default

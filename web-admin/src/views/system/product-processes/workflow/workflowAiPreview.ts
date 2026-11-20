@@ -1,6 +1,11 @@
 import type { ProductProcessWorkflowDefinition } from './types';
 
-export interface WorkflowAiChangeRow { path: string; text: string }
+/**
+ * One confirmation row. `clears` = this change deletes or empties a value the
+ * canvas already has (BP-38): the panel shows it in red and will not apply the
+ * proposal until each such row is confirmed individually.
+ */
+export interface WorkflowAiChangeRow { path: string; text: string; clears?: true }
 export type WorkflowAiPreview =
   | { ok: true; rows: WorkflowAiChangeRow[]; revision: string; warnings?: string[] }
   | { ok: false; message: string };
@@ -22,10 +27,23 @@ const labels: Record<string, string> = {
   subsequentPotRatio: '后续锅比例', injectionAmount: '注射量',
   inputShares: '主料份额', percent: '份额 %', reworkSources: '回料来源', output: '回料产出', rework: '是否回料',
   costAllocationMethod: '成本分摊方式', fixedCostShare: '成本分摊份额 %',
-  ccps: '控制点', hazardType: '危害类型', criticalLimitMin: '下限', criticalLimitMax: '上限',
+  ccps: '控制点', processParams: '工艺参数', standardValue: '标准值', min: '下限', max: '上限', hazardType: '危害类型', criticalLimitMin: '下限', criticalLimitMax: '上限',
 };
 const owns = (value: Record<string, unknown>, key: string) => Object.prototype.hasOwnProperty.call(value, key);
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
+
+/** Absent, null, blank text, [] and {} carry no configuration. `false` and `0` are real values. */
+export function isEmptyWorkflowValue(value: unknown): boolean {
+  if (value === undefined || value === null) return true;
+  if (typeof value === 'string') return value.trim() === '';
+  if (Array.isArray(value)) return value.length === 0;
+  if (record(value)) return Object.keys(value).length === 0;
+  return false;
+}
+
+const clearsFlag = (from: unknown, to: unknown): { clears?: true } => (
+  !isEmptyWorkflowValue(from) && isEmptyWorkflowValue(to) ? { clears: true } : {}
+);
 
 /** Stable comparison preserves unknown JSON keys and distinguishes absent, null, false and zero. */
 export function workflowAiStableJson(value: unknown): string {
@@ -306,7 +324,7 @@ export function previewWorkflowAiDefinitions(
         : display(value);
       const bindings = (value: unknown) => Array.isArray(value) ? value.map(item => record(item) ? String(item.materialTypeId || item.skuId || '') : '').join('|') : '';
       const switched = bindings(from) !== bindings(to) && bindings(from) !== '' && bindings(to) !== '';
-      rows.push({ path, text: `${label}：${packaging(from)} → ${packaging(to)}${switched ? '（档案绑定已切换）' : ''}` });
+      rows.push({ path, ...clearsFlag(from, to), text: `${label}：${packaging(from)} → ${packaging(to)}${switched ? '（档案绑定已切换）' : ''}` });
       return;
     }
     if (record(from) || record(to)) {
@@ -347,7 +365,7 @@ export function previewWorkflowAiDefinitions(
           };
           return `${verb}连接：${endpoint(item.source)}【${handle(item.sourceHandle, '产出')}】 → ${endpoint(item.target)}【${handle(item.targetHandle, '投入')}】`;
         };
-        a.filter(edge => !afterEdges.has(keyOf(edge))).forEach((edge, index) => rows.push({ path: `canvas.edges.removed[${index}]`, text: edgeText(edge, '删除') }));
+        a.filter(edge => !afterEdges.has(keyOf(edge))).forEach((edge, index) => rows.push({ path: `canvas.edges.removed[${index}]`, clears: true, text: edgeText(edge, '删除') }));
         b.filter(edge => !beforeEdges.has(keyOf(edge))).forEach((edge, index) => rows.push({ path: `canvas.edges.added[${index}]`, text: edgeText(edge, '新增') }));
         return;
       }
@@ -363,7 +381,7 @@ export function previewWorkflowAiDefinitions(
       : label.includes('是否报工')
       ? (value: unknown) => value === true ? '报工' : value === false ? '免报' : display(value)
       : display;
-    rows.push({ path, text: `${label}：${shown(from)} → ${shown(to)}` });
+    rows.push({ path, ...clearsFlag(from, to), text: `${label}：${shown(from)} → ${shown(to)}` });
   };
   add('canvas', '画布', beforeValue, afterValue);
   // One revision covers both sides: the current canvas and the semantic plan.
@@ -436,7 +454,52 @@ export function previewWorkflowAiSpec(
     add(path, `${label}：${display(from)} → ${display(to)}`);
   };
 
-  // A spec replaces the whole canvas. Use graph topology, not visual x/y, for current order.
+  const { rawMaterials: oldRaw, steps: oldSteps } = projectWorkflowAsSpec(before);
+  const compilerDefaultsReporting = before.nodes.some(node => (
+    node.kind === 'PROCESS' && owns(node.data as Record<string, unknown>, 'reportingRequired')));
+  diff('rawMaterials', '入口原料', oldRaw, spec.rawMaterials);
+
+  const used = new Set<number>();
+  spec.steps.forEach((step: Record<string, unknown>, index: number) => {
+    const oldIndex = oldSteps.findIndex((old, i) => !used.has(i) && old.process === step.process);
+    const label = `工序 ${index + 1}「${String(step.process)}」`;
+    if (oldIndex < 0) add(`steps[${index}].add`, `新增${label}`);
+    else {
+      used.add(oldIndex);
+      if (oldIndex !== index) add(`steps[${index}].order`, `${label}顺序：${oldIndex + 1} → ${index + 1}`);
+    }
+      const projectedStep = compilerDefaultsReporting
+        ? {
+          ...step,
+          ...(owns(step, 'inputs') ? {} : { inputs: [] }),
+          ...(!owns(step, 'reportingRequired')
+            ? { reportingRequired: true }
+            : {}),
+        }
+        : step;
+      diff(`steps[${index}]`, label, oldIndex < 0 ? undefined : oldSteps[oldIndex], projectedStep);
+  });
+  oldSteps.forEach((step, index) => {
+    if (!used.has(index)) {
+      add(`removed[${index}]`, `删除工序 ${index + 1}「${String(step.process)}」`);
+      diff(`removed[${index}].fields`, `删除工序「${String(step.process)}」`, step, undefined);
+    }
+  });
+  Object.keys(spec).filter(key => key !== 'steps' && key !== 'rawMaterials')
+    .forEach(key => diff(key, labels[key] || key, undefined, spec[key]));
+  return { ok: true, rows, revision: workflowAiStableJson(before) };
+}
+
+/**
+ * Project the current canvas into the same semantic shape the AI spec uses
+ * (rawMaterials + ordered steps). Shared by the confirmation diff above and by
+ * workflowAiPreserve.fillOmittedSpecFields, so both read the canvas the same way.
+ */
+export function projectWorkflowAsSpec(before: ProductProcessWorkflowDefinition): {
+  rawMaterials: unknown[];
+  steps: Record<string, unknown>[];
+} {
+  // Use graph topology, not visual x/y, for current order.
   const nodes = new Map(before.nodes.map(node => [node.id, node]));
   const indegree = new Map(before.nodes.map(node => [node.id, 0]));
   before.edges.forEach(edge => indegree.set(edge.target, (indegree.get(edge.target) || 0) + 1));
@@ -454,7 +517,6 @@ export function previewWorkflowAiSpec(
   }
   before.nodes.filter(node => !ordered.includes(node)).forEach(node => ordered.push(node));
   const processes = ordered.filter(node => node.kind === 'PROCESS');
-  const compilerDefaultsReporting = processes.some(node => owns(node.data as Record<string, unknown>, 'reportingRequired'));
   const oldSteps = processes.map(node => {
     const data = node.data as Record<string, unknown>;
     const ports = Array.isArray(data.ports) ? data.ports as Record<string, unknown>[] : [];
@@ -500,35 +562,5 @@ export function previewWorkflowAiSpec(
   });
   const oldRaw = ordered.filter(node => node.kind === 'RAW_MATERIAL' && !before.edges.some(edge => edge.target === node.id))
     .map(node => node.data.name);
-  diff('rawMaterials', '入口原料', oldRaw, spec.rawMaterials);
-
-  const used = new Set<number>();
-  spec.steps.forEach((step: Record<string, unknown>, index: number) => {
-    const oldIndex = oldSteps.findIndex((old, i) => !used.has(i) && old.process === step.process);
-    const label = `工序 ${index + 1}「${String(step.process)}」`;
-    if (oldIndex < 0) add(`steps[${index}].add`, `新增${label}`);
-    else {
-      used.add(oldIndex);
-      if (oldIndex !== index) add(`steps[${index}].order`, `${label}顺序：${oldIndex + 1} → ${index + 1}`);
-    }
-      const projectedStep = compilerDefaultsReporting
-        ? {
-          ...step,
-          ...(owns(step, 'inputs') ? {} : { inputs: [] }),
-          ...(!owns(step, 'reportingRequired')
-            ? { reportingRequired: true }
-            : {}),
-        }
-        : step;
-      diff(`steps[${index}]`, label, oldIndex < 0 ? undefined : oldSteps[oldIndex], projectedStep);
-  });
-  oldSteps.forEach((step, index) => {
-    if (!used.has(index)) {
-      add(`removed[${index}]`, `删除工序 ${index + 1}「${String(step.process)}」`);
-      diff(`removed[${index}].fields`, `删除工序「${String(step.process)}」`, step, undefined);
-    }
-  });
-  Object.keys(spec).filter(key => key !== 'steps' && key !== 'rawMaterials')
-    .forEach(key => diff(key, labels[key] || key, undefined, spec[key]));
-  return { ok: true, rows, revision: workflowAiStableJson(before) };
+  return { rawMaterials: oldRaw, steps: oldSteps };
 }

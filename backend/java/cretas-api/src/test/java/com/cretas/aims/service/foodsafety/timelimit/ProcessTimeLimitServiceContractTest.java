@@ -93,7 +93,9 @@ class ProcessTimeLimitServiceContractTest {
         service = new ProcessTimeLimitService(portRepo, taskRepo, mock(WorkProcessRepository.class), batchRepo,
                 planRepo, instanceRepo, reportRepo, semiRepo, txnRepo, materialRepo,
                 mock(FinishedGoodsBatchRepository.class), edgeRepo, markRepo, eventRepo, writer, qcRelease,
-                mock(WarehouseResolver.class), revisionRepo, new com.fasterxml.jackson.databind.ObjectMapper()) {
+                mock(WarehouseResolver.class), revisionRepo, new com.fasterxml.jackson.databind.ObjectMapper(),
+                new com.cretas.aims.service.processentry.IntermediateOwnershipGuard(planRepo, batchRepo,
+                        mock(com.cretas.aims.repository.CustomerRepository.class))) {
             @Override
             protected LocalDateTime now() {
                 return now;
@@ -108,6 +110,9 @@ class ProcessTimeLimitServiceContractTest {
         when(eventRepo.findByFactoryIdAndTargetTypeAndTargetIdAndStatus(eq(F), anyString(), anyString(),
                 eq(ProcessTimeLimitEvent.Status.RELEASED))).thenReturn(releases);
         when(markRepo.findByTargets(eq(F), anyString(), any())).thenReturn(List.of());
+        // PROTO-Q41: 本类原有用例都是「超时拦截」档 (工厂开关开); 只警告 (默认) 档见 ProcessTimeLimitWarnOnlyContractTest
+        service.setDisciplinePolicy(com.cretas.aims.service.discipline.DisciplineFixtures.policy(java.util.Map.of(
+                com.cretas.aims.service.canvas.ThresholdKeys.PRODUCTION_TIME_LIMIT_BLOCK_ON_EXCEED, "1")));
     }
 
     private WorkflowTaskPort port(String sku, String kind, Map<String, Object> config) {
@@ -202,6 +207,9 @@ class ProcessTimeLimitServiceContractTest {
         assertEquals(409, e.getCode());
         assertEquals(ProcessTimeLimitService.CODE_EXCEEDED, e.getErrorCode());
         assertTrue(e.getMessage().contains("W-1") && e.getMessage().contains("已超时 35 分钟"), e.getMessage());
+        // 验收 2026-11-12: 提示里「在」和「App」之间曾少空格; 钉住整句 (质检员按这句去找处置入口)
+        assertEquals("请通知质检员在 App 首页「超时处置」或网页「质量管理 → 质检放行 → 超时处置」"
+                + "复检放行或判不合格，处置后再领；也可以改选没有超时的批次", e.getActionHint());
 
         ArgumentCaptor<ProcessTimeLimitEvent> event = ArgumentCaptor.forClass(ProcessTimeLimitEvent.class);
         verify(writer).openIfAbsent(event.capture());
@@ -654,7 +662,7 @@ class ProcessTimeLimitServiceContractTest {
                 .markCode(ProcessTimeLimitConfig.MARK_THAW).startedAt(T0).build();
         when(markRepo.findByTargets(F, "RAW_MATERIAL_BATCH", List.of("A"))).thenReturn(List.of(first));
         ProcessTimeMark again = service.startMark(F, new ProcessTimeLimitService.MarkCommand(
-                "RAW_MATERIAL_BATCH", "A", "START", "THAW", null), 7L, "op");
+                "RAW_MATERIAL_BATCH", "A", "START", "THAW", null, null, null), 7L, "op");
         assertEquals(T0, again.getStartedAt());
         verify(markRepo, never()).save(any());
     }
@@ -664,20 +672,96 @@ class ProcessTimeLimitServiceContractTest {
     void markScopeAndServerTime() {
         when(materialRepo.findByIdAndFactoryId("X", F)).thenReturn(Optional.empty());
         assertEquals(404, assertThrows(BusinessException.class, () -> service.startMark(F,
-                new ProcessTimeLimitService.MarkCommand("RAW_MATERIAL_BATCH", "X", "START", "THAW", null), 7L, "op"))
+                new ProcessTimeLimitService.MarkCommand("RAW_MATERIAL_BATCH", "X", "START", "THAW", null, null, null), 7L, "op"))
                 .getCode());
 
         raw("A", null, T0);
         when(markRepo.save(any())).thenAnswer(i -> i.getArgument(0));
         now = T0.plusMinutes(5);
         ProcessTimeMark pause = service.startMark(F, new ProcessTimeLimitService.MarkCommand(
-                "RAW_MATERIAL_BATCH", "A", "PAUSE", "COLD_STORAGE", null), 7L, "op");
+                "RAW_MATERIAL_BATCH", "A", "PAUSE", "COLD_STORAGE", null, null, null), 7L, "op");
         assertEquals(now, pause.getStartedAt());
         assertNull(pause.getEndedAt());
 
         when(markRepo.findByTargets(F, "RAW_MATERIAL_BATCH", List.of("A"))).thenReturn(List.of(pause));
         assertEquals(ProcessTimeLimitService.CODE_PAUSE_OPEN, assertThrows(BusinessException.class,
                 () -> service.startMark(F, new ProcessTimeLimitService.MarkCommand(
-                        "RAW_MATERIAL_BATCH", "A", "PAUSE", "COLD_STORAGE", null), 7L, "op")).getErrorCode());
+                        "RAW_MATERIAL_BATCH", "A", "PAUSE", "COLD_STORAGE", null, null, null), 7L, "op")).getErrorCode());
+    }
+
+    // ═══════════════ 纪律排查 A13 (2026-11-10): 解冻开始允许补登, 要原因, 时长由工厂配置 ═══════════════
+
+    private ProcessTimeMark thaw(LocalDateTime startedAt, String reason) {
+        return service.startMark(F, new ProcessTimeLimitService.MarkCommand(
+                "RAW_MATERIAL_BATCH", "A", "START", "THAW", null, startedAt, reason), 7L, "op");
+    }
+
+    private void a13Setup(java.util.Map<String, String> cfg) {
+        raw("A", null, T0);
+        when(markRepo.save(any())).thenAnswer(i -> i.getArgument(0));
+        now = T0.plusHours(10);
+        if (cfg != null) {
+            service.setDisciplinePolicy(com.cretas.aims.service.discipline.DisciplineFixtures.policy(cfg));
+        }
+    }
+
+    @Test
+    @DisplayName("A13 默认 (最多补 480 分钟): 补登 2 小时前 + 原因 → 起算点就是实际开始时间, 原因留痕")
+    void a13_backfillWithinDefaultWindow() {
+        a13Setup(java.util.Map.of());
+        ProcessTimeMark m = thaw(now.minusHours(2), "早班忘了登记");
+        assertEquals(now.minusHours(2), m.getStartedAt());
+        assertEquals("早班忘了登记", m.getBackfillReason());
+        assertEquals(7L, m.getStartedBy());
+    }
+
+    @Test
+    @DisplayName("A13 补登不填原因 → 409, 不落库")
+    void a13_backfillNeedsReason() {
+        a13Setup(java.util.Map.of());
+        BusinessException e = assertThrows(BusinessException.class, () -> thaw(now.minusHours(2), " "));
+        assertEquals(ProcessTimeLimitService.CODE_BACKFILL_REASON_REQUIRED, e.getErrorCode());
+        verify(markRepo, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("A13 默认: 补登超过 480 分钟 → 409 TOO_EARLY")
+    void a13_backfillBeyondDefaultWindow() {
+        a13Setup(java.util.Map.of());
+        BusinessException e = assertThrows(BusinessException.class, () -> thaw(now.minusHours(9), "忘了"));
+        assertEquals(ProcessTimeLimitService.CODE_BACKFILL_TOO_EARLY, e.getErrorCode());
+        verify(markRepo, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("A13 非默认: 工厂配 60 分钟 → 补 2 小时拒绝, 补 30 分钟可以; 配 0 → 一律不许补登")
+    void a13_factoryConfiguredWindow() {
+        a13Setup(java.util.Map.of(
+                com.cretas.aims.service.canvas.ThresholdKeys.PRODUCTION_THAW_BACKFILL_MAX_MINUTES, "60"));
+        assertEquals(ProcessTimeLimitService.CODE_BACKFILL_TOO_EARLY,
+                assertThrows(BusinessException.class, () -> thaw(now.minusHours(2), "忘了")).getErrorCode());
+        assertEquals(now.minusMinutes(30), thaw(now.minusMinutes(30), "忘了").getStartedAt());
+
+        service.setDisciplinePolicy(com.cretas.aims.service.discipline.DisciplineFixtures.policy(java.util.Map.of(
+                com.cretas.aims.service.canvas.ThresholdKeys.PRODUCTION_THAW_BACKFILL_MAX_MINUTES, "0")));
+        BusinessException off = assertThrows(BusinessException.class, () -> thaw(now.minusMinutes(10), "忘了"));
+        assertEquals(ProcessTimeLimitService.CODE_BACKFILL_TOO_EARLY, off.getErrorCode());
+        assertTrue(off.getMessage().contains("不允许补登"), off.getMessage());
+    }
+
+    @Test
+    @DisplayName("A13 阴性对照: 不带时间仍记现在、不要原因; 冷藏暂停不能补登; 未来时间不收")
+    void a13_negativeControls() {
+        a13Setup(java.util.Map.of());
+        ProcessTimeMark m = thaw(null, null);
+        assertEquals(now, m.getStartedAt());
+        assertNull(m.getBackfillReason());
+
+        assertEquals(ProcessTimeLimitService.CODE_INVALID, assertThrows(BusinessException.class,
+                () -> service.startMark(F, new ProcessTimeLimitService.MarkCommand(
+                        "RAW_MATERIAL_BATCH", "A", "PAUSE", "COLD_STORAGE", null, now.minusHours(1), "忘了"),
+                        7L, "op")).getErrorCode());
+        assertEquals(ProcessTimeLimitService.CODE_INVALID,
+                assertThrows(BusinessException.class, () -> thaw(now.plusHours(1), "x")).getErrorCode());
     }
 }

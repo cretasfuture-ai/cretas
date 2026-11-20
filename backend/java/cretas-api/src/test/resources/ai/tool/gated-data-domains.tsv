@@ -28,6 +28,7 @@ workflows	OPEN	ProductProcessWorkflowRepository|ProductWorkProcessRepository|Wor
 quality-disposition	OPEN	QualityDispositionRuleService|QualityInspectionService|QualityDispositionInventoryService	QualityDispositionController#getPendingDispositions	质检与处置在 App 的处置页开放
 sku-complexity	OPEN	SkuComplexityRepository|SkuComplexityService	SchedulingOptimizationController#getSkuComplexity	SKU 复杂度在排产优化页开放
 worker-scheduling	OPEN	WorkerAssignmentRepository|ShiftScheduleService	SchedulingController#getWorkerAssignments	人员排班与分配在排产页开放
+line-schedules	OPEN	LineScheduleRepository|ProductionLineRepository|ProductionLineCapacityConfigRepository	SchedulingController#getSchedule,SchedulingController#getProductionLines	产线排程与产线在排产页开放 (2026-11-18 employee_work_location_query 读当天排程的产线名; 两个读接口只有 scheduling 模块门)
 work-sessions	OPEN	EmployeeWorkSessionRepository	WorkSessionController#getStats	工作时段统计在 App 里开放
 food-safety	NO_APP_PAGE	FoodSampleRepository|IngredientNutritionFactRepository|NutritionLabelRepository|SsopProcedureRepository|SsopExecutionRecordRepository|SsopBlockingGateRepository|RegulatoryReportPdfService	CODES:quality:read,quality:read_write	组织者裁定 2026-11-03: 留样、营养成分/标签、SSOP 与监管报告没有 App 读页面 (canvas 食安页不读这些表), 归质检模块: 质检读 (管理员另有全权)
 cold-chain	NO_APP_PAGE	ColdChainAlertRepository|ColdChainEquipmentRepository|ColdChainTempReadingRepository|IotDeviceDataRepository	CODES:warehouse:read,warehouse:read_write,inventory:read,inventory:read_write,quality:read,quality:read_write,equipment:read	组织者裁定 2026-11-03: 冷链设备/温度/IoT 读数没有 App 读页面, 仓储/库存读、质检读或设备读任一可看; 登记与确认告警另需对应写权限 (工具上声明)
@@ -38,6 +39,7 @@ rule-engine	NO_APP_PAGE	RuleEngine	ROLES:factory_super_admin,permission_admin	�
 units	NO_APP_PAGE	UnitConversionService	-	单位换算是参考数据 (千克/吨/箱的换算关系), 没有 App 读页面, 不含经营数据, 对工厂用户开放
 ai-conversation	INTERNAL	ConversationMemoryService	-	调用者本人的对话上下文 (上一轮的结果与翻页游标), 不读别人的业务数据
 ai-tool-catalog	INTERNAL	ToolMetadataRepository|ToolSimilarityService	-	工具目录元数据 (工具名、描述、相似度), 不含业务数据
+cost-deviation-threshold	INTERNAL	CostDeviationThresholdService	-	BP 问题 28 (2026-11-19): 只返回「发现的问题」损耗告警阈值这一个配置百分数及来源 (本厂配置/系统默认), 不读批次、计划、金额、偏差; 与物料平衡黄红线同类 (那两条线本工具一直随异常结果给出); 偏差案件与扫描结果仍在 CostDeviationScanService, 按其接口门禁, 本行不覆盖
 business-links	NO_APP_PAGE	LinkArrayService	-	单据之间的互链 (编号对编号), 不含金额与客户明细; 与溯源全链同类, 溯源接口对所有工厂用户开放
 gate-diagnosis	NO_APP_PAGE	GateDiagnosisService	-	批次被哪道闸拦的诊断 (闸名/批次号/可用量/解开方式), 与写路径拒绝是同一份诊断; 只含批次状态与数量, 无金额与客户明细; App 里等价信息就在被拒绝的操作提示上; Tool 自带仓储读权限
 factory-product-sales	NO_APP_PAGE	ProductSalesRankingService	CODES:sales:read,sales:read_write	新增工厂产品销售聚合Facade尚无直接App调用端点；按销售读权限与当前工厂及人员数据域查询，不额外读取采购成本
@@ -45,3 +47,8 @@ factory-delivery-line	NO_APP_PAGE	SalesDeliveryItemRepository	CODES:sales:read_w
 factory-invoice-status	NO_APP_PAGE	FactoryInvoiceTaxQueryService	CODES:finance:read,finance:read_write	自动开票状态与税率分组Facade只读财务单据，按财务读取权限；先证明订单工厂归属，不允许手工开票或跨租户查询
 product-create-receipt	NO_APP_PAGE	ProductCreateCommandReceiptService	CODES:production:read_write,system:read_write	受控建产品命令的创建、工序复制及持久结果回读Facade，没有独立App读页面；沿用product_create既有生产或系统写权限，另保留HTTP-only Gateway、完整调用者定位、工艺保密与确认凭证门，不按内部元数据或开放数据处理
 canvas-config-plan	NO_APP_PAGE	CanvasConfigCommandService|CanvasConfigPlanBindingService|CanvasConfigStateReader	ROLES:factory_super_admin,permission_admin	Canvas六配置命令的revision/目标状态绑定、原子写入与提交后回读Facade，没有独立App读页面；沿用六工具既有工厂管理员或权限管理员角色门，保留HTTP-only Gateway及同厂确认凭证，不按开放数据或内部目录元数据处理
+material-batch-hold	NO_APP_PAGE	MaterialBatchHoldService|MaterialBatchHoldService\$FreezeResult|FreezeResult	CODES:warehouse:read,warehouse:read_write,inventory:read,inventory:read_write	#1590 M5 扣留/放行的唯一实现 (冻结按批次号带锁取批次、判能否扣留、记扣留前状态), 返回的只是这一批的批次号/状态/扣留原因, 与原料批次列表 MaterialBatchController#getMaterialBatchList 同一份数据; 该服务只被写路径调用、没有读端点, 按批次列表的仓储/库存读权限 (冻结本身另需工具声明的写权限)
+insert-slots	OPEN	InsertSlotRepository	SchedulingController#getInsertSlots,SchedulingController#analyzeSlotImpact	插单时段与插单影响在 App 排产页经紧急插单时段 / 影响接口给到 (只按排产模块开关, 无权限码); 急单影响分析工具读同一批时段
+sales-order-trace	NO_APP_PAGE	SalesOrderTraceService	-	按销售单追溯 (销售单→计划→批次→溯源全链) 是 trace_full/trace_batch 的一个分支, 没有单独 App 读接口: 批次溯源全链 TraceabilityController#getFullTrace 对工厂用户开放, 工具与其同口径不收紧; 销售单本身经 SalesService#getSalesOrderById 逐条做数据范围校验 (越权 403), 不新增绕过
+supplier-material	NO_APP_PAGE	SupplierMaterialRepository	CODES:procurement:read,procurement:read_write,warehouse:read,warehouse:read_write,inventory:read,inventory:read_write	补货提醒里的推荐供应商 (供应关系: 启用/首选/交期) 没有 App 读页面; 采购读, 仓管问补货要知道找谁所以仓储/库存读也可见; 只出供应商名称与交期, 不出价格 (组织者裁定 2026-11-18)
+home-layout	OPEN	FactoryHomeLayoutRepository	DecorationController#getHomeLayout	工厂首页布局 (模块排列, 无业务数字) 在 App 里经首页布局读接口对所有工厂用户开放; AI 首页布局工具经 FactoryHomeLayoutToolStore 读写同一张表 (2026-11-19 扩扫辅助类后暴露); 工具读 findByFactoryId 含未发布草稿, App 读接口只给已发布版, 草稿只是模块排列不含业务数据, 不另设门

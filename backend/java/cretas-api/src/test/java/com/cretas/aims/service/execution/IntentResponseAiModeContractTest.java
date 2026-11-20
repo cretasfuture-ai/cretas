@@ -55,7 +55,7 @@ class IntentResponseAiModeContractTest {
     @BeforeEach
     void setUp() {
         orchestrator = mock(IntentExecutionOrchestrator.class, CALLS_REAL_METHODS);
-        tools = mock(ToolRegistry.class);
+        tools = com.cretas.aims.testsupport.ToolRegistryStubs.allToolsEnabled();
         ReflectionTestUtils.setField(orchestrator, "toolRegistry", tools);
         ReflectionTestUtils.setField(orchestrator, "writeGuardService", new WriteGuardService());
         var metadata = mock(IntentConfigManagementService.class);
@@ -65,7 +65,7 @@ class IntentResponseAiModeContractTest {
 
     @Test
     void realExecuteEarlyRetirementResponseHasReadModeWithoutRevivingCapability() {
-        var response = orchestrator.execute("F006", IntentExecuteRequest.builder()
+        var response = OrdinaryEntryPipeline.execute(orchestrator, "F006", IntentExecuteRequest.builder()
                 .intentCode(FactoryIntentCatalog.retiredCodes().iterator().next())
                 .userInput("已退役能力").mode("READ").build(), 1707L, "viewer");
         assertThat(response.getStatus()).isEqualTo("UNSUPPORTED_CAPABILITY");
@@ -80,7 +80,9 @@ class IntentResponseAiModeContractTest {
         var intent = intent("PRODUCTION_STATUS", null);
         var response = clarify(intent);
         assertThat(response.getStatus()).isEqualTo("NEED_CLARIFICATION");
-        assertThat(response.getMessage()).contains("请选择");
+        // INTENT-DISTILL D2: 没有可选的业务候选时明确说没有; 识别给的自由文本 (可能点名调用者用不了的功能) 不再照抄
+        assertThat(response.getMessage()).isEqualTo(ClarificationCandidateService.NO_CANDIDATE_MESSAGE)
+                .doesNotContain("生产报表");
         assertThat(response.getAiMode()).isEqualTo("READ");
         assertThat(response.getConfirmableAction()).isNull();
     }
@@ -143,10 +145,11 @@ class IntentResponseAiModeContractTest {
         when(recognizer.hasPermission(intent.getIntentCode(), "viewer")).thenReturn(true);
         ReflectionTestUtils.setField(orchestrator, "aiIntentService", recognizer);
         ReflectionTestUtils.setField(orchestrator, "businessTypeGate", mock(BusinessTypeGate.class));
-        var response = orchestrator.execute("F006", IntentExecuteRequest.builder().intentCode(intent.getIntentCode())
+        var response = OrdinaryEntryPipeline.execute(orchestrator, "F006", IntentExecuteRequest.builder().intentCode(intent.getIntentCode())
                 .userInput("预览产品").previewOnly(true).build(), 1707L, "viewer");
-        assertThat(response.getStatus()).isEqualTo("FAILED");
-        assertThat(response.getMessage()).contains("预览模式暂不支持");
+        // PR-3b 终审 L1: 与工具层执行出口同一状态 (前端 aiWriteConfirm 按 PREVIEW_UNSUPPORTED 映射)
+        assertThat(response.getStatus()).isEqualTo("PREVIEW_UNSUPPORTED");
+        assertThat(response.getMessage()).contains("不支持安全预览", "未执行");
         assertThat(response.getAiMode()).isEqualTo("WRITE");
         assertThat(response.getConfirmableAction()).isNull();
         assertThat(response.getResultData()).isNull();
@@ -161,7 +164,7 @@ class IntentResponseAiModeContractTest {
                 new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, 1707L, "F006", "operator"))) {
             var response = explicitEntry
                     ? orchestrator.executeWithExplicitIntent("F006", request, 1707L, "operator")
-                    : orchestrator.execute("F006", request, 1707L, "operator");
+                    : OrdinaryEntryPipeline.execute(orchestrator, "F006", request, 1707L, "operator");
             assertThat(response.getStatus()).isEqualTo("FACTORY_PACK_WORKFLOW_GUIDANCE");
             assertThat(response.getAiMode()).isEqualTo("WRITE");
             assertThat(response.getMetadata()).containsEntry("mutation", true);
@@ -213,7 +216,7 @@ class IntentResponseAiModeContractTest {
         ReflectionTestUtils.setField(orchestrator, "slotFillingService", slots);
         try (var ignored = AuthenticatedActor.trustedAsyncScope(
                 new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, 1707L, "F006", "viewer"))) {
-            var response = orchestrator.execute("F006", IntentExecuteRequest.builder().userInput("缺槽测试").build(),
+            var response = OrdinaryEntryPipeline.execute(orchestrator, "F006", IntentExecuteRequest.builder().userInput("缺槽测试").build(),
                     1707L, "viewer");
             assertThat(response.getStatus()).isEqualTo("NEED_MORE_INFO");
             assertThat(response.getAiMode()).isEqualTo(write ? "WRITE" : "READ");
@@ -240,7 +243,7 @@ class IntentResponseAiModeContractTest {
         var request = IntentExecuteRequest.builder().intentCode(selected.getIntentCode()).userInput("配置预览")
                 .previewOnly(true).build();
         var response = explicitEntry ? orchestrator.executeWithExplicitIntent("F006", request, 1707L, "viewer")
-                : orchestrator.execute("F006", request, 1707L, "viewer");
+                : OrdinaryEntryPipeline.execute(orchestrator, "F006", request, 1707L, "viewer");
         assertThat(response.getStatus()).isEqualTo("BUSINESS_TYPE_MISMATCH");
         assertThat(response.getAiMode()).isEqualTo("WRITE");
         assertThat(response.getConfirmableAction()).isNull();
@@ -261,7 +264,7 @@ class IntentResponseAiModeContractTest {
         try (var ignored = AuthenticatedActor.trustedAsyncScope(
                 new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, 1707L, "F006", "operator"))) {
             var response = explicitEntry ? orchestrator.executeWithExplicitIntent("F006", request, 1707L, "operator")
-                    : orchestrator.execute("F006", request, 1707L, "operator");
+                    : OrdinaryEntryPipeline.execute(orchestrator, "F006", request, 1707L, "operator");
             assertThat(response.getStatus()).isEqualTo("FACTORY_PACK_NO_MATCH");
             assertThat(response.getAiMode()).isEqualTo("WRITE");
             assertThat(response.getConfirmableAction()).isNull();
@@ -282,7 +285,7 @@ class IntentResponseAiModeContractTest {
         try (var ignored = AuthenticatedActor.trustedAsyncScope(
                 new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, 1707L, "F006", "operator"))) {
             var response = explicitEntry ? orchestrator.executeWithExplicitIntent("F006", request, 1707L, "operator")
-                    : orchestrator.execute("F006", request, 1707L, "operator");
+                    : OrdinaryEntryPipeline.execute(orchestrator, "F006", request, 1707L, "operator");
             assertThat(response.getStatus()).isEqualTo("FACTORY_PACK_NO_MATCH");
             assertThat(response.getMetadata()).containsEntry("reason", "read-tool-outside-allowlist");
             assertThat(response.getAiMode()).isEqualTo("READ");

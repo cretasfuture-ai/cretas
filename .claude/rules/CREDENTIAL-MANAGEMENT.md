@@ -1,3 +1,11 @@
+---
+paths:
+  - "backend/**"
+  - "**/.env*"
+  - "scripts/deploy/**"
+  - ".claude/skills/server-operations/**"
+---
+
 # 凭证配置
 
 **最后更新**: 2026-04-25

@@ -58,6 +58,19 @@ class MaterialBatchReservationSignGuardTest {
                 mock(ProductionPlanBatchUsageRepository.class),
                 mock(ExcelUtil.class),
                 mock(FuturePlanMatchingService.class));
+        // 排查 2026-11-10 A4/A5: 带计划的领料 / 预留 / 消耗要核对归属, 计划仓储必注入; 桩成本厂的公司备料计划
+        {
+            com.cretas.aims.repository.ProductionPlanRepository ownershipPlans =
+                    org.mockito.Mockito.mock(com.cretas.aims.repository.ProductionPlanRepository.class);
+            org.mockito.Mockito.lenient().when(ownershipPlans.existsById(org.mockito.ArgumentMatchers.anyString())).thenReturn(true);
+            org.mockito.Mockito.lenient().when(ownershipPlans.findById(org.mockito.ArgumentMatchers.anyString())).thenAnswer(inv -> {
+                com.cretas.aims.entity.ProductionPlan p = new com.cretas.aims.entity.ProductionPlan();
+                p.setId(inv.getArgument(0));
+                p.setFactoryId("F006");
+                return java.util.Optional.of(p);
+            });
+            org.springframework.test.util.ReflectionTestUtils.setField(service, "productionPlanRepository", ownershipPlans);
+        }
         // 字段注入的依赖: 正向对照会一路走到 publishStockChangedEventIfApplicable,
         // 不打桩就是 NPE —— 而 NPE 恰好说明这条对照真的驱动到了实现深处, 不是空跑。
         ReflectionTestUtils.setField(service, "inventoryLowStockEventPublisher",

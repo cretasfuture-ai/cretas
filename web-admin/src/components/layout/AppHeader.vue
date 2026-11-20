@@ -4,6 +4,10 @@ import { useRouter, useRoute } from 'vue-router';
 import { useAppStore } from '@/store/modules/app';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePlatformFactoryContextStore } from '@/store/modules/platformFactoryContext';
+import { useNavigationVisibilityStore } from '@/store/modules/navigationVisibility';
+import { factoryMenuForType, groupedMenuConfig, menuTrail } from './menuConfig';
+import { usePinnedMenu } from './pinnedMenu';
+import { Star, StarFilled } from '@element-plus/icons-vue';
 import { ElMessageBox, ElMessage } from 'element-plus';
 import { Fold, Expand, User, SwitchButton, Refresh, Moon, Sunny, Box, ArrowLeft, VideoPlay } from '@element-plus/icons-vue';
 import ReminderBell from '@/components/notifications/ReminderBell.vue';
@@ -14,6 +18,17 @@ const route = useRoute();
 const appStore = useAppStore();
 const authStore = useAuthStore();
 const factoryView = usePlatformFactoryContextStore();
+const navigationVisibility = useNavigationVisibilityStore();
+const currentFactoryMenu = computed(() => {
+  const snapshot = navigationVisibility.snapshot;
+  const identityMatches = navigationVisibility.status === 'ready'
+    && snapshot?.actorId === String(authStore.user?.id || '')
+    && snapshot?.factoryId === (factoryView.factoryId || authStore.factoryId)
+    && snapshot?.role === authStore.currentRole
+    && snapshot?.isPlatform === authStore.isPlatform;
+  return factoryMenuForType(factoryView.context?.factoryType || authStore.factoryType,
+    identityMatches ? snapshot?.menuProfile : undefined);
+});
 
 // 面包屑
 //
@@ -25,7 +40,37 @@ const factoryView = usePlatformFactoryContextStore();
 //
 // ⇒ 路由可以用 meta.breadcrumbParent 显式声明「我在导航里的上一级叫什么」,
 //   面包屑以它为准。⛔ 不改 URL(存量深链/书签), 也不搬菜单(业务归属是对的)。
+// P2「常用」：当前页是原型分组侧栏里的一个菜单项时，可在面包屑旁加入/移出常用（存本机浏览器）。
+const pinnedMenu = usePinnedMenu();
+// 只有「当前路由正好是侧栏里看得见的一个菜单叶子」才能钉（详情子路由不算；看不见的不算）。
+const pinnablePath = computed<string | null>(() => {
+  if (authStore.isPlatform || authStore.currentRole === 'finance_manager' || !pinnedMenu.currentKey.value) return null;
+  if (factoryMenuForType(factoryView.context?.factoryType || authStore.factoryType) !== groupedMenuConfig) return null;
+  const trail = menuTrail(currentFactoryMenu.value, route.fullPath);
+  const leaf = trail?.[trail.length - 1];
+  if (!leaf || leaf.path.split(/[?#]/)[0] !== route.path) return null;
+  return pinnedMenu.canPin(leaf.path) ? leaf.path : null;
+});
+const currentPinned = computed(() => !!pinnablePath.value && pinnedMenu.isPinned(pinnablePath.value));
+
 const breadcrumbs = computed(() => {
+  // P2：原型分组侧栏下，面包屑按菜单树取「组 › 项 › 子项」，与用户在侧栏里点的名字一致。
+  // 平台侧栏、财务主管专用菜单、餐饮/物流（原分组）仍走路由 meta.title。
+  const useGroupedLayout = !authStore.isPlatform
+    && authStore.currentRole !== 'finance_manager'
+    && factoryMenuForType(factoryView.context?.factoryType || authStore.factoryType) === groupedMenuConfig;
+  const trail = useGroupedLayout ? menuTrail(currentFactoryMenu.value, route.fullPath) : null;
+  if (trail && trail.length > 1) {
+    const leaf = trail[trail.length - 1];
+    const isLeafItself = leaf.path.split(/[?#]/)[0] === route.path;
+    // 分组/展示分组不是路由，不可点
+    const crumbs = trail.slice(0, -1).map((node) => ({ path: '', title: node.title }));
+    if (isLeafItself) return [...crumbs, { path: '', title: leaf.title }];
+    // 详情等子路由（/sales/orders/:id）：菜单那一级可点回列表，末项补当前路由标题（审查 #1692 第 1 条）
+    const routeTitle = [...route.matched].reverse().find((r) => typeof r.meta.title === 'string' && r.meta.title)?.meta.title as string | undefined;
+    const tail = routeTitle && routeTitle !== leaf.title ? [{ path: '', title: routeTitle }] : [];
+    return [...crumbs, { path: leaf.path, title: leaf.title }, ...tail];
+  }
   const matched = route.matched.filter(r => r.meta.title);
   const override = route.meta.breadcrumbParent as string | undefined;
   if (!override) {
@@ -96,13 +141,25 @@ async function handleLogout() {
       <!-- 面包屑（移动端隐藏） -->
       <el-breadcrumb v-if="!appStore.isMobile" separator="/">
         <el-breadcrumb-item
-          v-for="item in breadcrumbs"
-          :key="item.path"
-          :to="item.path"
+          v-for="(item, index) in breadcrumbs"
+          :key="`${index}-${item.title}`"
+          :to="item.path || undefined"
         >
           {{ item.title }}
         </el-breadcrumb-item>
       </el-breadcrumb>
+      <el-tooltip v-if="!appStore.isMobile && pinnablePath" :content="currentPinned ? '从常用移除' : '加入常用（保存在这台电脑的浏览器里）'" placement="bottom">
+        <button
+          type="button"
+          class="pin-toggle"
+          :class="{ 'is-pinned': currentPinned }"
+          :aria-pressed="currentPinned"
+          :aria-label="currentPinned ? '从常用移除' : '加入常用'"
+          @click="pinnedMenu.toggle(pinnablePath!)"
+        >
+          <el-icon><StarFilled v-if="currentPinned" /><Star v-else /></el-icon>
+        </button>
+      </el-tooltip>
     </div>
 
     <div class="header-right">
@@ -169,10 +226,8 @@ async function handleLogout() {
 <style lang="scss" scoped>
 .app-header {
   height: 64px;
-  background-color: var(--color-bg-card, rgba(255, 255, 255, 0.85));
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border-bottom: 1px solid var(--border-color-light, #EDF2F7);
+  background-color: var(--cs-surface);
+  border-bottom: 1px solid var(--cs-border);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -180,6 +235,22 @@ async function handleLogout() {
   position: sticky;
   top: 0;
   z-index: 99;
+}
+
+.pin-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin-left: 8px;
+  border: 0;
+  border-radius: var(--cs-radius-sm, 6px);
+  background: transparent;
+  color: var(--cs-muted, #526278);
+  cursor: pointer;
+  &:hover, &:focus-visible { background: var(--cs-primary-soft, #edf4fb); color: var(--cs-primary, #1b65a8); outline: none; }
+  &.is-pinned { color: var(--cs-warning, #885910); }
 }
 
 .header-left {
@@ -190,7 +261,7 @@ async function handleLogout() {
   .collapse-btn {
     font-size: 20px;
     cursor: pointer;
-    color: var(--color-text-secondary, #7A8599);
+    color: var(--cs-muted);
     transition: color 0.2s;
     min-width: 44px;
     min-height: 44px;
@@ -199,7 +270,7 @@ async function handleLogout() {
     justify-content: center;
 
     &:hover {
-      color: var(--color-primary, #1B65A8);
+      color: var(--cs-primary);
     }
   }
 }
@@ -227,9 +298,9 @@ async function handleLogout() {
   .header-action {
     font-size: 18px;
     cursor: pointer;
-    color: var(--color-text-secondary, #7A8599);
+    color: var(--cs-muted);
     padding: 8px;
-    border-radius: var(--radius-sm, 6px);
+    border-radius: var(--cs-radius-sm);
     transition: all 0.2s;
 
     // 修复: flex 布局下 el-icon 的 svg 只继承到 height:1em, width 塌成 ~2px → 图标不可见 (但可点/hover)。
@@ -241,8 +312,8 @@ async function handleLogout() {
     }
 
     &:hover {
-      background-color: var(--color-bg-hover, #EDF2F7);
-      color: var(--color-primary, #1B65A8);
+      background-color: var(--cs-primary-soft);
+      color: var(--cs-primary);
     }
   }
 }
@@ -253,16 +324,16 @@ async function handleLogout() {
   gap: 8px;
   cursor: pointer;
   padding: 4px 8px;
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--cs-radius-sm);
   transition: background-color 0.2s;
 
   &:hover {
-    background-color: var(--color-bg-hover, #EDF2F7);
+    background-color: var(--cs-surface-subtle);
   }
 
   :deep(.el-avatar) {
-    background: linear-gradient(135deg, #1B65A8, #2B7EC1);
-    color: #fff;
+    background: var(--cs-primary-soft);
+    color: var(--cs-primary);
   }
 
   .user-detail {
@@ -272,12 +343,12 @@ async function handleLogout() {
 
     .user-name {
       font-size: 14px;
-      color: var(--color-text-primary, #1A2332);
+      color: var(--cs-text);
     }
 
     .user-role {
       font-size: 12px;
-      color: var(--color-text-secondary, #7A8599);
+      color: var(--cs-muted);
     }
   }
 }

@@ -548,6 +548,20 @@ public class FinishedGoodsFeedServiceImpl implements FinishedGoodsFeedService {
     @Override
     @Transactional
     public void restoreForFeed(String factoryId, String batchNumber, BigDecimal qty, Long operatorId) {
+        restore(factoryId, batchNumber, qty, operatorId, REF_INTERIM_REVERSAL, "撤销小结投料领用 (还回) ", true);
+    }
+
+    @Override
+    @Transactional
+    public void restoreForSettlementReversal(String factoryId, String batchNumber, BigDecimal qty, Long operatorId) {
+        restore(factoryId, batchNumber, qty, operatorId, REF_SETTLEMENT_REVERSAL, "撤回结单投料领用 (还回) ", false);
+    }
+
+    /** 结单撤回还回成品投料的调整日志来源 (区别于撤销小结)。 */
+    private static final String REF_SETTLEMENT_REVERSAL = "SETTLEMENT_REVERSAL";
+
+    private void restore(String factoryId, String batchNumber, BigDecimal qty, Long operatorId,
+                         String referenceType, String reasonPrefix, boolean mayReviveReversed) {
         if (qty == null || qty.signum() <= 0) {
             return;
         }
@@ -567,24 +581,26 @@ public class FinishedGoodsFeedServiceImpl implements FinishedGoodsFeedService {
                 .adjustmentQuantity(qty)                // 正数 = 还回
                 .beforeProduced(before)
                 .afterProduced(after)
-                .reason("撤销小结投料领用 (还回) " + qty.stripTrailingZeros().toPlainString()
+                .reason(reasonPrefix + qty.stripTrailingZeros().toPlainString()
                         + (fg.getUnit() != null ? fg.getUnit() : ""))
-                .referenceType(REF_INTERIM_REVERSAL)
+                .referenceType(referenceType)
                 .operatorId(operatorId)
                 .build();
         finishedGoodsAdjustmentLogRepository.save(logEntry);
 
         fg.setProducedQuantity(after);
-        // 还量后有可用 → 只有因量耗尽而变的 DEPLETED/REVERSED 才恢复 AVAILABLE。
+        // 还量后有可用 → 只有因量耗尽而变的 DEPLETED (撤销小结另含 REVERSED) 才恢复 AVAILABLE。
         // ⛔ 白名单而非黑名单: 待检 (PENDING_INSPECTION) / 不良品 (DEFECTIVE) / 冻结 / 过期都是质量或业务判定,
         //    撤销一笔投料不能把它们洗成可售 (缺口 11 审查: 旧的「除 EXPIRED/FROZEN 外一律改回」会洗白)。
-        if (!fg.isDepleted() && (FinishedGoodsBatch.Status.DEPLETED.equals(fg.getStatus())
-                || FinishedGoodsBatch.Status.REVERSED.equals(fg.getStatus()))) {
+        // ⛔ 结单撤回不复活 REVERSED: 那是产出它的计划/小结被撤了, 投料侧撤回不能把作废的产出改回可售 (#1550 审查 3)。
+        boolean revivable = FinishedGoodsBatch.Status.DEPLETED.equals(fg.getStatus())
+                || (mayReviveReversed && FinishedGoodsBatch.Status.REVERSED.equals(fg.getStatus()));
+        if (!fg.isDepleted() && revivable) {
             fg.setStatus(FinishedGoodsBatch.Status.AVAILABLE);
         }
         finishedGoodsBatchRepository.save(fg);
-        log.info("[interim-reverse] restoreForFeed FG 投料还回: factory={}, batchNo={}, qty={}, before={}, after={}",
-                factoryId, batchNumber, qty, before, after);
+        log.info("[fg-feed-restore] {} FG 投料还回: factory={}, batchNo={}, qty={}, before={}, after={}, status={}",
+                referenceType, factoryId, batchNumber, qty, before, after, fg.getStatus());
     }
 
     @Override

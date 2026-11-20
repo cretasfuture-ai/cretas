@@ -66,6 +66,10 @@ class WorkReportingServiceImplTest {
     @Mock
     private ApplicationEventPublisher eventPublisher;
 
+    /** A14: 报工单入口过补录窗口 (这里的用例不传日期 / 传今天, 校验器桩即可)。 */
+    @Mock
+    private com.cretas.aims.util.BackdateWindowValidator backdateWindowValidator;
+
     @InjectMocks
     private WorkReportingServiceImpl service;
 

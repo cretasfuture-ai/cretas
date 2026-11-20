@@ -21,6 +21,7 @@ import { shipmentApiClient, ShipmentRecord } from "../../../services/api/shipmen
 import { formatDateTime as fmtDateTime, formatNumberWithCommas } from "../../../utils/formatters";
 import { useAuthStore } from "../../../store/authStore";
 import { useCanViewPrice } from "../../../store/canViewPriceStore";
+import { shipmentCustomerLabel } from "./shipmentCustomerLabel";
 
 type NavigationProp = NativeStackNavigationProp<WHOutboundStackParamList>;
 type RouteType = RouteProp<WHOutboundStackParamList, "WHOutboundDetail">;
@@ -194,7 +195,7 @@ export function WHOutboundDetailScreen() {
           showPackButton: statusInfo.showPackButton,
           isUrgent,
           dispatchTime: getDispatchTimeHint(shipment.shipmentDate),
-          customer: shipment.customerId ?? '未知客户',
+          customer: shipmentCustomerLabel(shipment),
           customerContact: '-',  // API doesn't provide contact info
           address: shipment.deliveryAddress ?? '-',
           totalQuantity: qty,

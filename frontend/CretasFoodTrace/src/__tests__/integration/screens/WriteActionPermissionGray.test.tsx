@@ -68,6 +68,7 @@ jest.mock('../../../services/api/disposalRecordApiClient', () => ({
     updateDisposalRecord: jest.fn(),
     deleteDisposalRecord: jest.fn(),
     approveDisposalRecord: jest.fn(),
+    getApprovalPermission: jest.fn(),
   },
 }));
 
@@ -99,6 +100,8 @@ beforeEach(() => {
   (customerApiClient.getCustomers as jest.Mock).mockResolvedValue({ data: [CUSTOMER] });
   (supplierApiClient.getSuppliers as jest.Mock).mockResolvedValue({ data: [SUPPLIER] });
   (disposalRecordApiClient.getDisposalRecords as jest.Mock).mockResolvedValue({ data: [DISPOSAL] });
+  // 报废审批权限由后端判断; 默认「没有」
+  (disposalRecordApiClient.getApprovalPermission as jest.Mock).mockResolvedValue(false);
 });
 
 describe('CustomerManagementScreen —— 只读角色', () => {
@@ -228,12 +231,29 @@ describe('DisposalRecordManagementScreen —— 能编辑但不能审批的角�
     expect(typeof edit.props.onPress).toBe('function');
   });
 
-  it('阴性对照: 工厂超管的审批按钮可用、handler 还在', async () => {
+  it('阴性对照: 后端说有「报废审批」权限时审批按钮可用、handler 还在 (不看 App 里的岗位名)', async () => {
+    (disposalRecordApiClient.getApprovalPermission as jest.Mock).mockResolvedValue(true);
+    const { getByTestId } = render(<DisposalRecordManagementScreen />);
+    await waitFor(() => expect(getByTestId(`disposal-approve-btn-${DISPOSAL.id}`).props.disabled).toBeFalsy());
+    const btn = getByTestId(`disposal-approve-btn-${DISPOSAL.id}`);
+
+    expect(typeof btn.props.onPress).toBe('function');
+  });
+
+  it('后端说没有权限时, 即使是工厂超管岗位名, 审批按钮也不放开 (权限只信后端)', async () => {
     setRole('factory_super_admin');
+    (disposalRecordApiClient.getApprovalPermission as jest.Mock).mockResolvedValue(false);
     const { getByTestId } = render(<DisposalRecordManagementScreen />);
     const btn = await waitFor(() => getByTestId(`disposal-approve-btn-${DISPOSAL.id}`));
 
-    expect(btn.props.disabled).toBeFalsy();
-    expect(typeof btn.props.onPress).toBe('function');
+    expect(btn.props.disabled).toBe(true);
+  });
+
+  it('读不到审批权限 (接口失败) ⇒ 按不能审批, 不默认放开', async () => {
+    (disposalRecordApiClient.getApprovalPermission as jest.Mock).mockRejectedValue(new Error('boom'));
+    const { getByTestId } = render(<DisposalRecordManagementScreen />);
+    const btn = await waitFor(() => getByTestId(`disposal-approve-btn-${DISPOSAL.id}`));
+
+    expect(btn.props.disabled).toBe(true);
   });
 });

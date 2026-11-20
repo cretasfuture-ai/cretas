@@ -7,6 +7,7 @@ import com.cretas.aims.entity.indicator.IndicatorVersion;
 import com.cretas.aims.repository.indicator.IndicatorRepository;
 import com.cretas.aims.repository.indicator.IndicatorThresholdRepository;
 import com.cretas.aims.repository.indicator.IndicatorVersionRepository;
+import com.cretas.aims.service.indicator.IndicatorValueVisibility;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -60,6 +61,16 @@ public class IndicatorQueryTool extends AbstractBusinessTool {
     /** 趋势最大返回行数, 防止 LLM context bloat. */
     private static final int MAX_TREND_ROWS = 60;
 
+    /** 金额类指标的数值、告警级别与阈值按这个价格口径给 —— 见 {@link IndicatorValueVisibility} (web 与 AI 共用)。 */
+    public static final String VALUE_SPEC = IndicatorValueVisibility.VALUE_SPEC;
+
+    static final String VALUE_HIDDEN_MESSAGE = IndicatorValueVisibility.VALUE_HIDDEN_MESSAGE;
+
+    /** 委托 {@link IndicatorValueVisibility#carriesMoneyFigure} (唯一判定)。 */
+    public static boolean carriesMoneyFigure(Indicator i) {
+        return IndicatorValueVisibility.carriesMoneyFigure(i);
+    }
+
     @Override
     public String getToolName() {
         return "indicator_query";
@@ -68,9 +79,10 @@ public class IndicatorQueryTool extends AbstractBusinessTool {
     @Override
     public String getDescription() {
         return "查询指定指标的当前值 + 趋势 + 阈值命中状态。" +
-                "输入指标编码 (例: AVG_TICKET_PRICE / FACTORY_YIELD_RATE / FOOD_SAFETY_PASS_RATE), " +
+                "输入指标编码 (例: B2B_AVG_ORDER_VALUE / FACTORY_LU_YIELD_RATE / FACTORY_QUALITY_REJECT_RATE), " +
                 "返回最新快照值 + 计算时间 + 告警级别 + 历史趋势 + 阈值配置。" +
-                "适用: 老板问\"今天客单价多少\" / \"良品率怎么样\" / \"食安合不合格\" / \"看一下指标走势\"。";
+                "适用: 老板问\"今天客单价多少\" / \"出品率怎么样\" / \"不合格率多少\" / \"看一下指标走势\"。" +
+                "指标库里没有的说法 (如损耗率) 不要自己编编码。";
     }
 
     @Override
@@ -83,9 +95,9 @@ public class IndicatorQueryTool extends AbstractBusinessTool {
         Map<String, Object> indicatorCode = new HashMap<>();
         indicatorCode.put("type", "string");
         indicatorCode.put("description",
-                "指标编码 (大写下划线), 例: AVG_TICKET_PRICE / TABLE_TURNOVER / " +
-                        "RAW_WASTAGE_RATE / FACTORY_YIELD_RATE / FOOD_SAFETY_PASS_RATE / " +
-                        "FACTORY_PLAN_ACHIEVE_RATE / DISH_GROSS_MARGIN");
+                "指标编码 (大写下划线), 例: B2B_AVG_ORDER_VALUE / B2B_TOTAL_REVENUE_MTD / " +
+                        "FACTORY_LU_YIELD_RATE / FACTORY_QUALITY_REJECT_RATE / FACTORY_LU_UNIT_COST。" +
+                        "只能用指标库里有的编码, 用户说的指标对不上就不要猜");
         properties.put("indicator_code", indicatorCode);
 
         Map<String, Object> periodStart = new HashMap<>();
@@ -113,10 +125,7 @@ public class IndicatorQueryTool extends AbstractBusinessTool {
     @Override
     protected String getParameterQuestion(String paramName) {
         if ("indicator_code".equals(paramName)) {
-            return "请问您想查询哪个指标？可选: 客单价 (AVG_TICKET_PRICE) / 翻台率 (TABLE_TURNOVER) / " +
-                    "食材损耗率 (RAW_WASTAGE_RATE) / 良品率 (FACTORY_YIELD_RATE) / " +
-                    "食安通过率 (FOOD_SAFETY_PASS_RATE) / 计划达成率 (FACTORY_PLAN_ACHIEVE_RATE) / " +
-                    "菜品毛利 (DISH_GROSS_MARGIN)。";
+            return "请问您想查询哪个指标？可选: 客单价 / 本月销售额 / 本月订单数 / 出品率 / 不合格率 / 单位成本。";
         }
         return super.getParameterQuestion(paramName);
     }
@@ -140,8 +149,22 @@ public class IndicatorQueryTool extends AbstractBusinessTool {
             Map<String, Object> notFound = new LinkedHashMap<>();
             notFound.put("status", "NOT_FOUND");
             notFound.put("indicatorCode", code);
-            notFound.put("hint", "该工厂未配置此指标编码, 请检查 indicators 表或先创建");
-            return buildSimpleResult("指标不存在: " + code, notFound);
+            // 用户看到的文字不外露内部指标编码 (2026-11-18 「最近有哪些损耗异常」回「指标不存在: RAW_WASTAGE_RATE」):
+            // 说清暂不支持, 并列出这家工厂现在真能查的指标名
+            List<String> names = new ArrayList<>();
+            List<Indicator> available = indicatorRepository.findByFactoryIdAndIsActiveTrueOrderByDisplayOrderAscNameAsc(factoryId);
+            if (available != null) {
+                for (Indicator a : available) {
+                    if (a.getName() != null && !a.getName().isBlank() && !names.contains(a.getName()) && names.size() < 12) {
+                        names.add(a.getName());
+                    }
+                }
+            }
+            notFound.put("availableIndicatorNames", names);
+            String msg = "暂不支持按这个指标查询（指标库里没有对应的指标）。"
+                    + (names.isEmpty() ? "这个工厂还没有配置可查询的指标。"
+                    : "现在可以查的指标有：" + String.join("、", names) + "。");
+            return buildSimpleResult(msg, notFound);
         }
         Indicator indicator = opt.get();
 
@@ -188,28 +211,47 @@ public class IndicatorQueryTool extends AbstractBusinessTool {
                 : (latestOpt.isPresent() || indicator.getLastComputedAt() != null
                         ? "NO_DATA" : "NOT_COMPUTED");
         String breachLevel = evaluateBreachLevel(currentValue, thresholds);
+        // 金额 / 毛利 / 财务类指标的数值、告警级别、阈值: 与 web 指标中心同一判定 (IndicatorValueVisibility) —— 价格查看口径,
+        // 经 PriceFieldResponseAdvice#showsSpec 按权限配置判, 不看角色名。看不到 ⇒ 这些键省略 (不是 0)。
+        boolean showValues = !carriesMoneyFigure(indicator) || replyShowsPriceSpec(context, VALUE_SPEC);
 
         // 6) Build result
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("indicator", serializeIndicator(indicator));
-        result.put("currentValue", currentValue);
-        result.put("valueStatus", valueStatus);
+        if (showValues) {
+            result.put("currentValue", currentValue);
+            result.put("valueStatus", valueStatus);
+        } else {
+            result.put("valueStatus", "HIDDEN");
+            result.put("valueHidden", true);
+        }
         result.put("source", valueSource);
-        result.put("breachLevel", breachLevel);
+        // 告警级别与阈值会夹出数值区间 (GREEN ≥ 60 ⇒ 毛利率 ≥ 60%), 与数值同进同出
+        if (showValues) {
+            result.put("breachLevel", breachLevel);
+        }
         result.put("latestComputedAt", latestOpt.map(IndicatorVersion::getComputedAt)
                 .orElse(indicator.getLastComputedAt()));
         latestOpt.ifPresent(v -> {
             result.put("latestPeriodStart", v.getPeriodStart());
             result.put("latestPeriodEnd", v.getPeriodEnd());
-            result.put("latestAlertLevel", v.getAlertLevel());
+            if (showValues) {
+                result.put("latestAlertLevel", v.getAlertLevel());
+            }
         });
-        result.put("thresholds", serializeThresholds(thresholds));
-        result.put("trend", serializeTrend(trend));
+        if (showValues) {
+            result.put("thresholds", serializeThresholds(thresholds));
+        } else {
+            result.put("thresholdsHidden", true);
+        }
+        result.put("trend", serializeTrend(trend, showValues));
         result.put("trendSize", trend.size());
         result.put("periodStart", periodStart);
         result.put("periodEnd", periodEnd);
 
-        String summary = buildSummaryText(indicator, currentValue, breachLevel, trend.size());
+        String summary = showValues
+                ? buildSummaryText(indicator, currentValue, breachLevel, trend.size())
+                : indicator.getName() + VALUE_HIDDEN_MESSAGE;
         return buildSimpleResult(summary, result);
     }
 
@@ -304,14 +346,18 @@ public class IndicatorQueryTool extends AbstractBusinessTool {
         return rows;
     }
 
-    private List<Map<String, Object>> serializeTrend(List<IndicatorVersion> versions) {
+    private List<Map<String, Object>> serializeTrend(List<IndicatorVersion> versions, boolean showValues) {
         List<Map<String, Object>> rows = new ArrayList<>(versions.size());
         for (IndicatorVersion v : versions) {
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("periodStart", v.getPeriodStart());
             m.put("periodEnd", v.getPeriodEnd());
-            m.put("value", v.getValue());
-            m.put("alertLevel", v.getAlertLevel());
+            if (showValues) {
+                m.put("value", v.getValue());
+                m.put("alertLevel", v.getAlertLevel());
+            } else {
+                m.put("valueHidden", true);
+            }
             m.put("computedAt", v.getComputedAt());
             rows.add(m);
         }

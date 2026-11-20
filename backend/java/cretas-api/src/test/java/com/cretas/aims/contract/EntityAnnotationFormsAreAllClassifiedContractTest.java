@@ -124,8 +124,9 @@ class EntityAnnotationFormsAreAllClassifiedContractTest {
         // Spring Data 审计
         java.util.Collections.addAll(EXPLICITLY_IRRELEVANT, "CreatedDate", "LastModifiedDate");
         // Jackson —— 只影响序列化
+        // JsonInclude (2026-11-10, #1558): 领料单 / 明细上不落库的 @Transient 字段为 null 时不输出, 与列和唯一性无关
         java.util.Collections.addAll(EXPLICITLY_IRRELEVANT,
-                "JsonIgnore", "JsonIgnoreProperties", "JsonProperty");
+                "JsonIgnore", "JsonIgnoreProperties", "JsonInclude", "JsonProperty");
         // Bean Validation —— 约束的是**值域**，⛔ 不是行间的唯一性
         java.util.Collections.addAll(EXPLICITLY_IRRELEVANT,
                 "DecimalMax", "DecimalMin", "Digits", "Max", "Min", "NotBlank", "NotNull",

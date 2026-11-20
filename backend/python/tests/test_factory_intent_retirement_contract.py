@@ -16,7 +16,8 @@ if str(FINETUNE) not in sys.path:
 
 def test_reviewed_catalog_counts_and_alias_are_stable():
     cat = catalog.load_catalog()
-    assert len(cat["canonical"]) == 266
+    # 2026-11-18 v3 复核缺口 +4: CUSTOMER_CREATE / HR_MY_WAGE_QUERY / HR_EMPLOYEE_WORK_LOCATION_QUERY / SSOP_SCHEDULE_PLAN_CREATE
+    assert len(cat["canonical"]) == 275
     assert len(cat["retired"]) == 81
     assert len(cat["retired_tools"]) == 56
     assert len(cat["reclassified"]) == 29

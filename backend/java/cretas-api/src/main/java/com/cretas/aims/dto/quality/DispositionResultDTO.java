@@ -42,6 +42,9 @@ public class DispositionResultDTO {
     @Schema(description = "批次新状态", example = "PASSED")
     private String newBatchStatus;
 
+    @Schema(description = "执行后本计划仍留在隔离里的成品批次数, 原因见 message", example = "0")
+    private Integer finishedGoodsHeld;
+
     @Schema(description = "是否启动审批流程", example = "false")
     private Boolean approvalInitiated;
 

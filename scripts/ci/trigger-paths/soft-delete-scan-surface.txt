@@ -1,0 +1,25 @@
+# soft-delete-scan-surface.yml 的 pull_request 触发路径 (2026-11-12 从 workflow 的 on.pull_request.paths 原样搬来)。
+# 由该 workflow 的 changes 作业经 scripts/ci/changed-paths.py 判定; 语义同 GitHub Actions paths:
+# `**` 跨目录, `*` 不跨 `/`, `!` 取反 (按顺序, 最后命中者为准)。一行一个 glob, `#` 起注释。
+# ⛔ 不要为了让某个 PR 跳过闸而删模式; 加模式与原 paths 同一规矩 (闸读什么, 什么就进触发面)。
+
+# 生成器扫描的两个根 —— 与 ENTITY_ROOT / REPOSITORY_ROOT 逐一对应
+backend/java/cretas-api/src/main/java/com/cretas/aims/entity/**
+backend/java/cretas-api/src/main/java/com/cretas/aims/repository/**
+# 🔴 扫描根**之外**的整棵树也要触发 —— 否则「有人在新子树里加了个软删实体」这件事
+#    在 PR 上一次都不会被看见(而那正是 test-soft-delete-scan-root-covers-entities.sh
+#    唯一要守的东西: logistics/entity/ 那 11 个就是这么长出来的, 谁都没红过)。
+#    ⚠️ 上面两条**不能**因为这条更宽就删掉: 它们是与生成器扫描根逐一对应的锚点,
+#       test-soft-delete-scan-surface-gate.sh 按它们比对(⛔ 别为了"去重"把锚点删了)。
+backend/java/cretas-api/src/main/java/com/cretas/aims/**
+# 生成器本身与它的两份产出/输入快照
+scripts/check-soft-delete-orphans.sh
+scripts/cron/soft-delete-orphans.sql
+scripts/cron/soft-delete-orphans.hasdel.txt
+# 本文件与它跑的那个用例
+.github/workflows/soft-delete-scan-surface.yml
+scripts/tests/test-soft-delete-orphans-sql-drift.sh
+
+# 判定仪器自身: 改了它们就该触发本闸 (否则清单/判定改坏了这道闸无从发现)。
+scripts/ci/changed-paths.py
+scripts/ci/trigger-paths/soft-delete-scan-surface.txt

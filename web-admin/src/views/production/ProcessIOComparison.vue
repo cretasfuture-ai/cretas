@@ -4,6 +4,15 @@ import { useAuthStore } from '@/store/modules/auth';
 import { get } from '@/api/request';
 import { Search, Refresh } from '@element-plus/icons-vue';
 import { balanceProcessLabel } from './balanceProcessLabel';
+import { displayProcessUnit } from '@/utils/processSheetUnits';
+import {
+  averageScopeNote,
+  formatQuantity,
+  incomparableLabel,
+  summaryKpi,
+  type IncomparableReason,
+  type ProcessYieldAgg,
+} from './processIoSummary';
 
 // ---------- auth ----------
 const authStore = useAuthStore();
@@ -20,12 +29,15 @@ const productTypes = ref<ProductType[]>([]);
 interface ProcessIORow {
   processName: string;
   processCategory: string;
-  inputQuantity: number;
-  outputQuantity: number;
+  inputQuantity: number | null;
+  outputQuantity: number | null;
   conversionRate: number | null;
   wastageRate: number | null;
-  unit: string;
+  inputUnit: string | null;
+  outputUnit: string | null;
+  incomparableReason: IncomparableReason | null;
   batchCount: number;
+  stageRecordCount: number;
 }
 
 interface ProductType {
@@ -33,34 +45,10 @@ interface ProductType {
   name: string;
 }
 
-interface ProcessYieldAgg {
-  processName: string;
-  inputQuantity: number;
-  outputQuantity: number;
-  conversionRate: number | null;  // 后端已 0-100, 不再 ×100 (audit FE-VUE-5); 不可比为 null
-  wastageRate: number | null;
-  unit: string;
-  unitComparable: boolean;
-  batchCount: number;
-}
-
 // ---------- KPI ----------
-const kpi = computed(() => {
-  const rows = tableData.value;
-  if (rows.length === 0) return { processCount: 0, avgConversion: 0, avgWastage: 0, lowEfficiencyCount: 0 };
-  const comparable = rows.filter((r) => r.conversionRate != null);
-  const avgConversion = comparable.length
-    ? comparable.reduce((s, r) => s + (r.conversionRate as number), 0) / comparable.length : 0;
-  const avgWastage = comparable.length
-    ? comparable.reduce((s, r) => s + ((r.wastageRate as number) ?? 0), 0) / comparable.length : 0;
-  const lowEfficiency = comparable.filter((r) => (r.conversionRate as number) < 80).length;
-  return {
-    processCount: rows.length,
-    avgConversion: Math.round(avgConversion * 10) / 10,
-    avgWastage: Math.round(avgWastage * 10) / 10,
-    lowEfficiencyCount: lowEfficiency,
-  };
-});
+// 平均只用能比的工序 (同单位 / 可靠换算); 一道都没有时显示「—」, 不显示成 0%
+const kpi = computed(() => summaryKpi(tableData.value));
+const kpiScopeNote = computed(() => averageScopeNote(kpi.value));
 
 // ---------- 物料平衡表 (缺口 #07) ----------
 interface BalanceRow {
@@ -135,7 +123,7 @@ function balanceLabel(row: BalanceRow): string {
 }
 
 function fmtQty(v: number | null, unit: string | null): string {
-  return v == null ? '—' : `${v} ${unit ?? ''}`.trim();
+  return v == null ? '—' : formatQuantity(v, unit);
 }
 
 function onTabChange(name: string | number) {
@@ -187,9 +175,13 @@ async function loadData() {
         outputQuantity: r.outputQuantity,
         conversionRate: r.conversionRate ?? null,
         wastageRate: r.wastageRate ?? null,
-        unit: r.unit,
+        // 旧后端只给 unit (=投入单位, 产出同单位); 新后端分开给, 没有单位为 null
+        inputUnit: r.inputUnit !== undefined ? r.inputUnit : (r.unit ?? null),
+        outputUnit: r.outputUnit !== undefined ? r.outputUnit : (r.unit ?? null),
+        incomparableReason: r.incomparableReason ?? null,
         batchCount: r.batchCount,
-      })) as ProcessIORow[];
+        stageRecordCount: r.stageRecordCount ?? 0,
+      }));
     } else {
       tableData.value = [];
     }
@@ -266,17 +258,22 @@ function handleReset() {
           <div class="kpi-label">工序数量</div>
         </el-card>
         <el-card shadow="hover" class="kpi-card">
-          <div class="kpi-value" :style="{ color: getConversionColor(kpi.avgConversion) }">
-            {{ kpi.avgConversion }}%
+          <div class="kpi-value" data-testid="kpi-avg-conversion"
+            :style="{ color: kpi.avgConversion == null ? 'var(--cs-muted)' : getConversionColor(kpi.avgConversion) }">
+            {{ kpi.avgConversion == null ? '—' : `${kpi.avgConversion}%` }}
           </div>
           <div class="kpi-label">平均转化率</div>
+          <div class="kpi-note" data-testid="kpi-scope-note">{{ kpiScopeNote }}</div>
         </el-card>
         <el-card shadow="hover" class="kpi-card">
-          <div class="kpi-value" style="color: #E6A23C">{{ kpi.avgWastage }}%</div>
+          <div class="kpi-value" :style="{ color: kpi.avgWastage == null ? 'var(--cs-muted)' : 'var(--cs-warning)' }">
+            {{ kpi.avgWastage == null ? '—' : `${kpi.avgWastage}%` }}
+          </div>
           <div class="kpi-label">平均损耗率</div>
+          <div class="kpi-note">{{ kpiScopeNote }}</div>
         </el-card>
         <el-card shadow="hover" class="kpi-card">
-          <div class="kpi-value" style="color: #F56C6C">{{ kpi.lowEfficiencyCount }}</div>
+          <div class="kpi-value" style="color: var(--cs-danger)">{{ kpi.lowEfficiencyCount }}</div>
           <div class="kpi-label">低效工序数 (&lt;80%)</div>
         </el-card>
       </div>
@@ -310,28 +307,35 @@ function handleReset() {
         border
         style="width: 100%"
       >
-        <el-table-column prop="processName" label="工序名称" min-width="150" show-overflow-tooltip />
-        <el-table-column label="投入量" width="130" align="right">
+        <el-table-column label="工序名称" min-width="150" show-overflow-tooltip>
           <template #default="{ row }">
-            {{ row.inputQuantity }} {{ row.unit }}
+            <span>{{ row.processName }}</span>
+            <el-tag v-if="row.stageRecordCount > 0" size="small" type="info" class="ml-1" data-testid="stage-record-source">
+              含 {{ row.stageRecordCount }} 条加工环节记录
+            </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="产出量" width="130" align="right">
+        <el-table-column label="投入量" width="150" align="right">
           <template #default="{ row }">
-            {{ row.outputQuantity }} {{ row.unit }}
+            {{ formatQuantity(row.inputQuantity, displayProcessUnit(row.inputUnit)) }}
           </template>
         </el-table-column>
-        <el-table-column label="转化率" width="130" align="center">
+        <el-table-column label="产出量" width="150" align="right">
           <template #default="{ row }">
-            <span v-if="row.conversionRate == null">—</span>
+            {{ formatQuantity(row.outputQuantity, displayProcessUnit(row.outputUnit)) }}
+          </template>
+        </el-table-column>
+        <el-table-column label="转化率" width="160" align="center">
+          <template #default="{ row }">
+            <span v-if="row.conversionRate == null" class="incomparable">{{ incomparableLabel(row) }}</span>
             <el-tag v-else :type="getConversionTagType(row.conversionRate)" size="small" effect="light">
               {{ row.conversionRate }}%
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="损耗率" width="130" align="center">
+        <el-table-column label="损耗率" width="160" align="center">
           <template #default="{ row }">
-            <span v-if="row.wastageRate == null">—</span>
+            <span v-if="row.wastageRate == null" class="incomparable">{{ incomparableLabel(row) || '—' }}</span>
             <el-tag v-else :type="getWastageTagType(row.wastageRate)" size="small" effect="light">
               {{ row.wastageRate }}%
             </el-tag>
@@ -360,6 +364,9 @@ function handleReset() {
         <span class="legend-item">
           <span class="legend-dot danger" />
           &lt;80% 需改进
+        </span>
+        <span class="legend-item">
+          投入与产出单位不同（如 kg → 盒）或单位不统一的工序不算转化率，也不计入平均
         </span>
       </div>
       </el-tab-pane>
@@ -444,7 +451,7 @@ function handleReset() {
 
   :deep(.el-card__header) {
     padding: 16px 20px;
-    border-bottom: 1px solid var(--border-color-lighter, #ebeef5);
+    border-bottom: 1px solid var(--border-color-lighter, var(--cs-border));
   }
 
   :deep(.el-card__body) {
@@ -470,12 +477,12 @@ function handleReset() {
     .page-title {
       font-size: 16px;
       font-weight: 600;
-      color: var(--text-color-primary, #303133);
+      color: var(--text-color-primary, var(--cs-text));
     }
 
     .data-count {
       font-size: 13px;
-      color: var(--text-color-secondary, #909399);
+      color: var(--text-color-secondary, var(--cs-muted));
     }
   }
 }
@@ -506,8 +513,19 @@ function handleReset() {
 
   .kpi-label {
     font-size: 13px;
-    color: var(--text-color-secondary, #909399);
+    color: var(--text-color-secondary, var(--cs-muted));
   }
+
+  .kpi-note {
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--text-color-secondary, var(--cs-muted));
+  }
+}
+
+.incomparable {
+  font-size: 12px;
+  color: var(--text-color-secondary, var(--cs-muted));
 }
 
 .search-bar {
@@ -526,9 +544,9 @@ function handleReset() {
   gap: 20px;
   margin-top: 16px;
   padding-top: 12px;
-  border-top: 1px solid var(--border-color-lighter, #ebeef5);
+  border-top: 1px solid var(--border-color-lighter, var(--cs-border));
   font-size: 12px;
-  color: #909399;
+  color: var(--cs-muted);
 
   .legend-item {
     display: flex;
@@ -541,15 +559,15 @@ function handleReset() {
     height: 10px;
     border-radius: 50%;
 
-    &.success { background-color: #67C23A; }
-    &.warning { background-color: #E6A23C; }
-    &.danger { background-color: #F56C6C; }
+    &.success { background-color: var(--cs-success); }
+    &.warning { background-color: var(--cs-warning); }
+    &.danger { background-color: var(--cs-danger); }
   }
 }
 
 .balance-hint {
   font-size: 12px;
-  color: #909399;
+  color: var(--cs-muted);
   align-self: center;
 }
 
@@ -565,13 +583,13 @@ function handleReset() {
     margin-left: 12px;
     font-weight: 400;
     font-size: 12px;
-    color: #909399;
+    color: var(--cs-muted);
   }
 }
 
 .balance-note {
   font-size: 12px;
-  color: #909399;
+  color: var(--cs-muted);
 }
 
 @media (max-width: 768px) {

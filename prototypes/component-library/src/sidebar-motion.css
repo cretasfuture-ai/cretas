@@ -1,0 +1,110 @@
+/* Shared by the desktop toggle, comparison rail and automatic narrow rail. */
+.cretas-app .app-sidebar {
+  --label-opacity: 1;
+  --label-visibility: visible;
+  --label-delay: 0ms;
+  --label-width: 180px;
+  --label-fade: min(var(--motion-duration), 140ms);
+  overflow: hidden;
+  transition: width var(--motion-duration) ease-in-out,
+    transform var(--motion-duration) var(--motion-ease);
+}
+.cretas-app .app-shell { transition: margin-left var(--motion-duration) ease-in-out; }
+.cretas-app .app-sidebar .brand { padding-left: 4px; justify-content: flex-start; }
+.cretas-app .app-sidebar .brand-symbol,
+.cretas-app .app-sidebar .avatar { flex-shrink: 0; }
+.cretas-app .app-sidebar .brand > span:last-child,
+.cretas-app .app-sidebar .nav-item > :is(span, small, kbd),
+.cretas-app .app-sidebar .sidebar-profile > div,
+.cretas-app .app-sidebar .sidebar-profile > button {
+  display: block;
+  min-width: 0;
+  max-width: var(--label-width);
+  overflow: hidden;
+  white-space: nowrap;
+  opacity: var(--label-opacity);
+  visibility: var(--label-visibility);
+  transition: opacity var(--label-fade) ease-out,
+    max-width var(--motion-duration) ease-in-out,
+    visibility 0s linear var(--label-delay);
+  transition-behavior: allow-discrete;
+}
+.cretas-app .app-sidebar .nav-item {
+  justify-content: flex-start;
+  padding: 11px 12px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.cretas-app .app-sidebar .sidebar-profile { justify-content: flex-start; padding-inline: 5px; }
+.cretas-app .app-sidebar .workspace-picker,
+.cretas-app .app-sidebar .sample-status { display: flex; }
+.cretas-app .app-sidebar .nav-section { display: block; }
+.cretas-app .app-sidebar :is(.workspace-picker, .sample-status, .nav-section) {
+  overflow: hidden;
+  white-space: nowrap;
+  max-height: 110px;
+  opacity: var(--label-opacity);
+  visibility: var(--label-visibility);
+  transition: opacity var(--label-fade) ease-out,
+    max-height var(--motion-duration) ease-in-out,
+    min-height var(--motion-duration) ease-in-out,
+    padding-block var(--motion-duration) ease-in-out,
+    margin-block var(--motion-duration) ease-in-out,
+    visibility 0s linear var(--label-delay);
+  transition-behavior: allow-discrete;
+}
+.cretas-app .app-sidebar .nav-item > svg:last-child:not(:first-child) {
+  display: block;
+  opacity: var(--label-opacity);
+  visibility: var(--label-visibility);
+  transition: opacity var(--label-fade) ease-out, visibility 0s linear var(--label-delay);
+  transition-behavior: allow-discrete;
+}
+@media (min-width: 761px) {
+  .cretas-app:is(.sidebar-collapsed, .compare-mode) .app-sidebar {
+    --label-opacity: 0;
+    --label-visibility: hidden;
+    --label-delay: var(--label-fade);
+    --label-width: 0px;
+    width: 68px;
+    padding-inline: 12px;
+  }
+  .cretas-app:is(.sidebar-collapsed, .compare-mode) .app-sidebar :is(.workspace-picker, .sample-status, .nav-section) {
+    max-height: 0;
+    min-height: 0;
+    padding-block: 0;
+    margin-block: 0;
+    border-width: 0;
+  }
+}
+@media (min-width: 761px) and (max-width: 1000px) {
+  .cretas-app .app-sidebar {
+    --label-opacity: 0;
+    --label-visibility: hidden;
+    --label-delay: var(--label-fade);
+    --label-width: 0px;
+    width: 68px;
+    padding-inline: 12px;
+  }
+  .cretas-app .app-shell { margin-left: 68px; }
+  .cretas-app .app-sidebar :is(.workspace-picker, .sample-status, .nav-section) {
+    max-height: 0;
+    min-height: 0;
+    padding-block: 0;
+    margin-block: 0;
+    border-width: 0;
+  }
+}
+@media (max-width: 760px) {
+  .cretas-app .app-sidebar { width: 240px; padding-inline: 12px; }
+  .cretas-app .app-shell { margin-left: 0; }
+  .cretas-app .app-sidebar .sidebar-collapse { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cretas-app .app-sidebar, .cretas-app .app-sidebar *, .cretas-app .app-shell {
+    transition: none !important;
+  }
+}
+html[data-motion='off'] .cretas-app .app-sidebar,
+html[data-motion='off'] .cretas-app .app-sidebar *,
+html[data-motion='off'] .cretas-app .app-shell { transition: none !important; }

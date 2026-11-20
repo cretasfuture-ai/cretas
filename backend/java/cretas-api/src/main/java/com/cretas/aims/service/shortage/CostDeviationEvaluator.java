@@ -5,12 +5,14 @@ import com.cretas.aims.dto.yield.MaterialBalanceTableDTO;
 import com.cretas.aims.entity.shortage.ShortageCase;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.function.Function;
 
 /**
  * 判定一张计划的成本差异 / 物料平衡读数是否超阈值。纯计算, 不碰库。
@@ -52,10 +54,30 @@ public final class CostDeviationEvaluator {
                 unknown, summary);
     }
 
+    /**
+     * 物料平衡行的单价 (元 / 该行单位)。price=null 时 reason 说明为什么定不了价, 不猜。
+     * 由调用方用开计划时的主料单价快照 + 单位契约换算给出 (LSM-COSTBI 第 11 项)。
+     */
+    public record RowPrice(BigDecimal price, String basis, String reason) {
+        public static RowPrice unknown(String reason) {
+            return new RowPrice(null, null, reason);
+        }
+    }
+
     public static Reading evaluateBalance(MaterialBalanceTableDTO.PlanBlock block, BigDecimal thresholdPct) {
+        return evaluateBalance(block, thresholdPct, null);
+    }
+
+    /**
+     * @param pricer null = 不估金额 (旧行为, 金额未知); 否则超阈值工序的未解释差额 × 单价合计成差异金额,
+     *               任何一道超阈值工序定不了价 ⇒ 金额仍未知, 并在摘要里说清原因。
+     */
+    public static Reading evaluateBalance(MaterialBalanceTableDTO.PlanBlock block, BigDecimal thresholdPct,
+                                          Function<MaterialBalanceTableDTO.Row, RowPrice> pricer) {
         BigDecimal max = null;
         int unknown = 0;
         List<String> over = new ArrayList<>();
+        List<MaterialBalanceTableDTO.Row> overRows = new ArrayList<>();
         for (MaterialBalanceTableDTO.Row r : block.getRows()) {
             BigDecimal pct = r.getUnexplainedPct();
             if (pct == null) {
@@ -64,7 +86,10 @@ public final class CostDeviationEvaluator {
             }
             BigDecimal abs = pct.abs();
             if (max == null || abs.compareTo(max) > 0) max = abs;
-            if (abs.compareTo(thresholdPct) > 0) over.add((r.getProcessName() == null ? "未命名工序" : r.getProcessName()) + " " + plain(abs) + "%");
+            if (abs.compareTo(thresholdPct) > 0) {
+                over.add((r.getProcessName() == null ? "未命名工序" : r.getProcessName()) + " " + plain(abs) + "%");
+                overRows.add(r);
+            }
         }
         if (max == null) {
             return reading(ShortageCase.SourceType.MATERIAL_BALANCE, block.getPlanId(), block.getPlanNumber(),
@@ -75,9 +100,40 @@ public final class CostDeviationEvaluator {
                 ? "最大未解释差额 " + plain(max) + "%, 在阈值 " + plain(thresholdPct) + "% 内"
                 : "未解释差额超阈值 " + plain(thresholdPct) + "%: " + String.join("、", over);
         if (unknown > 0) summary += ", 另有 " + unknown + " 道工序算不出";
+        BigDecimal amount = null;
+        if (pricer != null && !overRows.isEmpty()) {
+            // 正差额 (投入没对上, 未解释损耗) 和负差额 (产出比投入多) 都是异常, 按绝对值合计、分开写进摘要;
+            // ⛔ 不带符号相加: +10kg 和 −10kg 两道工序会抵消成 ¥0, 读成「没有差异」(#1911 终审 P2)
+            BigDecimal shortValue = BigDecimal.ZERO;
+            BigDecimal overValue = BigDecimal.ZERO;
+            String basis = null;
+            String why = null;
+            for (MaterialBalanceTableDTO.Row r : overRows) {
+                RowPrice p = pricer.apply(r);
+                if (r.getUnexplained() == null || p == null || p.price() == null) {
+                    why = p != null && p.reason() != null ? p.reason() : "未解释差额没有数量";
+                    break;
+                }
+                BigDecimal value = r.getUnexplained().multiply(p.price());
+                if (value.signum() >= 0) shortValue = shortValue.add(value);
+                else overValue = overValue.add(value.negate());
+                basis = p.basis();
+            }
+            if (why == null) {
+                amount = shortValue.add(overValue).setScale(2, RoundingMode.HALF_UP);
+                List<String> parts = new ArrayList<>();
+                if (shortValue.signum() > 0) parts.add("未解释损耗约 " + plain(shortValue.setScale(2, RoundingMode.HALF_UP)) + " 元");
+                if (overValue.signum() > 0) parts.add("产出多出约 " + plain(overValue.setScale(2, RoundingMode.HALF_UP)) + " 元");
+                summary += "; 差异金额按绝对值合计" + (parts.isEmpty() ? "" : " (" + String.join("、", parts) + ")")
+                        + (basis != null ? ", " + basis : "");
+            } else {
+                summary += "; 差异金额算不出: " + why;
+            }
+        }
+        // 金额是按单价快照估出来的, 不进指纹 (指纹只认报工事实; 上线后不因多了估价而重开已有实例)
         return reading(ShortageCase.SourceType.MATERIAL_BALANCE, block.getPlanId(), block.getPlanNumber(),
-                displayProduct(block.getProductName()), over.isEmpty() ? Outcome.WITHIN : Outcome.DEVIATED, max, thresholdPct, null,
-                over.size(), unknown, summary);
+                displayProduct(block.getProductName()), over.isEmpty() ? Outcome.WITHIN : Outcome.DEVIATED, max, thresholdPct, amount,
+                over.size(), unknown, summary, false);
     }
 
     /** 系统内部占位产品 (__RAW_WORKFLOW_OWNER__…) 不给人看。 */
@@ -88,10 +144,19 @@ public final class CostDeviationEvaluator {
     private static Reading reading(ShortageCase.SourceType type, String planId, String planNumber, String productName,
                                    Outcome outcome, BigDecimal metric, BigDecimal threshold, BigDecimal amount,
                                    int deviated, int unknown, String summary) {
+        return reading(type, planId, planNumber, productName, outcome, metric, threshold, amount, deviated, unknown,
+                summary, true);
+    }
+
+    private static Reading reading(ShortageCase.SourceType type, String planId, String planNumber, String productName,
+                                   Outcome outcome, BigDecimal metric, BigDecimal threshold, BigDecimal amount,
+                                   int deviated, int unknown, String summary, boolean amountInFingerprint) {
         // 指纹不含阈值: 改阈值不等于事实变了, 已下结论的实例不因此重开
-        String fp = sha256(type + "|" + planId + "|" + plain(metric) + "|" + plain(amount) + "|" + deviated + "|" + unknown);
-        return new Reading(type, planId, planNumber, productName, outcome, metric, threshold, amount, deviated, unknown,
-                summary, fp);
+        String fp = sha256(type + "|" + planId + "|" + plain(metric) + "|" + plain(amountInFingerprint ? amount : null)
+                + "|" + deviated + "|" + unknown);
+        // 不论哪条路径来的名字, 内部占位 (__RAW_WORKFLOW_OWNER__…) 一律不落库: 查不到真实产品就存 null
+        return new Reading(type, planId, planNumber, displayProduct(productName), outcome, metric, threshold, amount,
+                deviated, unknown, summary, fp);
     }
 
     private static String plain(BigDecimal v) {

@@ -17,7 +17,7 @@ import MaterialBatchPicker, {
 } from '../../components/processing/MaterialBatchPicker';
 import RawTimeLimitNotice from '../../components/processing/RawTimeLimitNotice';
 import WipBatchPicker, {
-  WipSelection, wipFreeQuantity, wipPendingQuantity, wipQcBlockReason,
+  WipSelection, wipDisplayTitle, wipFreeQuantity, wipPendingQuantity, wipQcBlockReason,
 } from '../../components/processing/WipBatchPicker';
 import BlendRatioCard from '../../components/processing/BlendRatioCard';
 import {
@@ -31,6 +31,8 @@ import { isProcessSecretHidden } from '../../utils/processSecretField';
 import { reworkReasonRequiredMessage, type ReworkRatioInput } from '../../utils/reworkRatio';
 import { isSecondaryBatchSourceType } from '../../utils/secondaryProcessing';
 import ReworkRatioReasonModal from '../../components/processing/ReworkRatioReasonModal';
+import RequiredReasonModal from '../../components/processing/RequiredReasonModal';
+import { OVER_RECEIPT_REASONS } from '../../utils/requiredReason';
 import type { TaskMaterialBatchOption } from '../../services/api/yieldReportApi';
 import CcpReadingsSection from '../../components/processing/CcpReadingsSection';
 import ProcessParamsSection from '../../components/processing/ProcessParamsSection';
@@ -689,6 +691,8 @@ const YieldStepReportScreen: React.FC = () => {
   const [blendNote, setBlendNote] = useState('');
   // 缺口 03 回料上限: 被后端 409 拦下时弹窗选原因 (reworkPrompt = 后端那句话), 选完放进 ref 带着重提
   const reworkRatioRef = useRef<ReworkRatioInput | null>(null);
+  // 纪律排查 A10: 超收时要选原因才能强制提交 (原因随这次报工记录), 不再只问「确认吗」
+  const [overReceipt, setOverReceipt] = useState<{ req: YieldReportRequest; message: string } | null>(null);
   const [reworkPrompt, setReworkPrompt] = useState<string | null>(null);
   const handleMaterialOptionsLoaded = useCallback((options: TaskMaterialBatchOption[]) => {
     setMaterialOptionsById((prev) => {
@@ -1755,10 +1759,11 @@ const YieldStepReportScreen: React.FC = () => {
 
   // ========================= 阶段 2b: 完工出成 (reportKind=OUTPUT) =========================
   // A4: 强制提交 (OVER_RECEIPT 确认后调用)
-  const submitOutputWithForce = useCallback(async (req: YieldReportRequest) => {
+  const submitOutputWithForce = useCallback(async (req: YieldReportRequest, forceSubmitReason: string) => {
     setSubmitting(true);
     try {
-      const res = await submitWithIdem(batchId, { ...req, forceSubmit: true });
+      const res = await submitWithIdem(batchId, { ...req, forceSubmit: true, forceSubmitReason });
+      setOverReceipt(null);
       if (!res.success) {
         appAlert('提交失败', res.message || '请重试');
         return;
@@ -1898,11 +1903,9 @@ const YieldStepReportScreen: React.FC = () => {
       const errorCode = e.response?.data?.errorCode;
       if (errorCode === 'OVER_RECEIPT') {
         handleError(error, { showAlert: false, logError: true });
-        const actionHint = e.response?.data?.actionHint ?? e.response?.data?.message ?? '产出已超收告警上限, 确认要超收提交吗?';
-        appAlert('超收确认', actionHint, [
-          { text: '取消', style: 'cancel' },
-          { text: '确认超收提交', onPress: () => submitOutputWithForce(req) },
-        ]);
+        const actionHint = e.response?.data?.actionHint ?? e.response?.data?.message ?? '产出已超过超收上限';
+        // 纪律排查 A10: 弹原因选择, 选了原因才强制提交 (已填的产出保留)
+        setOverReceipt({ req, message: actionHint });
         return;
       }
       handleError(error, { showAlert: false, logError: true });
@@ -3044,6 +3047,7 @@ const YieldStepReportScreen: React.FC = () => {
               {needsWipPicker ? (
                 <WipBatchPicker
                   batchId={batchId}
+                  batchNumber={batchNumber}
                   taskId={currentTask?.id}
                   selectedSourceWipNo={selectedWip?.sourceWipNo ?? null}
                   onChange={setSelectedWip}
@@ -3058,7 +3062,9 @@ const YieldStepReportScreen: React.FC = () => {
                     {wipAvailable <= 0 ? ' (已领空, 请确认上道是否还需报工产出)' : ' (本道最多领这么多)'}
                   </Text>
                   {yieldLimits?.sourceWipNo ? (
-                    <Text style={styles.wipBannerSub}>来源批次 {yieldLimits.sourceWipNo}</Text>
+                    <Text style={styles.wipBannerSub}>
+                      来源批次 {wipDisplayTitle({ intermediateBatchNo: yieldLimits.sourceWipNo, processOrder: null }, { batchId, batchNumber }).title}
+                    </Text>
                   ) : null}
                 </View>
               ) : null}
@@ -3754,6 +3760,19 @@ const YieldStepReportScreen: React.FC = () => {
           </>
         ) : null}
       </ScrollView>
+      {/* 纪律排查 A10: 超收要原因 */}
+      <RequiredReasonModal
+        message={overReceipt?.message ?? null}
+        title="产出超过上限"
+        hint="请先核对产出和投入；确实做出这么多，请选一个原因，原因会随这次报工记录下来："
+        reasons={OVER_RECEIPT_REASONS}
+        confirmLabel="仍然提交"
+        cancelLabel="返回核对"
+        submitting={submitting}
+        testIDPrefix="over-receipt"
+        onConfirm={(reason) => { if (overReceipt) submitOutputWithForce(overReceipt.req, reason); }}
+        onCancel={() => setOverReceipt(null)}
+      />
       <ReworkRatioReasonModal
         message={reworkPrompt}
         previous={reworkRatioRef.current}

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useAiEntryLink } from '@/composables/useAiEntryLink';
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
@@ -11,6 +12,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { pickPrefilled, readReadinessPrefill } from '@/views/factory-readiness/readinessPrefill';
 import { Plus, Search, Refresh, ChatDotRound, Download, QuestionFilled } from '@element-plus/icons-vue';
 import AiEntryDrawer from '@/components/ai-entry/AiEntryDrawer.vue';
+import { purchaseAiQuoteDifference } from './purchaseAiQuoteGuard';
 import AttachmentDropZone from '@/components/attachment/AttachmentDropZone.vue';
 import { PURCHASE_ORDER_CONFIG } from '@/components/ai-entry/types';
 import { WorkflowBar } from '@/components/workflow';
@@ -62,11 +64,16 @@ import { enumLabel } from '@/utils/enumDisplay';
 import { usePinyinFilter } from '@/utils/pinyinSearch';
 import { resolveMaterialDropdownEmpty } from './materialDropdownEmptyState';
 import { canDownloadSupplyOrder, canSubmitPurchaseOrder, purchaseOrderMoreActions } from './purchaseOrderActionIa';
-import { resolveSupplierMaterialRelations } from './purchaseOrderEditPrefill';
+import {
+  isSupplierLockedInEditor,
+  matchDraftLinesToSupplierRelations,
+  resolveSupplierMaterialRelations,
+} from './purchaseOrderEditPrefill';
 import {
   purchaseTaxIncludedUnitPrice,
   purchaseUntaxedUnitPrice,
 } from './purchaseOrderTaxInclusivePricing';
+import { purchaseLineMoney, roundMoney } from './purchaseOrderMoney';
 import {
   listSupplierMaterials,
   listSupplierPurchaseSpecs,
@@ -99,7 +106,8 @@ const {
   columns: () => [
     { key: 'purchaseType', label: '类型' },
     { key: 'orderDate', label: '下单日期' },
-    ...(canViewPrice.value ? [{ key: 'totalAmount', label: '总金额' }] : []),
+    // PROTO-DEMO-PO-TAX: totalAmount 是未税总额 (含税 = totalAmount + taxAmount), 标签照实写。
+    ...(canViewPrice.value ? [{ key: 'totalAmount', label: '未税总额' }] : []),
     { key: 'attachments', label: '附件' },
   ],
   defaults: PROCUREMENT_DEFAULT_COLUMNS,
@@ -244,7 +252,7 @@ const attachmentQueue = ref({ total: 0, pending: 0, failed: 0 });
 const summaryRequest = computed<ListSummaryRequest>(() => ({
   filterConditions: statusFilter.value ? { status: statusFilter.value } : {},
 }));
-const { summary: footerSummary, loading: footerLoading } = useListSummary('purchaseOrder', summaryRequest);
+const { summary: footerSummary, loading: footerLoading, refresh: refreshFooter } = useListSummary('purchaseOrder', summaryRequest);
 
 interface ProcurementOrderItem {
   materialName?: string;
@@ -273,12 +281,41 @@ const commonTaxRateOptions = [
   { label: '13%', value: 13 },
 ];
 
+const confirmingTaxRate = ref(false);
+
+function isFractionalTaxRate(rate: number): boolean {
+  return rate > 0 && rate < 1;
+}
+
+async function confirmFractionalTaxRate(rate: number, materialName: string): Promise<number | null> {
+  const percent = Number((rate * 100).toPrecision(15));
+  if (percent < 1) {
+    ElMessage.warning(`税率请按百分数填写，${rate} 换算为 ${percent}%，请填写 0 或 1–100 之间的税率`);
+    return null;
+  }
+  if (confirmingTaxRate.value) return null;
+  confirmingTaxRate.value = true;
+  try {
+    await ElMessageBox.confirm(
+      `税率请按百分数填写。输入的是 ${rate}，是否指 ${percent}%？`,
+      materialName ? `确认采购税率 · ${materialName}` : '确认采购税率',
+      { confirmButtonText: `使用 ${percent}%`, cancelButtonText: '取消', type: 'warning' },
+    );
+    return percent;
+  } catch {
+    return null;
+  } finally {
+    confirmingTaxRate.value = false;
+  }
+}
+
 function validateTaxRate(rate: unknown): string | null {
-  if (rate == null || rate === '') return '请选择税率（免税请选择 0%）';
+  if (rate == null || String(rate).trim() === '') return '请选择税率（免税请选择 0%）';
   const numeric = Number(rate);
   if (!Number.isFinite(numeric) || numeric < 0 || numeric > 100) {
     return '税率必须是 0-100 之间的数字';
   }
+  if (isFractionalTaxRate(numeric)) return '税率请按百分数填写，例如 13% 填 13，免税填 0';
   return null;
 }
 
@@ -304,19 +341,43 @@ const editingOrderId = ref('');
 const editingVersion = ref<number | null>(null);
 const editingOrderDate = ref('');
 const isEditing = computed(() => Boolean(editingOrderId.value));
+// D-S411R-01: 打开编辑时读到的状态与**已保存**的供应商, 供 isSupplierLockedInEditor 判断。
+// ⛔ 不能用 form.supplierId —— 用户选中第一个供应商的瞬间下拉就会锁死。
+const editingOrderStatus = ref('');
+const editingOriginalSupplierId = ref('');
+const supplierLocked = computed(() => isSupplierLockedInEditor({
+  isEditing: isEditing.value,
+  orderStatus: editingOrderStatus.value,
+  originalSupplierId: editingOriginalSupplierId.value,
+}));
+/** 正在编辑草稿的供应商 (补录或更换) —— 换供应商时保留明细, 按原料重新对应到新供应商。 */
+const backfillingDraftSupplier = computed(() => isEditing.value && !supplierLocked.value);
+/** 补录供应商后, 该供应商不供应 (或供应关系不唯一) 的草稿原料, 需用户处理。 */
+const unmatchedDraftMaterials = ref<string[]>([]);
+/** 补录供应商前, 明细行的原料下拉是禁用且空白的 —— 把草稿里有什么原料、多少数量直接说出来。 */
+const draftLineSummary = computed(() => form.value.items
+  .map((item) => `${item.materialName || item.materialTypeId || '未命名原料'} ${Number(item.quantity || 0)} ${displayUnit(item.quantityUnit || item.unit) || ''}`.trim())
+  .join('；'));
 
 function itemAmountPreview(item: ProcurementOrderItem) {
   return pricingAmountPreview(item);
 }
 
+// PROTO-DEMO-PO-TAX: 与后端同一口径 (行未税先取两位 → 含税 = 未税×(1+税率) 取两位 → 税额 = 差),
+// 预览与保存后的详情一分不差。
 function itemTaxPreview(item: ProcurementOrderItem): { untaxed: number; tax: number; taxed: number } | null {
-  const amount = itemAmountPreview(item).amount;
-  const rate = Number(item.taxRate);
-  if (amount == null || !Number.isFinite(rate)) return null;
-  const untaxed = Number(amount);
-  const tax = Number((untaxed * rate / 100).toFixed(2));
-  return { untaxed, tax, taxed: Number((untaxed + tax).toFixed(2)) };
+  const money = purchaseLineMoney(itemAmountPreview(item).amount, item.taxRate);
+  return money ? { untaxed: money.untaxed, tax: money.tax, taxed: money.taxIncluded } : null;
 }
+
+/** 表单合计: 未税合计 + 税额合计 = 含税合计; 任一行算不出就不给合计 (⛔ 不把缺价行当 0)。 */
+const formMoneyTotal = computed(() => {
+  const lines = form.value.items.map(itemTaxPreview);
+  if (!lines.length || lines.some((line) => line == null)) return null;
+  const untaxed = roundMoney(lines.reduce((sum, line) => sum + (line?.untaxed ?? 0), 0));
+  const tax = roundMoney(lines.reduce((sum, line) => sum + (line?.tax ?? 0), 0));
+  return { untaxed, tax, taxed: roundMoney(untaxed + tax) };
+});
 
 const suppliers = ref<TableRow[]>([]);
 // R-4 拼音/首字母搜索: filter-method 场景下 el-select 关掉内建字面过滤,
@@ -413,7 +474,52 @@ async function onSupplierChange(): Promise<void> {
   );
   purchaseSpecCache.value = {};
   materialSpecCache.value = {};
+  if (backfillingDraftSupplier.value) {
+    // D-S411R-01: 给没有供应商的草稿补录供应商时, ⛔ 不清空明细 —— 草稿里的原料与缺口数量
+    // 是系统按缺料算出来的, 清空等于让采购员凭记忆重填。
+    await rebindDraftLinesToSupplier();
+    return;
+  }
   form.value.items = [newPurchaseItem()];
+}
+
+/**
+ * 把草稿已有明细按原料对应到刚选的供应商的供应关系。
+ *
+ * - 数量与数量单位**保持草稿原值**, 只补供应关系、原料名、税点与供应商价。
+ * - 价格走 applyRelationPrice: 关系价的单位与草稿行单位对不上时它会把价留空 (MISSING),
+ *   由采购员手填 —— ⛔ 不在前端做单位换算 (utils/unitPricing.ts 的 fail-closed 约定)。
+ * - 对不上的行清掉供应关系并列出来, 提交时既有校验「请选择当前供应商可供的所有原料」会拦住。
+ */
+async function rebindDraftLinesToSupplier(): Promise<void> {
+  const { matched, unmatched } = matchDraftLinesToSupplierRelations(
+    form.value.items,
+    supplierMaterialRelations.value,
+  );
+  for (const item of unmatched) {
+    item.supplierMaterialId = '';
+    item.purchasePackagingSpecId = null;
+    item.materialPackagingSpecId = null;
+  }
+  for (const { line: item, relation } of matched) {
+    item.supplierMaterialId = relation.id;
+    item.purchasePackagingSpecId = null;
+    item.materialPackagingSpecId = null;
+    const material = materials.value.find((row) => String(row.id) === relation.materialTypeId);
+    if (!relation.materialName && material?.name) relation.materialName = String(material.name);
+    item.materialName = item.materialName || relation.materialName || undefined;
+    const masterTaxRate = materialTaxRate(material?.taxRate);
+    if (masterTaxRate !== null) item.taxRate = masterTaxRate;
+    applyRelationPrice(item, relation, item.quantityUnit || item.unit);
+    syncTaxIncludedPrice(item);
+  }
+  unmatchedDraftMaterials.value = form.value.supplierId
+    ? unmatched.map((item) => item.materialName || item.materialTypeId || '未命名原料')
+    : [];
+  await Promise.all(matched.flatMap(({ relation }) => [
+    loadPurchaseSpecs(relation.id),
+    loadMaterialSpecs(relation.materialTypeId, relation.id),
+  ]));
 }
 
 function newPurchaseItem(): ProcurementOrderItem {
@@ -560,9 +666,21 @@ function onTaxIncludedPriceEdited(item: ProcurementOrderItem): void {
     ? 'MANUAL' : 'MISSING';
 }
 
-function onTaxRateEdited(item: ProcurementOrderItem): void {
+async function onTaxRateEdited(item: ProcurementOrderItem, rate: number | string | null): Promise<void> {
+  if (confirmingTaxRate.value) return;
+  if (isFractionalTaxRate(Number(rate))) {
+    rate = await confirmFractionalTaxRate(Number(rate), item.materialName || '');
+    if (rate === null || !dialogVisible.value || !form.value.items.includes(item)) return;
+  }
+  item.taxRate = rate;
+  // 改税率: 含税单价是用户录的, 保持不变; 未税单价按新税率反算, 税额/含税金额随之重算。
   item.unitPrice = purchaseUntaxedUnitPrice(item.taxIncludedUnitPrice, item.taxRate);
   item.lineAmount = null;
+  // 先录含税价、后选税率时, 录价那一刻算不出未税价, priceSource 被记成 MISSING;
+  // 选了税率算出来了就要改回来, 否则提示仍说「未配置采购价」。
+  if (item.priceSource === 'MISSING' && item.unitPrice !== null && hasConfiguredPrice(item.taxIncludedUnitPrice)) {
+    item.priceSource = 'MANUAL';
+  }
 }
 
 async function onSupplierMaterialChange(item: ProcurementOrderItem): Promise<void> {
@@ -749,6 +867,7 @@ onBeforeUnmount(() => { window.removeEventListener('beforeunload', handleBeforeU
 
 async function loadData() {
   if (!factoryId.value) return;
+  void refreshFooter();
   loading.value = true;
   try {
     const url = statusFilter.value
@@ -756,25 +875,16 @@ async function loadData() {
       : `/${factoryId.value}/purchase/orders`;
     const params: TableRow = { page: pagination.value.page, size: pagination.value.size };
     if (statusFilter.value) params.status = statusFilter.value;
+    // 关键词(订单号/供应商名) + 订单日期由服务端过滤, 分页总数随之变化 (以前只在当前页 includes, 翻页后搜不到)
+    const kw = searchKeyword.value.trim();
+    if (kw) params.keyword = kw;
+    if (dateRange.value && dateRange.value[0] && dateRange.value[1]) {
+      params.startDate = dateRange.value[0];
+      params.endDate = dateRange.value[1];
+    }
     const response = await get(url, { params });
     if (response.success && response.data) {
-      let rows = response.data.content || [];
-      // Client-side keyword + date filter (Apr 21 2026): backend lacks
-      // keyword param on purchase/orders; filter locally on current page.
-      const kw = searchKeyword.value.trim().toLowerCase();
-      if (kw) {
-        rows = rows.filter((r: TableRow) =>
-          String(r.orderNumber || '').toLowerCase().includes(kw) ||
-          String(r.supplierName || (r.supplier as TableRow)?.name || '').toLowerCase().includes(kw)
-        );
-      }
-      if (dateRange.value && dateRange.value[0] && dateRange.value[1]) {
-        const [from, to] = dateRange.value;
-        rows = rows.filter((r: TableRow) => {
-          const d = String(r.orderDate || '').slice(0, 10);
-          return d && d >= from && d <= to;
-        });
-      }
+      const rows = response.data.content || [];
       tableData.value = rows;
       pagination.value.total = response.data.totalElements || 0;
 
@@ -857,7 +967,7 @@ function removeItem(index: number) {
 const submitting = ref(false);
 
 async function handleCreate() {
-  if (submitting.value) return; // P-2: prevent double-submit
+  if (submitting.value || confirmingTaxRate.value) return;
   if (createdOrderId.value) {
     submitting.value = true;
     try {
@@ -1025,6 +1135,9 @@ function resetForm() {
   editingOrderId.value = '';
   editingVersion.value = null;
   editingOrderDate.value = '';
+  editingOrderStatus.value = '';
+  editingOriginalSupplierId.value = '';
+  unmatchedDraftMaterials.value = [];
   form.value = { supplierId: '', purchaseType: 'DIRECT', expectedDeliveryDate: '', remark: '', relatedSalesOrderId: '', contractNumber: '', settlementType: '', invoiceReminderDays: null, items: [newPurchaseItem()], customFields: {} as TableRow };
   supplierMaterialRelations.value = [];
   purchaseSpecCache.value = {};
@@ -1105,6 +1218,8 @@ async function openEditDialog(orderId: string) {
   editingVersion.value = Number(order.version);
   editingOrderDate.value = String(order.orderDate || factoryToday());
   const orderSupplierId = String(order.supplierId || '');
+  editingOrderStatus.value = String(order.status || '');
+  editingOriginalSupplierId.value = orderSupplierId;
   form.value.supplierId = orderSupplierId;
   // 「开始采购」按销售订单自动生成的草稿单没有供应商 (Sheet 第 22 行), 而编辑入口正是
   // 为「事后补录供应商」而加的. 这里必须容许空 supplierId —— 空 id 直接拼进
@@ -1244,6 +1359,7 @@ function handleRefresh() {
 
 // ==================== AI Entry ====================
 const aiEntryVisible = ref(false);
+const aiEntryInitialInput = useAiEntryLink(aiEntryVisible, canWrite, () => ({ factoryId: factoryId.value || '', actorId: String(authStore.user?.id || '') }));
 
 // ==================== Forward Share Dialog (PR #872) ====================
 // State for ForwardShareDialog — scoped to the row clicked via 转发 inline chip.
@@ -1251,7 +1367,57 @@ const forwardDialogVisible = ref(false);
 const forwardEntityId = ref('');
 const forwardEntityLabel = ref('');
 
-function handleAiFill(params: TableRow) {
+function guardPurchaseAiQuote(params: TableRow): string | null {
+  if (!Array.isArray(params.items)) return null;
+  for (const [index, item] of (params.items as TableRow[]).entries()) {
+    const match = resolveReferenceByName(String(item.materialName || ''), materials.value);
+    if (match.status !== 'MATCHED') continue; // Existing reference checks handle this.
+    const material = materials.value.find((row) => String(row.id) === match.id);
+    const configuredRate = materialTaxRate(material?.taxRate);
+    const suppliedRate = materialTaxRate(item.taxRate);
+    // 歧义税率由填单动作确认，确认后再校验档案税率和报价。
+    if (suppliedRate !== null && isFractionalTaxRate(suppliedRate)) continue;
+    if (configuredRate !== null && suppliedRate !== null && suppliedRate !== configuredRate) {
+      return `第 ${index + 1} 行 AI 识别税率 ${suppliedRate}% 与原料档案 ${configuredRate}% 不同，请继续修改；如需使用其他税率，请到普通采购表单核对办理。系统未创建采购单。`;
+    }
+    const price = item.taxIncludedUnitPrice ?? item.unitPrice;
+    if (price == null || price === '') continue;
+    const rate = configuredRate ?? suppliedRate;
+    if (rate === null) continue;
+    const rawQuantityUnit = item.quantityUnit || item.unit;
+    const rawPriceUnit = item.priceUnit || item.unit;
+    if (!rawQuantityUnit || !rawPriceUnit) continue;
+    const quantityUnit = canonicalUnitCodeKeepingCount(rawQuantityUnit);
+    const priceUnit = canonicalUnitCodeKeepingCount(rawPriceUnit);
+    const materialUnit = canonicalUnitCodeKeepingCount(material?.unit);
+    // Only compare an explicitly supplied quote in this material's maintained base unit.
+    // Other units/conversions remain governed by the existing native form/server checks.
+    if (!materialUnit || quantityUnit !== materialUnit || priceUnit !== materialUnit) continue;
+    const difference = purchaseAiQuoteDifference(Number(item.quantity), Number(price), rate);
+    if (difference) return `第 ${index + 1} 行含税报价合计 ¥${difference.quoted}，当前计价规则保存后为 ¥${difference.stored}。含税报价保真尚待完善，本次不能填入表单；请继续修改并核对报价，系统未创建采购单。`;
+  }
+  return null;
+}
+
+async function handleAiFill(params: TableRow) {
+  if (confirmingTaxRate.value) return;
+  if (Array.isArray(params.items)) {
+    const confirmedItems: TableRow[] = [];
+    for (const item of params.items as TableRow[]) {
+      const suppliedRate = materialTaxRate(item.taxRate);
+      if (suppliedRate === null || !isFractionalTaxRate(suppliedRate)) {
+        confirmedItems.push(item);
+        continue;
+      }
+      const confirmed = await confirmFractionalTaxRate(suppliedRate, String(item.materialName || ''));
+      if (confirmed === null) return;
+      confirmedItems.push({ ...item, taxRate: confirmed });
+    }
+    params = { ...params, items: confirmedItems };
+  }
+  const quoteWarning = guardPurchaseAiQuote(params);
+  if (quoteWarning) { ElMessage.warning(quoteWarning); return; }
+  resetForm();
   // Match supplierName to supplierId
   const supplierName = String(params.supplierName || '');
   const supplierResolution = resolveReferenceByName(supplierName, suppliers.value);
@@ -1268,6 +1434,7 @@ function handleAiFill(params: TableRow) {
 
   if (Array.isArray(params.items) && params.items.length > 0) {
     try {
+      await refreshSupplierMaterialRelations();
       form.value.items = (params.items as TableRow[]).map((item) => {
       // Try to match materialName to materialTypeId
       const matName = String(item.materialName || '');
@@ -1275,17 +1442,24 @@ function handleAiFill(params: TableRow) {
       if (materialResolution.status !== 'MATCHED') {
         throw new Error(`原料“${matName}”${materialResolution.status === 'AMBIGUOUS' ? '匹配到多个候选' : '未找到'}`);
       }
+      const relation = supplierMaterialRelations.value.find((row) => String(row.materialTypeId) === materialResolution.id && row.active !== false);
+      if (!relation) throw new Error(`供应商“${supplierName}”尚未维护原料“${matName}”的供应关系，请先维护供应原料`);
+      const material = materials.value.find((row) => String(row.id) === materialResolution.id);
+      const taxRate = materialTaxRate(material?.taxRate) ?? materialTaxRate(item.taxRate);
       return {
+        ...newPurchaseItem(),
+        supplierMaterialId: relation.id,
         materialTypeId: materialResolution.id,
+        materialName: matName,
         quantity: Number(item.quantity || 0),
         unit: canonicalUnitCodeKeepingCount(item.quantityUnit || item.unit || 'kg'),
         quantityUnit: canonicalUnitCodeKeepingCount(item.quantityUnit || item.unit || 'kg'),
-        unitPrice: purchaseUntaxedUnitPrice(item.taxIncludedUnitPrice ?? item.unitPrice, item.taxRate),
+        unitPrice: purchaseUntaxedUnitPrice(item.taxIncludedUnitPrice ?? item.unitPrice, taxRate),
         taxIncludedUnitPrice: item.taxIncludedUnitPrice == null && item.unitPrice == null
           ? null : Number(item.taxIncludedUnitPrice ?? item.unitPrice),
         priceUnit: canonicalUnitCodeKeepingCount(item.priceUnit || item.unit || 'kg'),
         priceSource: item.taxIncludedUnitPrice == null && item.unitPrice == null ? 'MISSING' : 'MANUAL',
-        taxRate: validateTaxRate(item.taxRate) ? null : normalizeTaxRateForPayload(item.taxRate),
+        taxRate,
       };
       });
     } catch (error) {
@@ -1447,7 +1621,7 @@ function handleAiFill(params: TableRow) {
         <el-table-column
           v-if="canViewPrice && procurementColumnVisible('totalAmount')"
           prop="totalAmount"
-          label="总金额"
+          label="未税总额"
           width="130"
           align="right"
           sortable
@@ -1551,9 +1725,10 @@ function handleAiFill(params: TableRow) {
             placeholder="请选择（支持拼音/首字母，如 bjfx / beijing）"
             filterable
             :filter-method="handleSupplierFilter"
-            :disabled="isEditing"
+            :disabled="supplierLocked"
             :loading="dropdownsRefreshing"
             loading-text="正在更新供应商列表…"
+            data-testid="purchase-supplier-select"
             style="width: 100%"
             @change="onSupplierChange"
             @visible-change="handleSupplierVisibleChange"
@@ -1577,6 +1752,25 @@ function handleAiFill(params: TableRow) {
             action-text="去创建供应商"
             contact-text="请联系采购或管理员先创建供应商"
             @action="goCreate('/procurement/suppliers')"
+          />
+          <!-- D-S411R-01: 缺料自动生成的草稿没有供应商; 告诉采购员这里能补、补了明细不会丢。 -->
+          <el-alert
+            v-if="backfillingDraftSupplier && !form.supplierId"
+            data-testid="purchase-draft-supplier-backfill-hint"
+            type="info"
+            :closable="false"
+            show-icon
+            :title="`这张采购草稿还没有供应商，提交前请先在这里选择。选好后明细（${draftLineSummary}）会按原料自动对应到该供应商，数量保持不变。`"
+            style="margin-top: 8px"
+          />
+          <el-alert
+            v-if="backfillingDraftSupplier && form.supplierId && unmatchedDraftMaterials.length > 0"
+            data-testid="purchase-draft-supplier-unmatched"
+            type="warning"
+            :closable="false"
+            show-icon
+            :title="`该供应商没有启用以下原料的供应关系：${unmatchedDraftMaterials.join('、')}。请换一家供应商，或在下方明细里重新选择/删除这些行。`"
+            style="margin-top: 8px"
           />
         </el-form-item>
         <el-form-item label="采购类型">
@@ -1782,14 +1976,14 @@ function handleAiFill(params: TableRow) {
           <div class="tax-select-cell" style="width: 110px">
             <el-tooltip :disabled="!validateTaxRate(item.taxRate)" :content="validateTaxRate(item.taxRate) || ''" placement="top">
               <el-select
-                v-model="item.taxRate"
+                :model-value="item.taxRate"
                 placeholder="请选择税率"
                 filterable
                 allow-create
                 default-first-option
                 style="width: 100%"
                 :class="{ 'is-error-select': validateTaxRate(item.taxRate) }"
-                @update:model-value="onTaxRateEdited(item)"
+                @update:model-value="onTaxRateEdited(item, $event)"
               >
                 <el-option
                   v-for="opt in commonTaxRateOptions"
@@ -1821,12 +2015,17 @@ function handleAiFill(params: TableRow) {
           <span class="derived-cell"><em>含税金额</em>{{ itemTaxPreview(item) ? itemTaxPreview(item)?.taxed.toFixed(2) : '-' }}</span>
         </div>
         </div>
+        <div v-if="formMoneyTotal" class="item-money-total" data-testid="po-form-money-total">
+          <span>未税合计 <strong data-testid="po-form-untaxed">{{ formMoneyTotal.untaxed.toFixed(2) }}</strong></span>
+          <span>税额合计 <strong data-testid="po-form-tax">{{ formMoneyTotal.tax.toFixed(2) }}</strong></span>
+          <span>含税合计 <strong data-testid="po-form-tax-included">{{ formMoneyTotal.taxed.toFixed(2) }}</strong></span>
+        </div>
         <el-button style="width: 100%; margin-top: 8px" @click="addItem">+ 添加行</el-button>
         </div>
       </el-form>
       <template #footer>
         <el-button @click="closeOrderEditor">取消</el-button>
-        <el-button :data-testid="isEditing ? 'purchase-link-sales-submit' : 'purchase-create-submit'" type="primary" :loading="submitting" @click="handleCreate">
+        <el-button :data-testid="isEditing ? 'purchase-link-sales-submit' : 'purchase-create-submit'" type="primary" :loading="submitting" :disabled="confirmingTaxRate" @click="handleCreate">
           {{ createdOrderId ? (attachmentQueue.failed ? '重试附件并完成' : '完成') : (isEditing ? '保存修改' : '创建') }}
         </el-button>
       </template>
@@ -1836,6 +2035,8 @@ function handleAiFill(params: TableRow) {
     <AiEntryDrawer
       v-model="aiEntryVisible"
       :config="PURCHASE_ORDER_CONFIG"
+      :initial-input="aiEntryInitialInput"
+      :confirm-guard="guardPurchaseAiQuote"
       @fill-form="handleAiFill"
     />
 
@@ -1939,6 +2140,12 @@ function handleAiFill(params: TableRow) {
 .derived-cell {
   font-variant-numeric: tabular-nums; font-feature-settings: 'tnum';
   em { font-style: normal; color: #909399; margin-right: 4px; }
+}
+/* 表单合计: 未税合计 + 税额合计 = 含税合计 (与销售订单同口径)。 */
+.item-money-total {
+  display: flex; justify-content: flex-end; gap: 18px; padding: 6px 2px 0;
+  font-size: 13px; color: #606266; font-variant-numeric: tabular-nums;
+  strong { color: #303133; margin-left: 4px; }
 }
 .price-input-cell { display: flex; align-items: center; gap: 4px; }
 .price-source-icon { color: #909399; font-size: 14px; cursor: help; flex-shrink: 0; }

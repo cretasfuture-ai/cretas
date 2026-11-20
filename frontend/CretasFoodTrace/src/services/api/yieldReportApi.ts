@@ -262,6 +262,8 @@ export interface YieldReportRequest {
   workMinutes?: number;             // 本道工时(分钟), 选填 (后端 Integer)
   workerCount?: number;             // P1-3 (G4): 本道人数, 选填 (后端 Integer)
   forceSubmit?: boolean;            // A4 超收软告警后强制提交
+  /** 纪律排查 A10: 强制超收的原因 (forceSubmit=true 时后端必收, 没有就 409 OVER_RECEIPT_REASON_REQUIRED) */
+  forceSubmitReason?: string;
   sourceBatchRefs?: Array<Record<string, unknown>>;  // A3 跨批来源 (Phase D 默认不传)
   reporterName?: string;
   targetWorkerId?: number;          // 代报工 (Phase D operator 自报, 默认不传)

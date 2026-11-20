@@ -84,6 +84,12 @@ public class AlertRuleDeleteTool extends AbstractBusinessTool {
         result.put("ruleId", existing.getId().toString());
         result.put("ruleName", existing.getRuleName());
         result.put("alertType", existing.getAlertType().name());
+        // 改前值 (确认前状态核对): 规则在预览之后被改名 / 启停 / 删除就不按旧预览删
+        Map<String, Object> currentValues = new java.util.LinkedHashMap<>();
+        currentValues.put("规则名称", existing.getRuleName());
+        currentValues.put("启用", existing.getEnabled());
+        currentValues.put("已删除", existing.getDeletedAt() != null);
+        result.put("currentValues", currentValues);
         result.put("eventCounts", Map.of(
                 "open", openCount,
                 "acknowledged", ackCount,

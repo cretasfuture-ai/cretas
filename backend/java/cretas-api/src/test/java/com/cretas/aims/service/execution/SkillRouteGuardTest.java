@@ -169,6 +169,42 @@ class SkillRouteGuardTest {
     }
 
     @Test
+    void keywordPreemptionUsesTheSameSkillPreflightAsExplicitSkillExecution() {
+        // #1747 遗留 L-b: 抢先原来只按工具链判; 显式 Skill 执行 (SkillExecutor 第 2a 步) 对受治理工具按网关准入判。
+        // 构造: team_board_query 受治理, 网关不放行 (没有主体工厂 ⇒ gatewayAdmits=false); 工具链本身放行管理员。
+        Fixture f = new Fixture();
+        SkillDefinition board = f.registry.getSkill("team-board").orElseThrow();
+        assertThat(f.dynamic.skillPreemptionBlocker(board, FACTORY, ADMIN_ID, ADMIN))
+                .as("对照: 不受治理时管理员可抢先").isEmpty();
+
+        com.cretas.aims.ai.tool.gateway.ToolRuntimeRegistry governed =
+                mock(com.cretas.aims.ai.tool.gateway.ToolRuntimeRegistry.class);
+        when(governed.isGoverned("team_board_query")).thenReturn(true);
+        ReflectionTestUtils.setField(f.executor, "toolRuntimeRegistry", governed);
+        // 前提: 显式 Skill 执行的预检会拒
+        assertThat(f.executor.permissionRefusal(board, com.cretas.aims.dto.skill.SkillContext.builder()
+                .factoryId(FACTORY).userId(String.valueOf(ADMIN_ID)).userRole(ADMIN).build())).isPresent();
+
+        assertThat(f.dynamic.skillPreemptionBlocker(board, FACTORY, ADMIN_ID, ADMIN))
+                .as("抢先与显式执行同一个判定").isPresent();
+    }
+
+    @Test
+    void keywordPreemptionDoesNotRunASkillWhoseToolTheFactoryTurnedOff() {
+        // #1769 终审第 1 条: 工厂关掉 Skill 里的工具, 执行期 executeSingleTool 抛 "Tool disabled for factory";
+        // 抢先不能先把这个 Skill 抢下来 (抢先第二层对无意图工具直接放过, 只能靠共用预检拦)。
+        // 用没有意图绑定的工具 (query_online_staff_count): 第二层对它直接 continue, 只有共用预检能拦 —— 正是终审说的漏口
+        Fixture f = new Fixture();
+        SkillDefinition orphan = SkillDefinition.builder().name("orphan-only").tools(List.of("query_online_staff_count"))
+                .triggers(List.of("x")).build();
+        assertThat(f.dynamic.skillPreemptionBlocker(orphan, FACTORY, ADMIN_ID, ADMIN)).as("对照: 开着时可抢先").isEmpty();
+
+        when(f.toolRegistry.isToolEnabledForFactory(FACTORY, "query_online_staff_count")).thenReturn(false);
+        assertThat(f.dynamic.skillPreemptionBlocker(orphan, FACTORY, ADMIN_ID, ADMIN))
+                .hasValueSatisfying(reason -> assertThat(reason).contains("query_online_staff_count"));
+    }
+
+    @Test
     void toolLessIntentTheUserMayNotUseDoesNotReachItsSkill() {
         // SSE 7a 的显式 Skill 路由此前在意图权限检查之前 —— 没权限的意图也能先把 Skill 跑掉。
         Fixture f = new Fixture();
@@ -329,6 +365,7 @@ class SkillRouteGuardTest {
         final SkillRegistryImpl registry;
         final DynamicToolSelectionService dynamic;
         final ClarificationCandidateService candidates;
+        final SkillExecutorImpl executor;
         final SseStreamingService service;
 
         final AIIntentConfig clockIn;
@@ -391,7 +428,7 @@ class SkillRouteGuardTest {
             IntentPermissionGate permissionGate = mock(IntentPermissionGate.class);
             IntentAccessModeFilter accessModeFilter = mock(IntentAccessModeFilter.class);
             candidates = new ClarificationCandidateService(configService, permissionGate, accessModeFilter,
-                    writeGuard, frontline, toolRegistry);
+                    writeGuard, frontline, toolRegistry, chain);
 
             // 真 Skill 栈: 默认 Skill + classpath SKILL.md 全量 + 两个测试用无工具意图的 Skill
             registry = new SkillRegistryImpl(mock(SmartBiSkillRepository.class), new ObjectMapper());
@@ -408,13 +445,15 @@ class SkillRouteGuardTest {
             registry.register(SkillDefinition.builder().name("team-board").displayName("班组看板单查")
                     .triggers(List.of("测试专用触发词丙")).tools(List.of("team_board_query"))
                     .contextNeeded(List.of("factoryId")).promptTemplate("${userQuery}").build());
-            SkillExecutorImpl executor = new SkillExecutorImpl(toolRegistry, skillLlm, new ObjectMapper());
+            executor = new SkillExecutorImpl(toolRegistry, skillLlm, new ObjectMapper());
             ReflectionTestUtils.setField(executor, "writeGuardService", writeGuard);
             ReflectionTestUtils.setField(executor, "toolPermissionChain", chain);
             ReflectionTestUtils.setField(executor, "parallelExecutionEnabled", false);
             ReflectionTestUtils.setField(executor, "maxToolsPerSkill", 5);
             ReflectionTestUtils.setField(executor, "defaultTimeoutMs", 60_000L);
             ReflectionTestUtils.setField(executor, "toolTimeoutSeconds", 30);
+            // 抢先预检与显式 Skill 共用 SkillExecutor 的预检 (#1747 遗留 L-b), 经候选服务调用
+            ReflectionTestUtils.setField(candidates, "skillExecutor", executor);
             SkillRouterServiceImpl router = new SkillRouterServiceImpl(registry, executor, aiIntentService,
                     mock(ToolRouterService.class));
             ReflectionTestUtils.setField(router, "skillsEnabled", true);

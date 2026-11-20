@@ -20,11 +20,17 @@ import { usePermissionStore } from '@/store/modules/permission';
 import {
   findSalesOrdersForTrace,
   getBatchesForProductionPlans,
+  exportEvidencePack,
+  getEvidencePack,
   getFullTrace,
   getPlansBySalesOrder,
+  getRecallImpact,
   getRecentTraceability,
   isTraceNotFound,
+  type EvidenceMissingItem,
   type FullTraceResponse,
+  type RecallImpact,
+  type BoxTotals,
   type ProductionBatchTraceOption,
   type ProcessingStageInfo,
   type ProductionPlanTraceOption,
@@ -35,16 +41,20 @@ import { getSalesOrderDocumentTrace } from '@/api/documentTrace';
 import type { BusinessDocumentTrace, TraceDocument } from '@/types/businessDocumentTrace';
 import { documentTraceTarget, traceDocumentLabel } from '@/utils/documentTraceNavigation';
 import { displayProcessUnit } from '@/utils/processSheetUnits';
-import { formatDateTime } from '@/utils/dateFormat';
+import { formatDateTime, formatLocalDateTimeMinute } from '@/utils/dateFormat';
 import { bannerText, summarizeSourceIndividuals } from './lineageBanner';
 import {
   depthLabel,
   emptySectionsLine,
   formatQueryTime,
   formatTimeRange,
+  formatStageLossRate,
   isBlank,
+  boxGapLines,
+  qualityStatusCellText,
   qualityStatusLabel,
   qualityStatusTag,
+  traceProductName,
   shipmentStatusLabel,
   shipmentStatusTag,
   type EmptySectionKey,
@@ -53,6 +63,7 @@ import LineageNodeRow from './LineageNodeRow.vue';
 import IndividualDrawer from './IndividualDrawer.vue';
 import BatchDispositionEvidence from './BatchDispositionEvidence.vue';
 import PotTracePanel from '@/components/pot/PotTracePanel.vue';
+import TraceDagView from './TraceDagView.vue';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
@@ -86,6 +97,9 @@ const salesLookupError = ref('');
 let salesLookupSequence = 0;
 let recentLookupSequence = 0;
 const salesDocumentTrace = ref<BusinessDocumentTrace | null>(null);
+
+/** 追溯线「图 / 列表」切换, 默认图。 */
+const viewMode = ref<'graph' | 'list'>('graph');
 
 const drawerVisible = ref(false);
 const drawerIndividualId = ref<string | null>(null);
@@ -287,15 +301,113 @@ async function runQuery(batchNumber: string) {
   }
 }
 
+// ── 验厂证据包导出（缺口 02）──────────────────────────────────────────────
+const evidenceBusy = ref(false);
+const evidenceNotice = ref<{ type: 'success' | 'error' | 'warning'; text: string } | null>(null);
+const evidenceGaps = ref<EvidenceMissingItem[]>([]);
+function saveBlob(blob: Blob, fileName: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+async function downloadEvidencePack(batchNumber: string, withGaps: boolean) {
+  const fid = factoryId.value;
+  if (!fid) return;
+  evidenceBusy.value = true;
+  try {
+    const blob = await exportEvidencePack(fid, batchNumber);
+    saveBlob(blob, `验厂证据包-${batchNumber}.zip`);
+    evidenceNotice.value = withGaps
+      ? { type: 'warning', text: `已下载带缺口的证据包（共 ${evidenceGaps.value.length} 项缺口，见概要表）。证据尚不齐全，不能当作完整证据使用。` }
+      : { type: 'success', text: '验厂证据包已下载，证据齐全。' };
+  } catch (error) {
+    evidenceNotice.value = { type: 'error', text: `证据包下载失败：${String((error as Error)?.message || '未知错误')}` };
+  } finally {
+    evidenceBusy.value = false;
+  }
+}
+async function handleExportEvidencePack() {
+  const fid = factoryId.value;
+  const batchNumber = trace.value?.production.batchNumber;
+  if (!fid || !batchNumber) return;
+  evidenceBusy.value = true;
+  evidenceNotice.value = null;
+  evidenceGaps.value = [];
+  try {
+    const pack = await getEvidencePack(fid, batchNumber);
+    if (pack.status === 'READY') {
+      evidenceBusy.value = false;
+      await downloadEvidencePack(pack.rootBatchNumber || batchNumber, false);
+      return;
+    }
+    // GAPS 或未知状态：如实列出缺什么，不提示成功
+    evidenceGaps.value = pack.missingEvidence;
+    evidenceNotice.value = {
+      type: 'warning',
+      text: pack.status === 'GAPS'
+        ? `证据不齐全，缺 ${pack.missingEvidence.length} 项。补齐前不建议用于验厂。`
+        : `证据包状态异常（${pack.status}），无法确认证据齐全。`,
+    };
+  } catch (error) {
+    evidenceNotice.value = { type: 'error', text: `证据包导出失败：${String((error as Error)?.message || '未知错误')}` };
+  } finally {
+    evidenceBusy.value = false;
+  }
+}
+
+// ── 召回影响面箱数（缺口 01）──────────────────────────────────────────────
+const recallImpact = ref<RecallImpact | null>(null);
+const recallImpactError = ref('');
+const recallImpactLoading = ref(false);
+let impactSequence = 0;
+async function loadRecallImpact() {
+  const fid = factoryId.value;
+  const batchId = trace.value?.production.batchId;
+  recallImpact.value = null;
+  recallImpactError.value = '';
+  if (!fid || batchId == null) return;
+  const seq = ++impactSequence;
+  recallImpactLoading.value = true;
+  try {
+    const impact = await getRecallImpact(fid, 'PRODUCTION_BATCH', String(batchId));
+    if (seq === impactSequence) recallImpact.value = impact;
+  } catch (error) {
+    if (seq === impactSequence) recallImpactError.value = String((error as Error)?.message || '召回影响面查询失败');
+  } finally {
+    if (seq === impactSequence) recallImpactLoading.value = false;
+  }
+}
+watch(() => trace.value?.production.batchNumber, () => { void loadRecallImpact(); });
+function boxText(totals?: BoxTotals | null, kind: 'stock' | 'shipped' = 'stock'): string {
+  if (!totals) return '无法折算：本次没有算出箱数';
+  if (totals.complete && totals.totalBoxQuantity != null) return `${totals.totalBoxQuantity} 箱`;
+  const known = totals.knownBoxSubtotal != null ? `；已能折算的部分 ${totals.knownBoxSubtotal} 箱` : '';
+  // B8: 追溯范围里根本没有成品批次 / 发货单时, 缺的不是箱规 —— 如实说缺什么, 不让人去补箱规
+  const codes = new Set((recallImpact.value?.boxExposure?.gaps ?? []).map((g) => g.code));
+  if (codes.has('FINISHED_BATCH_SCOPE_EMPTY')) {
+    return `无法折算（追溯范围内没有成品入库批次，箱数按成品入库与发货记录折算，与箱规无关）${known}`;
+  }
+  if (kind === 'shipped' && codes.has('SHIPMENT_SCOPE_EMPTY')) {
+    return `无法折算（追溯范围内没有可核验的发货单）${known}`;
+  }
+  return `无法折算（${totals.unknownSourceCount} 项缺少箱规或发货扣减数据）${known}`;
+}
+const boxGapMessages = computed(() => boxGapLines(recallImpact.value?.boxExposure?.gaps ?? []));
+
 // ── 生产信息: 空值行不渲染 ──────────────────────────────────────────────────
 const productionRows = computed(() => {
   const p = trace.value?.production;
   if (!p) return [];
   const rows: Array<{ label: string; value: string }> = [
     { label: '批次号', value: p.batchNumber },
-    { label: '产品名称', value: p.productName },
+    { label: '产品名称', value: traceProductName(p.productName) },
     { label: '生产工厂', value: p.factoryName },
-    { label: '生产日期', value: p.productionDate },
+    { label: '生产日期', value: formatLocalDateTimeMinute(p.productionDate) },
     { label: '负责人', value: p.supervisorName ?? '' },
     { label: '设备', value: p.equipmentName ?? '' },
     { label: '总产量（含不良）', value: p.quantity != null ? `${p.quantity} ${p.unit || ''}`.trim() : '' },
@@ -358,6 +470,12 @@ const queryTimeText = computed(() => formatQueryTime(trace.value?.queryTime));
 
 function percent(rate?: number | null): string {
   return rate == null ? '' : `${(rate * 100).toFixed(1)}%`;
+}
+function stageLoss(stage: ProcessingStageInfo) {
+  const legacyUnit = stage.stageType === 'PROCESS_SHEET' ? '' : 'kg';
+  const inUnit = stage.inputUnit || legacyUnit;
+  const outUnit = stage.outputUnit || legacyUnit;
+  return formatStageLossRate(stage.inputWeight, stage.outputWeight, inUnit === outUnit);
 }
 function processQuantities(stage: ProcessingStageInfo): string {
   if (stage.inputWeight == null || stage.outputWeight == null) return '';
@@ -471,9 +589,15 @@ function openIndividual(id: string) {
       <el-empty v-else-if="recentBatches.length === 0" description="暂无最近批次" :image-size="60" data-testid="recent-batches-empty" />
       <el-table v-else :data="recentBatches" size="small" data-testid="recent-batches-table">
         <el-table-column prop="batchNumber" label="批次号" min-width="170" />
-        <el-table-column prop="productName" label="产品" min-width="140" />
-        <el-table-column prop="productionDate" label="生产日期" min-width="130" />
-        <el-table-column prop="qualityStatus" label="质量" min-width="100" />
+        <el-table-column label="产品" min-width="140">
+          <template #default="{ row }">{{ traceProductName(row.productName) }}</template>
+        </el-table-column>
+        <el-table-column label="生产日期" min-width="130">
+          <template #default="{ row }">{{ formatLocalDateTimeMinute(row.productionDate) }}</template>
+        </el-table-column>
+        <el-table-column label="质量" min-width="100">
+          <template #default="{ row }"><span data-testid="recent-batch-quality">{{ qualityStatusCellText(row.qualityStatus) }}</span></template>
+        </el-table-column>
         <el-table-column prop="completedQuantity" label="数量" min-width="90" />
         <el-table-column label="操作" width="90">
           <template #default="{ row }">
@@ -566,8 +690,28 @@ function openIndividual(id: string) {
         <span>{{ banner }}</span>
       </div>
 
+      <!-- 追溯线: 图 / 列表 切换, 默认图 -->
+      <el-card shadow="never" class="content-card" data-testid="trace-view-card">
+        <template #header>
+          <span class="card-title">追溯线</span>
+          <el-radio-group v-model="viewMode" size="small" class="card-title__trailing" data-testid="trace-view-toggle">
+            <el-radio-button value="graph" data-testid="trace-view-graph">图</el-radio-button>
+            <el-radio-button value="list" data-testid="trace-view-list">列表</el-radio-button>
+          </el-radio-group>
+        </template>
+        <TraceDagView
+          v-if="viewMode === 'graph'"
+          :trace="trace"
+          @open-individual="openIndividual"
+          @open-evidence="openBatchEvidence"
+          @open-quality="openBatchQuality"
+          @open-batch="(b: string) => router.push({ path: '/production/traceability', query: { batchNumber: b } })"
+        />
+        <p v-else class="muted">下方为分段列表：来源链、加工环节、质检记录、出货记录。</p>
+      </el-card>
+
       <!-- 来源链 -->
-      <el-card shadow="never" class="content-card" data-testid="lineage-card">
+      <el-card v-if="viewMode === 'list'" shadow="never" class="content-card" data-testid="lineage-card">
         <template #header>
           <span class="card-title">来源链</span>
           <span v-if="ancestorCount > 0" class="card-title__trailing">
@@ -644,7 +788,7 @@ function openIndividual(id: string) {
       />
 
       <!-- 加工环节 -->
-      <el-card v-if="processingStages.length > 0" shadow="never" class="content-card" data-testid="processing-card">
+      <el-card v-if="viewMode === 'list' && processingStages.length > 0" shadow="never" class="content-card" data-testid="processing-card">
         <template #header>
           <span class="card-title">加工环节</span>
           <span class="card-title__trailing">{{ processingStages.length }} 道工序</span>
@@ -664,7 +808,9 @@ function openIndividual(id: string) {
             </template>
           </el-table-column>
           <el-table-column label="损耗率" width="100">
-            <template #default="{ row }">{{ percent(row.lossRate) }}</template>
+            <template #default="{ row }">
+              <span :title="stageLoss(row).reason" data-testid="stage-loss-rate">{{ stageLoss(row).text }}</span>
+            </template>
           </el-table-column>
           <el-table-column label="合格率" width="100">
             <template #default="{ row }">{{ percent(row.passRate) }}</template>
@@ -682,17 +828,43 @@ function openIndividual(id: string) {
         <p v-else>抽检合格率仅反映被抽取的样本，不代替生产良品率或正式放行结论。</p>
         <el-button v-if="canViewQuality" @click="openBatchQuality">查看或登记本批次质检</el-button>
         <el-button v-if="canViewQuality" @click="openBatchRecall">查看退货与召回</el-button>
+        <el-button :loading="evidenceBusy" data-testid="export-evidence-pack"
+          @click="handleExportEvidencePack">导出证据包</el-button>
+        <div v-if="evidenceNotice" class="evidence-notice" data-testid="evidence-notice">
+          <el-alert :type="evidenceNotice.type" :closable="false" show-icon :title="evidenceNotice.text" />
+          <ul v-if="evidenceGaps.length > 0" data-testid="evidence-gaps">
+            <li v-for="(g, i) in evidenceGaps" :key="i">
+              {{ g.kind }}{{ g.batchNumber ? `（${g.batchNumber}）` : '' }}：{{ g.detail }}
+            </li>
+          </ul>
+          <el-button v-if="evidenceGaps.length > 0" size="small" :loading="evidenceBusy" data-testid="export-evidence-pack-anyway"
+            @click="downloadEvidencePack(trace.production.batchNumber, true)">仍然下载（带缺口）</el-button>
+        </div>
         <BatchDispositionEvidence v-if="canViewQuality && qualityInspections.length > 0"
           :factory-id="trace.production.factoryId" :batch-id="trace.production.batchId" />
       </el-card>
-      <el-card v-if="qualityInspections.length > 0" shadow="never" class="content-card" data-testid="quality-card">
+      <!-- 召回影响面：在库 / 已发箱数 -->
+      <el-card v-if="trace.production.batchId != null" shadow="never" class="content-card" data-testid="recall-box-card">
+        <div class="card-title">召回影响面 · 箱数</div>
+        <p v-if="recallImpactLoading">正在计算箱数…</p>
+        <p v-else-if="recallImpactError" data-testid="recall-box-error">召回影响面暂时取不到：{{ recallImpactError }}</p>
+        <template v-else-if="recallImpact">
+          <p data-testid="recall-box-stock">在库箱数：{{ boxText(recallImpact.boxExposure?.stock) }}</p>
+          <p data-testid="recall-box-shipped">已发箱数：{{ boxText(recallImpact.boxExposure?.shipped, 'shipped') }}</p>
+          <ul v-if="boxGapMessages.length > 0" data-testid="recall-box-gaps">
+            <li v-for="(m, i) in boxGapMessages" :key="i">{{ m }}</li>
+          </ul>
+          <p class="recall-box-hint">箱数按包装快照折算，是记录数量的折算，不代表实物封箱数。</p>
+        </template>
+      </el-card>
+      <el-card v-if="viewMode === 'list' && qualityInspections.length > 0" shadow="never" class="content-card" data-testid="quality-card">
         <template #header>
           <span class="card-title">质检记录</span>
           <span class="card-title__trailing">{{ qualityInspections.length }} 次</span>
         </template>
         <el-table :data="qualityInspections" size="default" data-testid="quality-table">
           <el-table-column label="检验编号" width="140">
-            <template #default="{ row }">质检 #{{ row.inspectionId?.slice(-8) || '-' }}</template>
+            <template #default="{ $index }">质检 第{{ $index + 1 }}次</template>
           </el-table-column>
           <el-table-column label="检验日期" width="120">
             <template #default="{ row }">{{ dateOnly(row.inspectionDate) }}</template>
@@ -716,7 +888,7 @@ function openIndividual(id: string) {
       </el-card>
 
       <!-- 出货 -->
-      <el-card v-if="shipments.length > 0" shadow="never" class="content-card" data-testid="shipment-card">
+      <el-card v-if="viewMode === 'list' && shipments.length > 0" shadow="never" class="content-card" data-testid="shipment-card">
         <template #header>
           <span class="card-title">出货记录</span>
           <span class="card-title__trailing">{{ shipments.length }} 单</span>

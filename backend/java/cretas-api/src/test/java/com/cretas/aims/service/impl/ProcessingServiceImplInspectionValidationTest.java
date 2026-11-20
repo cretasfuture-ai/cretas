@@ -301,7 +301,7 @@ class ProcessingServiceImplInspectionValidationTest {
         when(productionBatchRepository.findByIdAndFactoryId(7003L, F_ID))
                 .thenReturn(java.util.Optional.of(batchWithStatus(7003L, ProductionBatchStatus.IN_PROGRESS)));
         org.mockito.Mockito.doThrow(new BusinessException(409, "补录超出时效窗口"))
-                .when(backdateWindowValidator).assertWithinWindow(any(), org.mockito.ArgumentMatchers.eq("班组报工"));
+                .when(backdateWindowValidator).assertWithinWindow(org.mockito.ArgumentMatchers.eq(F_ID), any(), org.mockito.ArgumentMatchers.eq("班组报工"));
 
         TeamBatchReportRequest req = teamReport(7003L, 100);
         req.setReportTime("2026-06-01T08:00:00");  // 远早于 T-2, 触发补录窗口锁
@@ -319,6 +319,6 @@ class ProcessingServiceImplInspectionValidationTest {
         // 不设 reportTime → reportTimeProvided=false → 不调 assertWithinWindow → 正常完成 (无异常)
         service.submitTeamBatchReport(F_ID, teamReport(7004L, 50));
         org.mockito.Mockito.verify(backdateWindowValidator, org.mockito.Mockito.never())
-                .assertWithinWindow(any(), org.mockito.ArgumentMatchers.anyString());
+                .assertWithinWindow(any(), any(), org.mockito.ArgumentMatchers.anyString());
     }
 }

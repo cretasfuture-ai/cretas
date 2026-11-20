@@ -125,6 +125,15 @@ public class LineSchedule {
     @Column(name = "updated_at")
     private LocalDateTime updatedAt;
 
+    /**
+     * 乐观锁版本号 (V20261113_83): 两个人同时改同一条排程, 后提交的拿到冲突 (409「排程已被别人修改，请刷新后再改」),
+     * 不再后写覆盖先写。批量作废的 JPQL UPDATE 不经过实体, 在语句里自己 +1 (LineScheduleRepository 等三处)。
+     * 新建时为 null, 持久化时 Hibernate 置 0。
+     */
+    @Version
+    @Column(name = "version", nullable = false)
+    private Long version;
+
     @com.fasterxml.jackson.annotation.JsonIgnore
     @OneToMany(mappedBy = "schedule", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
     private List<WorkerAssignment> workerAssignments;
@@ -132,6 +141,13 @@ public class LineSchedule {
     public enum ScheduleStatus {
         pending, in_progress, completed, delayed, cancelled
     }
+
+    /**
+     * 没开工 = 没有实际开始时间, 且还在这几个状态里 (延误不等于开工: 待开始超时、或报进度时效率低, 都会被标成延误)。
+     * 全仓唯一一份: 调度计划重开时作废旧排程、生产计划取消后的幽灵排程判定与级联, 都读它。
+     */
+    public static final java.util.Set<ScheduleStatus> NOT_STARTED_STATUSES =
+            java.util.Collections.unmodifiableSet(java.util.EnumSet.of(ScheduleStatus.pending, ScheduleStatus.delayed));
 
     @PrePersist
     public void prePersist() {

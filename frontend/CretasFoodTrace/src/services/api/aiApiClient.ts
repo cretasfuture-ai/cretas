@@ -4,6 +4,8 @@ import type { IntentRecognizeResponse, IntentExecuteResponse } from '../../types
 import { API_BASE_URL } from '../../constants/config';
 import EventSource from 'react-native-sse';
 import { StorageService } from '../storage/storageService';
+import { TokenManager } from '../tokenManager';
+import * as FileSystem from 'expo-file-system';
 
 /**
  * AI API客户端
@@ -906,6 +908,26 @@ class AIApiClient {
     // 安全提取数据：优先使用 response.data，兼容直接返回数据的情况
     const data = response?.data ?? (response as unknown as AICostAnalysisResponseBackend);
     return transformAnalysisResponse(data);
+  }
+
+  /**
+   * 下载经营报告文件 (pdf / pptx) 到本机缓存目录并返回文件路径。
+   * 服务端按调用者权限裁剪正文; 失败 (非 200) 抛错, 不留半截文件。
+   */
+  async downloadReportFile(reportId: number, format: 'pdf' | 'pptx', factoryId?: string): Promise<string> {
+    const token = await TokenManager.getValidToken();
+    if (!token) throw new Error('登录已过期，请重新登录');
+    const uri = `${FileSystem.cacheDirectory}operating-report-${reportId}.${format}`;
+    const result = await FileSystem.downloadAsync(
+      `${API_BASE_URL}${this.getBasePath(factoryId)}/reports/${reportId}/export?format=${format}`,
+      uri,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    if (result.status !== 200) {
+      await FileSystem.deleteAsync(uri, { idempotent: true });
+      throw new Error(`导出失败 (${result.status})`);
+    }
+    return result.uri;
   }
 
   /**

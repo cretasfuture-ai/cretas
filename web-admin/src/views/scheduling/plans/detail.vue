@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { CS_TOKENS } from '@/styles/csTokens';
 /**
  * 调度计划详情页
  * 包含甘特图、排程列表、工人分配、概率监控
@@ -17,9 +18,12 @@ import {
   SchedulingPlan,
   LineSchedule,
   CompletionProbability,
-  type ScheduleTaskTimelineEntry
+  type ScheduleTaskTimelineEntry,
+  type DailyAllocationDelay
 } from '@/api/scheduling';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import ChartInsight from '@/views/smart-bi/components/ChartInsight.vue';
+import { buildGanttInsight, ganttBarKind, type GanttItem } from '@/utils/chartPageInsights';
 import {
   ArrowLeft,
   Refresh,
@@ -91,6 +95,11 @@ function formatQty(value: number | null | undefined) {
   return Number(value).toLocaleString('zh-CN', { maximumFractionDigits: 2 });
 }
 
+/** 推迟区间: 同一天只写一天, 否则「11-10 至 11-12」。 */
+function delayRangeText(delay: DailyAllocationDelay) {
+  return delay.from === delay.to ? `${delay.from.slice(5)} ` : `${delay.from.slice(5)} 至 ${delay.to.slice(5)} `;
+}
+
 function formatShare(share: number) {
   return Number.isFinite(share) ? `${Math.round(share * 100)}%` : '—';
 }
@@ -138,6 +147,16 @@ function goWorkProcesses() {
   router.push('/system/work-processes');
 }
 const probabilities = ref<CompletionProbability[]>([]);
+// 一图一分析（问题 40）：和甘特图同一份排程、同一套颜色规则现算
+const ganttItems = computed<GanttItem[]>(() => (plan.value?.lineSchedules ?? []).map(s => ({
+  label: scheduleLabel(s),
+  line: s.productionLineName,
+  status: s.status,
+  prob: s.predictedCompletionProb ?? null,
+  startMs: new Date(s.plannedStartTime).getTime(),
+  endMs: new Date(s.plannedEndTime).getTime(),
+})));
+const ganttInsight = computed(() => buildGanttInsight(ganttItems.value));
 const ganttChart = ref<echarts.ECharts | null>(null);
 const ganttContainer = ref<HTMLElement | null>(null);
 const refreshInterval = ref<number | null>(null);
@@ -275,16 +294,13 @@ function updateGanttChart() {
     const lineIndex = lines.indexOf(s.productionLineName);
     const startTime = new Date(s.plannedStartTime).getTime();
     const endTime = new Date(s.plannedEndTime).getTime();
-    const prob = s.predictedCompletionProb || 0;
-
-    let color = '#409EFF'; // 默认蓝色
-    if (s.status === 'completed') {
-      color = '#67C23A'; // 绿色
-    } else if (s.status === 'in_progress') {
-      color = '#E6A23C'; // 黄色
-    } else if (s.status === 'delayed' || prob < 0.7) {
-      color = '#F56C6C'; // 红色
-    }
+    // 颜色规则与分析共用 ganttBarKind：完成概率缺失（未知）不再按 0 标红
+    const kind = ganttBarKind({ status: s.status, prob: s.predictedCompletionProb ?? null });
+    const color: string =
+      kind === 'completed' ? '#67C23A'
+        : kind === 'in_progress' ? '#E6A23C'
+          : kind === 'risk' ? '#F56C6C'
+            : CS_TOKENS.primary;
 
     return {
       name: scheduleLabel(s),
@@ -633,7 +649,7 @@ async function handleCompleteSchedule(schedule: LineSchedule) {
         <div class="card-header">
           <span>排程甘特图</span>
           <div class="legend">
-            <span class="legend-item"><span class="legend-color" style="background: #409EFF"></span>待开始</span>
+            <span class="legend-item"><span class="legend-color" style="background: var(--el-color-primary)"></span>待开始</span>
             <span class="legend-item"><span class="legend-color" style="background: #E6A23C"></span>进行中</span>
             <span class="legend-item"><span class="legend-color" style="background: #67C23A"></span>已完成</span>
             <span class="legend-item"><span class="legend-color" style="background: #F56C6C"></span>延期/风险</span>
@@ -641,6 +657,7 @@ async function handleCompleteSchedule(schedule: LineSchedule) {
         </div>
       </template>
       <div ref="ganttContainer" class="gantt-container"></div>
+      <ChartInsight :insight="ganttInsight" depth="detailed" class="gantt-insight" data-testid="gantt-insight" />
     </el-card>
 
     <!-- 排程列表 -->
@@ -732,6 +749,24 @@ async function handleCompleteSchedule(schedule: LineSchedule) {
           计划量 {{ formatQty(schedule.dailyAllocations!.plannedQuantity) }}，
           已入库 {{ formatQty(schedule.dailyAllocations!.reportedQuantity) }}，
           本次排 {{ formatQty(schedule.dailyAllocations!.remainingQuantity) }} {{ schedule.dailyAllocations!.unit }}
+          <ul
+            v-if="schedule.dailyAllocations!.delays?.length"
+            class="daily-constraint-list"
+            :data-testid="`daily-delays-${schedule.id}`"
+          >
+            <li v-for="(delay, index) in schedule.dailyAllocations!.delays" :key="`delay-${schedule.id}-${index}`">
+              {{ delayRangeText(delay) }}没排：{{ delay.text }}
+            </li>
+          </ul>
+          <ul
+            v-if="schedule.dailyAllocations!.constraintNotes?.length"
+            class="daily-constraint-list daily-constraint-notes"
+            :data-testid="`daily-notes-${schedule.id}`"
+          >
+            <li v-for="(note, index) in schedule.dailyAllocations!.constraintNotes" :key="`note-${schedule.id}-${index}`">
+              未核对：{{ note }}
+            </li>
+          </ul>
         </li>
       </ul>
       <el-table :data="dailyRows" size="small" border row-key="key">
@@ -869,7 +904,7 @@ async function handleCompleteSchedule(schedule: LineSchedule) {
 
   .overview-icon {
     font-size: 32px;
-    color: #409EFF;
+    color: var(--el-color-primary);
   }
 
   .overview-content {
@@ -958,5 +993,15 @@ async function handleCompleteSchedule(schedule: LineSchedule) {
   color: #606266;
   font-size: 13px;
   line-height: 1.8;
+}
+
+.daily-constraint-list {
+  margin: 2px 0 6px;
+  padding-left: 18px;
+  color: #b88230;
+}
+
+.daily-constraint-notes {
+  color: #909399;
 }
 </style>

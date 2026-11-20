@@ -11,6 +11,7 @@ import type { TableRow } from '@/types/api';
 import { RowActionMenu, TableFooter } from '@/components/list';
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
 import CreateReturnOrderDialog from '@/components/dialog/CreateReturnOrderDialog.vue';
+import { knownUnitPrice } from '@/views/sales/orders/deliveryPricePayload';
 import { computeRowActions } from '@/composables/useRowActions';
 import { safePrint } from '@/api/printApi';
 import { useListSummary } from '@/composables/useListSummary';
@@ -50,7 +51,7 @@ const returnDialogItems = computed(() => {
       materialTypeId: null as string | null,
       productTypeId: row.productTypeId ? String(row.productTypeId) : null,
       itemName: String(row.productName || '-'),
-      unitPrice: Number(row.unitPrice) || 0,
+      unitPrice: knownUnitPrice(row.unitPrice),
       maxQuantity: Number(row.quantity) || 0,
       batchNumber: row.batchNumber ? String(row.batchNumber) : null,
     },

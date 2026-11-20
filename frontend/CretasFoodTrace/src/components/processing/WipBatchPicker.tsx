@@ -85,6 +85,33 @@ export function wipDrawableQuantity(row: WipQcFields, status?: ProcessTimeLimitS
   return drawable == null ? free : Math.min(free, drawable);
 }
 
+/**
+ * 后端没给人起的批次号时, 工序批次号是系统拼的内部键:
+ * `{产品类型 ID}-B{生产批次 ID}-S{第几道}-{工序任务 ID}` (WipInventoryServiceImpl#generateBatchNo),
+ * 例 `553ab0a6-0b0c-41a3-ab58-c5a792711641-B11154-S1-2313`。这串给人看没有意义 (2026-11-12 真机验收)。
+ */
+const SYSTEM_WIP_KEY = /^.+-B(\d+)-S(\d+)-(\d+)$/;
+
+/**
+ * 选择列表里这一行的标题 (fool-proof Rule 2: 给人看批次号, 不给内部串)。
+ * - 本来就是人起的批次号 (如 QA-V15-14-SEMI): 原样显示。
+ * - 系统内部键且生产批次正是本屏这一批: 显示本批批次号 + 「第 N 道产出」。
+ * - 对不上: 如实写「批次号没查到」+ 第几道产出, ⛔ 不编、不拿本批批次号顶替别的批次。
+ * 选中 / 提交仍用 intermediateBatchNo (sourceWipNo), 这里只管显示。
+ */
+export function wipDisplayTitle(
+  row: Pick<WipRowDTO, 'intermediateBatchNo' | 'processOrder'>,
+  current?: { batchId?: number | null; batchNumber?: string | null },
+): { title: string; isSystemKey: boolean } {
+  const m = SYSTEM_WIP_KEY.exec(row.intermediateBatchNo ?? '');
+  if (!m) return { title: row.intermediateBatchNo, isSystemKey: false };
+  const order = row.processOrder ?? Number(m[2]);
+  const step = Number.isFinite(order) && order > 0 ? ` · 第 ${order} 道产出` : '';
+  const sameBatch = current?.batchId != null && Number(m[1]) === Number(current.batchId);
+  if (sameBatch && current?.batchNumber) return { title: `${current.batchNumber}${step}`, isSystemKey: true };
+  return { title: `批次号没查到${step}`, isSystemKey: true };
+}
+
 export interface WipSelection {
   /** 选中的工序批次号 = 报工 sourceWipNo */
   sourceWipNo: string;
@@ -97,6 +124,8 @@ export interface WipSelection {
 interface WipBatchPickerProps {
   /** 当前批次 ID (传给 listWip) */
   batchId: number;
+  /** 当前批次号: 上道产出没有人起的批次号时, 用它给行标题 (见 wipDisplayTitle) */
+  batchNumber?: string | null;
   /** 当前工厂 ID (可选, 不传则 yieldReportApi 自动解析) */
   factoryId?: string;
   /** 本道工序任务 ID: 传了才读时限状态 (缺口 14), 不传行为不变 */
@@ -118,6 +147,7 @@ interface WipBatchPickerProps {
 
 export const WipBatchPicker: React.FC<WipBatchPickerProps> = ({
   batchId,
+  batchNumber,
   factoryId,
   taskId,
   selectedSourceWipNo,
@@ -306,6 +336,7 @@ export const WipBatchPicker: React.FC<WipBatchPickerProps> = ({
               const status = statusOf(row);
               const timeLine = blockReason == null ? timeLimitLine(status, nowMs) : null;
               const expiredQty = blockReason == null ? timeLimitExpiredQuantity(status) : 0;
+              const display = wipDisplayTitle(row, { batchId, batchNumber });
               return (
                 <TouchableOpacity
                   key={row.intermediateBatchNo}
@@ -313,8 +344,8 @@ export const WipBatchPicker: React.FC<WipBatchPickerProps> = ({
                   onPress={() => selectRow(row)}
                   disabled={disabled || blockReason != null}
                   accessibilityLabel={blockReason != null
-                    ? `半成品批次 ${row.intermediateBatchNo}，${blockReason}`
-                    : `选择半成品批次 ${row.intermediateBatchNo}`}
+                    ? `半成品批次 ${display.title}，${blockReason}`
+                    : `选择半成品批次 ${display.title}`}
                   accessibilityState={{ disabled: disabled || blockReason != null, selected }}
                   testID={`wip-row-${row.intermediateBatchNo}`}
                 >
@@ -325,7 +356,9 @@ export const WipBatchPicker: React.FC<WipBatchPickerProps> = ({
 
                   {/* 批次信息 */}
                   <View style={styles.wipInfo}>
-                    <Text style={styles.wipNo}>{row.intermediateBatchNo}</Text>
+                    <Text style={styles.wipNo} testID={`wip-row-title-${row.intermediateBatchNo}`}>
+                      {display.title}
+                    </Text>
                     <Text style={styles.wipProcess}>
                       {row.processName ?? `第 ${row.processOrder ?? '?'} 道`}
                     </Text>

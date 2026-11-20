@@ -63,6 +63,12 @@ class IntentExecutionOrchestratorReadWriteModeTest {
         aiIntentService = mock(AIIntentService.class);
         toolRegistry = mock(ToolRegistry.class);
         dispatchService = mock(ToolDispatchService.class);
+        org.mockito.Mockito.lenient().when(dispatchService.recheckPreviewState(
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any()))
+                .thenReturn(com.cretas.aims.ai.tool.gateway.PreviewStateRecheck.ConfirmStateCheck.ok());
         tokenService = mock(PreviewTokenService.class);
         orchestrator = new IntentExecutionOrchestrator(
                 aiIntentService,

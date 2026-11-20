@@ -100,6 +100,27 @@ public interface PreviewTokenService {
     Optional<BoundTokenExecution> readBoundExecution(String token, String factoryId, Long userId);
 
     /**
+     * Owner-scoped, non-secret row id of a bound token. Callers that must later re-check the
+     * token's state (e.g. digital-crew work items) store this id instead of the bearer token.
+     */
+    Optional<Long> readBoundTokenId(String token, String factoryId, Long userId);
+
+    /** Owner-scoped status read by row id (see {@link #readBoundTokenId}); includes terminal states. */
+    Optional<IntentPreviewToken.TokenStatus> readBoundStatusById(Long tokenId, String factoryId, Long userId);
+
+    /**
+     * Atomically cancels one still-PENDING token by row id, scoped to its owner and factory. Used when a
+     * shared work item is re-previewed by someone else: the previous previewer's token must stop being
+     * confirmable anywhere. Returns false when the token was already claimed / resolved / not owned.
+     */
+    boolean cancelPendingById(Long tokenId, String factoryId, Long ownerUserId, String reason);
+
+    /** Configured EXECUTING-lease reconciliation window (minutes); callers that wait on it derive from this. */
+    default long executingStaleMinutes() {
+        return 10;
+    }
+
+    /**
      * 确认令牌并执行操作 (Confirm 阶段)
      *
      * @param token 令牌值
@@ -123,10 +144,36 @@ public interface PreviewTokenService {
                            String expectedCommandDigest);
 
     /**
+     * Gateway claim bound to the business object the caller is about to execute against.
+     * Besides everything {@link #claimToken(String, String, Long, String)} binds, the token's
+     * issued entity type and entity id must equal the expected ones — inside the atomic claim
+     * predicate, so a token issued for one object can never be claimed for another, and a
+     * mismatched attempt leaves the token PENDING for its rightful object. {@code null}
+     * expectations mean "issued without that value" and match only a token that has none.
+     */
+    ClaimResult claimTokenForSubject(String token, String factoryId, Long userId,
+                                     String expectedCommandDigest,
+                                     String expectedEntityType, String expectedEntityId);
+
+    /**
      * Resolves an execution lease. Success must be written only after the real Tool response is
      * successful; failures are terminal in this phase and are not retried automatically.
      */
     boolean resolveClaim(String token, String claimId, boolean success, String message);
+
+    /**
+     * The tool was invoked but its outcome cannot be established (exception / timeout after the
+     * call started). Marks the lease OUTCOME_UNKNOWN — never FAILED, because the write may have
+     * committed and a "failed" label invites a second, duplicate write.
+     */
+    boolean resolveClaimOutcomeUnknown(String token, String claimId, String message);
+
+    /**
+     * Reconciles EXECUTING leases older than the configured window into OUTCOME_UNKNOWN (scheduled).
+     *
+     * @return number of reconciled tokens
+     */
+    int reconcileStaleExecutingTokens();
 
     /**
      * 取消令牌 (Cancel 阶段)
@@ -300,6 +347,8 @@ public interface PreviewTokenService {
         private IntentPreviewToken token;
         private String claimId;
         private Map<String, Object> parameters;
+        /** On failure: the token's status when the claim was refused (null if not found / not owned). */
+        private IntentPreviewToken.TokenStatus existingStatus;
 
         public static ClaimResult success(IntentPreviewToken token, String claimId,
                                           Map<String, Object> parameters) {
@@ -314,6 +363,10 @@ public interface PreviewTokenService {
 
         public static ClaimResult failure(String message) {
             return ClaimResult.builder().success(false).message(message).build();
+        }
+
+        public static ClaimResult alreadyHandled(String message, IntentPreviewToken.TokenStatus status) {
+            return ClaimResult.builder().success(false).message(message).existingStatus(status).build();
         }
     }
 

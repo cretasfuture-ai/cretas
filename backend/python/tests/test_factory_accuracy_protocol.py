@@ -205,7 +205,17 @@ def test_inventory_stops_at_inline_description_and_preserves_quoted_braces(tmp_p
     import factory_accuracy_support as support
     directory=tmp_path/'backend/java/cretas-api/src/main/java/com/cretas/aims/ai/tool/impl/demo'
     directory.mkdir(parents=True)
-    (directory/'DemoTool.java').write_text('public String getToolName(){return "read";}\npublic String getDescription(){return "查询 {完整} 单据";}\npublic String unrelated(){return "do not include schema";}\npublic AccessMode getAccessMode(){return AccessMode.READ;}',encoding='utf-8')
+    # 夹具要长成真实的 Tool 类: 2026-11-11 起读写属性改由 scripts/finetune/tool_access_modes.py 扫描
+    # (按类与父类找声明, 方法体须是单独一行 return AccessMode.X;), 没有类声明的方法片段会被如实判 UNRESOLVED。
+    (directory/'DemoTool.java').write_text(
+        'public class DemoTool extends AbstractTool {\n'
+        '    public String getToolName(){return "read";}\n'
+        '    public String getDescription(){return "查询 {完整} 单据";}\n'
+        '    public String unrelated(){return "do not include schema";}\n'
+        '    public AccessMode getAccessMode() {\n'
+        '        return AccessMode.READ;\n'
+        '    }\n'
+        '}\n',encoding='utf-8')
     monkeypatch.setattr(support,'WORK',tmp_path)
     rows=support.source_inventory({'canonical_intents':[{'intent_code':'P','tool_name':'read'}]})
     assert rows[0]['tool_contract']['description']=='查询 {完整} 单据'

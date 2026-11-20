@@ -64,11 +64,19 @@ class ReplyTextPriceSweepContractTest {
     static {
         // ── CHECKED: 本 PR 起按字段判定 ──
         reviewed("crm/CustomerPriceMemoryQueryTool.java", Verdict.CHECKED, "unitPrice");
+        reviewed("finance/FinanceLiquidityTool.java", Verdict.CHECKED, "流动资产 / 流动负债 (价格查看 FinanceFigures.AMOUNT_SPEC; 见 FinanceRatioAmountVisibilityContractTest)");
+        reviewed("finance/FinanceRoaTool.java", Verdict.CHECKED, "净利润 / 总资产 (价格查看 FinanceFigures.AMOUNT_SPEC; 见 FinanceRatioAmountVisibilityContractTest)");
+        reviewed("finance/FinanceRoeTool.java", Verdict.CHECKED, "净利润 / 股东权益 (价格查看 FinanceFigures.AMOUNT_SPEC; 见 FinanceRatioAmountVisibilityContractTest)");
+        reviewed("finance/FinanceSolvencyTool.java", Verdict.CHECKED, "总负债 / 总资产 (价格查看 FinanceFigures.AMOUNT_SPEC; 见 FinanceRatioAmountVisibilityContractTest)");
         reviewed("foodsafety/RecallLossEstimateTool.java", Verdict.CHECKED, "totalEstimatedLoss…brandLoss");
         reviewed("foodsafety/RegulatoryReportGenerateTool.java", Verdict.CHECKED, "estimatedLoss");
         reviewed("hr/ExpenseRequestQueryTool.java", Verdict.CHECKED, "total / 类别 / amount");
         reviewed("pricing/PricingTestCalculateTool.java", Verdict.CHECKED, "originalPrice / finalPrice / totalDiscount");
         reviewed("purchase/ProcurementOrderCreateTool.java", Verdict.CHECKED, "estimatedUnitPrice / estimatedBudget");
+        reviewed("report/ReportBomCostRankTool.java", Verdict.CHECKED, "totalCost (无权限整份金额与图不出, 见 ReportBomCostRankToolContractTest)");
+        reviewed("report/ReportLaborCostShareTool.java", Verdict.CHECKED, "laborCost / totalCost / 占比 (无权限整份不出, 见 ReportLaborCostShareToolContractTest)");
+        reviewed("report/ReportSalesMarginSummaryTool.java", Verdict.CHECKED, "revenue / cost / grossProfit / 毛利率 (无权限整份不出, 见 ReportSalesMarginSummaryToolContractTest)");
+        reviewed("report/ReportCostQueryTool.java", Verdict.CHECKED, "totalCost / unitCost / 分项成本 (无权限整份金额与图不出, 见 ReportCostQueryToolContractTest)");
         reviewed("report/ReportCostVarianceTool.java", Verdict.SAME_AS_REST, "sameVisibilityAsRest(");
         reviewed("report/SkuGrossMarginTool.java", Verdict.CHECKED, "revenue / cost / price / unitCost");
         reviewed("workdesk/AccountsReceivableAgingTool.java", Verdict.CHECKED, "totalAmount / highRiskAmount");
@@ -81,20 +89,29 @@ class ReplyTextPriceSweepContractTest {
         reviewed("workdesk/WageCostSummaryTool.java", Verdict.CHECKED, "totalAmount / totalPieceRate / totalHourly / totalOvertime");
         reviewed("workflow/ApprovalPendingQueryTool.java", Verdict.CHECKED, "PO 金额按 PriceSensitive.PURCHASE");
         // ── OWN_GATE: 工具自带判定 (note = 判定标识) ──
+        // OWN_GATE (2026-11-18): 金额是调用者本人的工资, 门是「只看本人」 —— 参数里出现别人就整次 DENIED 不出金额
+        //   (阴性对照见 IntentGapV3ToolsContractTest.MyWage); 不是价格可见性字段, 不走 replyShowsAmount。
+        reviewed("hr/MyWageQueryTool.java", Verdict.OWN_GATE, "otherPersonMentioned(params, self)");
+        // OWN_GATE (2026-11-18): 整个结果就是采购价 (月均价 / 涨幅排名的前后均价), doExecute 一开头按 callerMayViewPurchasePrices
+        //   (采购价可见性配置, 与 PurchaseController / PriceFieldResponseAdvice 同判定) 整次拒绝, 单原料与「涨幅排名」两条路径都在门后。
+        reviewed("workdesk/PriceHistoryQueryTool.java", Verdict.OWN_GATE, "callerMayViewPurchasePrices(context)");
         // ── NOT_PRICE_SENSITIVE ──
         reviewed("print/PrintTemplateCreateFromAITool.java", Verdict.NOT_PRICE_SENSITIVE, "给大模型的格式示例 ¥1,234.50, 不是数据");
         reviewed("rules/RuleTestEvaluateTool.java", Verdict.NOT_PRICE_SENSITIVE, "工具描述里的规则举例");
     }
 
-    /** 非注释行里, 字符串字面量含 ¥ / 万元 / 以「元」结尾。 */
-    private static final Pattern MONEY_LITERAL = Pattern.compile("\"[^\"\\n]*(?:¥|万元)|元\"");
+    /**
+     * 非注释行里, 字符串字面量含 ¥ / 万元 / 以「元」结尾 —— 含「元」后跟转义换行再收尾 ({@code "元\n"}):
+     * 以前只认 {@code 元"}, 多行回复里逐行写「350元\n」的工具 (ROE / ROA / 流动比率 …) 不在分母里 (#1806 复审 L4)。
+     */
+    private static final Pattern MONEY_LITERAL = Pattern.compile("\"[^\"\\n]*(?:¥|万元)|元(?:\\\\n)*\"");
     private static final Pattern CHECK_CALL = Pattern.compile("replyShows(?:Amounts?|PriceSpec)\\(");
 
     @Test
     void everyToolThatWritesMoneyIntoTextIsReviewed() throws IOException {
         Set<String> found = moneyTextFiles();
         // Dedicated restaurant implementations were removed; keep an exact non-vacuous denominator.
-        assertThat(found).as("工厂目录金额文本审计分母").hasSize(19);
+        assertThat(found).as("工厂目录金额文本审计分母").hasSize(29); // 2026-11-18 +1 hr/MyWageQueryTool (本人工资), +1 workdesk/PriceHistoryQueryTool (涨幅排名文字, 门在 doExecute 开头)
 
         Set<String> unreviewed = new TreeSet<>(found);
         unreviewed.removeAll(REVIEWED.keySet());

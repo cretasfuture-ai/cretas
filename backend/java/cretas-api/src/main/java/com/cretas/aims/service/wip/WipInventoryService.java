@@ -302,6 +302,15 @@ public interface WipInventoryService {
     ClerkSemiRestore restoreClerkSemiStrict(String factoryId, String intermediateBatchNo, BigDecimal feedKg,
                                             String sourceRef, Long operatorId);
 
+    /**
+     * 按<b>当时实际扣下的原生单位数量</b>还回 (结单撤回用): 量取自结单落下的投料明细
+     * ({@link #consumeClerkSemiStrict} 的返回值), ⛔ 不按 kg 再折算一次 —— 结单到撤回之间每盒克重改了,
+     * 再折一次还回的盒数就和扣掉的对不上。其余与 {@link #restoreClerkSemiStrict} 相同: 还量超过已消耗即抛,
+     * 源行不在返回 null 由调用方登记, 写一条正量 REVERSE/REVERSAL 流水 ({@code reportId=null})。
+     */
+    ClerkSemiRestore restoreClerkSemiExact(String factoryId, String intermediateBatchNo, BigDecimal quantityInSourceUnit,
+                                           String sourceRef, Long operatorId);
+
     /** 严格还回的回执: 实际还回量 (来源原生单位) + REVERSE 流水 id。 */
     record ClerkSemiRestore(BigDecimal restored, Long ledgerTxnId) { }
 

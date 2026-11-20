@@ -81,13 +81,20 @@ async def _run_job(job_id: str, factory_id: str) -> None:
 
         etl_stats = await run_factory_etl_with_retry(cretas_pool, smartbi_pool, factory_id)
 
-        _running_jobs[job_id]["status"] = "success"
+        _running_jobs[job_id]["status"] = "error" if etl_stats.external_sync_error else "success"
         _running_jobs[job_id]["stats"] = {
             "silverUpserted":       etl_stats.silver_upserted,
+            "silverPruned":         etl_stats.silver_pruned,
+            "silverPrunedHardDeleted": etl_stats.silver_pruned_hard_deleted,
+            "goldPruned":           etl_stats.gold_pruned,
             "goldProductRows":      etl_stats.gold_product_rows,
             "goldDailyRollupRows":  etl_stats.gold_daily_rollup_rows,
+            "externalSnapshotsSynced": etl_stats.external_snapshots_synced,
             "errors":               etl_stats.errors,
         }
+        if etl_stats.external_sync_error:
+            _running_jobs[job_id]["externalSyncError"] = etl_stats.external_sync_error
+            _running_jobs[job_id]["error"] = etl_stats.external_sync_error
         logger.info("[factory-etl-admin] job %s factory=%s completed: %s",
                     job_id, factory_id, etl_stats)
     except Exception as exc:
@@ -150,6 +157,9 @@ def _derive_last_status(factory_id: str, last_success: Optional[str]) -> str:
     ]
     if active:
         return active[-1]["status"]
+    latest = next((v for v in reversed(_running_jobs.values()) if v["factory_id"] == factory_id), None)
+    if latest and latest.get("externalSyncError"):
+        return "error"
     return "success" if last_success else "never_ran"
 
 
@@ -205,7 +215,7 @@ async def status_factory_etl(
 
     Returns:
     - lastSuccessRun: ISO timestamp of last Gold agg update (null if never ran)
-    - lastStatus: 'running' | 'queued' | 'success' | 'never_ran'
+    - lastStatus: 'running' | 'queued' | 'success' | 'never_ran' | 'error'
     - rowCounts: Silver/Gold table row counts (RLS-safe; -1 = error/unavailable)
     - recentFailures: from restaurant_etl_failures (shared failure log table)
     """

@@ -1,10 +1,11 @@
 <script setup lang="ts">
+import ListEmptyExplain from '@/components/common/ListEmptyExplain.vue';
 import { ref, computed, onMounted } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get } from '@/api/request';
 import { ElMessage } from 'element-plus';
-import { Refresh } from '@element-plus/icons-vue';
+import type { CsTableColumn as TableColumn } from '@/types/csTable';
 import { formatDateTime } from '@/utils/dateFormat';
 import type { TableRow } from '@/types/api';
 
@@ -17,6 +18,8 @@ import type { TableRow } from '@/types/api';
  * 状态转换由后端 ProcessingServiceImpl 维护:
  *  - startProduction → RESERVED/AVAILABLE → PRODUCING_RESERVED
  *  - completeProduction / cancelProduction → PRODUCING_RESERVED → AVAILABLE/RESERVED/DEPLETED
+ *
+ * 组件全部是 Nuxt UI (UTable / UAlert / UButton) + --cs-*。
  */
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
@@ -25,6 +28,19 @@ const canViewPrice = computed(() => permissionStore.canViewPrice);
 
 const loading = ref(false);
 const tableData = ref<TableRow[]>([]);
+
+const columns = computed<TableColumn<TableRow>[]>(() => [
+  { accessorKey: 'batchNumber', header: '批次号' },
+  { accessorKey: 'factoryId', header: '工厂' },
+  { id: 'materialType', header: '物料类型' },
+  { id: 'remaining', header: '剩余数量' },
+  { accessorKey: 'reservedQuantity', header: '预留数量' },
+  { id: 'supplier', header: '供应商' },
+  ...(canViewPrice.value ? [{ accessorKey: 'unitPrice', header: '单价' } as TableColumn<TableRow>] : []),
+  { id: 'inboundDate', header: '入库日期' },
+  { id: 'expiryDate', header: '过期日期' },
+  { id: 'lastUsedAt', header: '最后使用时间' },
+]);
 
 onMounted(() => {
   loadData();
@@ -55,110 +71,35 @@ function formatQuantity(row: TableRow): string {
 
 <template>
   <div class="wip-batches-page">
-    <div class="page-header">
+    <div class="cs-page-head">
       <h2>在制品 (WIP)</h2>
       <div class="page-actions">
-        <el-button :icon="Refresh" @click="loadData">刷新</el-button>
+        <UButton icon="i-lucide-refresh-cw" color="neutral" variant="outline" :loading="loading" @click="loadData">刷新</UButton>
       </div>
     </div>
 
-    <el-alert
-      title="在制品说明"
-      type="info"
-      :closable="false"
-      show-icon
-      class="info-banner"
-    >
-      <template #default>
+    <UAlert color="info" variant="subtle" icon="i-lucide-info" title="在制品说明" class="info-banner">
+      <template #description>
         本页显示当前已被「进行中」生产批次占用的原材料批次 (状态 = PRODUCING_RESERVED)。
         生产批次完成或取消后, 物料批次状态会自动恢复为 AVAILABLE / RESERVED / DEPLETED。
       </template>
-    </el-alert>
+    </UAlert>
 
-    <el-table
-      v-loading="loading"
-      :data="tableData"
-      stripe
-      border
-      empty-text="暂无在制品批次"
-    >
-      <el-table-column prop="batchNumber" label="批次号" min-width="160" />
-      <el-table-column prop="factoryId" label="工厂" width="100" />
-      <el-table-column
-        label="物料类型"
-        min-width="160"
-      >
-        <template #default="{ row }">
-          {{ row.materialType?.name || row.materialTypeId || '-' }}
-        </template>
-      </el-table-column>
-      <el-table-column label="剩余数量" min-width="120">
-        <template #default="{ row }">
-          {{ formatQuantity(row) }}
-        </template>
-      </el-table-column>
-      <el-table-column prop="reservedQuantity" label="预留数量" min-width="120" />
-      <el-table-column
-        label="供应商"
-        min-width="140"
-      >
-        <template #default="{ row }">
-          {{ row.supplier?.name || row.supplierId || '-' }}
-        </template>
-      </el-table-column>
-      <el-table-column
-        v-if="canViewPrice"
-        prop="unitPrice"
-        label="单价"
-        min-width="100"
-      />
-      <el-table-column
-        label="入库日期"
-        min-width="140"
-      >
-        <template #default="{ row }">
-          {{ row.inboundDate || row.receiptDate || '-' }}
-        </template>
-      </el-table-column>
-      <el-table-column
-        label="过期日期"
-        min-width="140"
-      >
-        <template #default="{ row }">
-          {{ row.expiryDate || row.expireDate || '-' }}
-        </template>
-      </el-table-column>
-      <el-table-column
-        label="最后使用时间"
-        min-width="180"
-      >
-        <template #default="{ row }">
-          {{ formatDateTime(row.lastUsedAt) }}
-        </template>
-      </el-table-column>
-    </el-table>
+    <section class="cs-card">
+      <UTable :data="tableData" :columns="columns" :loading="loading" class="cs-table" data-testid="wip-table">
+        <template #empty><ListEmptyExplain empty-title="还没有在制品批次" empty-hint="生产领料投入后、产成品入库前的批次会出现在这里；还没有生产领料或已全部入库时为空。" /></template>
+        <template #materialType-cell="{ row }">{{ row.original.materialType?.name || row.original.materialTypeId || '-' }}</template>
+        <template #remaining-cell="{ row }"><span class="num">{{ formatQuantity(row.original) }}</span></template>
+        <template #supplier-cell="{ row }">{{ row.original.supplier?.name || row.original.supplierId || '-' }}</template>
+        <template #inboundDate-cell="{ row }">{{ row.original.inboundDate || row.original.receiptDate || '-' }}</template>
+        <template #expiryDate-cell="{ row }">{{ row.original.expiryDate || row.original.expireDate || '-' }}</template>
+        <template #lastUsedAt-cell="{ row }">{{ formatDateTime(row.original.lastUsedAt) }}</template>
+      </UTable>
+    </section>
   </div>
 </template>
 
 <style scoped>
-.wip-batches-page {
-  padding: 20px;
-}
-
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
-}
-
-.page-header h2 {
-  margin: 0;
-  font-size: 20px;
-  font-weight: 600;
-}
-
-.info-banner {
-  margin-bottom: 16px;
-}
+.wip-batches-page { padding: var(--cs-space-4); }
+.info-banner { margin-bottom: var(--cs-space-3); }
 </style>

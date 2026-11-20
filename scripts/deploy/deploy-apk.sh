@@ -27,7 +27,7 @@ set -euo pipefail
 OSS_BUCKET="${OSS_BUCKET:-cretas-download}"           # CDN 源站桶 (账号 A/C, 与 CDN 同账号)
 OSS_CONFIG="${OSS_CONFIG:-$HOME/.ossutilconfig-apk}"  # 账号 A/C ossutil 配置 (与默认账号 B cretas-media 区分)
 CDN_DOMAIN="${CDN_DOMAIN:-dl.cretaceousfuture.com}"
-PAGE_GATEWAY="${PAGE_GATEWAY:-root@139.196.165.140}"
+PAGE_GATEWAY="${PAGE_GATEWAY:-root@47.100.235.168}"  # 2026-11-12: 139 停用, 网关并入 47; upstream 指本机回环 (47 访问自己的公网 IP 不通)
 PAGE_REMOTE_DIR="${PAGE_REMOTE_DIR:-/www/wwwroot/download}"          # download.cretaceousfuture.com 根
 APK_REMOTE_DIR="${APK_REMOTE_DIR:-/www/wwwroot/download/downloads}"  # nginx /downloads/ 回退路径
 OSSUTIL="${OSSUTIL:-ossutil64}"

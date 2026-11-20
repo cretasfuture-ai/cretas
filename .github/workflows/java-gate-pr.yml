@@ -14,34 +14,117 @@ name: Java Gate
 # `java-full-ready` 全量负责最终候选覆盖；两者缺一不可。
 
 on:
+  # pull_request 不带 paths (合并队列/必需检查要求每个 PR 都报告结果); 触发路径清单在
+  # scripts/ci/trigger-paths/java-gate-pr.txt, 由下面的 changes 作业判定原作业跑不跑。
   pull_request:
     types: [opened, synchronize, reopened, labeled]
-    paths:
-      - 'backend/java/cretas-api/**'
-      - '.github/workflows/java-gate-pr.yml'
-      - '.github/workflows/java-full-nightly.yml'
-      - 'scripts/ci/java-test-ratchet.py'
-      - 'scripts/ci/run-with-test-postgres.sh'
-      - 'scripts/ci/test-activity-events-migration.sh'
+  merge_group:
+    types: [checks_requested]
 
 concurrency:
-  group: java-pr-gate-${{ github.event.pull_request.number }}
+  # merge_group 下没有 pull_request.number: 若只用它, 所有队列运行同组互相取消 ⇒ 回落到 github.ref
+  # (队列分支 gh-readonly-queue/... 每个合并组唯一)。
+  # An unrelated label must never cancel a queued or running gate for this PR.
+  group: java-pr-gate-${{ (github.event.action == 'labeled' && github.event.label.name != 'ci-hosted' && github.event.label.name != 'java-full-ready' && format('ignored-label-{0}', github.run_id)) || github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
+# mini 共用槽池 (2026-11-19 21:5x Steve「不跑5个了……重点是这4个槽不要只给pg用」): 最多 4 个槽, 每个槽什么都领,
+# 上 mini 的作业一律 runs-on 公共标签 cretas-mini。时段 (北京时间, 唯一定义在 scripts/ci/canada-mini-gate/refill.sh
+# 的 mini_window) 与排队阈值都由 changes 作业里的 route-mini-or-hosted.sh 决定, 输出 runner / mini_window:
+#   day  (08-22): mini 启用槽 1-3 (Steve「白天最多总计 3 个」); PG 派第 2、3 片, fast 派第 3 片 (共 3 个 Java 作业)。
+#   full (22-08): 槽 1-4 全开; PG 4 片 + fast 第 2、3 片 (共 6 个)。
+# 时段读不到按 day: 只会少派, 不会多派。fast 第 0 片不上 mini (2026-11-19 它在 mini 上有 OOM)。
+
 jobs:
-  fast-contracts:
-    # 最终候选的全量已经包含这些测试；2 台 runner 上再跑一份只会与全量争槽。
-    if: ${{ !contains(github.event.pull_request.labels.*.name, 'java-full-ready') }}
+  # 合并队列准备 (2026-11-12): 判断这次 PR 有没有改到本闸的触发路径。
+  #   清单: scripts/ci/trigger-paths/java-gate-pr.txt (原 on.pull_request.paths 原样搬过去)。
+  #   pull_request / merge_group 按 diff 判, 其余事件 (push / schedule / workflow_dispatch) 一律 run=true;
+  #   取不到 diff 也 run=true —— 宁可多跑, ⛔ 不因为没量到而跳过。
+  # 必需检查在步骤中判断 run，并在本作业失败时显式报错。
+  changes:
+    if: ${{ github.event.action != 'labeled' || github.event.label.name == 'ci-hosted' || github.event.label.name == 'java-full-ready' }}
+    # 可信 base 路由验证合并组来源、心跳、空闲槽与队列，再输出 runner / mini_window。
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-    # GitHub-hosted (public repo: 4 vCPU / 16 GB): one shared surefire fork (Maven default) at 12g.
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read   # 路由脚本读 Java Gate 运行/作业列表
+      pull-requests: read  # merge_group 的 PR 元数据
+    outputs:
+      run: ${{ steps.filter.outputs.run }}
+      runner: ${{ steps.route.outputs.runner }}
+      route_policy: ${{ steps.route.outputs.route_policy }}
+      mini_group_verified: ${{ steps.route.outputs.mini_group_verified }}
+      mini_window: ${{ steps.route.outputs.mini_window }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 三点 diff 要 merge-base; 只要提交与树, blob 按需取。
+          fetch-depth: 0
+          filter: blob:none
+      # Run only code from the protected base, before the candidate's path filter.
+      - id: route
+        if: ${{ github.event.label.name != 'ci-hosted' && ((vars.MINI_POOL_V2_ENABLED == '1' && github.event.pull_request.base.ref == 'main') || ((vars.MINI_POOL_V2_ENABLED == '0' || vars.MINI_POOL_V2_ENABLED == '1') && github.event.merge_group.base_ref == 'refs/heads/main')) }}
+        continue-on-error: true # missing route outputs select GitHub-hosted
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+          GROUP_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
+          GROUP_BASE_REF: ${{ github.event.merge_group.base_ref }}
+          TRUSTED_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          GH_GATE_DAY_FULL: ${{ vars.MINI_DAY_FULL }}
+          MINI_POOL_CAPACITY: ${{ vars.MINI_POOL_CAPACITY }}
+          MINI_POOL_V2_ENABLED: ${{ vars.MINI_POOL_V2_ENABLED }}
+        run: |
+          [[ "$TRUSTED_BASE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          git merge-base --is-ancestor "$TRUSTED_BASE_SHA" refs/remotes/origin/main
+          route_dir=$(mktemp -d)
+          trap 'rm -rf "$route_dir"' EXIT
+          timeout 45s git archive --output="$route_dir/router.tar" "$TRUSTED_BASE_SHA" scripts/ci/route-mini-or-hosted.sh scripts/ci/canada-mini-gate
+          tar -xf "$route_dir/router.tar" -C "$route_dir"
+          timeout 45s bash "$route_dir/scripts/ci/route-mini-or-hosted.sh"
+      - id: filter
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
+        run: python3 scripts/ci/changed-paths.py --patterns scripts/ci/trigger-paths/java-gate-pr.txt
+
+  fast-contracts-shard:
+    needs: changes
+    # 最终候选的全量已经包含这些测试；2 台 runner 上再跑一份只会与全量争槽。
+    # merge_group 下没有标签 ⇒ !contains(...) 为真, 队列里照跑快速门禁。
+    if: ${{ !cancelled() && needs.changes.result != 'skipped' && needs.changes.outputs.run != 'false' && !contains(github.event.pull_request.labels.*.name, 'java-full-ready') }}
+    # 分片 (2026-11-10): 类清单 scripts/ci/java-gate-fast-patterns.txt 按类名哈希取模分 4 片并行;
+    # 原 job 名 fast-contracts 由下面的汇总 job 保留 (分支保护/各会话判据不变)。
+    name: fast-contracts-shard (${{ matrix.shard }}/4)
+    # 2026-11-18 (Steve「直接开始接托管那边的部分」) 上 canada-mini; 2026-11-19 21:5x 改为共用槽池 (标签 cretas-mini):
+    # 白天只派第 3 片, 夜间 (mini_window=full) 派第 2、3 片; 其余并行在托管。近 60 次成功 run 实测 fast 一片
+    # mini 7.2 分钟 vs 托管 12.6 分钟 + 排队 17-20 分钟, 夜里槽多就多派一片。
+    # (不派第 0 片: 2026-11-19 它在 mini 上有 OOM, 另一条线在查。) fork PR / ci-hosted 仍托管。
+    runs-on: ${{ (matrix.shard == 3 || (matrix.shard == 2 && needs.changes.outputs.mini_window == 'full')) && github.run_attempt == '1' && needs.changes.outputs.runner == 'cretas-mini' && needs.changes.outputs.route_policy == 'v2' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'merge_group' && needs.changes.outputs.mini_group_verified == 'true')) && !contains(github.event.pull_request.labels.*.name, 'ci-hosted') && 'cretas-mini' || 'ubuntu-latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    # 2026-11-14: 正常一片 ≤16 分钟; 卡死会拖到平台 55 分钟取消。30 分钟必然是异常。
+    timeout-minutes: 30
+    # GitHub-hosted (public repo: 4 vCPU / 16 GB): one shared surefire fork (Maven default) at 6g (2026-11-19: 10g→6g, 上下文缓存上限 8, 见 step 内根因)。
+    # 下面 2026-11-14 那段是降到 10g 时的历史记录。
+    # 2026-11-14: 12g→10g (Maven 保持 2g: 1g 实测编译测试就 OOM)。实测 (PR #1700 MEMGUARD): 存活堆 >8g (8g 会 GC 死循环后 OOM), 12g 吃光整机
+    # (无 swap ⇒ 日志断流, fork 内看门狗和步骤超时都不开火); 10g 下可用内存最低 1.2GB。
+    # mem-guard.sh 每 30 秒打印 MEMGUARD 读数, 可用内存见底时在冻住前杀 fork。
     # Measured 2026-10-25: a shared fork reached 3759 tests in 13 min but OOMed at 6g; one fresh JVM per
     # class (-DreuseForks=false) took 44 min with 2 forks and >60 min with 3 (~700 Spring startups).
     env:
-      CRETAS_JAVA_FORK_XMX: 12g
+      CRETAS_JAVA_FORK_XMX: 6g
     steps:
       - uses: actions/checkout@v4
         with:
@@ -128,33 +211,96 @@ jobs:
         with:
           java-version: '21'
           distribution: 'temurin'
-          cache: maven
 
+      # Maven 仓库缓存由 maven-cache-warm.yml 在 main 上跑过一次真实 mvn test 后写入（key 含 pom 哈希）。
+      # 不再用 setup-java 的 `cache: maven`: 它的 key 一旦存在就不可覆盖, main 上那份 158MB 只含部分依赖,
+      # 实测 2026-11-12 每片仍要从 central 现下 1160 个文件（约 2 分钟）。命中不了就退化成现状, 不会更慢。
+      # ⛔ 自建 runner (canada-mini) 不恢复: 各槽共用常驻的 ~ghgate/.m2 (本来就是热的), 恢复会把 158MB
+      # 缓存原地解压到别的槽正在读的仓库上。2026-11-19 run 44403277567: PG 第 0 片 22:48:52 恢复完开始编译,
+      # 22:48:56 读到 spring-integration-core-6.2.11.jar「zip END header not found」, 同时槽 1/2/4 还在解压
+      # (到 22:48:56 / 22:49:01 才结束); 事后扫 376 个 jar 全部完好。Maven 自己下载是临时文件 + 原子改名,
+      # 不会读到半截文件, 所以加 Maven 跨进程文件锁防不住这个, 只能不解压。闸: test-route-mini-or-hosted.sh。
+      - name: Restore Maven repository (warmed on main)
+        if: ${{ runner.environment != 'self-hosted' }}
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.m2/repository
+          key: maven-gate-${{ hashFiles('backend/java/cretas-api/pom.xml') }}
+          restore-keys: maven-gate-
+
+      # 兜底 (2026-11-13): 分片偶发在 Spring 上下文启动后静默卡死, 拖满 job 超时。
+      # 1) 主兜底在 fork 里: src/test 的 IdleWatchdogTestExecutionListener, 7 分钟没有任何 JUnit 事件就
+      #    打线程转储并 halt fork ⇒ surefire 报失败 (不是跳过)。
+      # 2) 这里的 step 超时是第二道: 正常一片 ≤16 分钟 (含编译/下依赖), 25 分钟必然是卡死。
       - name: Compile all Java tests and run high-signal gates
+        timeout-minutes: 22
         working-directory: backend/java/cretas-api
         env:
           MAVEN_OPTS: -Xmx2g
         run: |
           set -euo pipefail
+          MVN_OUT="$RUNNER_TEMP/mvn-shard.out"
+          : > "$MVN_OUT"
+          # 内存看门狗: 可用内存见底时在 VM 冻住之前 kill fork, 让构建带着最后一个类名快速失败。
+          bash "$GITHUB_WORKSPACE/scripts/ci/mem-guard.sh" "$MVN_OUT" &
           # 测试 fork 的堆按 runner 取 (2026-10-03): 本机 8G runner 不设 -> 3g; 加拿大 canada-mini-cretas
           # 的 .env 设 6g —— 那边的执行顺序下 3g/4g 都在第 324 个类 OOM, 6g/8g 全过 (实测, 见 PR #874)。
           echo "READING: JAVA_FORK_XMX=${CRETAS_JAVA_FORK_XMX:-3g} runner=${RUNNER_NAME:-?}"
           MVN=$(bash "$GITHUB_WORKSPACE/scripts/ci/resolve-maven.sh")
+          TESTS=$(python3 "$GITHUB_WORKSPACE/scripts/ci/shard-tests.py" --list "$GITHUB_WORKSPACE/scripts/ci/java-gate-fast-patterns.txt" --shard "${{ matrix.shard }}" --shards 4 --test-root "$GITHUB_WORKSPACE/backend/java/cretas-api/src/test/java")
+          echo "READING: SHARD=${{ matrix.shard }}/4 CLASSES=$(echo "$TESTS" | tr ',' '\n' | wc -l)"
+          # ExitOnOutOfMemoryError: 堆溢出时 fork 立即退出 (而不是半死不活挂着); MaxMetaspaceSize/MaxDirectMemorySize
+          # 给非堆封顶, 让 fork 总占用有上界。
+          # 根因 (PR #1700 MEMGUARD 实测): 共用 fork 的存活堆随 Spring 上下文缓存 (默认 32 个, 每个带 H2 + 全部实体) 涨到
+          # 约 8GB+: 8g 下 337 秒顶满, 之后同一个类上 GC 死循环直到 OOM (3/4 片); 12g 吃光 16GB 整机 (无 swap) 而冻住;
+          # 10g 4/4 片通过但 runner 可用内存只剩 1.2GB。
+          # 2026-11-19 复测 (本机同一份分片 0 类清单) 与修法: 每片启动 24-37 个不同上下文, 都装得进默认 32 格, 一个也不淘汰,
+          # 每个约 0.3-0.4GB ⇒ 存活堆涨到 10g (本机 246 次 Full GC 后空转, 7 分钟无 JUnit 事件被看门狗 halt, 丢最后 2 个类;
+          # CI 上表现为 OOM / mem-guard 杀 fork: #1896 #1904 #1905 的分片 0)。
+          # -Dspring.test.context.cache.maxSize=8 让最久未用的上下文被淘汰关闭: 上下文启动 36 -> 38 次, 清理后存活堆约 3.5-4GB,
+          # 6g 堆 0 次 Full GC, 逐类结果与基线一致。堆上限同步 10g -> 6g, 给托管机 16GB 留可用内存。
+          # ⚠️ 只适用于本 job: H2 + ddl-auto=create, 共享内存库不会因上下文关闭被 drop (application-test.properties)。
+          #    ⛔ 不要搬到 postgres-reversal-concurrency-shard: 那里压到 4 让共享 PG 库被别的上下文关闭, 95 个测试报 SQL 错。
+          rc=0
           "$MVN" -B test \
-            -Dtest='*ContractTest,*ContractsTest,*RepositoryQueryValidationTest,FlywayVersionUniquenessTest,*StartupGuardTest,*RoleGateTest,*RoleGateMvcTest,*SecurityTest,*VulnerabilityTest,*AuthorizationTest,*PermissionTest,*PermissionGateTest,PermissionServiceImpl*Test,*ArchitectureTest,*GuardTest,*GateTest,*RbacTest,*IsolationTest,*RedactionTest,*TenantScopeTest,ProcessSheetMultiOutputUnknownCostTest,AttachmentSopSpringTest' \
+            -Dtest="$TESTS" \
             -Dsurefire.failIfNoSpecifiedTests=false \
             -Dspring.profiles.active=test \
-            -DargLine="-XX:+EnableDynamicAgentLoading -Xshare:off -Xmx${CRETAS_JAVA_FORK_XMX:-3g}"
+            -DargLine="-XX:+EnableDynamicAgentLoading -Xshare:off -Xmx${CRETAS_JAVA_FORK_XMX:-3g} -XX:+ExitOnOutOfMemoryError -XX:MaxMetaspaceSize=1g -XX:MaxDirectMemorySize=512m -Dspring.test.context.cache.maxSize=8" \
+            2>&1 | tee "$MVN_OUT" || rc=${PIPESTATUS[0]}
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::fast-contracts 分片失败 rc=$rc; 最后运行的测试类: $(grep -a 'Running com\.' "$MVN_OUT" | tail -1 | sed 's/.*Running //')"
+            grep -a "OutOfMemoryError\|Terminating due to\|MEMGUARD" "$MVN_OUT" | tail -5 || true
+          fi
+          exit "$rc"
 
-  postgres-reversal-concurrency:
-    runs-on: ubuntu-latest
+  postgres-reversal-concurrency-shard:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.result != 'skipped' && needs.changes.outputs.run != 'false' }}
+    name: postgres-reversal-concurrency-shard (${{ matrix.shard }}/4)
+    # 2026-11-18 (Steve 撤销「公开仓库禁自建 runner」, 前提实测更快): 本仓库分支的 PR 和合并队列跑在
+    # canada-mini 自建 runner (共用槽池标签 cretas-mini, 最多 4 槽); fork PR 一律托管 (陌生人代码不上我们的机器)。
+    # 逃生口: 给 PR 打 `ci-hosted` 标签 = 回托管 (mini 离线时 job 会一直排队, 不会自动回落)。
+    # 2026-11-18 mini 优先、满了溢出: 先看 changes 作业的路由输出 (mini 排队 >= 阈值 / 读不到 -> ubuntu-latest),
+    # 守卫照旧串在后面, 路由输出只能把作业从 mini 挪到托管, fork PR 无论如何落托管。
+    # ⚠️ 这一行是闸 scripts/tests/test-public-repo-hosted-only.sh 里唯一放行的表达式, 逐字钉住。
+    runs-on: ${{ (matrix.shard >= 2 || needs.changes.outputs.mini_window == 'full') && github.run_attempt == '1' && needs.changes.outputs.runner == 'cretas-mini' && needs.changes.outputs.route_policy == 'v2' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'merge_group' && needs.changes.outputs.mini_group_verified == 'true')) && !contains(github.event.pull_request.labels.*.name, 'ci-hosted') && 'cretas-mini' || 'ubuntu-latest' }}
+    # 分片 (2026-11-10): 类清单 scripts/ci/java-gate-pg-tests.txt (一行一类, 新类追加到文件末尾)。
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
     # 25 -> 40 (2026-11-04): 近 29 次实测 job 总耗时 17-22 分(成功), 3 次 25.x 分被取消且 0 失败用例;
     # 慢的那次 checkout 占 6.2 分(常态 0.3 分, 偶发 2-4 分, 是拉取抖动不是测试变慢)。
     timeout-minutes: 40
-    # GitHub-hosted (public repo: 4 vCPU / 16 GB). -DreuseForks=false gives each test class a fresh JVM, as
-    # Aurora's Maven wrapper did: one shared fork accumulated Spring contexts and OOMed at 6g.
+    # GitHub-hosted (public repo: 4 vCPU / 16 GB). 2026-11-12 起共用一个测试 JVM (不再 -DreuseForks=false):
+    # 实测 run 43212152997 每个 PG 分片 17~22 次 Spring 启动、合计 308~473 秒, 占分片 9~14 分钟的一半。
+    # 当年改成每类新 JVM 是因为共用 JVM 在 6g 下累积上下文 OOM; 现在用 10g。
+    # ⛔ 不压 spring.test.context.cache.maxSize: 试验 run 43215916062 压到 4 后, 上下文被中途淘汰,
+    #    4 片共 95 个测试报 SQL 错 (同库被别的上下文关闭/改动)。保持默认上限, 不中途淘汰。
+    # 机器上还跑着 PostgreSQL 和 Maven 本身 (MAVEN_OPTS 2g), 所以不用 12g。
     env:
-      CRETAS_JAVA_FORK_XMX: 6g
+      CRETAS_JAVA_FORK_XMX: 10g
     steps:
       - uses: actions/checkout@v4
         with:
@@ -243,7 +389,31 @@ jobs:
         with:
           java-version: '21'
           distribution: 'temurin'
-          cache: maven
+
+      # ⛔ 自建 runner (canada-mini) 不恢复: 各槽共用常驻的 ~ghgate/.m2 (本来就是热的), 恢复会把 158MB
+      # 缓存原地解压到别的槽正在读的仓库上。2026-11-19 run 44403277567: PG 第 0 片 22:48:52 恢复完开始编译,
+      # 22:48:56 读到 spring-integration-core-6.2.11.jar「zip END header not found」, 同时槽 1/2/4 还在解压
+      # (到 22:48:56 / 22:49:01 才结束); 事后扫 376 个 jar 全部完好。Maven 自己下载是临时文件 + 原子改名,
+      # 不会读到半截文件, 所以加 Maven 跨进程文件锁防不住这个, 只能不解压。闸: test-route-mini-or-hosted.sh。
+      - name: Restore Maven repository (warmed on main)
+        if: ${{ runner.environment != 'self-hosted' }}
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.m2/repository
+          key: maven-gate-${{ hashFiles('backend/java/cretas-api/pom.xml') }}
+          restore-keys: maven-gate-
+
+      # 自建 runner (canada-mini) 的隔离与资源读数。runner 是一次性 JIT runner, 跑在无密码、非管理员的
+      # ghgate 账户下, 每个任务一个全新目录; 发布优先由 mini 上的补位脚本 (~rex/gh-gate/refill.sh) 保证:
+      # 发布构建持有 ~/cretas-build/.build.lock 时不领新任务。这里只读数: 账户、rex 目录不可读、空闲内存。
+      - name: Self-hosted isolation reading (self-hosted only)
+        if: ${{ runner.environment == 'self-hosted' }}
+        shell: bash
+        run: |
+          set -u
+          if ls /Users/rex >/dev/null 2>&1; then rex_home=readable; else rex_home=denied; fi
+          echo "READING: SELF_HOSTED user=$(id -un) admin=$(id -Gn | tr ' ' '\n' | grep -cx admin) rex_home=$rex_home runner=${RUNNER_NAME:-?} free=$(/usr/bin/memory_pressure 2>/dev/null | sed -nE 's/.*free percentage: ([0-9]+)%.*/\1/p')%"
+          [ "$rex_home" = denied ] || { echo "::error::自建 runner 能读 /Users/rex (部署密钥/令牌所在), 隔离失效"; exit 1; }
 
       - name: Prove PostgreSQL-only workflow and correction invariants
         working-directory: backend/java/cretas-api
@@ -255,16 +425,86 @@ jobs:
           # 的 .env 设 6g —— 那边的执行顺序下 3g/4g 都在第 324 个类 OOM, 6g/8g 全过 (实测, 见 PR #874)。
           echo "READING: JAVA_FORK_XMX=${CRETAS_JAVA_FORK_XMX:-3g} runner=${RUNNER_NAME:-?}"
           MVN=$(bash "$GITHUB_WORKSPACE/scripts/ci/resolve-maven.sh")
+          TESTS=$(python3 "$GITHUB_WORKSPACE/scripts/ci/shard-tests.py" --list "$GITHUB_WORKSPACE/scripts/ci/java-gate-pg-tests.txt" --shard "${{ matrix.shard }}" --shards 4 --test-root "$GITHUB_WORKSPACE/backend/java/cretas-api/src/test/java")
+          echo "READING: SHARD=${{ matrix.shard }}/4 CLASSES=$(echo "$TESTS" | tr ',' '\n' | wc -l)"
           bash "$GITHUB_WORKSPACE/scripts/ci/run-with-test-postgres.sh" "$MVN" -B test \
-            -Dtest=ProductionScopePostgresContractTest,FinanceScopePostgresContractTest,VoucherLedgerScopePostgresContractTest,ReportReversalLogRepositoryPostgresConcurrencyIT,ProductionBatchRepositoryPostgresConcurrencyIT,ProductionReportCorrectionPartialUniquePostgresIT,ProductionSettlementPartialUniqueIndexPostgresContractTest,ProductionReceiptCostPostgresContractTest,InquiryQuoteMaterialReferencePostgresContractTest,WorkflowEngineRestartWithCurrentDefinitionOrderingPostgresIT,SoftDeletePartialUniqueIndexPostgresContractTest,InventoryAuditTransactionContractTest,RoleDataScopePostgresContractTest,UserOrganizationConcurrencyPostgresContractTest,PurchaseReturnConcurrencyPostgresContractTest,BatchAdjustmentAtomicityPostgresContractTest,PurchaseExceptionConcurrencyPostgresContractTest,PurchaseExceptionRepositoryQueryValidationTest,OperationalQuoteOrderPostgresContractTest,AiPurchaseTaskGrantServiceContractTest,AiPurchaseTaskGrantRepositoryQueryValidationTest,ProcessSecretRepositoryQueryValidationTest,ProcessSecretAggregateExclusionPostgresRepositoryQueryValidationTest,PlatformDataAccessLogRepositoryQueryValidationTest,TransferWarehouseDeliveryPostgresContractTest,WarehouseTransferMovementMigrationPostgresContractTest,WipOutputCorrectionPostgresContractTest,ProductionReportCorrectionLockedStatePostgresContractTest,StocktakeDriftRecoveryPostgresContractTest,ProductionBatchSearchPostgresRepositoryQueryValidationTest,LineageClosureCrossJoinPostgresContractTest,ModuleConfigurationFormalActivationPostgresContractTest,AutonomousGrantIssuePostgresContractTest,AutonomousRunAsEndToEndPostgresContractTest,AutonomousScheduledWriteIsolatedPostgresContractTest,AutonomousGrantMigrationPostgresContractTest,AutonomousGrantOutcomeMigrationPostgresContractTest,AutonomousRunAsMigrationPostgresContractTest,AutonomousGrantRepositoryQueryValidationTest,AutonomousRunAsRepositoryQueryValidationTest,ExecutionReconciliationRepositoryQueryValidationTest,FactoryDataScopePostgresContractTest,FactoryDataPackageRestorePostgresContractTest,FactoryErasurePostgresContractTest,ProductionBatchCostIncompleteMigrationPostgresContractTest,ReturnOrderTaxAmountMigrationPostgresContractTest,TenantBackupPostgresContractTest,LineCapacityMigrationPostgresContractTest,LineCapacityRepositoryQueryValidationTest,LineCapacityConfigWriteRepositoryQueryValidationTest,SkillAndTriggerChainGatewayPostgresContractTest,ScheduledDelegatedWritePostgresContractTest,ShortageCaseMigrationPostgresContractTest,ShortageCaseRepositoryQueryValidationTest,ShortageCaseActionMigrationPostgresContractTest,ColdChainLocationMigrationPostgresContractTest,FactoryConfirmedFactCarryOverPostgresContractTest,PlatformFactoryMenuConcurrencyPostgresContractTest,RescheduleProposalMigrationPostgresContractTest,ShortageScheduleRepositoryQueryValidationTest,MaterialBatchFilteredSearchPostgresRepositoryQueryValidationTest,ChatListFiltersRepositoryQueryValidationTest,FactoryWarehouseCodeUniqueMigrationPostgresContractTest,FactorySecrecyMigrationPostgresContractTest,TrainingSampleSecrecyHoldMigrationPostgresContractTest,TrainingSampleSecrecyRepositoryQueryValidationTest,PlatformAiAnalysisGrantMigrationPostgresContractTest,PurchaseAutoSuggestionPostgresContractTest,SecondaryHoldPostgresContractTest,QualityDispositionInventoryPostgresContractTest,ProductionSettlementManualOverrideMigrationPostgresContractTest,ProductionReportParamCheckRepositoryStartupGuardTest,AttachmentSopMigrationPostgresContractTest,AttachmentSopRepositoryStartupGuardTest,MaterialMergeConcurrencyPostgresContractTest,SupplierMaterialReferenceWritePostgresContractTest,MaterialPackagingHierarchyIdWidthPostgresContractTest,SupplierDeliveryNativeQueryPostgresContractTest,FactoryInventorySoftDeletePostgresRepositoryQueryValidationTest,ProcessParamDeviationCaseMigrationPostgresContractTest,ProcessParamDeviationCasePostgresLifecycleContractTest,ProcessParamDeviationCaseRepositoryQueryValidationTest,UserDisableConcurrencyPostgresContractTest,UserDisableRepositoryQueryValidationTest,ProductCreatePlanBindingPostgresContractTest,ProductCreateReceiptRepositoryQueryValidationTest,ProductCreateReceiptPostgresContractTest,ProductCreateActualToolGatewayPostgresContractTest,CanvasConfigPlanBindingPostgresContractTest,DecisionSnapshotComparisonRepositoryQueryValidationTest,InsertSlotPreviewRepositoryQueryValidationTest,SchedulingResourceConcurrencyPostgresContractTest,InsertSlotPreviewMigrationPostgresContractTest,SupplyImpactBoxExposureRepositoryQueryValidationTest,PlanConcurrentReadinessPostgresContractTest \
+            -Dtest="$TESTS" \
             -Dspring.profiles.active=test \
-            -DreuseForks=false \
             -DargLine="-XX:+EnableDynamicAgentLoading -Xshare:off -Xmx${CRETAS_JAVA_FORK_XMX:-3g}"
 
       - name: Prove activity event migration and committed JDBC writes
+        if: ${{ matrix.shard == 0 }}
         run: bash "$GITHUB_WORKSPACE/scripts/ci/run-with-test-postgres.sh" bash "$GITHUB_WORKSPACE/scripts/ci/test-activity-events-migration.sh"
 
+  # GitHub 不展开 skipped job 的 name 表达式。仅无关标签跳过整个汇总 job。
+  # run=false / fast-contracts 被全量套件覆盖时，仅跳过 checkout 和分片判定步骤。
+  # changes 失败优先报错。其余场景沿用分片判定脚本（包括同一 PR 头上更新 run 的取消交接）。
+  fast-contracts:
+    name: ${{ (github.event.action == 'labeled' && github.event.label.name != 'ci-hosted' && github.event.label.name != 'java-full-ready') && 'fast-contracts (ignored label)' || 'fast-contracts' }}
+    needs: [changes, fast-contracts-shard]
+    if: ${{ always() && needs.changes.result != 'skipped' }}
+    runs-on: ${{ github.run_attempt == '1' && needs.changes.outputs.runner == 'cretas-mini' && needs.changes.outputs.route_policy == 'v2' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'merge_group' && needs.changes.outputs.mini_group_verified == 'true')) && !contains(github.event.pull_request.labels.*.name, 'ci-hosted') && 'cretas-mini' || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    # actions: read 只给判定脚本查「同一头 SHA 上有没有更新的 run」(被并发组取消 ⇒ 结论交给那条)。
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Require change detection to succeed
+        if: ${{ needs.changes.result != 'success' }}
+        run: |
+          echo '::error::Java Gate change detection did not succeed'
+          exit 1
+      - uses: actions/checkout@v4
+        if: ${{ needs.changes.outputs.run != 'false' && !contains(github.event.pull_request.labels.*.name, 'java-full-ready') }}
+        with:
+          sparse-checkout: scripts/ci/java-gate-shard-summary.sh
+          sparse-checkout-cone-mode: false
+      - name: Require every shard to succeed
+        if: ${{ needs.changes.outputs.run != 'false' && !contains(github.event.pull_request.labels.*.name, 'java-full-ready') }}
+        env:
+          RESULT: ${{ needs.fast-contracts-shard.result }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bash scripts/ci/java-gate-shard-summary.sh fast-contracts "$RESULT"
+
+  postgres-reversal-concurrency:
+    name: ${{ (github.event.action == 'labeled' && github.event.label.name != 'ci-hosted' && github.event.label.name != 'java-full-ready') && 'postgres-reversal-concurrency (ignored label)' || 'postgres-reversal-concurrency' }}
+    needs: [changes, postgres-reversal-concurrency-shard]
+    if: ${{ always() && needs.changes.result != 'skipped' }}
+    # 和 PG 分片同一条自建路由 (见 postgres-reversal-concurrency-shard 注释): PG 这条线首尾的小作业也在 mini 上,
+    # 否则托管机排队 (2026-11-18 实测全仓 94 个 run 在排) 时, 分片要等托管机上的这个作业, mini 省下的排队又被吃回去。
+    runs-on: ${{ github.run_attempt == '1' && needs.changes.outputs.runner == 'cretas-mini' && needs.changes.outputs.route_policy == 'v2' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'merge_group' && needs.changes.outputs.mini_group_verified == 'true')) && !contains(github.event.pull_request.labels.*.name, 'ci-hosted') && 'cretas-mini' || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    # actions: read 只给判定脚本查「同一头 SHA 上有没有更新的 run」(被并发组取消 ⇒ 结论交给那条)。
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Require change detection to succeed
+        if: ${{ needs.changes.result != 'success' }}
+        run: |
+          echo '::error::Java Gate change detection did not succeed'
+          exit 1
+      - uses: actions/checkout@v4
+        if: ${{ needs.changes.outputs.run != 'false' }}
+        with:
+          sparse-checkout: scripts/ci/java-gate-shard-summary.sh
+          sparse-checkout-cone-mode: false
+      - name: Require every shard to succeed
+        if: ${{ needs.changes.outputs.run != 'false' }}
+        env:
+          RESULT: ${{ needs.postgres-reversal-concurrency-shard.result }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bash scripts/ci/java-gate-shard-summary.sh postgres-reversal-concurrency "$RESULT"
+
+
   final-full-suite:
-    if: ${{ contains(github.event.pull_request.labels.*.name, 'java-full-ready') }}
+    needs: changes
+    # 仅 java-full-ready 标签时运行 (merge_group 下没有标签 ⇒ 不跑, 队列跑快速门禁)。
+    if: ${{ !cancelled() && needs.changes.result != 'skipped' && needs.changes.outputs.run != 'false' && contains(github.event.pull_request.labels.*.name, 'java-full-ready') }}
     uses: ./.github/workflows/java-full-nightly.yml
     # 不传 write_baseline：PR 永远不许改已知红基线。

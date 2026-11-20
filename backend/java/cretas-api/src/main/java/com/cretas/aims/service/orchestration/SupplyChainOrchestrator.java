@@ -104,8 +104,12 @@ public class SupplyChainOrchestrator {
     @Autowired(required = false)
     private FactoryTriggerChainRepository triggerChainRepository;
 
+    /**
+     * 纪律排查 A7: 「完工必须先结单」的唯一读取处 (工厂开关, 默认开)。批次完工这条路也必须问它,
+     * 否则批次级完工 / AI 完工会绕过结单把计划改成完工。未注入 (只在单测里) 按默认开。
+     */
     @Autowired(required = false)
-    private com.cretas.aims.repository.FactorySettingsRepository factorySettingsRepository;
+    private com.cretas.aims.service.discipline.FactoryDisciplinePolicy disciplinePolicy;
 
     /** 质检放行 (缺口 11/13): 生产完工自动入成品时叠加「待检」; 未注入 = 旧行为 AVAILABLE。 */
     @Autowired(required = false)
@@ -192,6 +196,18 @@ public class SupplyChainOrchestrator {
                         event.getFactoryId(), event.getSalesOrderId());
                 return;
             }
+            // 财务批准后取消 (工厂开关, 2026-11-11): 本联动是异步的, 订单可能在它跑起来之前已被取消 ——
+            // 已取消就不再预留库存、不再建生产计划。拿销售单行锁再判 (取消也先拿这把锁): 要么取消先提交、这里看到已取消;
+            // 要么这里先拿到锁、建完计划提交后取消才看得到这些计划。批准事务自己也持这把锁, 这里会等它提交后再读。
+            com.cretas.aims.entity.enums.SalesOrderStatus lockedStatus = salesOrderRepository
+                    .findByIdAndFactoryIdForUpdate(event.getSalesOrderId(), event.getFactoryId())
+                    .map(SalesOrder::getStatus)
+                    .orElse(sourceOrder.getStatus());
+            if (lockedStatus == com.cretas.aims.entity.enums.SalesOrderStatus.CANCELLED) {
+                log.info("销售订单已取消，跳过供应链联动: factoryId={}, SO={}",
+                        event.getFactoryId(), event.getSalesOrderId());
+                return;
+            }
             if (sourceOrder.getMaterialSupplyMode() == MaterialSupplyMode.CUSTOMER_SUPPLIED) {
                 if (sourceOrder.getCustomerStockFulfillmentMode()
                         == CustomerStockFulfillmentMode.PRESTOCKED) {
@@ -239,11 +255,12 @@ public class SupplyChainOrchestrator {
                     log.info("库存满足并预留: product={}, qty={}", match.getProductTypeId(), match.getRequiredQuantity());
                 } else if (canBecomeAProductionPlan(event.getFactoryId(), event.getSalesOrderId(), match)) {
                     // ③b 库存不足 → 创建生产计划草稿
-                    // approvedBy 一路传到 setCreatedBy —— 事件自带审批人, 不要再写死用户 id
+                    // approvedBy 一路传到 setCreatedBy —— 事件自带审批人, 不要再写死用户 id。
+                    // 系统自动审批时没有审批人, 用事件自带的触发人 (见 planCreatorOf)。
                     createProductionPlanFromSO(
                             event.getFactoryId(), sourceOrder,
                             match.getProductTypeId(), match.getProductTypeName(), match.getShortfallQuantity(),
-                            event.getApprovedBy());
+                            planCreatorOf(event), autoApprovalNoteOf(event));
                 }
             }
         } catch (Exception e) {
@@ -396,17 +413,35 @@ public class SupplyChainOrchestrator {
                 batch.getFactoryId(), batch.getId(), batch.getGoodQuantity());
 
         try {
+            // 纪律排查 A7: 本厂要求完工先结单时, 原料扣减与成品入库都归结单 (结单按实际领用明细过账、仓库确认实收建成品)。
+            // 批次完工这里再按 BOM 理论量扣一次 = 同一批料扣两次 (A7 默认开之后所有工厂都会走到), 所以整段跳过。
+            boolean settlementMode = requiresProductionSettlement(batch.getFactoryId());
+
             // ⑦-AUTO: BOM自动扣料
-            try {
-                batchConsumptionService.autoConsumeForBatch(batch);
-                log.info("自动扣料成功: batchId={}", batch.getId());
-            } catch (Exception e) {
-                log.error("自动扣料失败(不影响后续流程): batchId={}", batch.getId(), e);
+            if (settlementMode) {
+                log.info("本厂要求先结单, 批次完工不自动扣料 (由结单按实际领用扣减): factoryId={}, batchId={}",
+                        batch.getFactoryId(), batch.getId());
+            } else {
+                try {
+                    batchConsumptionService.autoConsumeForBatch(batch);
+                    log.info("自动扣料成功: batchId={}", batch.getId());
+                } catch (Exception e) {
+                    log.error("自动扣料失败(已整段回滚, 挂待办; 不影响后续流程): batchId={}", batch.getId(), e);
+                    // 排查 2026-11-10 A9: 扣料事务整段回滚 (一克没扣), 挂待办让人按实际领用补录, ⛔ 不只写日志
+                    try {
+                        batchConsumptionService.raiseAutoConsumeAlert(batch, "CRITICAL", "批次 " + batch.getBatchNumber()
+                                + " 完工自动扣料失败, 已整单撤销 (库存未扣、成本未计): " + e.getMessage()
+                                + "。请检查批次后按实际领用补录消耗");
+                    } catch (Exception alertFailure) {
+                        // 待办挂不上也不能挡住后面的成品入库 / 计划进度 (独立审查 M5); 响亮地记一行
+                        log.error("自动扣料失败的待办没挂上, 需人工核对: batchId={}", batch.getId(), alertFailure);
+                    }
+                }
             }
 
             // ⑦a 自动创建成品批次
             if (batch.getGoodQuantity() != null && batch.getGoodQuantity().compareTo(BigDecimal.ZERO) > 0) {
-                if (requiresProductionSettlement(batch.getFactoryId())) {
+                if (settlementMode) {
                     log.info("Settlement-mode factory skips automatic FG on batch completion; use warehouse receipt path: factoryId={}, batchId={}, goodQty={}",
                             batch.getFactoryId(), batch.getId(), batch.getGoodQuantity());
                 } else {
@@ -456,10 +491,37 @@ public class SupplyChainOrchestrator {
      * @param shortfallQuantity 库存缺口数量
      * @param createdBy         建计划归给谁 —— 用财审事件自带的 {@code approvedBy}
      */
+    /**
+     * 自动生成的生产计划记谁为建单人。
+     *
+     * <p>人工审批: 审批人 ({@code approvedBy})。系统自动审批 (D-SO-AUTOPLAN-NOAPPROVER, 2026-11-10):
+     * OA 审批流命中自动通过条件时没有人点「通过」, {@code approvedBy} 为 null —— 原来直接把 null 传下去,
+     * 建计划抛「缺少审批人」, 订单通过了计划却没生成 (prod F006 SO-20261110-0005/0014/0015, error.log 10 条)。
+     * 此时用事件自带的 {@code triggeredBy} (提交审批、触发这次自动通过的人), 它是真实发生的那次操作的主体,
+     * 不是挑出来的某个真人 id。两者都没有才是真的「不知道是谁」, 返回 null 交给下面显式失败。
+     */
+    static Long planCreatorOf(SalesOrderFinanceApprovedEvent event) {
+        if (event.getApprovedBy() != null) {
+            return event.getApprovedBy();
+        }
+        return event.isSystemAutoApproved() ? event.getTriggeredBy() : null;
+    }
+
+    /** 系统自动审批时写进计划备注的一句话 (可追溯「系统自动审批」); 人工审批返回 null。 */
+    static String autoApprovalNoteOf(SalesOrderFinanceApprovedEvent event) {
+        if (!event.isSystemAutoApproved()) {
+            return null;
+        }
+        String reason = event.getAutoApprovalReason() != null && !event.getAutoApprovalReason().isBlank()
+                ? event.getAutoApprovalReason() : "系统自动审批通过";
+        return "订单为系统自动审批通过（" + reason + "），无人工审批人；计划创建人记为提交审批的用户 "
+                + event.getTriggeredBy();
+    }
+
     private void createProductionPlanFromSO(String factoryId, SalesOrder sourceOrder,
                                             String productTypeId, String productTypeName,
                                             BigDecimal shortfallQuantity,
-                                            Long createdBy) {
+                                            Long createdBy, String autoApprovalNote) {
         String salesOrderId = sourceOrder.getId();
         // 创建PP草稿（PENDING状态，需调度员确认后排产）
         ProductionPlan plan = new ProductionPlan();
@@ -512,10 +574,16 @@ public class SupplyChainOrchestrator {
                 salesOrderId, plan.getCustomerId(), plan.getProcessingMode(), plan.getMaterialSupplyMode(),
                 plan.getOutputOwnership());
         plan.setStatus(ProductionPlanStatus.PENDING);
+        // D-S411-03 (2026-11-10): 订单交期 → 计划的预计完成日 (排程候选列表与「交期早的先排」都按这个字段)。
+        //    原来这里一个日期都不设, 自动计划不出现在「按日产能自动排程」的候选里, 生产经理得先进计划编辑手填。
+        //    只用订单上真实的交期; 订单没填交期就保持为空 (候选列表把「未定日期」的待处理计划单独列出),
+        //    ⛔ 不凭空编开始日期 / 完成日期。
+        plan.setExpectedCompletionDate(sourceOrder.getRequiredDeliveryDate());
         plan.setIsFullyMatched(false);
         // ProductionPlan 无 productName 字段；productTypeName 冗余记录在 sourceCustomerName 旁
         // 如业务需要，可将 productTypeName 写入 notes 字段
-        plan.setNotes("自动创建：来自销售订单 " + salesOrderId + "，产品 " + productTypeName);
+        plan.setNotes("自动创建：来自销售订单 " + salesOrderId + "，产品 " + productTypeName
+                + (autoApprovalNote != null ? "；" + autoApprovalNote : ""));
         // 🔴 2026-08-19: 这里原来写死 `plan.setCreatedBy(1L)`, 注释是
         //    「使用 factory_admin1 的 user ID (1L)，避免外键违约」。
         //
@@ -550,7 +618,8 @@ public class SupplyChainOrchestrator {
             // 形态 A¹⁰: 兜底一个假 id 会把「不知道是谁」写成「就是那个人」, 而且下次
             // 那个人被删掉时又是一次静默失败。宁可在这里明说, 由上层 catch 记进日志。
             throw new IllegalStateException(
-                    "自动创建生产计划缺少审批人 (approvedBy 为空): SO=" + salesOrderId
+                    "自动创建生产计划缺少建单人 (审批人 approvedBy 与系统自动审批的触发人 triggeredBy 都为空): SO="
+                            + salesOrderId
                             + " —— production_plans.created_by 是 NOT NULL 且有外键指向 users, "
                             + "⛔ 不要用写死的 user id 兜底 (上一个写死的 1L 已随 F001 租户被清理而失效)");
         }
@@ -573,8 +642,9 @@ public class SupplyChainOrchestrator {
         //    用户是自己发现计划没出来, 在 15:58 / 16:01 / 19:15 手工点了三次「以销定产」。
         //    flush 之后再打日志, 这条 log 才是「它真的落库了」而不是「我提交了一个意图」。
         ProductionPlan saved = productionPlanRepository.saveAndFlush(plan);
-        log.info("自动创建生产计划: PP={}, product={}, qty={}, sourceOrder={}",
-                saved.getPlanNumber(), productTypeId, shortfallQuantity, salesOrderId);
+        log.info("自动创建生产计划: PP={}, product={}, qty={}, sourceOrder={}, expectedCompletionDate={}",
+                saved.getPlanNumber(), productTypeId, shortfallQuantity, salesOrderId,
+                saved.getExpectedCompletionDate() != null ? saved.getExpectedCompletionDate() : "未定日期(订单无交期)");
 
         // Sprint 3 Track-F (C-LINKARRAY-1): unified BusinessLink for auto-cascade path.
         // This path bypasses ProductionPlanService.createProductionPlan, so the link()
@@ -881,7 +951,12 @@ public class SupplyChainOrchestrator {
                 .countByProductionPlanIdAndStatusNot(batch.getProductionPlanId(), ProductionBatchStatus.COMPLETED);
 
         boolean planJustCompleted = false;
-        if (incompleteBatches == 0) {
+        if (incompleteBatches == 0 && requiresProductionSettlement(batch.getFactoryId())) {
+            // 纪律排查 A7: 本厂要求完工先结单 —— 批次全部完工也不替结单把计划改成完工, 计划保持原状态等「核对结单」
+            // (结单会把计划改成完工、入成品库并发完工事件)。⛔ 不在这里自己改 COMPLETED。
+            log.info("批次全部完工, 本厂要求先结单, 计划不自动完工: PP={}, actualQty={}",
+                    plan.getPlanNumber(), plan.getActualQuantity());
+        } else if (incompleteBatches == 0) {
             // 批次完工直接把计划结束, 不走结单: 返工计划没用掉的来源半成品占用在这里还回去
             if ("SECONDARY".equals(plan.getPlanSourceType()) && plan.getSecondarySourceWipId() != null) {
                 if (secondaryPlanFeedService == null) {
@@ -898,7 +973,9 @@ public class SupplyChainOrchestrator {
         productionPlanRepository.save(plan);
 
         // 如果PP来自SO → 发布 FinishedGoodsCreatedEvent 通知出库/发货模块
-        if (plan.getSourceOrderId() != null && PlanSourceType.CUSTOMER_ORDER == plan.getSourceType()) {
+        // 纪律排查 A7: 本厂要求先结单时批次完工没有建成品 (成品在仓库确认实收时才建), ⛔ 不发「成品已生成」
+        if (plan.getSourceOrderId() != null && PlanSourceType.CUSTOMER_ORDER == plan.getSourceType()
+                && !requiresProductionSettlement(batch.getFactoryId())) {
             applicationEventPublisher.publishEvent(new FinishedGoodsCreatedEvent(
                     this,
                     batch.getFactoryId(),
@@ -953,19 +1030,9 @@ public class SupplyChainOrchestrator {
         return String.format("FG-AUTO-%s-%s", dateStr, batch.getId());
     }
 
+    /** 纪律排查 A7: 与 ProductionPlanServiceImpl 同一个工厂开关, ⛔ 不再看 skip_process_reporting_default / 写死 F006。 */
     private boolean requiresProductionSettlement(String factoryId) {
-        if (factorySettingsRepository != null) {
-            Boolean skipProcessReportingDefault =
-                    factorySettingsRepository.findSkipProcessReportingDefaultByFactoryId(factoryId);
-            if (skipProcessReportingDefault != null) {
-                return Boolean.TRUE.equals(skipProcessReportingDefault);
-            }
-        }
-        return isLiushanmenFactory(factoryId);
-    }
-
-    private boolean isLiushanmenFactory(String factoryId) {
-        return "F006".equalsIgnoreCase(factoryId);
+        return disciplinePolicy == null || disciplinePolicy.requireSettlementBeforeComplete(factoryId);
     }
 
     /**

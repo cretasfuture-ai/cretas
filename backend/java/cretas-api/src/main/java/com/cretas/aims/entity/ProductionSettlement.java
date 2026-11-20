@@ -78,6 +78,13 @@ public class ProductionSettlement extends BaseEntity {
     @Column(name = "semi_stocking_detail", columnDefinition = "TEXT")
     private String semiStockingDetail;
 
+    /**
+     * 结单按逐道录入行扣掉的常驻半成品 / 成品投料明细 (JSON, 见 SettlementStockFeedDetail);
+     * 整单撤回照着原样还回。null = 这个功能上线前的结单。
+     */
+    @Column(name = "stock_feed_detail", columnDefinition = "TEXT")
+    private String stockFeedDetail;
+
     @Column(name = "quantity_variance_reason", length = 64)
     private String quantityVarianceReason;
 

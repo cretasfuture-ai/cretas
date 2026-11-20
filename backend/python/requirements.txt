@@ -29,6 +29,7 @@ scipy>=1.7.0,<2.0.0
 
 # LLM integration
 httpx>=0.20.0,<1.0.0
+socksio==1.0.0  # httpx SOCKS proxy for LLM_EGRESS_PROXY (openai/anthropic egress via canada mini, 2026-11-12)
 aiohttp>=3.8.0,<4.0.0
 openai>=1.0.0  # For OpenAI-compatible API (DashScope)
 

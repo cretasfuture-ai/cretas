@@ -105,6 +105,31 @@ public class DeliveryRiskService {
                 count(out, Level.OK), created, refreshed, out);
     }
 
+    /**
+     * 只评估指定订单并登记 (紧急插单把排程挤后之后用): 有风险开 / 刷新处理实例, 没风险不动。
+     * 不开事务, 与 {@link #scan} 同理 (缺料分析可能抛业务异常)。
+     *
+     * @return 评估并写过结果的订单数 (本厂不存在的订单 id 跳过)
+     */
+    public int refreshOrders(String factoryId, Collection<String> orderIds, ActorRef actor) {
+        int done = 0;
+        for (String id : orderIds) {
+            SalesOrder o = orderRepository.findByIdAndFactoryId(id, factoryId).orElse(null);
+            if (o == null) {
+                continue;
+            }
+            try {
+                OrderAssessment a = assess(factoryId, o);
+                store.record(factoryId, a, fingerprint(a), actor);
+                done++;
+            } catch (RuntimeException e) {
+                // 一个订单评估失败不能让后面的订单都不登记
+                log.error("交付风险: 订单 {} 登记失败: {}", id, e.getMessage(), e);
+            }
+        }
+        return done;
+    }
+
     /** 按当前数据复核一条实例, 结论写回。 */
     public OrderAssessment recheck(String factoryId, String caseId, ActorRef actor) {
         OrderAssessment a = assessCase(factoryId, caseId);

@@ -57,15 +57,12 @@ ok() { pass=$((pass + 1)); echo "  ok - $*"; }
 [ -s "$GATE" ] || fail "找不到 $GATE"
 [ -d "$TEST_ROOT" ] || fail "找不到测试根 $TEST_ROOT"
 
-# ---- 1. 从 workflow 里抽出选择器本身 ----
-# ⛔ 不 grep 单个模式名 —— 那等于把清单抄第二份。抽整行, 恰好 1 处。
-SELECTOR_LINES=$(grep -c -- "-Dtest='" "$GATE" || true)
-[ "$SELECTOR_LINES" -eq 1 ] \
-    || fail "java-gate-pr.yml 里 \`-Dtest='…'\` 有 $SELECTOR_LINES 处(要恰好 1) —— 抽错了照样能跑, 属于最难查的那种"
-SELECTOR=$(sed -n "s/.*-Dtest='\([^']*\)'.*/\1/p" "$GATE")
-[ -n "$SELECTOR" ] || fail "抽不出选择器内容 —— 没量到, ⛔ 不当成没问题"
-printf '%s\n' "$SELECTOR" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' \
-    | grep -v '^$' > "$TMP/patterns.txt"
+# ---- 1. 读选择器本身 ----
+# 2026-11-10 起 fast-contracts 的模式在清单文件里 (分片脚本读它), workflow 里不再有 -Dtest 字面量。
+PATFILE="$ROOT_DIR/scripts/ci/java-gate-fast-patterns.txt"
+[ -s "$PATFILE" ] || fail "找不到 $PATFILE"
+grep -q 'java-gate-fast-patterns.txt' "$GATE" || fail "workflow 没引用 java-gate-fast-patterns.txt —— 清单没接上"
+grep -vE '^[[:space:]]*(#|$)' "$PATFILE" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' > "$TMP/patterns.txt"
 N_PAT=$(wc -l < "$TMP/patterns.txt")
 [ "$N_PAT" -ge 5 ] || fail "只解析出 $N_PAT 个模式, 不像是那条选择器 —— 没量到"
 echo "READING: SELECTOR_PATTERNS=$N_PAT"

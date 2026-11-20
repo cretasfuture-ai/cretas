@@ -208,8 +208,13 @@ public class IntentPreviewToken {
         CANCELLED,
         /** 已过期 */
         EXPIRED,
-        /** 执行失败 */
-        FAILED
+        /** 执行失败 (确定没有写入: 工具明确返回失败, 或确认前的核对就拒绝了) */
+        FAILED,
+        /**
+         * 结果不明: 工具执行中抛异常/超时, 或进程中途退出后由对账判定。写入可能已经提交,
+         * 不得把它当失败让用户重做; 同一张凭据永远不会被再次认领执行 (认领只接受 PENDING)。
+         */
+        OUTCOME_UNKNOWN
     }
 
     /**

@@ -69,6 +69,23 @@ public class TimeNormalizationRules {
      * 时间模式映射：正则表达式 -> 时间范围计算函数
      * 使用 BiFunction 支持动态参数提取
      */
+    private static final String YEAR_PREFIX = "(今年|本年|明年|下一年|去年|上一年|前年)";
+    /** 「最近 / 过去 / 近」+ 数量; 数量前后允许空格 (演示题「最近 30 天」曾因空格落到「最近」= 7 天)。 */
+    private static final String RECENT_PREFIX = "(?:最近|过去|(?<![附接将邻临])近)\\s*";
+    /**
+     * 「N天前 / N天内」前面没有「最近」时的数量: 阿拉伯数字只防前面紧贴数字 (「12345天前」), 「查一下3天前」照常认;
+     * 中文数字前面不能紧贴汉字 (「统一天前」「第一天内」不是时间)。两个分组, 用 {@link #countOf} 取命中的那个。
+     */
+    private static final String BARE_COUNT_TEXT = "(?:(?<!\\d)(\\d{1,4})|(?<!\\p{IsHan})([一二两三四五六七八九十]{1,3}))";
+    /** 阿拉伯数字或「两 / 三 / 十二 / 三十 / 二十五」。 */
+    private static final String COUNT_TEXT = "(\\d{1,4}|[一二两三四五六七八九十]{1,3})";
+    private static final String MONTH_TEXT = "(\\d{1,2}|[一二三四五六七八九十]{1,3})";
+    /** 「N月之前/以前/前」(前后接 年/天/后 的不算: 前年/前天/前后)。 */
+    private static final String BEFORE_WORD = "(?:以前|之前|前(?![年天后]))";
+    /** 环比对比基准「和上月比 / 比上月 / 环比上月」里的「上月」: 不是本期, 不参与时间提取。与 ReportCostQueryTool.MONTH_OVER_MONTH 同口径。 */
+    private static final Pattern MOM_BASE = Pattern.compile(
+            "(?:和|与|跟|同|比)(上个月|上月)(?:比|相比|对比)?|比(上个月|上月)|环比(上个月|上月)");
+    private static final char MOM_PLACEHOLDER = '\uE000';
     private static final Map<Pattern, BiFunction<LocalDateTime, Matcher, TimeRange>> TIME_PATTERNS = new LinkedHashMap<>();
 
     static {
@@ -135,52 +152,135 @@ public class TimeNormalizationRules {
         );
 
         // === 年 ===
+        // 「明年一月」「去年3月」「今年十二月」: 带年份前缀的具体月份。必须排在下面整年规则之前,
+        // 否则「明年」先被吃成整年 (2027-01-01~2027-12-31), 「一月」被丢掉 (2026-11-15 财务复跑 Q17)。
+        // 区间 / 「以来」先于单月规则整体识别 (否则「今年3月份到5月份」「去年12月到今年2月」「今年3月起」只剩一个月, 静默丢数据):
+        //   「今年3月(份)到5月(份)」「去年12月到今年2月」→ 首月 1 号 ~ 末月月底; 「今年3月(份)以来/起/开始/至今」→ 该月 1 号 ~ 现在。
         TIME_PATTERNS.put(
-                Pattern.compile("今年|本年"),
+                Pattern.compile(YEAR_PREFIX + MONTH_TEXT + "月(?:份)?\\s*(?:到|至|-|~|—)\\s*" + YEAR_PREFIX + "?" + MONTH_TEXT + "月(?:份)?"),
+                (now, m) -> {
+                    int y1 = now.getYear() + yearOffsetOf(m.group(1));
+                    int m1 = parseMonthNumber(m.group(2));
+                    int m2 = parseMonthNumber(m.group(4));
+                    // 第二个月没写年份: 月份比起始月小就是跨年 (「去年12月到2月」= 去年12月~今年2月)
+                    int y2 = m.group(3) != null ? now.getYear() + yearOffsetOf(m.group(3)) : (m2 < m1 ? y1 + 1 : y1);
+                    if (m1 < 1 || m1 > 12 || m2 < 1 || m2 > 12) {
+                        throw new IllegalArgumentException("月份超出范围: " + m.group(2) + "/" + m.group(4));
+                    }
+                    LocalDateTime first = LocalDateTime.of(y1, m1, 1, 0, 0).with(LocalTime.MIN);
+                    LocalDateTime last = LocalDateTime.of(y2, m2, 1, 0, 0).with(TemporalAdjusters.lastDayOfMonth()).with(LocalTime.MAX);
+                    if (last.isBefore(first)) {
+                        throw new IllegalArgumentException("月份区间倒置");
+                    }
+                    return TimeRange.of(first, last);
+                }
+        );
+        TIME_PATTERNS.put(
+                Pattern.compile(YEAR_PREFIX + MONTH_TEXT + "月(?:份)?\\s*(?:以来|以后|之后|后(?![天年])|起|开始|至今)"),
+                (now, m) -> {
+                    int month = parseMonthNumber(m.group(2));
+                    if (month < 1 || month > 12) {
+                        throw new IllegalArgumentException("月份超出范围: " + m.group(2));
+                    }
+                    LocalDateTime first = LocalDateTime.of(now.getYear() + yearOffsetOf(m.group(1)), month, 1, 0, 0);
+                    return TimeRange.of(first, now.isBefore(first) ? first.with(TemporalAdjusters.lastDayOfMonth()).with(LocalTime.MAX) : now);
+                }
+        );
+        // 「今年3月之前/以前/前」= 年初 ~ 上个月月底 (3月本身不含); 「今年1月之前」之前没有可统计的月份 -> 如实认不出, 不猜 (见下面整年规则的排除)。
+        TIME_PATTERNS.put(
+                Pattern.compile(YEAR_PREFIX + MONTH_TEXT + "月(?:份)?\\s*" + BEFORE_WORD),
+                (now, m) -> {
+                    int month = parseMonthNumber(m.group(2));
+                    if (month < 2 || month > 12) {
+                        throw new IllegalArgumentException("月份之前没有可统计的月份: " + m.group(2));
+                    }
+                    int year = now.getYear() + yearOffsetOf(m.group(1));
+                    LocalDateTime first = LocalDateTime.of(year, 1, 1, 0, 0);
+                    LocalDateTime last = LocalDateTime.of(year, month - 1, 1, 0, 0)
+                            .with(TemporalAdjusters.lastDayOfMonth()).with(LocalTime.MAX);
+                    return TimeRange.of(first, last);
+                }
+        );
+        // 单月: 「今年10月1日」这种具体日期不是单月, 照旧落到整年规则 (偏宽但不丢数据)。
+        // 「份」用占有量词, 否则回溯成空后前瞻看到「份」就放行。上一个词是「到/至」的年月已被上面的区间规则吃掉。
+        TIME_PATTERNS.put(
+                Pattern.compile("(?<![到至\\-~—])" + YEAR_PREFIX + MONTH_TEXT + "月(?:份)?+(?!\\s*(?:到|至|-|~|—|以来|以后|之后|后|以前|之前|前|[和、]\\s*" + MONTH_TEXT + "月|起|开始|\\d{1,2}[日号]|[一二三四五六七八九十]{1,3}[日号]))"),
+                (now, m) -> {
+                    int yearOffset = yearOffsetOf(m.group(1));
+                    int month = parseMonthNumber(m.group(2));
+                    if (month < 1 || month > 12) {
+                        throw new IllegalArgumentException("月份超出范围: " + m.group(2));
+                    }
+                    LocalDateTime first = now.plusYears(yearOffset).withMonth(month).with(TemporalAdjusters.firstDayOfMonth())
+                            .with(LocalTime.MIN);
+                    return TimeRange.of(first, first.with(TemporalAdjusters.lastDayOfMonth()).with(LocalTime.MAX));
+                }
+        );
+        // 不带年份的月份: 「10月各客户销售额排行」「10 月」(数字与「月」之间允许空格)。以前只认「今年10月」, 单说「10月」整个丢掉,
+        // 工具退回默认最近 7 天 (LSMDEMO 2026-11-18 只出 1 个客户)。没写年份取「不晚于当前月」的最近一次:
+        // 月份 <= 当前月 → 今年, 否则 → 去年 (问的是已发生的数据)。前面是年 / 区间连接符 / 并列词(和、「、」) / 数字的由上面的带年份规则管 (「今年3月和4月」是并列月份, 4月不能再单独拆成第二个区间);
+        // 后面跟 到/至/以来/之前/具体几号 的是区间、起止、具体日期, 同样不当单月 (宁可不认, 不猜)。
+        TIME_PATTERNS.put(
+                Pattern.compile("(?<![年到至和、\\-~—\\d])" + MONTH_TEXT + "\\s*月(?:份)?+(?!\\s*(?:到|至|-|~|—|以来|以后|之后|后|以前|之前|前|[和、]\\s*" + MONTH_TEXT + "月|起|开始|\\d{1,2}[日号]|[一二三四五六七八九十]{1,3}[日号]))"),
+                (now, m) -> {
+                    int month = parseMonthNumber(m.group(1));
+                    if (month < 1 || month > 12) {
+                        throw new IllegalArgumentException("月份超出范围: " + m.group(1));
+                    }
+                    int yearOffset = month > now.getMonthValue() ? -1 : 0;
+                    LocalDateTime first = now.plusYears(yearOffset).withDayOfMonth(1).withMonth(month)
+                            .with(LocalTime.MIN);
+                    return TimeRange.of(first, first.with(TemporalAdjusters.lastDayOfMonth()).with(LocalTime.MAX));
+                }
+        );
+        TIME_PATTERNS.put(
+                Pattern.compile("(?:今年|本年)(?!" + MONTH_TEXT + "月(?:份)?\\s*" + BEFORE_WORD + ")"),
                 (now, m) -> yearRange(now, 0)
         );
         TIME_PATTERNS.put(
-                Pattern.compile("去年|上一年"),
+                Pattern.compile("(?:去年|上一年)(?!" + MONTH_TEXT + "月(?:份)?\\s*" + BEFORE_WORD + ")"),
                 (now, m) -> yearRange(now, -1)
         );
         TIME_PATTERNS.put(
-                Pattern.compile("明年|下一年"),
+                Pattern.compile("(?:明年|下一年)(?!" + MONTH_TEXT + "月(?:份)?\\s*" + BEFORE_WORD + ")"),
                 (now, m) -> yearRange(now, 1)
         );
 
         // === 动态模糊时间 (需要提取数字) ===
         TIME_PATTERNS.put(
-                Pattern.compile("最近(\\d+)天"),
+                Pattern.compile(RECENT_PREFIX + COUNT_TEXT + "\\s*天"),
                 (now, m) -> {
-                    int days = Integer.parseInt(m.group(1));
-                    return TimeRange.of(now.minusDays(days).with(LocalTime.MIN), now);
+                    // 「最近 N 天」含今天共 N 天 (与页面默认 N 天窗口一致): 起点 = 今天 - (N-1)
+                    int days = parseCount(m.group(1));
+                    return TimeRange.of(now.minusDays(Math.max(0, days - 1)).with(LocalTime.MIN), now);
                 }
         );
         TIME_PATTERNS.put(
-                Pattern.compile("最近(\\d+)周"),
+                Pattern.compile(RECENT_PREFIX + COUNT_TEXT + "\\s*(?:周|个星期|个礼拜)"),
                 (now, m) -> {
-                    int weeks = Integer.parseInt(m.group(1));
-                    return TimeRange.of(now.minusWeeks(weeks).with(LocalTime.MIN), now);
+                    // 「最近 N 周」= 含今天共 7N 天
+                    int weeks = parseCount(m.group(1));
+                    return TimeRange.of(now.minusDays(Math.max(0, weeks * 7L - 1)).with(LocalTime.MIN), now);
                 }
         );
         TIME_PATTERNS.put(
-                Pattern.compile("最近(\\d+)个月"),
+                Pattern.compile(RECENT_PREFIX + COUNT_TEXT + "\\s*个月"),
                 (now, m) -> {
-                    int months = Integer.parseInt(m.group(1));
+                    int months = parseCount(m.group(1));
                     return TimeRange.of(now.minusMonths(months).with(LocalTime.MIN), now);
                 }
         );
         TIME_PATTERNS.put(
-                Pattern.compile("(\\d+)天前"),
+                Pattern.compile(BARE_COUNT_TEXT + "\\s*天前"),
                 (now, m) -> {
-                    int days = Integer.parseInt(m.group(1));
+                    int days = countOf(m);
                     return dayRange(now, -days);
                 }
         );
         TIME_PATTERNS.put(
-                Pattern.compile("(\\d+)天内"),
+                Pattern.compile(BARE_COUNT_TEXT + "\\s*天内"),
                 (now, m) -> {
-                    int days = Integer.parseInt(m.group(1));
+                    int days = countOf(m);
                     return TimeRange.of(now.minusDays(days).with(LocalTime.MIN), now);
                 }
         );
@@ -192,11 +292,11 @@ public class TimeNormalizationRules {
         );
         TIME_PATTERNS.put(
                 Pattern.compile("最近"),
-                (now, m) -> TimeRange.of(now.minusDays(7).with(LocalTime.MIN), now)
+                (now, m) -> TimeRange.of(now.minusDays(6).with(LocalTime.MIN), now) // 含今天共 7 天
         );
         TIME_PATTERNS.put(
                 Pattern.compile("近期"),
-                (now, m) -> TimeRange.of(now.minusDays(14).with(LocalTime.MIN), now)
+                (now, m) -> TimeRange.of(now.minusDays(13).with(LocalTime.MIN), now) // 含今天共 14 天
         );
         TIME_PATTERNS.put(
                 Pattern.compile("早上|上午"),
@@ -263,8 +363,24 @@ public class TimeNormalizationRules {
             return new NormalizationResult(text, java.util.Collections.emptyList());
         }
 
-        String result = text;
+        // 环比对比基准「和上月比」的「上月」: 句子里除它之外还有别的时间表达时, 它不是本期 (先换成占位符, 提取完再还原,
+        // 否则「今年3月的成本和上月比」本期被取成上月)。它是句子里唯一的时间词时保持原行为 (primary=上月), 不隐藏:
+        // 没有环比模式的工具拿不到本期会回落到各自默认期间, 静默放宽数据。
+        java.util.List<String> protectedBases = new java.util.ArrayList<>();
+        String protectedText = protectMonthOverMonthBase(text, protectedBases);
+        if (!protectedBases.isEmpty()) {
+            java.util.List<TimeRange> others = new java.util.ArrayList<>();
+            String protectedResult = extractAll(protectedText, now, others);
+            if (!others.isEmpty()) {
+                return new NormalizationResult(restoreMonthOverMonthBase(protectedResult, protectedBases), others);
+            }
+        }
         java.util.List<TimeRange> extractedRanges = new java.util.ArrayList<>();
+        return new NormalizationResult(extractAll(text, now, extractedRanges), extractedRanges);
+    }
+
+    private String extractAll(String text, LocalDateTime now, java.util.List<TimeRange> extractedRanges) {
+        String result = text;
 
         for (Map.Entry<Pattern, BiFunction<LocalDateTime, Matcher, TimeRange>> entry : TIME_PATTERNS.entrySet()) {
             Matcher matcher = entry.getKey().matcher(result);
@@ -283,7 +399,33 @@ public class TimeNormalizationRules {
             }
         }
 
-        return new NormalizationResult(result, extractedRanges);
+        return result;
+    }
+
+    private static String protectMonthOverMonthBase(String text, java.util.List<String> bases) {
+        Matcher m = MOM_BASE.matcher(text);
+        StringBuilder sb = new StringBuilder();
+        int last = 0;
+        while (m.find()) {
+            int g = m.start(1) >= 0 ? 1 : (m.start(2) >= 0 ? 2 : 3);
+            bases.add(m.group(g));
+            sb.append(text, last, m.start(g)).append(MOM_PLACEHOLDER);
+            last = m.end(g);
+            // 替换只覆盖「上月」本身, 其余部分 (和 / 比) 原样保留: 继续从 g 组之后扫描
+            m.region(Math.max(last, m.end()), text.length());
+        }
+        sb.append(text, last, text.length());
+        return sb.toString();
+    }
+
+    private static String restoreMonthOverMonthBase(String text, java.util.List<String> bases) {
+        if (bases.isEmpty()) return text;
+        StringBuilder sb = new StringBuilder();
+        int i = 0;
+        for (char c : text.toCharArray()) {
+            if (c == MOM_PLACEHOLDER && i < bases.size()) sb.append(bases.get(i++)); else sb.append(c);
+        }
+        return sb.toString();
     }
 
     /**
@@ -336,6 +478,60 @@ public class TimeNormalizationRules {
         LocalDateTime endOfMonth = targetMonth.with(TemporalAdjusters.lastDayOfMonth())
                 .with(LocalTime.MAX);
         return TimeRange.of(startOfMonth, endOfMonth);
+    }
+
+    /** 年份前缀 → 相对今年的偏移; null (没写年份) 视为今年。 */
+    static int yearOffsetOf(String prefix) {
+        if (prefix == null) return 0;
+        return switch (prefix) {
+            case "明年", "下一年" -> 1;
+            case "去年", "上一年" -> -1;
+            case "前年" -> -2;
+            default -> 0;
+        };
+    }
+
+    /** 「30」「两」「三」「十二」「三十」「二十五」→ 数量; 认不出抛异常 (调用方记日志并跳过这条规则)。 */
+    /** {@link #BARE_COUNT_TEXT} 两个分组里命中的那个。 */
+    static int countOf(Matcher m) {
+        return parseCount(m.group(1) != null ? m.group(1) : m.group(2));
+    }
+
+    static int parseCount(String text) {
+        if (text.chars().allMatch(Character::isDigit)) {
+            return Integer.parseInt(text);
+        }
+        String digits = "一二三四五六七八九";
+        String t = text.replace('两', '二');
+        int ten = t.indexOf('十');
+        int value;
+        if (ten < 0) {
+            if (t.length() != 1) throw new IllegalArgumentException("认不出的数量: " + text);
+            value = digits.indexOf(t.charAt(0)) + 1;
+        } else {
+            if (ten > 1 || t.length() - ten > 2) throw new IllegalArgumentException("认不出的数量: " + text);
+            int tens = ten == 0 ? 1 : digits.indexOf(t.charAt(0)) + 1;
+            int units = ten == t.length() - 1 ? 0 : digits.indexOf(t.charAt(ten + 1)) + 1;
+            if (tens <= 0 || (ten < t.length() - 1 && units <= 0)) throw new IllegalArgumentException("认不出的数量: " + text);
+            value = tens * 10 + units;
+        }
+        if (value <= 0) throw new IllegalArgumentException("认不出的数量: " + text);
+        return value;
+    }
+
+    /** 「3」「十二」「一」→ 月份数字; 认不出返回 -1。 */
+    static int parseMonthNumber(String text) {
+        if (text.chars().allMatch(Character::isDigit)) {
+            return Integer.parseInt(text);
+        }
+        String digits = "一二三四五六七八九";
+        if (text.equals("十")) return 10;
+        if (text.length() == 1) return digits.indexOf(text) + 1 > 0 ? digits.indexOf(text) + 1 : -1;
+        if (text.length() == 2 && text.charAt(0) == '十') {
+            int u = digits.indexOf(text.charAt(1)) + 1;
+            return u > 0 ? 10 + u : -1;
+        }
+        return -1;
     }
 
     /**

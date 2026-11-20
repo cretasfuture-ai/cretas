@@ -655,6 +655,58 @@ public class PurchaseServiceImpl implements PurchaseService {
     }
 
     @Override
+    @DataScope("created_by")
+    public PageResponse<PurchaseOrder> searchPurchaseOrders(String factoryId, PurchaseOrderStatus status, String keyword,
+                                                            LocalDate orderDateFrom, LocalDate orderDateTo,
+                                                            List<Long> owners, int page, int size) {
+        if (orderDateFrom != null && orderDateTo != null && orderDateFrom.isAfter(orderDateTo)) {
+            throw new BusinessException(400, "订单日期范围不成立: 开始 " + orderDateFrom + " 晚于结束 " + orderDateTo)
+                    .withHint("请把开始日期改成不晚于结束日期");
+        }
+        List<Long> createdBy = owners;
+        if (createdBy == null) {
+            // 与 getPurchaseOrders / getPurchaseOrdersByStatus 同一套 DataScope 口径
+            DataScopeContext dsCtx = DataScopeContext.current();
+            if (dsCtx != null && dsCtx.isFiltered() && dsCtx.getUserId() != null) {
+                com.cretas.aims.entity.enums.DataScope scope = dsCtx.getScope();
+                if (scope == com.cretas.aims.entity.enums.DataScope.SELF) {
+                    createdBy = List.of(dsCtx.getUserId());
+                } else if (scope == com.cretas.aims.entity.enums.DataScope.SELF_AND_BELOW
+                        || scope == com.cretas.aims.entity.enums.DataScope.DEPT_AND_BELOW) {
+                    createdBy = dataScopeResolver != null
+                            ? dataScopeResolver.resolveCreatedByChain(dsCtx) : List.of(dsCtx.getUserId());
+                    if (createdBy == null || createdBy.isEmpty()) createdBy = List.of(dsCtx.getUserId());
+                }
+            }
+        }
+        if (createdBy != null && createdBy.isEmpty()) {
+            return PageResponse.of(List.of(), page, size, 0L);
+        }
+        String escaped = keyword == null ? null : keyword.trim()
+                .replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
+        Page<PurchaseOrder> result = purchaseOrderRepository.searchListPage(factoryId, createdBy, status, escaped,
+                orderDateFrom, orderDateTo, PageRequest.of(page - 1, size));
+        hydrateSalesOrderNumbers(result.getContent());
+        return PageResponse.of(result.getContent(), page, size, result.getTotalElements());
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public PageResponse<PurchaseOrder> getPurchaseOrdersByStatusOwnedBy(String factoryId, PurchaseOrderStatus status,
+                                                                        List<Long> owners, int page, int size) {
+        if (owners == null) {
+            throw new IllegalArgumentException("owners must not be null; whole-factory scope uses getPurchaseOrdersByStatus");
+        }
+        if (owners.isEmpty()) {
+            return PageResponse.of(List.of(), page, size, 0L);
+        }
+        Page<PurchaseOrder> result = purchaseOrderRepository.findByFactoryIdAndStatusAndCreatedByInOrderByCreatedAtDesc(
+                factoryId, status, owners, PageRequest.of(page - 1, size));
+        hydrateSalesOrderNumbers(result.getContent());
+        return PageResponse.of(result.getContent(), page, size, result.getTotalElements());
+    }
+
+    @Override
     public PageResponse<PurchaseOrder> getPurchaseOrdersBySalesOrder(String factoryId, String salesOrderId, int page, int size) {
         // W-12 fix: SO detail page's "关联采购" tab needs this filter
         PageRequest pageRequest = PageRequest.of(page - 1, size, Sort.by(Sort.Direction.DESC, "createdAt"));
@@ -1898,10 +1950,28 @@ public class PurchaseServiceImpl implements PurchaseService {
         if (request.getSupplierId() != null) {
             // Validate supplier only when changed
             requireActiveSupplier(factoryId, request.getSupplierId());
+            boolean supplierChanged = !Objects.equals(order.getSupplierId(), request.getSupplierId());
             order.setSupplierId(request.getSupplierId());
             if (request.getItems() == null) {
+                List<PurchaseOrderItem> rebound = new ArrayList<>();
                 for (PurchaseOrderItem existingItem : purchaseOrderItemRepository.findByPurchaseOrderId(orderId)) {
                     assertSupplierMaterialActive(factoryId, request.getSupplierId(), existingItem.getMaterialTypeId());
+                    // 草稿换供应商而没带明细: 行上还挂着旧供应商的供应关系 / 包装规格 / 行价, 提交会被
+                    // SUPPLIER_MATERIAL_IDENTITY_INVALID 拦住 (或带着旧价)。改绑到新供应商对这个原料的那一条
+                    // 供应关系 ((工厂, 供应商, 原料) 唯一, 不是猜), 清掉旧规格与旧价, 提交时按新供应关系回解价格。
+                    if (supplierChanged && existingItem.getSupplierMaterialId() != null) {
+                        existingItem.setSupplierMaterialId(supplierMaterialRepository
+                                .findByFactoryIdAndSupplierIdAndMaterialTypeId(
+                                        factoryId, request.getSupplierId(), existingItem.getMaterialTypeId())
+                                .map(com.cretas.aims.entity.SupplierMaterial::getId)
+                                .orElse(null));
+                        existingItem.setPurchasePackagingSpecId(null);
+                        existingItem.setUnitPrice(BigDecimal.ZERO);
+                        rebound.add(existingItem);
+                    }
+                }
+                if (!rebound.isEmpty()) {
+                    purchaseOrderItemRepository.saveAll(rebound);
                 }
             }
         }
@@ -4515,6 +4585,10 @@ public class PurchaseServiceImpl implements PurchaseService {
         }
         if (taxRate.compareTo(BigDecimal.ZERO) < 0 || taxRate.compareTo(new BigDecimal("100")) > 0) {
             throw new BusinessException(400, "采购税率必须在0到100之间").withHintTarget("taxRate");
+        }
+        if (taxRate.signum() > 0 && taxRate.compareTo(BigDecimal.ONE) < 0) {
+            throw new BusinessException(400, "采购税率请按百分数填写，例如 13% 填 13，免税填 0")
+                    .withHintTarget("taxRate");
         }
         item.setTaxRate(taxRate);
         snapshotPurchaseAmounts(item);

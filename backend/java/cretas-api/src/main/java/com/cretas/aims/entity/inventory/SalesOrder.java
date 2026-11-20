@@ -384,7 +384,10 @@ public class SalesOrder extends BaseEntity {
     @JoinColumn(name = "created_by", referencedColumnName = "id", insertable = false, updatable = false)
     private User createdByUser;
 
+    // 列表接口 (GET /sales/orders) 直接序列化实体, 每张单的明细在 open-in-view 里逐张懒加载 = N+1
+    // (一页 20 张单 42 条 SQL, 2026-11-11 实测)。BatchSize 让一页内同一集合一次取齐 (42 -> 4)。
     @OneToMany(mappedBy = "salesOrder", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
+    @org.hibernate.annotations.BatchSize(size = 50)
     private List<SalesOrderItem> items = new ArrayList<>();
 
     /**
@@ -393,6 +396,7 @@ public class SalesOrder extends BaseEntity {
      */
     @OneToMany(mappedBy = "salesOrder", fetch = FetchType.LAZY)
     @OrderBy("expectedArrivalAt ASC, id ASC")
+    @org.hibernate.annotations.BatchSize(size = 50)
     private List<SalesOrderSuppliedMaterialRequirement> suppliedMaterials = new ArrayList<>();
 
     @JsonIgnore

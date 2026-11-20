@@ -42,6 +42,14 @@ public interface SalesService {
                                                     java.time.LocalDate orderDateFrom, java.time.LocalDate orderDateTo,
                                                     int page, int size);
 
+    /**
+     * 列表页服务端搜索: 关键词(订单号/客户/销售员/备注) + 状态 + 订单日期, 每项可选, 在分页之前由数据库过滤,
+     * 总数随过滤变化, 按 DataScope 收窄。原型统一 DECISIONS 十九。
+     */
+    PageResponse<SalesOrder> searchSalesOrders(String factoryId, SalesOrderStatus status, String keyword,
+                                               java.time.LocalDate orderDateFrom, java.time.LocalDate orderDateTo,
+                                               int page, int size);
+
     SalesOrder confirmOrder(String factoryId, String orderId, Long initiatorUserId);
 
     /** 提交财务审核: CONFIRMED -> PENDING_FINANCE_REVIEW */
@@ -118,6 +126,25 @@ public interface SalesService {
      *                  ("[取消原因: X]"), 便于事后追溯。
      */
     SalesOrder cancelOrder(String factoryId, String orderId, String reason);
+
+    /**
+     * 带操作人的取消。财务已批准的订单只有在本厂开了 sales.order.cancel_after_approval、操作人有
+     * 「取消已批准销售单」权限、写了原因时才能取消, 并连带取消自动生成的生产计划与未开工排程。
+     * 默认实现 = 不带操作人 (批准后的订单会被拒), 给测试替身用。
+     */
+    default SalesOrder cancelOrder(String factoryId, String orderId, String reason, Long operatorUserId) {
+        return cancelOrder(factoryId, orderId, reason);
+    }
+
+    /** 本厂开了「财务批准后可取消」且当前用户有权限 ⇒ true (网页据此决定已批准订单上显不显示取消)。默认 false。 */
+    default boolean mayCancelApprovedOrders(String factoryId, Long userId) {
+        return false;
+    }
+
+    /** 最近一次 {@link #cancelOrder} 在当前线程上的连带取消说明 (没有连带 = null)。给控制器拼回执用。 */
+    default String lastCancelSummary() {
+        return null;
+    }
 
     /**
      * 短交结案 (2026-09-04 owner 拍板): PARTIAL_DELIVERED 订单剩余数量确认不再发货，

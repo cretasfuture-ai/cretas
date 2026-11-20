@@ -47,6 +47,9 @@ public interface ProductionPlanRepository extends JpaRepository<ProductionPlan, 
      */
     Optional<ProductionPlan> findByIdAndFactoryId(String id, String factoryId);
 
+    /** 批量按 id 取本厂计划 (避免逐个 findByIdAndFactoryId 的 N+1)。 */
+    List<ProductionPlan> findByFactoryIdAndIdIn(String factoryId, Collection<String> ids);
+
     Optional<ProductionPlan> findByFactoryIdAndCreatedByAndClientRequestId(
             String factoryId, Long createdBy, String clientRequestId);
 
@@ -67,6 +70,14 @@ public interface ProductionPlanRepository extends JpaRepository<ProductionPlan, 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT p FROM ProductionPlan p WHERE p.id = :id")
     Optional<ProductionPlan> findByIdForUpdate(@Param("id") String id);
+
+    /**
+     * 锁住这条计划并返回它已提交的最新状态 (原生 SQL, 不经持久化上下文)。
+     * 排程落库前用: 与「取消生产计划」(同一行 FOR UPDATE) 串行, 取消之后不会再长出未开工的排程行。
+     */
+    @Query(value = "SELECT status FROM production_plans WHERE id = :id AND factory_id = :factoryId FOR UPDATE",
+            nativeQuery = true)
+    Optional<String> lockStatusForUpdate(@Param("id") String id, @Param("factoryId") String factoryId);
 
     /**
      * 查找工厂的所有生产计划
@@ -294,6 +305,28 @@ public interface ProductionPlanRepository extends JpaRepository<ProductionPlan, 
     BigDecimal calculateTotalCostBetweenDates(@Param("factoryId") String factoryId,
                                               @Param("startDate") LocalDateTime startDate,
                                               @Param("endDate") LocalDateTime endDate);
+
+    /**
+     * 结束时间在区间内的计划数 (含端点), 口径与 {@link #calculateTotalCostBetweenDates} 一致,
+     * 用来算「完工计划数 / 平均每计划成本」(LSM-COSTBI 第 12 项)。
+     */
+    @Query("SELECT COUNT(p) FROM ProductionPlan p WHERE p.factoryId = :factoryId " +
+           "AND p.endTime BETWEEN :startDate AND :endDate")
+    long countEndedBetweenDates(@Param("factoryId") String factoryId,
+                                @Param("startDate") LocalDateTime startDate,
+                                @Param("endDate") LocalDateTime endDate);
+
+    /**
+     * {@link #countEndedBetweenDates} 里四项实际成本至少录了一项的计划数。
+     * 只有它等于完工计划数时, 平均每计划成本才有意义 (没录成本的计划不能当 0 进分母)。
+     */
+    @Query("SELECT COUNT(p) FROM ProductionPlan p WHERE p.factoryId = :factoryId " +
+           "AND p.endTime BETWEEN :startDate AND :endDate " +
+           "AND (p.actualMaterialCost IS NOT NULL OR p.actualLaborCost IS NOT NULL " +
+           "OR p.actualEquipmentCost IS NOT NULL OR p.actualOtherCost IS NOT NULL)")
+    long countCostRecordedEndedBetweenDates(@Param("factoryId") String factoryId,
+                                            @Param("startDate") LocalDateTime startDate,
+                                            @Param("endDate") LocalDateTime endDate);
 
     /**
      * 计算指定日期范围内的原材料成本
@@ -553,6 +586,16 @@ public interface ProductionPlanRepository extends JpaRepository<ProductionPlan, 
             LocalDate endDate);
 
     /**
+     * 按状态查「未定日期」(预计完成日为空) 的生产计划。
+     *
+     * <p>D-S411-03: 上面那条 BETWEEN 对 NULL 恒不命中, 没有交期的待处理计划 (如订单没填交期时
+     * 财审自动生成的 PP-AUTO-*) 会被排程候选列表静默丢掉; 排程页用这条把它们单独补上。
+     */
+    List<ProductionPlan> findByFactoryIdAndStatusAndExpectedCompletionDateIsNull(
+            String factoryId,
+            ProductionPlanStatus status);
+
+    /**
      * 统计指定时间范围内创建的生产计划数量
      * 用于预测报表的置信度计算
      *
@@ -695,6 +738,17 @@ public interface ProductionPlanRepository extends JpaRepository<ProductionPlan, 
     @Query("SELECT p.id, p.status FROM ProductionPlan p "
             + "WHERE p.factoryId = :factoryId AND p.id IN :planIds")
     List<Object[]> findPlanStatusesByFactoryIdAndIdIn(
+            @Param("factoryId") String factoryId,
+            @Param("planIds") Collection<String> planIds);
+
+    /**
+     * 调度 Dashboard: 工作流批次所属计划的编号与建议产线 (批次本身不存产线 id)。
+     *
+     * @return 每行 {@code [String planId, String planNumber, String suggestedProductionLineId]}
+     */
+    @Query("SELECT p.id, p.planNumber, p.suggestedProductionLineId FROM ProductionPlan p "
+            + "WHERE p.factoryId = :factoryId AND p.id IN :planIds")
+    List<Object[]> findDashboardPlanRefsByFactoryIdAndIdIn(
             @Param("factoryId") String factoryId,
             @Param("planIds") Collection<String> planIds);
 

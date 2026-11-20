@@ -3,7 +3,6 @@ package com.cretas.aims.controller;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.annotation.RequireModule;
-import com.cretas.aims.config.RequireRole;
 import com.cretas.aims.dto.quality.*;
 import com.cretas.aims.entity.QualityInspection;
 import com.cretas.aims.entity.DecisionAuditLog;
@@ -56,8 +55,12 @@ import org.springframework.transaction.annotation.Transactional;
 public class QualityDispositionController {
     private final com.cretas.aims.service.quality.QualityDispositionDecisionGuard decisionGuard;
 
-    private static void validatePendingApprovalIdentity(DecisionAuditLog auditLog,
-            DispositionApproveRequest request, Long authenticatedUserId) {
+    /** 纪律排查 B3: 工厂级「允许本人审批」。未注入 = 开关关 (四眼照旧)。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.workflow.FactorySelfApprovalGate selfApprovalGate;
+
+    private com.cretas.aims.service.workflow.FactorySelfApprovalGate.Decision validatePendingApprovalIdentity(
+            DecisionAuditLog auditLog, DispositionApproveRequest request, Long authenticatedUserId) {
         if (!Boolean.TRUE.equals(auditLog.getRequiresApproval())
                 || auditLog.getApprovalStatus() != DecisionAuditLog.ApprovalStatus.PENDING) {
             throw new BusinessException(409, "该处置申请已处理或不是待审批状态");
@@ -65,17 +68,30 @@ public class QualityDispositionController {
         if (!Objects.equals(request.getApproverId(), authenticatedUserId)) {
             throw new BusinessException(400, "审批人必须与当前登录用户一致");
         }
-        if (Objects.equals(auditLog.getExecutorId(), authenticatedUserId)) {
-            throw new BusinessException(403, "申请人与审批人不能为同一用户");
+        // 纪律排查 B3 (Owner 2026-11-10): 工厂开了「允许本人审批」时申请人可自批, 必须写原因并留痕。
+        String reason = request.getSelfApprovalReason() != null && !request.getSelfApprovalReason().isBlank()
+                ? request.getSelfApprovalReason() : request.getComment();
+        com.cretas.aims.service.workflow.FactorySelfApprovalGate.Decision selfDecision =
+                com.cretas.aims.service.workflow.FactorySelfApprovalGate.decide(selfApprovalGate,
+                        auditLog.getFactoryId(), Objects.equals(auditLog.getExecutorId(), authenticatedUserId), reason);
+        if (selfDecision.forbidden()) {
+            throw new BusinessException(403, "申请人与审批人不能为同一用户")
+                    .withHint(com.cretas.aims.service.workflow.FactorySelfApprovalGate.SWITCH_HINT);
         }
+        return selfDecision;
     }
 
     private final QualityDispositionRuleService qualityDispositionRuleService;
     private final QualityInspectionRepository qualityInspectionRepository;
     private final DecisionAuditLogRepository decisionAuditLogRepository;
+    private final com.cretas.aims.repository.ProductionBatchRepository productionBatchRepository;
     private final StateMachineService stateMachineService;
     private final NotificationService notificationService;
     private final PushNotificationService pushNotificationService;
+
+    /** 列「成品仍在隔离的已放行批次」用; 可选注入只为兼容手工构造控制器的单测。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.quality.QualityDispositionInventoryService heldGoodsService;
 
     /**
      * 根据质检结果评估处置建议
@@ -177,6 +193,56 @@ public class QualityDispositionController {
      * 3. 记录审计日志
      * 4. 发送通知
      */
+    /**
+     * 已放行、但所在计划还有成品在隔离的批次 (Owner 2026-11-09)。web 端只给这些批次显示「重新核对并放行成品」。
+     */
+    @RequirePermission({"quality:read", "quality:read_write"})
+    @RequireModule("quality_inspection")
+    @GetMapping("/held-goods-batches")
+    @Operation(summary = "成品仍在隔离的已放行批次")
+    public ApiResponse<List<com.cretas.aims.service.quality.QualityDispositionInventoryService.HeldGoodsBatch>>
+            listHeldGoodsBatches(@PathVariable String factoryId) {
+        if (heldGoodsService == null) {
+            throw new IllegalStateException("质检处置库存服务未注入，查不了成品隔离情况");
+        }
+        return ApiResponse.success(heldGoodsService.listPassedBatchesWithHeldGoods(factoryId));
+    }
+
+    /**
+     * 已放行批次申请放行隔离成品 (Owner 2026-11-09): 一个人决定, 不要另一人复核; 用现在的数据把计划级放行重跑一遍,
+     * 每道检查重新来。权限与执行处置相同。操作人取登录身份, 不取请求体。
+     */
+    @RequirePermission({"quality:read_write"})
+    @RequireModule("quality_inspection")
+    @PostMapping("/batches/{batchId}/release-held-goods")
+    @Operation(summary = "已放行批次申请放行隔离成品")
+    public ApiResponse<DispositionResultDTO> releaseHeldGoods(
+            @PathVariable String factoryId,
+            @PathVariable Long batchId,
+            @RequestAttribute("userId") @Parameter(hidden = true) Long authenticatedUserId) {
+        // ⛔ 这里故意不加 @Transactional: 申请在服务自己的事务里跑, 被拒时那个事务回滚;
+        //    拒绝的审计在另一个事务里写, 才不会跟着回滚掉 (#1548 第二轮审查 5)。
+        DispositionExecutionResult result;
+        try {
+            result = qualityDispositionRuleService.recheckPlanRelease(factoryId, batchId, authenticatedUserId);
+        } catch (BusinessException refused) {
+            qualityDispositionRuleService.recordRefusedPlanRelease(factoryId, batchId, authenticatedUserId,
+                    refused.getErrorCode(), refused.getMessage());
+            throw refused;
+        }
+        return ApiResponse.success(DispositionResultDTO.builder()
+                .dispositionId(result.getAuditLogId())
+                .status("EXECUTED")
+                .executedAction(result.getExecutedAction().name())
+                .message(result.getMessage())
+                .newBatchStatus(result.getNewBatchStatus())
+                .finishedGoodsHeld(result.getFinishedGoodsHeld())
+                .approvalInitiated(false)
+                .auditLogId(result.getAuditLogId())
+                .executedAt(LocalDateTime.now())
+                .build());
+    }
+
     @RequirePermission({"quality:read_write"})
     @RequireModule("quality_inspection")
     @PostMapping("/execute")
@@ -262,6 +328,7 @@ public class QualityDispositionController {
                 .message(executionResult.getMessage())
                 .nextSteps(buildNextSteps(executionResult))
                 .newBatchStatus(executionResult.getNewBatchStatus())
+                .finishedGoodsHeld(executionResult.getFinishedGoodsHeld())
                 .approvalInitiated(executionResult.isApprovalInitiated())
                 .approvalRequestId(executionResult.getApprovalRequestId())
                 .auditLogId(executionResult.getAuditLogId())
@@ -476,6 +543,17 @@ public class QualityDispositionController {
                 qualityInspectionRepository.findAllById(entityIds).stream()
                         .collect(Collectors.toMap(QualityInspection::getId, Function.identity()));
 
+        // 批次号 / 品名: 一次批量查生产批次 (只认本厂的, 查不到就留空, 不编)
+        Set<Long> batchIds = inspectionMap.values().stream()
+                .map(QualityInspection::getProductionBatchId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        Map<Long, com.cretas.aims.entity.ProductionBatch> batchMap = batchIds.isEmpty() ? Collections.emptyMap() :
+                productionBatchRepository.findAllById(batchIds).stream()
+                        .filter(b -> factoryId.equals(b.getFactoryId()))
+                        .collect(Collectors.toMap(com.cretas.aims.entity.ProductionBatch::getId,
+                                Function.identity(), (x, y) -> x));
+
         List<PendingDispositionDTO> pendingList = pendingLogs.stream()
                 .map(auditLog -> {
                     PendingDispositionDTO dto = new PendingDispositionDTO();
@@ -495,6 +573,12 @@ public class QualityDispositionController {
                         QualityInspection inspection = inspectionMap.get(auditLog.getEntityId());
                         if (inspection != null) {
                             dto.setProductionBatchId(inspection.getProductionBatchId());
+                            com.cretas.aims.entity.ProductionBatch batch = inspection.getProductionBatchId() == null
+                                    ? null : batchMap.get(inspection.getProductionBatchId());
+                            if (batch != null) {
+                                dto.setBatchNumber(batch.getBatchNumber());
+                                dto.setProductName(batch.getProductName());
+                            }
                         }
                     }
 
@@ -540,6 +624,8 @@ public class QualityDispositionController {
         } catch (IllegalArgumentException e) {
             throw new BusinessException(400, "无效的处置动作: " + request.getActionCode());
         }
+        // Q6: 已报废批次不能申请返工, 在写申请行之前拒绝 (批次锁已由 lockInspection 拿到)
+        decisionGuard.assertReworkAllowed(factoryId, scopedInspection.getProductionBatchId(), requestedAction.name());
         // 动作本身不用审批的「放行」, 落在不合格未解除的批次上一样要复核 (D-S302-01)
         boolean unclearedRelease = requestedAction == DispositionAction.RELEASE
                 && qualityDispositionRuleService.isAwaitingDisposition(scopedInspection);
@@ -638,8 +724,8 @@ public class QualityDispositionController {
     /**
      * 审批处置申请
      */
-    @RequirePermission({"quality:read_write"})
-    @RequireRole({"quality_manager", "factory_super_admin", "platform_admin", "permission_admin"})
+    // 纪律排查 B3: 谁能审批按权限码 (默认 = 原名单 quality_manager / factory_super_admin / permission_admin, 各厂可改)
+    @RequirePermission({"approval_quality_disposition:approve"})
     @RequireModule("quality_inspection")
     @PostMapping("/{id}/approve")
     @Transactional
@@ -671,8 +757,14 @@ public class QualityDispositionController {
         // Lock order: production batch, inspection refresh, approval row, then inventory.
         // Reload the managed audit after waiting so a concurrent winner cannot be overwritten.
         decisionGuard.refreshApproval(auditLog);
-        validatePendingApprovalIdentity(auditLog, request, authenticatedUserId);
-        if (request.getApproved()) decisionGuard.assertApprovalCurrent(currentInspection);
+        com.cretas.aims.service.workflow.FactorySelfApprovalGate.Decision selfDecision =
+                validatePendingApprovalIdentity(auditLog, request, authenticatedUserId);
+        if (request.getApproved()) {
+            // Q6: 返工申请提交后批次被报废 (或报废前留下的旧申请) —— 批准之前、改审批行之前拒绝
+            decisionGuard.assertReworkAllowed(factoryId, currentInspection.getProductionBatchId(),
+                    auditLog.getDecisionMade());
+            decisionGuard.assertApprovalCurrent(currentInspection);
+        }
 
         // 更新审批状态
         auditLog.setApprovalStatus(request.getApproved()
@@ -682,6 +774,8 @@ public class QualityDispositionController {
         auditLog.setApproverName(request.getApproverName());
         auditLog.setApprovalComment(request.getComment());
         auditLog.setApprovedAt(LocalDateTime.now());
+        auditLog.setSelfApproved(selfDecision.selfApproved());
+        auditLog.setSelfApprovalReason(selfDecision.selfApproved() ? selfDecision.reason() : null);
 
         if (request.getApproved()) {
             auditLog.setNewState("APPROVED");
@@ -695,6 +789,8 @@ public class QualityDispositionController {
         Long productionBatchId = null;
         String executionStatus = null;
         String newBatchStatus = null;
+        String executionMessage = null;
+        Integer finishedGoodsHeld = null;
 
         // 如果批准，执行处置动作
         if (request.getApproved()) {
@@ -713,6 +809,9 @@ public class QualityDispositionController {
                 );
                 executionStatus = "EXECUTED";
                 newBatchStatus = executionResult.getNewBatchStatus();
+                // Q2/Q4: 还有成品留在隔离 (同计划还有几批没解除 / 报废召回批次的货 / 分不清归属) 要原话告诉审批人
+                executionMessage = executionResult.getMessage();
+                finishedGoodsHeld = executionResult.getFinishedGoodsHeld();
             } catch (BusinessException be) {
                 throw be;
             } catch (Exception e) {
@@ -785,7 +884,10 @@ public class QualityDispositionController {
                 .approvedAt(auditLog.getApprovedAt())
                 .executionStatus(executionStatus)
                 .newBatchStatus(newBatchStatus)
-                .message(request.getApproved() ? "处置申请已批准" : "处置申请已拒绝")
+                .finishedGoodsHeld(finishedGoodsHeld)
+                .message(request.getApproved()
+                        ? "处置申请已批准" + (executionMessage != null ? "；" + executionMessage : "")
+                        : "处置申请已拒绝")
                 .build();
 
         log.info("处置审批完成 - id={}, approved={}", id, request.getApproved());

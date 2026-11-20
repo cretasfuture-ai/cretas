@@ -111,13 +111,13 @@ function onDrop(event: DragEvent, beforeKey: string): void {
 
 <style scoped lang="scss">
 .workspace-tabs {
-  min-height: 46px;
+  min-height: 44px;
   display: flex;
   align-items: center;
   gap: 12px;
   padding: 0 16px;
-  background: #edf2f8;
-  border-bottom: 1px solid #dfe7f1;
+  background: var(--cs-surface);
+  border-bottom: 1px solid var(--cs-border);
 
   /*
    * 常驻悬浮在顶部 (2026-08-21 owner 实测: 页面往下滑, 标签栏跟着滑走了)。
@@ -156,7 +156,7 @@ function onDrop(event: DragEvent, beforeKey: string): void {
   border: 0;
   border-bottom: 2px solid transparent;
   background: transparent;
-  color: #53647a;
+  color: var(--cs-muted);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -165,19 +165,19 @@ function onDrop(event: DragEvent, beforeKey: string): void {
   white-space: nowrap;
 }
 
-.workspace-tab-container:hover { background: rgba(255, 255, 255, 0.6); color: #1b65a8; }
-.workspace-tab-container.active { color: #1b65a8; background: #fff; border-bottom-color: #1b65a8; font-weight: 600; }
+.workspace-tab-container:hover { background: var(--cs-surface-subtle); color: var(--cs-primary); }
+.workspace-tab-container.active { color: var(--cs-primary); background: transparent; border-bottom-color: var(--cs-primary); font-weight: 600; }
 .workspace-tab-container:active { cursor: grabbing; }
 .workspace-tab { min-width: 0; min-height: 42px; flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; cursor: inherit; }
-.workspace-tab:focus-visible, .workspace-tab-close:focus-visible { outline: 2px solid #1b65a8; outline-offset: -2px; }
+.workspace-tab:focus-visible, .workspace-tab-close:focus-visible { outline: 2px solid var(--cs-primary); outline-offset: -2px; }
 .workspace-tab-title { min-width: 0; display: inline-flex; overflow: hidden; }
 .workspace-tab-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .workspace-tab-number { flex: 0 0 auto; white-space: pre; }
-.task-dot { width: 8px; height: 8px; flex: 0 0 8px; border-radius: 50%; background: #d89222; box-shadow: 0 0 0 3px rgba(216, 146, 34, 0.12); }
-.workspace-tab-close { width: 24px; height: 24px; flex: 0 0 24px; padding: 0; border: 0; background: transparent; border-radius: 6px; display: inline-grid; place-items: center; color: #8a98aa; font-size: 17px; font-weight: 400; cursor: pointer; }
-.workspace-tab-close:hover { color: #d84a4a; background: #fff0f0; }
+.task-dot { width: 8px; height: 8px; flex: 0 0 8px; border-radius: 50%; background: var(--cs-warning); box-shadow: 0 0 0 3px var(--cs-warning-soft); }
+.workspace-tab-close { width: 24px; height: 24px; flex: 0 0 24px; padding: 0; border: 0; background: transparent; border-radius: 6px; display: inline-grid; place-items: center; color: var(--cs-muted); font-size: 17px; font-weight: 400; cursor: pointer; }
+.workspace-tab-close:hover { color: var(--cs-danger); background: var(--cs-danger-soft); }
 .new-task-button { align-self: center; margin: 6px 8px; min-width: 34px; }
-.workspace-hint { flex: 0 0 auto; color: #8795a8; font-size: 12px; }
+.workspace-hint { flex: 0 0 auto; color: var(--cs-muted); font-size: 12px; }
 
 @media (max-width: 980px) {
   .workspace-hint { display: none; }

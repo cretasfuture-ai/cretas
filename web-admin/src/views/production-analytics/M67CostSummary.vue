@@ -23,7 +23,7 @@
       <el-table-column prop="productName" label="产品" min-width="160"><template #default="{ row }">{{ row.productName || '—' }}</template></el-table-column>
       <!-- productTypeId 是 UUID, 兜底展示它等于给操作员看一串乱码, 不如照实显示"—" -->
       <el-table-column prop="skuCode" label="SKU" min-width="130"><template #default="{ row }">{{ row.skuCode || '—' }}</template></el-table-column>
-      <el-table-column label="SKU产出" width="120" align="right"><template #default="{ row }">{{ skuOutput(row) }}</template></el-table-column>
+      <el-table-column label="SKU产出" min-width="120" align="right"><template #default="{ row }">{{ skuOutput(row) }}</template></el-table-column>
       <el-table-column label="整批出成率" width="110" align="right">
         <template #default="{ row }"><span :class="yieldClass(row.overallYieldRate)">{{ isProcessSecretHidden(row, 'overallYieldRate') ? PROCESS_SECRET_LABEL : row.overallYieldRate == null ? '—' : (row.overallYieldRate * 100).toFixed(1) + '%' }}</span></template>
       </el-table-column>
@@ -33,7 +33,7 @@
       <el-table-column label="包装" width="100" align="right"><template #default="{ row }">{{ secretAwareCell(row, 'packagingCost', moneyOf) }}</template></el-table-column>
       <!-- 成本项没采集齐时 totalCost 依约为 null (不伪造完整成本), 但仍把「已填的都算进去」的
            已知合计显示出来, 并挂上"待补"标记说明差什么 —— 否则一个光秃秃的数会被当成完整成本。 -->
-      <el-table-column prop="totalCost" label="总成本" width="150" align="right">
+      <el-table-column prop="totalCost" label="总成本" min-width="170" align="right" fixed="right">
         <template #default="{ row }">
           <b>{{ totalCostCell(row) }}</b>
           <el-tooltip v-if="!isAnyProcessSecretHidden(row, ['totalCost', 'knownCostSubtotal']) && row.totalCost == null && row.knownCostSubtotal != null" placement="top">
@@ -82,6 +82,7 @@ import { canonicalUnitCode, displayUnit } from '@/utils/unitPricing';
 import { toDateString } from '@/utils/dateFormat';
 import { PROCESS_SECRET_LABEL, isAnyProcessSecretHidden, isProcessSecretHidden, secretAwareCell } from '@/utils/processSecretField';
 import { costSummaryTotal } from './costSummaryTotal';
+import { costMoney } from './costMoney';
 
 interface Row {
   orderId: string; orderNumber?: string; orderDate?: string; productTypeId?: string; productName?: string; skuCode?: string;
@@ -108,7 +109,7 @@ function defaultRange(): [string, string] {
 const range = ref<[string, string]>(defaultRange());
 const empties = computed(() => masked.value ? '无价格查看权限或区间内无订单' : '该区间无含生产批次的订单');
 
-const money = (v?: number | null) => (v == null ? '—' : '¥' + Number(v).toFixed(2));
+const money = costMoney;
 const moneyOf = (v: unknown) => money(typeof v === 'number' ? v : null);
 // 工艺保密: 保密产品的成本合计对无授权账号是 null, 显示「已保密」而不是「—」
 const totalCostCell = (row: Row) => (isAnyProcessSecretHidden(row, ['totalCost', 'knownCostSubtotal'])
@@ -182,10 +183,10 @@ onMounted(load);
 .sum-page { padding: 16px; }
 .sum-header { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 16px; }
 .sum-header h2 { margin: 0; }
-.sub { color: #909399; margin: 4px 0 0; font-size: 13px; }
+.sub { color: var(--cs-muted); margin: 4px 0 0; font-size: 13px; }
 .ctrls { display: flex; align-items: center; gap: 8px; }
 .mb { margin-bottom: 16px; }
-.y-ok { color: #67c23a; } .y-low { color: #f56c6c; font-weight: 600; } .y-high { color: #e6a23c; }
+.y-ok { color: var(--cs-success); } .y-low { color: var(--cs-danger); font-weight: 600; } .y-high { color: var(--cs-warning); }
 .wide-table :deep(.el-scrollbar__bar.is-horizontal) { opacity: 1; }
 .cost-partial-tag { margin-left: 6px; cursor: help; }
 </style>

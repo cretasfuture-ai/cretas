@@ -5,8 +5,9 @@ import { useAppStore } from '@/store/modules/app';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore, ModuleName } from '@/store/modules/permission';
 import { useTaskBadgeStore } from '@/store/modules/taskBadges';
+import { useDisposalApprovalStore } from '@/store/modules/disposalApproval';
 import { useWorkspaceStore } from '@/store/modules/workspace';
-import { useNavigationVisibilityStore, type NavigationVisibilityIdentity } from '@/store/modules/navigationVisibility';
+import { useNavigationVisibilityStore, navigationPermissionsReady, type NavigationVisibilityIdentity } from '@/store/modules/navigationVisibility';
 import { usePlatformFactoryContextStore, isFactoryViewPageRoute } from '@/store/modules/platformFactoryContext';
 import type { User as AuthUser } from '@/types/auth';
 import { get } from '@/api/request';
@@ -16,17 +17,20 @@ import {
   House, Operation, Box, Checked, ShoppingCart, Goods,
   User, Monitor, Money, Setting, DataAnalysis, Calendar,
   TrendCharts, Sell, Upload, ChatDotRound, Aim, Odometer, Tickets,
-  Histogram
+  Histogram, StarFilled
 } from '@element-plus/icons-vue';
-import { menuConfig, platformMenuConfig, financeManagerMenu, type MenuItem } from './menuConfig';
+import { factoryMenuForType, wholesaleWorkdeskTitles, platformMenuConfig, financeManagerMenu, MENU_SECTION_TITLES, type MenuItem, type MenuSection } from './menuConfig';
 import { resolveWorkspaceFactoryType, resolveWorkspaceFactoryTypeFromUser } from '@/config/workspaces';
 import SidebarMenuNode from './SidebarMenuNode.vue';
+import MenuSearch from './MenuSearch.vue';
+import { PINNED_MENU_LIMIT, pinnedMenuStorageKey, usePinnedMenu } from './pinnedMenu';
 import { getF006DemoMenu } from './f006DemoMenu';
 import {
-  hasFactoryAnalyticsSidebarOptIn, canShowOptedInFactoryAnalytics,
-  getDisabledFactoryMenuPaths, getHiddenFactoryMenuModules, isFactoryMenuHidden,
+  isFactoryAnalyticsSidebarTurnedOff, isFactoryAnalyticsGroupHidden,
+  getDisabledFactoryMenuPaths, getHiddenFactoryMenuModules, isFactoryMenuHidden, getFactoryMenuProfile,
 } from './factoryMenuVisibility';
 import { secrecyFromFeatureConfig, secrecyHiddenMenuPaths } from '@/api/factorySecrecy';
+import { externalHiddenMenuPaths, integrationsFromFeatureConfig } from '@/api/externalIntegrations';
 
 const router = useRouter();
 const route = useRoute();
@@ -34,12 +38,19 @@ const appStore = useAppStore();
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const taskBadges = useTaskBadgeStore();
+const disposalApproval = useDisposalApprovalStore();
 const workspace = useWorkspaceStore();
 const navigationVisibility = useNavigationVisibilityStore();
 const factoryView = usePlatformFactoryContextStore();
+const menuProfile = ref<'wholesale' | undefined>();
 
 // 当前用户角色
 const roleCode = computed(() => authStore.currentRole);
+// 工作区卡：当前工厂编号 + 业态（品牌块已经显示品牌名，这里不重复）
+const WORKSPACE_TYPE_LABEL: Record<string, string> = { FACTORY: '工厂', RESTAURANT: '餐饮', LOGISTICS: '物流' };
+const workspaceName = computed(() => effectiveFactoryId.value || '平台工作区');
+const workspaceSub = computed(() => `${WORKSPACE_TYPE_LABEL[String(effectiveFactoryType.value || '').toUpperCase()] || '企业'} · 当前工作区`);
+const workspaceInitial = computed(() => String(workspaceName.value).slice(0, 1).toUpperCase());
 const effectiveFactoryId = computed(() => factoryView.factoryId || authStore.factoryId);
 const effectiveFactoryType = computed(() => factoryView.context?.factoryType || authStore.factoryType);
 const workspaceFactoryType = computed(() => resolveWorkspaceFactoryType(
@@ -50,7 +61,7 @@ const workspaceFactoryType = computed(() => resolveWorkspaceFactoryType(
 
 // R19: Canvas module enable/disable — hide disabled modules from sidebar
 const disabledModuleCodes = ref<string[]>([]);
-const factoryAnalyticsMenuEnabled = ref(false);
+const factoryAnalyticsTurnedOff = ref(false);
 const hiddenFactoryMenuPaths = ref<string[]>([]);
 const hiddenFactoryMenuModules = ref<string[]>([]);
 // Backend-authoritative assembly switch. Keep the default closed until the
@@ -117,13 +128,21 @@ function isDemoTenant(factoryId: string | undefined): boolean {
 // `filteredMenu`) recompute automatically.
 async function fetchDisabledModules(factoryId: string) {
   const token = navigationVisibility.beginLoading();
-  factoryAnalyticsMenuEnabled.value = false;
+  menuProfile.value = undefined;
+  factoryAnalyticsTurnedOff.value = false;
   // 保密配置读到 `=== true` 之前, 依赖它的菜单 (工艺保密) 一律不显示
   hiddenFactoryMenuPaths.value = secrecyHiddenMenuPaths({});
+  // P10：外部授权读到 authorized === true 之前，外部软件对照菜单同样不显示
+  hiddenFactoryMenuPaths.value.push(...externalHiddenMenuPaths({}));
   hiddenFactoryMenuModules.value = [];
-  if (!factoryId || isDemoTenant(factoryId)) {
+  if (!factoryId) {
     disabledModuleCodes.value = [];
     navigationVisibility.markUnavailableIfCurrent(token);
+    return;
+  }
+  if (isDemoTenant(factoryId)) {
+    disabledModuleCodes.value = [];
+    navigationVisibility.markReadyIfCurrent(token);
     return;
   }
   try {
@@ -147,12 +166,15 @@ async function fetchDisabledModules(factoryId: string) {
       navigationVisibility.markErrorIfCurrent(token);
       return;
     }
-    factoryAnalyticsMenuEnabled.value = hasFactoryAnalyticsSidebarOptIn(featuresPayload.data);
+    factoryAnalyticsTurnedOff.value = isFactoryAnalyticsSidebarTurnedOff(featuresPayload.data);
+    menuProfile.value = getFactoryMenuProfile(featuresPayload.data);
     // 工厂级保密配置 (平台设置, 只读): 「工艺保密」不是明确开启 (=== true) 时隐藏工艺保密菜单
     const secrecyFlags = secrecyFromFeatureConfig(featuresPayload.data);
     hiddenFactoryMenuPaths.value = [
       ...getDisabledFactoryMenuPaths(featuresPayload.data),
       ...secrecyHiddenMenuPaths(secrecyFlags),
+      // P10：外部软件对照只在平台授权（authorized === true）的工厂显示，读不到按没授权
+      ...externalHiddenMenuPaths(integrationsFromFeatureConfig(featuresPayload.data)),
     ];
     hiddenFactoryMenuModules.value = getHiddenFactoryMenuModules(featuresPayload.data);
     navigationVisibility.markReadyIfCurrent(token);
@@ -166,8 +188,8 @@ async function fetchDisabledModules(factoryId: string) {
   }
 }
 watch(
-  () => effectiveFactoryId.value,
-  (factoryId) => { void fetchDisabledModules(factoryId); },
+  () => [effectiveFactoryId.value, authStore.user?.id] as const,
+  ([factoryId]) => { void fetchDisabledModules(factoryId); },
   { immediate: true },
 );
 watch(
@@ -227,6 +249,22 @@ const iconMap: Record<string, any> = {
 // the computed depend on factoryType, the disabled-module set, currentRole and
 // the (DB-or-fallback) permission level for the module — so any of them
 // changing reliably re-runs the filter.
+// P2：侧栏节点可见性 = 节点自身判据（canSeeMenuItem）+ 原型分组带来的两条规则。
+// 每次都先跑 canSeeMenuItem(item)，让它的响应式读取（见 AppSidebar.reactivity.spec）照常注册。
+function canSeeMenuNode(item: MenuItem): boolean {
+  const own = canSeeMenuItem(item);
+  // 纯展示分组不带判据，可见性只由子项决定（filterMenuItem 里子项全隐藏则整组隐藏）。
+  if (item.container) {
+    // 「数据与分析」容器认「按厂关掉」开关（只看这一个开关，不套其它判据；其余容器无判据）
+    return !isFactoryAnalyticsGroupHidden(
+      effectiveFactoryType.value || authStore.factoryType, item.path, factoryAnalyticsTurnedOff.value,
+    );
+  }
+  // 从原分组搬出来的叶子，原父组也必须可见（与搬家前「父组隐藏 ⇒ 子项隐藏」等价）。
+  const ancestorsVisible = (item.guardAncestors ?? []).map((ancestor) => canSeeMenuItem(ancestor)).every(Boolean);
+  return own && ancestorsVisible;
+}
+
 function canSeeMenuItem(item: MenuItem): boolean {
   // Keep the auth identity read eager for Vue dependency tracking; a factory
   // view context only overrides the effective tenant below.
@@ -235,14 +273,14 @@ function canSeeMenuItem(item: MenuItem): boolean {
   const disabledSet = disabledSidebarModules.value;
   const currentRole = permissionStore.currentRole;
   const canAccess = permissionStore.canAccess(item.module);
-  const factoryAnalyticsVisible = canShowOptedInFactoryAnalytics(
-    factoryType, item.path, factoryAnalyticsMenuEnabled.value,
+  const factoryAnalyticsHidden = isFactoryAnalyticsGroupHidden(
+    factoryType, item.path, factoryAnalyticsTurnedOff.value,
   );
   const assemblyEnabled = factoryAssemblyEnabled.value;
   const hiddenByFactory = isFactoryMenuHidden(item.path, hiddenFactoryMenuPaths.value);
   const hiddenByModule = hiddenFactoryMenuModules.value.includes(item.module);
 
-  if (hiddenByFactory || hiddenByModule) return false;
+  if (hiddenByFactory || hiddenByModule || factoryAnalyticsHidden) return false;
 
   const itemFactoryType = item.requiresFactoryContext ? workspaceFactoryType.value : factoryType;
   if (item.allowedFactoryTypes && !item.allowedFactoryTypes.includes(itemFactoryType)) return false;
@@ -259,7 +297,7 @@ function canSeeMenuItem(item: MenuItem): boolean {
     }
   }
 
-  if (item.hideForFactoryTypes?.includes(factoryType) && !factoryAnalyticsVisible) {
+  if (item.hideForFactoryTypes?.includes(factoryType)) {
     return false;
   }
   // R19: Canvas module enable/disable — hide disabled modules
@@ -269,6 +307,7 @@ function canSeeMenuItem(item: MenuItem): boolean {
   if (item.assemblyFeature && !assemblyEnabled) {
     return false;
   }
+  if (item.requiresDisposalApproval && !disposalApproval.canApprove) return false;
   if (!item.roles || item.roles.length === 0) {
     return canAccess;
   }
@@ -277,7 +316,7 @@ function canSeeMenuItem(item: MenuItem): boolean {
 
 function filterMenuItem(item: MenuItem): MenuItem | null {
   if (factoryView.isViewingFactory && !item.children?.length && !isFactoryViewPageRoute(item.path)) return null;
-  if (!canSeeMenuItem(item)) return null;
+  if (!canSeeMenuNode(item)) return null;
   if (!item.children?.length) return item;
 
   const filteredChildren = item.children
@@ -293,7 +332,7 @@ function filterMenuItem(item: MenuItem): MenuItem | null {
 const filteredMenu = computed(() => {
   const sourceMenu = authStore.isPlatform && !factoryView.isViewingFactory
     ? platformMenuConfig
-    : roleCode.value === 'finance_manager' ? financeManagerMenu : menuConfig;
+    : roleCode.value === 'finance_manager' ? financeManagerMenu : factoryMenuForType(effectiveFactoryType.value, menuProfile.value);
   const demoMenu = factoryView.isViewingFactory ? [] : getF006DemoMenu(effectiveFactoryId.value, roleCode.value);
   return [...demoMenu, ...sourceMenu]
     .map(item => filterMenuItem(item))
@@ -302,27 +341,70 @@ const filteredMenu = computed(() => {
 
 function collectVisiblePaths(items: readonly MenuItem[]): string[] {
   return items.flatMap((item) => [
-    item.path,
+    // container 的 path 是 '#group/...' 不是路由，不发布；搬出来的叶子把原父组路径一起发布（与搬家前一致）
+    ...(item.container ? [] : [item.path]),
+    ...(item.guardAncestors ?? []).map((ancestor) => ancestor.path),
     ...(item.children ? collectVisiblePaths(item.children) : []),
   ]);
 }
 
+// P2「常用」：浏览器本地按「账号 id + 工厂 id」存 path；只显示当前侧栏看得见的项（权限仍由上面判）。
+const pinnedMenu = usePinnedMenu();
+watch(
+  () => [authStore.user?.id, effectiveFactoryId.value] as const,
+  ([userId, factoryId]) => pinnedMenu.bind(pinnedMenuStorageKey(userId, factoryId)),
+  { immediate: true },
+);
+function visibleLeaves(items: readonly MenuItem[]): MenuItem[] {
+  return items.flatMap((item) => (item.children?.length ? visibleLeaves(item.children) : [item]));
+}
+// 侧栏过滤后的可见叶子交给「常用」：顶栏星标只能钉这些（审查 #1692 第 4 条）。
+watch(
+  () => (authStore.isPlatform && !factoryView.isViewingFactory ? [] : visibleLeaves(filteredMenu.value).map((leaf) => leaf.path)),
+  (paths) => pinnedMenu.setVisibleLeafPaths(paths),
+  { immediate: true },
+);
+const pinnedItems = computed<MenuItem[]>(() => {
+  if (authStore.isPlatform && !factoryView.isViewingFactory) return [];
+  const byPath = new Map(visibleLeaves(filteredMenu.value).map((leaf) => [leaf.path, leaf]));
+  return pinnedMenu.pinned.value
+    .map((path) => byPath.get(path))
+    .filter((leaf): leaf is MenuItem => !!leaf)
+    .slice(-PINNED_MENU_LIMIT);
+});
+const PINNED_INDEX_PREFIX = 'pin:';
+
+/** 侧栏分区标题：在每个分区的第一项前显示一次（「全部功能」「设置」；top 分区无标题）。 */
+function sectionTitleBefore(index: number): string {
+  const items = filteredMenu.value;
+  const section: MenuSection | undefined = items[index]?.section;
+  if (!section) return '';
+  if (index > 0 && items[index - 1]?.section === section) return '';
+  return MENU_SECTION_TITLES[section];
+}
+
 const navigationIdentity = computed<NavigationVisibilityIdentity>(() => ({
+  actorId: String(authStore.user?.id || ''),
   factoryId: effectiveFactoryId.value || '',
   role: roleCode.value,
-  factoryType: workspaceFactoryType.value,
+  factoryType: effectiveFactoryType.value,
   isPlatform: authStore.isPlatform,
 }));
+const navigationPermissionReady = computed(() => navigationPermissionsReady(
+  { ...navigationIdentity.value, factoryId: authStore.factoryId || '' }, permissionStore,
+  !!route.meta.mockDemo && isDemoTenant(authStore.factoryId),
+));
 
 // Publish only the already fully filtered sidebar paths. Consumers must match
 // this identity exactly; a missing or stale snapshot fails closed.
 watch(
-  [filteredMenu, navigationIdentity, () => navigationVisibility.status],
-  ([visibleMenu, identity, status]) => {
-    if (status !== 'ready') return;
+  [filteredMenu, navigationIdentity, () => navigationVisibility.status, navigationPermissionReady],
+  ([visibleMenu, identity, status, permissionsReady]) => {
+    if (status !== 'ready' || !permissionsReady) return;
     navigationVisibility.publish({
       ...identity,
       paths: collectVisiblePaths(visibleMenu),
+      menuProfile: menuProfile.value,
     });
   },
   { immediate: true, deep: true },
@@ -330,7 +412,7 @@ watch(
 
 const LOGISTICS_TITLE_OVERRIDES: Record<string, string> = {
   '/scheduling': '物流调度',
-  '/scheduling/logistics/workbench': '排线工作台',
+  '/scheduling/logistics/workbench': '排线数字专员工作台',
   '/scheduling/logistics/records': '调度记录',
   '/scheduling/logistics/orders': '门店与订单',
   '/scheduling/logistics/resources': '车辆与司机',
@@ -385,6 +467,16 @@ watch(
 
 watch(() => route.path, () => scheduleBadgeRefresh());
 
+// 报废审批入口按后端 approval-permission 判 (disposal:approve); 没有 finance 模块的人不问 (不发必 403 的请求)。
+watch(
+  () => [authStore.factoryId, authStore.user?.id, permissionStore.canAccess('finance')] as const,
+  ([factoryId, userId, hasFinance]) => {
+    if (factoryView.isViewingFactory || !hasFinance) { disposalApproval.reset(); return; }
+    void disposalApproval.ensureLoaded(String(factoryId || ''), String(userId ?? ''));
+  },
+  { immediate: true },
+);
+
 onMounted(() => {
   stopBadgeTimer = startVisibleBadgeRefresh(
     () => { if (!factoryView.isViewingFactory) void taskBadges.loadAll(); },
@@ -431,28 +523,43 @@ function findOpenParents(path: string, items: MenuItem[], parents: string[] = []
  * ⚠️ 阈值是**顶级可见项数**，⛔ 不是角色名 —— 按角色写死会漏掉以后新增的角色，
  *    而且同一个角色在不同工厂启用的模块数也不一样（菜单还按 module 启停过滤）。
  */
-const FLATTEN_WHEN_TOP_LEVEL_AT_MOST = 4;
+/**
+ * P2 改组后的阈值（审查 #1692 第 3 条）：原来数**顶级可见项**（≤ 4 铺开）。改组后顶级多了
+ * 「概览」「主数据」这类展示分组，同一个销售主管顶级从 3–5 项变成 5–6 项，铺开整体失效；
+ * 而且「工作台」嵌在「概览」里，只开顶级也还要再点一次。
+ * ⇒ 改数**可见叶子数**（真正能点的页面），≤ 24 就整棵树（含嵌套分组）全部铺开。
+ *   依据：本地实测单部门角色的可见叶子——销售主管、采购经理都在 24 以内（整页滚动可看完）；
+ *   车间主任这类跨部门管理角色 60+，铺开反而找不到东西，保持「只展开当前所在组」。
+ *   仍然 ⛔ 不按角色名写死（同一角色在不同工厂启用的模块不同）。
+ */
+const FLATTEN_WHEN_VISIBLE_LEAVES_AT_MOST = 24;
 
 // ⚠️ 铺开态下必须把 el-menu 的 unique-opened 关掉（模板里 :unique-opened="!shouldFlatten"）：
 //    它强制「同时只能展开一个」，会把 defaultOpeneds 里除第一个以外的全部收起来，
 //    于是 defaultOpeneds 看起来生效了、实际只开了一个。
-const shouldFlatten = computed(() => filteredMenu.value.length <= FLATTEN_WHEN_TOP_LEVEL_AT_MOST);
+const shouldFlatten = computed(() => visibleLeaves(filteredMenu.value).length <= FLATTEN_WHEN_VISIBLE_LEAVES_AT_MOST);
+
+function allGroupPaths(items: readonly MenuItem[]): string[] {
+  return items.flatMap((m) => (m.children?.length ? [m.path, ...allGroupPaths(m.children)] : []));
+}
 
 const defaultOpeneds = computed(() => {
   if (shouldFlatten.value) {
-    // 全铺开：把所有有子项的顶级项都列进去。
-    return filteredMenu.value.filter((m) => m.children?.length).map((m) => m.path);
+    // 全铺开：所有层级的分组都列进去（「概览 › 工作台」这种嵌套的也开）。
+    return allGroupPaths(filteredMenu.value);
   }
   return findOpenParents(route.path, filteredMenu.value) ?? [];
 });
 
-function handleSelect(path: string) {
+function handleSelect(index: string) {
+  const path = index.startsWith(PINNED_INDEX_PREFIX) ? index.slice(PINNED_INDEX_PREFIX.length) : index;
   const target = router.resolve(path);
   void router.push(workspace.menuRoute({
     path: target.path,
     fullPath: target.fullPath,
     query: target.query,
-    title: typeof target.meta.title === 'string' ? target.meta.title : undefined,
+    title: (menuProfile.value === 'wholesale' ? wholesaleWorkdeskTitles[target.path] : undefined)
+      || (typeof target.meta.title === 'string' ? target.meta.title : undefined),
   }));
   if (appStore.isMobile) {
     appStore.closeMobileMenu();
@@ -475,7 +582,7 @@ function handleSelect(path: string) {
       'mobile-open': appStore.isMobile && appStore.mobileMenuOpen
     }"
   >
-    <!-- Logo -->
+    <!-- 品牌块（原型：产品 logo + 产品名 + 副标题） -->
     <div class="sidebar-logo">
       <img :src="authStore.factoryLogoUrl" :alt="authStore.brandTitle" class="logo-icon" />
       <span class="logo-copy" :aria-hidden="isCollapsedSidebar">
@@ -483,6 +590,23 @@ function handleSelect(path: string) {
         <span v-if="authStore.brandSubtitle" class="logo-subtitle">{{ authStore.brandSubtitle }}</span>
       </span>
     </div>
+
+    <!-- 工作区卡（原型：当前工厂 / 租户）。折叠时隐藏，不占位 -->
+    <div v-if="!isCollapsedSidebar" class="sidebar-workspace" role="group" aria-label="当前工作区">
+      <UAvatar :text="workspaceInitial" size="md" class="workspace-avatar" />
+      <span class="workspace-copy">
+        <strong>{{ workspaceName }}</strong>
+        <small>{{ workspaceSub }}</small>
+      </span>
+    </div>
+
+    <!-- P2 菜单搜索（Ctrl+K），只搜当前侧栏可见项 -->
+    <MenuSearch
+      :menu="filteredMenu"
+      :collapsed="isCollapsedSidebar"
+      :title-for-item="titleForItem"
+      @select="handleSelect"
+    />
 
     <!-- 菜单 -->
     <el-scrollbar class="sidebar-menu-wrap" @wheel.stop>
@@ -494,13 +618,46 @@ function handleSelect(path: string) {
         :collapse-transition="false"
         :unique-opened="!shouldFlatten"
         background-color="transparent"
-        text-color="#ffffffa6"
-        active-text-color="#ffffff"
+        text-color="var(--cs-muted)"
+        active-text-color="var(--cs-primary)"
         @select="handleSelect"
       >
+        <template v-if="pinnedItems.length">
+          <div
+            class="menu-section-title"
+            :class="{ 'is-collapsed': isCollapsedSidebar }"
+            :aria-hidden="isCollapsedSidebar"
+            role="presentation"
+          >常用</div>
+          <el-menu-item
+            v-for="pin in pinnedItems"
+            :key="`pin-${pin.path}`"
+            :index="`${PINNED_INDEX_PREFIX}${pin.path}`"
+            :aria-label="`常用：${titleForItem(pin)}`"
+            class="pinned-menu-item"
+          >
+            <el-icon><StarFilled /></el-icon>
+            <template #title>
+              <span class="menu-title-copy">{{ titleForItem(pin) }}</span>
+              <button
+                type="button"
+                class="pinned-remove"
+                :aria-label="`从常用移除：${titleForItem(pin)}`"
+                title="从常用移除"
+                @click.stop="pinnedMenu.toggle(pin.path)"
+              >×</button>
+            </template>
+          </el-menu-item>
+        </template>
+        <template v-for="(item, index) in filteredMenu" :key="item.path">
+        <div
+          v-if="sectionTitleBefore(index)"
+          class="menu-section-title"
+          :class="{ 'is-collapsed': isCollapsedSidebar }"
+          :aria-hidden="isCollapsedSidebar"
+          role="presentation"
+        >{{ sectionTitleBefore(index) }}</div>
         <SidebarMenuNode
-          v-for="item in filteredMenu"
-          :key="item.path"
           :item="item"
           :collapsed="isCollapsedSidebar"
           :icon-map="iconMap"
@@ -508,26 +665,29 @@ function handleSelect(path: string) {
           :badge-for-item="badgeForItem"
           :level="1"
         />
+        </template>
       </el-menu>
     </el-scrollbar>
   </aside>
 </template>
 
 <style lang="scss" scoped>
+/* 原型样张（批发商管理端 V2）：白色侧栏 220px、品牌块 64 高、工作区卡、11px 分组小标题、13px 菜单项、浅蓝选中。全部取 --cs-* */
 .app-sidebar {
   position: fixed;
   top: 0;
   left: 0;
   bottom: 0;
-  width: 220px;
-  background: linear-gradient(180deg, #0C1929 0%, #132238 60%, #0F1D2E 100%);
+  width: var(--cs-sidebar, 220px);
+  background: var(--cs-surface);
+  border-right: 1px solid var(--cs-border);
   transition: width 0.3s ease-in-out;
   z-index: 100;
   display: flex;
   flex-direction: column;
 
   &.is-collapsed {
-    width: 64px;
+    width: var(--cs-sidebar-collapsed, 64px);
   }
 }
 
@@ -536,27 +696,16 @@ function handleSelect(path: string) {
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  padding: 0 16px;
-  position: relative;
-
-  // Gradient glow line instead of solid border
-  &::after {
-    content: '';
-    position: absolute;
-    bottom: 0;
-    left: 16px;
-    right: 16px;
-    height: 1px;
-    background: linear-gradient(90deg, transparent, rgba(43, 126, 193, 0.4), transparent);
-  }
+  padding: 0 20px;
+  flex: none;
 
   .logo-icon {
     flex-shrink: 0;
     width: 32px;
     height: 32px;
     object-fit: contain;
-    border-radius: 6px;
-    background: #fff;
+    border-radius: 8px;
+    background: var(--cs-surface);
   }
 
   .logo-copy {
@@ -565,7 +714,7 @@ function handleSelect(path: string) {
     display: flex;
     flex-direction: column;
     justify-content: center;
-    line-height: 1.1;
+    line-height: 1.25;
     max-width: 144px;
     overflow: hidden;
     opacity: 1;
@@ -576,8 +725,8 @@ function handleSelect(path: string) {
   }
 
   .logo-title {
-    color: #fff;
-    font-size: 15px;
+    color: var(--cs-text);
+    font-size: 17px;
     font-weight: 600;
     white-space: nowrap;
     overflow: hidden;
@@ -585,25 +734,114 @@ function handleSelect(path: string) {
   }
 
   .logo-subtitle {
-    margin-top: 3px;
-    color: rgba(255, 255, 255, 0.62);
-    font-size: 11px;
-    font-weight: 500;
+    margin-top: 2px;
+    color: var(--cs-muted);
+    font-size: 10px;
+    font-weight: 400;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
 }
 
+// 工作区卡：浅底 + 1px 边 + 6px 圆角，边距 14/12/8，内边距 10
+.sidebar-workspace {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 12px 8px;
+  padding: 10px;
+  border: 1px solid var(--cs-border);
+  border-radius: var(--cs-radius-sm);
+  background: var(--cs-surface-subtle);
+
+  .workspace-avatar {
+    flex: none;
+    border-radius: var(--cs-radius-sm);
+    background: var(--cs-primary-soft);
+    color: var(--cs-primary);
+  }
+
+  .workspace-copy {
+    min-width: 0;
+    display: grid;
+    gap: 2px;
+
+    strong {
+      color: var(--cs-text);
+      font-size: 13px;
+      font-weight: 600;
+      line-height: 17px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    small {
+      color: var(--cs-muted);
+      font-size: 11px;
+      line-height: 17px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
+}
+
 .sidebar-menu-wrap {
   flex: 1;
-  padding: 8px;
+  padding: 0 12px 8px;
+}
+
+// P2「常用」项：右侧移除按钮悬停才出现
+:deep(.pinned-menu-item) {
+  .pinned-remove {
+    margin-left: auto;
+    padding: 0 4px;
+    border: 0;
+    background: transparent;
+    color: var(--cs-muted);
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity var(--cs-duration-fast, 140ms);
+  }
+  &:hover .pinned-remove,
+  .pinned-remove:focus-visible { opacity: 1; color: var(--cs-primary); }
+}
+
+// 分组小标题（「全部功能」「设置」「业务分组」）：11px 灰字，左右 10px
+.menu-section-title {
+  padding: 14px 10px 5px;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--cs-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  user-select: none;
+  transition: opacity 140ms ease-out;
+
+  &:first-child { padding-top: 4px; }
+
+  &.is-collapsed {
+    opacity: 0;
+    height: 8px;
+    padding: 0;
+  }
 }
 
 // Keep the icon at the same x position in both layouts. Scope label rules to
 // root items so teleported submenus and their tooltip text remain readable.
 :deep(.sidebar-menu) {
-  --el-menu-base-level-padding: 12px;
+  --el-menu-base-level-padding: 10px;
+  --el-menu-item-height: 34px;
+  --el-menu-sub-item-height: 34px;
+  --el-menu-bg-color: transparent;
+  --el-menu-hover-bg-color: var(--cs-surface-subtle);
+  --el-menu-text-color: var(--cs-muted);
+  --el-menu-active-color: var(--cs-primary);
   width: 100%;
 }
 
@@ -660,75 +898,52 @@ function handleSelect(path: string) {
   }
 }
 
+// 菜单项：13px / 7×10 内边距 / 6px 圆角 / 灰字；悬停浅底；选中 = 主色浅底 + 主色字 + 600
 :deep(.el-menu) {
   border-right: none;
 
   .el-menu-item,
   .el-sub-menu__title {
-    margin: 2px 0;
-    border-radius: 8px;
+    height: 34px;
+    line-height: 20px;
+    margin: 1px 0;
+    padding: 7px 10px;
+    border-radius: var(--cs-radius-sm);
+    font-size: 13px;
+    color: var(--cs-muted);
     cursor: pointer;
-    transition: all 0.2s ease;
+    transition: background-color var(--cs-duration-fast), color var(--cs-duration-fast);
 
     &:hover {
-      background-color: rgba(255, 255, 255, 0.06) !important;
-      color: #fff !important;
+      background-color: var(--cs-surface-subtle) !important;
+      color: var(--cs-text) !important;
     }
 
-    // Icon micro-interaction: subtle scale + 1px lift on hover. Plain CSS
-    // transition (not GSAP) — this is a pure :hover state with no JS-driven
-    // sequencing/stagger/cleanup logic needed, so CSS is cheaper and simpler
-    // than spinning up a GSAP hover handler for every one of ~20 menu items.
-    // GSAP is reserved for useCountUp/vReveal where it earns its keep
-    // (once-only mount tweens, formatted-value tweening). Scale/duration
-    // values intentionally mirror ICON_HOVER_SCALE/ICON_HOVER_DURATION_S in
-    // src/utils/motion/constants.ts so the sidebar reads as the same motion
-    // vocabulary as the rest of the app.
     .el-icon {
-      transition: transform 0.15s ease-out;
-    }
-
-    &:hover .el-icon {
-      transform: scale(1.12) translateY(-1px);
+      margin-right: 10px;
+      font-size: 14px;
+      width: 14px;
+      color: inherit;
     }
   }
+
+  .el-sub-menu__title { padding-right: 28px; }
+  .el-sub-menu__icon-arrow { right: 10px; font-size: 12px; color: var(--cs-muted); }
 
   .el-menu-item.is-active {
-    background-color: rgba(27, 101, 168, 0.25) !important;
-    position: relative;
-
-    &::before {
-      content: '';
-      position: absolute;
-      left: 0;
-      top: 25%;
-      height: 50%;
-      width: 3px;
-      border-radius: 0 3px 3px 0;
-      background: #2B7EC1;
-    }
+    background-color: var(--cs-primary-soft) !important;
+    color: var(--cs-primary) !important;
+    font-weight: 600;
   }
 
-  // Nested sub-menu items
+  // 嵌套子菜单：缩进，字号同级
   .el-sub-menu .el-menu-item {
-    margin: 1px 4px;
-    border-radius: 6px;
-    padding-left: 48px !important;
+    margin: 1px 0;
+    padding-left: 34px !important;
   }
 
-  // Reduced motion: no icon transform at all, even instantly on hover —
-  // background/color hover feedback (above) still works, just no motion.
-  @media (prefers-reduced-motion: reduce) {
-    .el-menu-item .el-icon,
-    .el-sub-menu__title .el-icon {
-      transition: none;
-    }
-
-    .el-menu-item:hover .el-icon,
-    .el-sub-menu__title:hover .el-icon {
-      transform: none;
-    }
-  }
+  // 子菜单标题含当前页时只变色，不整块染底
+  .el-sub-menu.is-active > .el-sub-menu__title { color: var(--cs-primary); }
 }
 
 .sidebar-overlay {
@@ -755,11 +970,12 @@ function handleSelect(path: string) {
   }
 }
 
+// 折叠态的弹出子菜单：白底 + 1px 边 + 轻阴影（原先是深色）
 :global(.app-sidebar-menu-popper) {
-  border: 1px solid rgba(255, 255, 255, 0.08) !important;
-  border-radius: 8px !important;
-  background: #102033 !important;
-  box-shadow: 0 16px 40px rgba(3, 10, 20, 0.35) !important;
+  border: 1px solid var(--cs-border) !important;
+  border-radius: var(--cs-radius) !important;
+  background: var(--cs-surface) !important;
+  box-shadow: var(--cs-shadow-overlay) !important;
 }
 
 :global(.app-sidebar-menu-popper::before) {

@@ -17,6 +17,16 @@ public interface FactoryMaterialRequisitionRepository extends JpaRepository<Fact
 
     Optional<FactoryMaterialRequisition> findByIdAndFactoryIdAndDeletedAtIsNull(String id, String factoryId);
 
+    /**
+     * 行锁读领料单 (C1, 2026-11-10): 整单撤回放回生产仓的料要不要直接退回原料仓, 取决于这张单
+     * <b>此刻</b>是否已关单。必须在锁住对应生产仓批次之后再锁读这一行, 读到的才是并发关单提交后的状态。
+     */
+    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT r FROM FactoryMaterialRequisition r "
+            + "WHERE r.id = :id AND r.factoryId = :factoryId AND r.deletedAt IS NULL")
+    Optional<FactoryMaterialRequisition> findByIdAndFactoryIdForUpdate(@Param("id") String id,
+                                                                       @Param("factoryId") String factoryId);
+
     // 防呆 Rule 2 (fool-proof-design): 支持按人类可读的需求单号查询 (前端不该要求仓管员手填 UUID).
     Optional<FactoryMaterialRequisition> findByFactoryIdAndRequisitionNoAndDeletedAtIsNull(String factoryId, String requisitionNo);
 
@@ -54,4 +64,43 @@ public interface FactoryMaterialRequisitionRepository extends JpaRepository<Fact
      */
     List<FactoryMaterialRequisition> findByStatusInAndCreatedAtBeforeAndDeletedAtIsNull(
             List<Status> statuses, java.time.LocalDateTime before);
+
+    /**
+     * 领料单列表的筛选查询。kw / plan 由调用方预先拼成小写 "%x%" (null = 不筛), 用户输入里的 % _ ! 已按 ESCAPE '!' 转义
+     * (见 FactoryMaterialRequisitionServiceImpl#likePattern); from/to 作用于需求日期 required_date。
+     * 参数侧 IS NULL 一律 CAST(... AS string) 给 PG 类型提示 (见 database-entity-sync 规则)。
+     */
+    @Query("SELECT r FROM FactoryMaterialRequisition r WHERE r.factoryId = :factoryId AND r.deletedAt IS NULL "
+            + "AND (CAST(:status AS string) IS NULL OR r.status = :status) "
+            + "AND (CAST(:kw AS string) IS NULL OR LOWER(r.requisitionNo) LIKE :kw ESCAPE '!' "
+            + "     OR LOWER(r.productName) LIKE :kw ESCAPE '!' OR LOWER(r.productionPlanNumber) LIKE :kw ESCAPE '!') "
+            + "AND (CAST(:plan AS string) IS NULL OR LOWER(r.productionPlanNumber) LIKE :plan ESCAPE '!') "
+            + "AND (CAST(:fromDate AS string) IS NULL OR r.requiredDate >= :fromDate) "
+            + "AND (CAST(:toDate AS string) IS NULL OR r.requiredDate <= :toDate)")
+    Page<FactoryMaterialRequisition> search(@Param("factoryId") String factoryId, @Param("status") Status status,
+                                            @Param("kw") String kw, @Param("plan") String plan,
+                                            @Param("fromDate") java.time.LocalDate fromDate,
+                                            @Param("toDate") java.time.LocalDate toDate, Pageable pageable);
+
+    /**
+     * 按物料汇总: 已发 (issued_qty, 已签收入工厂仓) / 已备 (picked_qty) / 退回 (returned_qty); 同样的筛选, 已取消的单不计。
+     * 行: [materialTypeId, materialName, unit, pickedQty, issuedQty, returnedQty]。
+     */
+    @Query("SELECT i.materialTypeId, i.materialName, i.unit, "
+            + "COALESCE(SUM(i.pickedQty), 0), COALESCE(SUM(i.issuedQty), 0), COALESCE(SUM(i.returnedQty), 0) "
+            + "FROM FactoryMaterialRequisitionItem i JOIN i.requisition r "
+            + "WHERE r.factoryId = :factoryId AND r.deletedAt IS NULL "
+            + "AND r.status <> :excluded "
+            + "AND (CAST(:status AS string) IS NULL OR r.status = :status) "
+            + "AND (CAST(:kw AS string) IS NULL OR LOWER(r.requisitionNo) LIKE :kw ESCAPE '!' "
+            + "     OR LOWER(r.productName) LIKE :kw ESCAPE '!' OR LOWER(r.productionPlanNumber) LIKE :kw ESCAPE '!') "
+            + "AND (CAST(:plan AS string) IS NULL OR LOWER(r.productionPlanNumber) LIKE :plan ESCAPE '!') "
+            + "AND (CAST(:fromDate AS string) IS NULL OR r.requiredDate >= :fromDate) "
+            + "AND (CAST(:toDate AS string) IS NULL OR r.requiredDate <= :toDate) "
+            + "GROUP BY i.materialTypeId, i.materialName, i.unit ORDER BY i.materialName, i.unit")
+    List<Object[]> summarizeByMaterial(@Param("factoryId") String factoryId, @Param("status") Status status,
+                                       @Param("excluded") Status excluded,
+                                       @Param("kw") String kw, @Param("plan") String plan,
+                                       @Param("fromDate") java.time.LocalDate fromDate,
+                                       @Param("toDate") java.time.LocalDate toDate);
 }

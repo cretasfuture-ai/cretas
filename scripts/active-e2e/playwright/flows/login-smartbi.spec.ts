@@ -8,8 +8,8 @@
  * Per HARD rule `feedback_active_e2e_replaces_passive_soak.md`:
  *   active synthetic E2E from customer perspective replaces passive soak.
  *
- * Configurable via env vars (defaults target Web-Admin prod 139:8086):
- *   E2E_BASE_URL    https://www.cretaceousfuture.com   (or http://139.196.165.140:8086)
+ * Configurable via env vars (defaults target Web-Admin prod via the 47 gateway):
+ *   E2E_BASE_URL    https://admin.cretaceousfuture.com (47 gateway; 139 was retired 2026-11-12)
  *   E2E_USERNAME    factory_super_admin                (Web-Admin login)
  *   E2E_PASSWORD    <from .env.test.example, never commit real value>
  *   E2E_FACTORY     F002                               (one factory to scope)
@@ -22,7 +22,7 @@
  */
 import { test, expect } from '@playwright/test';
 
-const BASE_URL = process.env.E2E_BASE_URL || 'http://139.196.165.140:8086';
+const BASE_URL = process.env.E2E_BASE_URL || 'https://admin.cretaceousfuture.com';
 const USERNAME = process.env.E2E_USERNAME || '';
 const PASSWORD = process.env.E2E_PASSWORD || '';
 const FACTORY = process.env.E2E_FACTORY || 'F002';
@@ -46,7 +46,7 @@ test.describe('Active E2E — SmartBI Web-Admin customer perspective', () => {
     await page.waitForURL(/.*dashboard|home|index|main.*/i, { timeout: 15000 });
 
     // 2. Navigate to executive dashboard
-    // Web-Admin main routes (verified at 139:8086 in cutover smoke):
+    // Web-Admin main routes (verified at the old 139:8086 gateway in cutover smoke):
     //   /smartbi/dashboard or /home (factory_super_admin landing)
     await page.goto(`${BASE_URL}/smartbi/dashboard`);
     await page.waitForLoadState('networkidle', { timeout: 20000 });

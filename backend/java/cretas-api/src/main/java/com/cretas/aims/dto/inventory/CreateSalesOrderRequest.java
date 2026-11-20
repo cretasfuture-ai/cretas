@@ -44,6 +44,10 @@ public class CreateSalesOrderRequest {
     @Size(max = 5000, message = "备注长度不能超过5000个字符")
     private String remark;
 
+    /** 超信用额度被拦截 (BLOCK 模式) 时的特批原因; 仅持「信用特批」权限者填写才生效, 留痕到订单备注。 */
+    @Size(max = 500, message = "信用特批原因长度不能超过500个字符")
+    private String creditOverrideReason;
+
     @Size(max = 100, message = "业务员长度不能超过100个字符")
     private String salesperson;
 

@@ -245,5 +245,5 @@ onMounted((): void => { void loadUnits(); });
 <style lang="scss" scoped>
 .unit-select { width: 100%; }
 .unit-dialog-tip { margin-left: 86px; color: #909399; font-size: 12px; line-height: 1.5; }
-:deep(.create-unit-option) { color: #409eff; font-weight: 600; }
+:deep(.create-unit-option) { color: var(--cs-primary); font-weight: 600; }
 </style>

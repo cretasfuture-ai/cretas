@@ -14,6 +14,10 @@ BOUNDARIES=Path(__file__).parent/'data/factory_semantic_boundaries.json'
 
 def source_inventory(catalog):
     """Read actual Tool descriptors and source hashes without starting Java/DB."""
+    from tool_access_modes import scan  # one scanner for both pipelines (superclasses, comments)
+    # 扫同一棵树: 描述与参数从 WORK 读, 读写属性也必须从 WORK 读 (默认参数指向本仓, 与 WORK 不同时会张冠李戴)
+    tool_root=WORK/'backend/java/cretas-api/src/main/java/com/cretas/aims/ai/tool'
+    modes=scan(tool_root,tool_root/'impl')
     tools={}
     for path in (WORK/'backend/java/cretas-api/src/main/java/com/cretas/aims/ai/tool/impl').rglob('*.java'):
         source=path.read_text(encoding='utf-8')
@@ -36,8 +40,7 @@ def source_inventory(catalog):
             body=source[start:index-1]
         strings=re.findall(r'"""(.*?)"""|"((?:\\.|[^"\\])*)"',body,re.S)
         description=' '.join(a or b for a,b in strings).replace('\\n',' ').replace('\\"','"')
-        mode=re.search(r'AccessMode getAccessMode\(\)\s*\{\s*return AccessMode\.([A-Z_]+)',source)
-        tools[name.group(1)]=dict(description=description[:3000],parameters=sorted(set(re.findall(r'properties\.put\("([^"]+)"',source))),source=path.relative_to(WORK).as_posix(),sha256=hashlib.sha256(path.read_bytes()).hexdigest(),declared_access_mode=mode.group(1) if mode else 'UNRESOLVED')
+        tools[name.group(1)]=dict(description=description[:3000],parameters=sorted(set(re.findall(r'properties\.put\("([^"]+)"',source))),source=path.relative_to(WORK).as_posix(),sha256=hashlib.sha256(path.read_bytes()).hexdigest(),declared_access_mode=modes.get(name.group(1),{}).get('mode','UNRESOLVED'))
     return [dict(row,tool_contract=tools.get(row.get('tool_name'),{})) for row in catalog['canonical_intents']]
 
 

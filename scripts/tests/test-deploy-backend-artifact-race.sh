@@ -67,13 +67,28 @@ fi
 
 simultaneous_left() { sleep 0.1; }
 simultaneous_right() { sleep 0.1; }
-run_first_success_build_race "$TMP_ROOT/simultaneous" ci simultaneous_left maven simultaneous_right
-case "$BUILD_RACE_WINNER" in
-    ci|maven) ;;
-    *) fail "simultaneous success produced an invalid winner" ;;
-esac
-[ "$(wc -l < "$TMP_ROOT/simultaneous/winner" | tr -d ' ')" = 1 ] || fail "winner file is not singular"
-[ -d "$TMP_ROOT/simultaneous/claim" ] || fail "atomic claim directory is missing"
+
+# Simultaneous success must still yield exactly one well-formed winner. One run
+# hides the race: with the old `mkdir` claim, ubuntu-26.04 runners produced a
+# corrupt winner in 142 of 400 iterations (#1552), i.e. ~35% each, so a single
+# check went red only some of the time. Loop it: with that failure rate, 60
+# iterations all passing by luck is ~0.65^60 ≈ 6e-12.
+SIMULTANEOUS_ITERATIONS=${SIMULTANEOUS_ITERATIONS:-60}
+simultaneous_runs=0
+for simultaneous_i in $(seq 1 "$SIMULTANEOUS_ITERATIONS"); do
+    race_dir="$TMP_ROOT/simultaneous-$simultaneous_i"
+    run_first_success_build_race "$race_dir" ci simultaneous_left maven simultaneous_right
+    case "$BUILD_RACE_WINNER" in
+        ci|maven) ;;
+        *) fail "simultaneous success produced an invalid winner on iteration $simultaneous_i: '$BUILD_RACE_WINNER'" ;;
+    esac
+    [ "$(wc -l < "$race_dir/winner" | tr -d ' ')" = 1 ] || fail "winner file is not singular on iteration $simultaneous_i"
+    [ -e "$race_dir/claim" ] || fail "atomic claim is missing on iteration $simultaneous_i"
+    simultaneous_runs=$((simultaneous_runs + 1))
+done
+# The loop must really have run, not been skipped by an empty seq.
+[ "$simultaneous_runs" = "$SIMULTANEOUS_ITERATIONS" ] || fail "simultaneous loop ran $simultaneous_runs of $SIMULTANEOUS_ITERATIONS"
+echo "simultaneous: $simultaneous_runs iterations, one winner each"
 
 # Exact recorded PID cleanup must leave unrelated processes alive.
 sleep 30 &

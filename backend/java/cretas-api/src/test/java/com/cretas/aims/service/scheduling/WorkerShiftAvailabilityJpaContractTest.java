@@ -29,8 +29,24 @@ import static org.assertj.core.api.Assertions.assertThat;
 @ActiveProfiles("test")
 @EntityScan("com.cretas.aims.entity")
 @EnableJpaRepositories("com.cretas.aims.repository")
-@Import(WorkerShiftAvailabilityCheck.class)
+@Import({WorkerShiftAvailabilityCheck.class, WorkerShiftAvailabilityJpaContractTest.Permissions.class})
 class WorkerShiftAvailabilityJpaContractTest {
+    /**
+     * 切片上下文里没有 PermissionService: 可派人手现在按权限判断 (B6), 构造函数多了这个依赖。
+     * 用真实的权限判定 (内置矩阵) 包一层 Mockito 委托, 不是桩 —— 仓库层是「成功的空结果」, 落到矩阵 (operator 有报工权限)。
+     * 生产里 PermissionService 一定存在, 这个依赖保持必填 (缺失 = 起不来, 不静默当没人)。
+     */
+    @org.springframework.boot.test.context.TestConfiguration
+    static class Permissions {
+        @org.springframework.context.annotation.Bean
+        com.cretas.aims.service.PermissionService permissionService() {
+            com.cretas.aims.service.impl.PermissionServiceImpl real = new com.cretas.aims.service.impl.PermissionServiceImpl();
+            com.cretas.aims.testutil.PermissionRepositoryFixtures.installSuccessfulEmpty(real);
+            return org.mockito.Mockito.mock(com.cretas.aims.service.PermissionService.class,
+                    org.mockito.AdditionalAnswers.delegatesTo(real));
+        }
+    }
+
     private static final String F = "APS-ROSTER-A", OTHER = "APS-ROSTER-B";
     private static final LocalDateTime START = LocalDateTime.of(2027, 1, 5, 9, 0);
     @Autowired TestEntityManager em;

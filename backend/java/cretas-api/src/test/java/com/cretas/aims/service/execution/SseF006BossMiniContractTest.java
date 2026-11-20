@@ -79,6 +79,15 @@ class SseF006BossMiniContractTest {
         when(businessTypeGate.resolveDomain("F006")).thenReturn("FACTORY");
         when(businessTypeGate.resolveDomain("F007")).thenReturn("FACTORY");
         ReflectionTestUtils.setField(service, "businessTypeGate", businessTypeGate);
+        // 生产接线: 早期通用问法路由 (分析流 / 食品知识) 只有编排器那一份, 管线每轮都调 (PR-3)
+        IntentExecutionOrchestrator turnSteps = OrdinaryEntryPipeline.attachTurnSteps(service);
+        // PR-3 复审 M2: 分析流准入要 analytics (调用者是有这项权限的角色); 门缺席时按拒绝 (fail closed)
+        IntentPermissionGate analyticsGate = org.mockito.Mockito.mock(IntentPermissionGate.class);
+        org.mockito.Mockito.when(analyticsGate.check(org.mockito.ArgumentMatchers.argThat(i -> i != null
+                        && IntentExecutionOrchestrator.ANALYSIS_FLOW_PERMISSION.equals(i.getRequiredPermission())),
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(IntentPermissionGate.PermissionCheck.allowed());
+        ReflectionTestUtils.setField(turnSteps, "intentPermissionGate", analyticsGate);
         when(memory.getOrCreateContext(anyString(), anyLong(), any())).thenAnswer(call ->
                 ConversationContext.builder().factoryId(call.getArgument(0)).userId(call.getArgument(1))
                         .sessionId(SESSION).build());
@@ -179,6 +188,17 @@ class SseF006BossMiniContractTest {
         verifyNoInteractions(cloud);
         verify(service, never()).sendSseEvent(eq(emitter), eq("result"), any());
         verify(service, never()).sendSseEvent(eq(emitter), eq("complete"), any());
+        verify(emitter).completeWithError(any(IOException.class));
+    }
+
+    @Test
+    void disconnectedWhileSendingProgressTakesTheDisconnectPathNotTheUpstreamFailurePath() throws Exception {
+        doThrow(new IOException("disconnected")).when(service).sendSseEvent(eq(emitter), eq("progress"), any());
+        execute("F006", 77L, "factory_super_admin", false);
+        verify(service).sendSseEvent(eq(emitter), eq("progress"), any()); // 必然发生的读数: 真走到了 progress
+        // 上游失败出口发的 error 带 status=FAILED; 断开走外层统一出口 (ProcessError), 与 token 断开一致
+        assertThat(sentPayloads("error")).noneMatch(p -> String.valueOf(p).contains("FAILED"));
+        verify(service, never()).sendSseEvent(eq(emitter), eq("result"), any());
         verify(emitter).completeWithError(any(IOException.class));
     }
 
@@ -290,8 +310,15 @@ class SseF006BossMiniContractTest {
                 .matchMethod(IntentMatchResult.MatchMethod.NONE)
                 .questionType(IntentKnowledgeBase.QuestionType.OPERATIONAL_COMMAND).build());
         execute("F006", 77L, "factory_super_admin", false);
-        verifyNoInteractions(mini, cloud);
-        verify(intents).recognizeIntentWithConfidence(eq(QUESTION), eq("F006"), eq(3), eq(77L),
+        // PR-3: 两入口同一条早期路由 —— 在用的食品知识按显式意图走, 分析请求进分析流 (原普通入口口径, App 也一样);
+        // 本地老板问答通道都不接 (守的就是这一条)
+        verifyNoInteractions(mini);
+        if ("active-food".equals(route)) {
+            verifyNoInteractions(cloud);
+        } else {
+            verify(analysis).detectAnalysisTopic(QUESTION);
+        }
+        verify(intents, never()).recognizeIntentWithConfidence(eq(QUESTION), eq("F006"), eq(3), eq(77L),
                 eq("factory_super_admin"), any(), any(), any(), eq(List.of()));
     }
 
@@ -319,5 +346,70 @@ class SseF006BossMiniContractTest {
         verify(dispatch).executeWithTool(eq(tool), eq("F006"), any(), eq(intent), eq(77L),
                 eq("factory_super_admin"), any());
         verifyNoInteractions(mini, cloud, knowledge);
+    }
+
+    private void answerWith(String content) throws Exception {
+        doAnswer(call -> {
+            Consumer<F006BossQuestionClient.Metadata> meta = call.getArgument(5);
+            Consumer<String> tokens = call.getArgument(6);
+            meta.accept(new F006BossQuestionClient.Metadata("mac-mini", "qwen3.8:27b",
+                    call.getArgument(4), CORRELATION));
+            tokens.accept(content.substring(0, content.length() / 2));
+            tokens.accept(content.substring(content.length() / 2));
+            return new F006BossQuestionClient.Answer(content, "mac-mini", "qwen3.8:27b",
+                    "stop", CORRELATION, new F006BossQuestionClient.Usage(1, 1, 2));
+        }).when(mini).stream(anyString(), anyLong(), anyString(), anyString(), anyBoolean(), any(), any(), any());
+    }
+
+    private List<Object> sentPayloads(String event) {
+        return mockingDetails(service).getInvocations().stream()
+                .filter(i -> "sendSseEvent".equals(i.getMethod().getName()) && event.equals(i.getArgument(1)))
+                .map(i -> (Object) i.getArgument(2))
+                .toList();
+    }
+
+    @Test
+    void bossQuestionFabricatedNumbersAreBlockedBeforeAnyTokenAndCounted() throws Exception {
+        com.cretas.aims.ai.grounding.ChatBusinessFactGuard guard =
+                (com.cretas.aims.ai.grounding.ChatBusinessFactGuard)
+                        ReflectionTestUtils.getField(service, "chatBusinessFactGuard");
+        assertThat(mini.shouldRoute("F006", 77L, "factory_super_admin")).as("前提: 走 F006 老板提问通道").isTrue();
+        answerWith("这个月销售额约35万，同比增长 8%，继续保持。");
+
+        execute("F006", 77L, "factory_super_admin", false);
+
+        verify(mini).stream(eq("F006"), eq(77L), eq("factory_super_admin"), eq(QUESTION), eq(false), any(), any(), any());
+        assertThat(guard.total(SseStreamingService.MINI_FACT_GUARD_SITE))
+                .as("必然发生的读数: 闸确实跑了").isEqualTo(1);
+        assertThat(guard.count(SseStreamingService.MINI_FACT_GUARD_SITE,
+                com.cretas.aims.ai.grounding.ChatBusinessFactGuard.Decision.BLOCKED)).isEqualTo(1);
+        assertThat(sentPayloads("token")).as("有 token 下发 (被改写的文本)").isNotEmpty()
+                .allSatisfy(t -> assertThat(String.valueOf(t)).doesNotContain("35万", "8%", "同比"));
+        IntentExecuteResponse response = (IntentExecuteResponse) sentPayloads("result").get(0);
+        assertThat(response.getFormattedText()).doesNotContain("35万", "8%", "同比");
+        assertThat(response.getFormattedText()).contains("先查");
+    }
+
+    @Test
+    void bossQuestionCommonSenseAnswerPassesUnchangedAndProgressIsSentWhileHolding() throws Exception {
+        com.cretas.aims.ai.grounding.ChatBusinessFactGuard guard =
+                (com.cretas.aims.ai.grounding.ChatBusinessFactGuard)
+                        ReflectionTestUtils.getField(service, "chatBusinessFactGuard");
+        answerWith("冷库建议控制在 0-4℃，HACCP 有 7 个原则。");
+
+        execute("F006", 77L, "factory_super_admin", false);
+
+        assertThat(guard.count(SseStreamingService.MINI_FACT_GUARD_SITE,
+                com.cretas.aims.ai.grounding.ChatBusinessFactGuard.Decision.PASS)).isEqualTo(1);
+        assertThat(((IntentExecuteResponse) sentPayloads("result").get(0)).getFormattedText())
+                .isEqualTo("冷库建议控制在 0-4℃，HACCP 有 7 个原则。");
+        assertThat(sentPayloads("progress")).as("攒的期间发 progress").hasSize(1);
+        List<String> order = mockingDetails(service).getInvocations().stream()
+                .filter(i -> "sendSseEvent".equals(i.getMethod().getName()))
+                .map(i -> String.valueOf((Object) i.getArgument(1))).toList();
+        assertThat(order.indexOf("progress")).as("progress 在 token 之前")
+                .isGreaterThanOrEqualTo(0).isLessThan(order.indexOf("token"));
+        assertThat(String.valueOf(sentPayloads("progress").get(0)))
+                .contains(SseStreamingService.GENERATING_PROGRESS_MESSAGE);
     }
 }

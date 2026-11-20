@@ -45,6 +45,19 @@ const salesService = stripJava(fs.readFileSync(
 const allocService = stripJava(fs.readFileSync(
   path.resolve(backendRoot, 'service/sales/impl/SalesDeliveryBatchAllocationServiceImpl.java'), 'utf8'));
 
+/** 方法体 (签名后第一个 `{` 到配对的 `}`, 不含外层大括号)。找不到就炸, 免得后面的断言对着空串恒真。 */
+const javaMethodBody = (src: string, signature: string): string => {
+  const start = src.indexOf(signature);
+  if (start < 0) throw new Error(`没找到方法: ${signature}`);
+  const open = src.indexOf('{', start);
+  let depth = 0;
+  for (let i = open; i < src.length; i++) {
+    if (src[i] === '{') depth++;
+    if (src[i] === '}' && --depth === 0) return src.slice(open + 1, i);
+  }
+  throw new Error(`方法体没闭合: ${signature}`);
+};
+
 describe('发货确认 · App 上不出现「批次」概念', () => {
   it('前提：确实读到了发货确认屏（否则下面的阴性断言全是恒真）', () => {
     expect(confirm).toContain('确认并扣库存');
@@ -129,7 +142,24 @@ describe('后端 · 确认发货时自动按先进先出分配', () => {
   });
 
   it('🔴 库存不够时不做部分分配（分配一半再放行会让下游拿到对不上的数）', () => {
-    expect(allocService).toMatch(/remaining\.signum\(\) > 0 \|\| picks\.isEmpty\(\)[\s\S]{0,400}return false;/);
+    /*
+     * Q3 (#1548) 把挑批次抽成 fifoPicks, 凑不够返回 null; autoAllocateFifo (发货兜底) 和 prefillFifo
+     * (子发运预填) 都先判 null 再写分配。旧断言钉的是字面「…return false;」, 改成钉性质:
+     *   1. fifoPicks 的凑不够分支返回 null, 且 fifoPicks 里根本不写分配;
+     *   2. 两个入口里「picks == null」的判断都排在 allocateBatches 之前。
+     */
+    const fifoPicks = javaMethodBody(allocService, 'private List<BatchAllocationDTO> fifoPicks(');
+    expect(fifoPicks).toMatch(/if \(remaining\.signum\(\) > 0 \|\| picks\.isEmpty\(\)\) \{[\s\S]{0,400}?return null;\s*\}/);
+    expect(fifoPicks).not.toContain('allocateBatches(');
+    expect(fifoPicks).toMatch(/return picks;\s*$/);
+
+    for (const signature of ['public boolean autoAllocateFifo(', 'public AutoAllocationOutcome prefillFifo(']) {
+      const body = javaMethodBody(allocService, signature);
+      const nullCheck = body.indexOf('if (picks == null)');
+      const write = body.indexOf('allocateBatches(');
+      expect([signature, nullCheck >= 0, write >= 0]).toEqual([signature, true, true]);
+      expect([signature, nullCheck < write]).toEqual([signature, true]);
+    }
   });
 
   it('发货确认先自动分配，⛔ 不再直接抛「未完成批次分配」', () => {

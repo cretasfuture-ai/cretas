@@ -116,12 +116,19 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
      */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.processentry.ByproductBatchMaterializer byproductBatchMaterializer;
+    /** 原料来源归属判断取物料大类 (#1606 审查 M4)。required=false: 未注入按最严格口径 (等同原料)。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.RawMaterialTypeRepository rawMaterialTypeRepository;
     /**
      * F3: 逐工序自定义字段 schema 校验 —— chain 路径 (recordChain) 复用与 sheet 路径同一诚实-400 契约。
      * null-tolerant (测试 @InjectMocks 未注入时 skip 校验; 校验只在 step.customFields 非空时触发, 极少查库)。
      */
     private final ProductWorkProcessRepository productWorkProcessRepository;
     private final WorkProcessRepository workProcessRepository;
+
+    /** 工艺参数产品标准: 读计划锁定的工艺版本快照; 未注入 = 旧行为。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.ProductProcessWorkflowRevisionRepository workflowRevisionRepository;
     /** 每道注射工序的绝对注射量配置。 */
     private final BomProcessInjectionConfigRepository bomProcessInjectionConfigRepository;
 
@@ -146,6 +153,16 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
      */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.shortage.ShortageStartGate shortageStartGate;
+    /** 1551-11 开工被拦时说清在等谁批 (只影响措辞); 字段注入理由同上。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.production.ForceInsertApproverDescriber forceInsertApproverDescriber;
+
+    /**
+     * D-W-01: 建批时判「计划单位与产出单位是不是同一个」(kg / 千克 / 公斤 是同一个)。同上字段注入
+     * required=false; 未注入时按字面记计划单位 —— 写法不同但其实相同的单位会让效率留空, 不会算出假数。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.unit.UnitContractService unitContractService;
 
     /** Process-parameter deviation hook; optional so existing constructor-based unit fixtures remain valid. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -180,9 +197,10 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
 
         // SP-D Fix 2: 跨租户守卫 — planId 必须归属本 factoryId
         // null-tolerant: planRepository 为 null 时 (测试 @InjectMocks 未注入) 跳过, 不 NPE.
-        if (planRepository != null &&
-                planRepository.findByIdAndFactoryId(planId, factoryId).isEmpty()) {
-            throw new BusinessException(404, "生产计划不存在: " + planId);
+        com.cretas.aims.entity.ProductionPlan ownerPlan = null;
+        if (planRepository != null) {
+            ownerPlan = planRepository.findByIdAndFactoryId(planId, factoryId)
+                    .orElseThrow(() -> new BusinessException(404, "生产计划不存在: " + planId));
         }
 
         // 1. 幂等检查
@@ -211,7 +229,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         for (BatchEntry be : ordered) {
             if (be.getSteps() == null) continue;
             for (StepEntry st : be.getSteps()) {
-                validateStepCustomFields(factoryId, be.getProductTypeId(), st);
+                validateStepCustomFields(factoryId, planId, be.getProductTypeId(), st);
             }
         }
 
@@ -248,6 +266,15 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                                         ri.getMaterialBatchId(), factoryId)
                                 .orElseThrow(() -> new BusinessException(404,
                                         "原料批次不存在: " + ri.getMaterialBatchId()));
+                        // 排查 2026-11-10 A4 (清点补出的同类入口): 逐道录入的原料来源不许是待检 / 报废 / 不良品
+                        // (事后补录: 领出后才过期的不拦, 见 assertReportable)
+                        com.cretas.aims.service.gate.MaterialBatchStateGate.assertReportable(rawMb);
+                        // #1606 审查 M4: 原料来源的归属与领料同一口径 (客户料只进该客户订单的计划)。
+                        // planRepository 只在手工构造的旧单测里为 null (同上方跨租户守卫), prod 恒注入。
+                        if (planRepository != null) {
+                            com.cretas.aims.service.processentry.ProductionInventoryOwnershipGuard.assertRawSourceAllowed(
+                                    ownerPlan, rawMb, rawMainCategory(factoryId, rawMb), "原料批次");
+                        }
                         // ⛔ 刻意<b>不做单位换算</b>: ri.getQuantity() 按契约已经是 rawMb 自己的
                         //    库存单位 (RawInput 连 unit 字段都没有, 见 ProcessChainEntryRequest.RawInput)。
                         //    这里原样入边 → MaterialConsumption.quantity → 小结时
@@ -581,7 +608,12 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                 .orElseThrow(() -> new BusinessException(404,
                         "生产批次不存在或无权访问: " + existingBatchId));
         if (lastOutputQty.signum() > 0) {
+            // D-W-01 (L4): 数量换成这次末道产出, 单位必须跟着换 —— 否则「3」还挂着上次的单位,
+            // 与建批路径 (createProductionBatch 用同一个 resolveBatchOutputUnit) 不一致。
+            String outputUnit = resolveBatchOutputUnit(steps);
+            refreshPlannedSideOnRematerialize(ctx.getFactoryId(), pb, lastOutputQty, outputUnit);
             pb.setQuantity(lastOutputQty);
+            pb.setUnit(outputUnit);
         }
         applyBatchCostSummary(pb, batchMaterialCost, batchLaborCost, batchTotalCost,
                 firstInputQty, lastOutputQty, lastYieldOutputQty, anyUncosted);
@@ -595,7 +627,20 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
     // Batch creation
     // ─────────────────────────────────────────────────────────────
 
+    /** 批次所挂的本厂计划; 没挂计划 / 单测没注入仓库 / 查不到 ⇒ null (守卫放行)。 */
+    private com.cretas.aims.entity.ProductionPlan ownerPlanOf(MaterializeContext ctx) {
+        if (planRepository == null || ctx.getPlanId() == null) {
+            return null;
+        }
+        return planRepository.findByIdAndFactoryId(ctx.getPlanId(), ctx.getFactoryId()).orElse(null);
+    }
+
     private ProductionBatch createProductionBatch(MaterializeContext ctx, List<StepEntry> steps) {
+        // 1551-11 (独立审查 B2): 待审批 / 已驳回 / 已取消的计划都不能经文员录入或工序表 (ProcessSheetServiceImpl
+        //    直接调 materializeBatch, 不经 recordChain) 建出生产中批次。必须在下面「计划还是待处理」的过滤之外判:
+        //    驳回后计划是 CANCELLED, 过滤会把它筛掉, 守卫就跑不到。放在本方法任何写入之前。
+        com.cretas.aims.service.production.PendingApprovalStartGuard.check(
+                ownerPlanOf(ctx), forceInsertApproverDescriber);
         String batchNumber = ctx.getBatchNumber() != null && !ctx.getBatchNumber().isBlank()
                 ? ctx.getBatchNumber()
                 : generateBatchNumber(ctx.getFactoryId(), ctx.isFinished());
@@ -655,13 +700,18 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         }
         // plannedQuantity: FINISHED 批次已挂 planId → 取计划的真实计划数量;
         // WIP 批次 (无 planId 语义) 或计划已不存在 → 退回本批次的产出数量 qty。
-        BigDecimal plannedQty = null;
+        com.cretas.aims.entity.ProductionPlan sourcePlan = null;
         if (planRepository != null && ctx.getPlanId() != null) {
-            plannedQty = planRepository.findById(ctx.getPlanId())
-                    .map(com.cretas.aims.entity.ProductionPlan::getPlannedQuantity)
-                    .orElse(null);
+            sourcePlan = planRepository.findById(ctx.getPlanId()).orElse(null);
         }
+        BigDecimal plannedQty = sourcePlan == null ? null : sourcePlan.getPlannedQuantity();
+        String outputUnit = resolveBatchOutputUnit(steps);
         batch.setPlannedQuantity(plannedQty != null ? plannedQty : qty);
+        // D-W-01: 计划量从计划拷来 ⇒ 它按计划单位计 (例: 计划 0.3 kg, 批次产出按袋)。把计划单位记在批次上,
+        // 之后任何一次 save 重算效率都知道这是两个单位, 留 null 而不是 3 袋 ÷ 0.3 kg 裸除。
+        // 退回 qty 时计划量就是产出量, 记产出单位。
+        batch.setPlannedUnit(plannedQty != null ? plannedUnitForBatch(ctx.getFactoryId(),
+                sourcePlan.getPlannedUnit(), outputUnit) : outputUnit);
         // 母计划状态同步 (2026-07 修复): 逐工序录入建 FINISHED 批次时 (ctx.planId 非空) 只建了
         // ProductionBatch(IN_PROGRESS), 从未回写母 ProductionPlan.status → 计划永远卡在 PENDING,
         // 即便生产已实际进行/完成 (看板/统计按 production_plans.status 过滤 IN_PROGRESS/PENDING 因此口径错)。
@@ -674,6 +724,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
             planRepository.findByIdAndFactoryId(ctx.getPlanId(), ctx.getFactoryId())
                     .filter(p -> p.getStatus() == com.cretas.aims.entity.enums.ProductionPlanStatus.PENDING)
                     .ifPresent(p -> {
+                        // 1551-11: 待审批 / 已驳回的判定在本方法开头 (不受这个 PENDING 过滤影响)
                         // S4-08: 这里也会把计划翻成生产中, 所以与开工入口过同一道缺料闸 (开关默认关 = N1);
                         //    拦下时整次录入回滚, 带原因放行时原因记入缺料实例处理记录。
                         if (shortageStartGate != null) {
@@ -689,7 +740,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                         planRepository.save(p);
                     });
         }
-        batch.setUnit(resolveBatchOutputUnit(steps));
+        batch.setUnit(outputUnit);
         batch.setStatus(ProductionBatchStatus.IN_PROGRESS);  // 文员录入 = 生产进行中
         // SP-D Fix 1a: 区分 CLERK_WIP 与 REGULAR 批次
         // CLK-W- 前缀 = isFinished=false 中间批次, 不计入仪表盘; CLK-B- 前缀 = 成品批次.
@@ -1122,7 +1173,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
      * null-tolerant: repos 未注入 (测试 @InjectMocks) / 缺定位信息 / 找不到工序配置 → skip (放行),
      * 与 sheet 路径 {@code ProcessSheetServiceImpl.validateCustomFields} 的兜底语义一致。
      */
-    private void validateStepCustomFields(String factoryId, String productTypeId, StepEntry st) {
+    private void validateStepCustomFields(String factoryId, String planId, String productTypeId, StepEntry st) {
         Map<String, Object> cf = st.getCustomFields();
         if (cf == null || cf.isEmpty()) {
             return; // 无自定义字段 —— 最常见路径, 提前返回避免查库
@@ -1147,7 +1198,25 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
             return;
         }
         ProcessCustomFieldValidation.checkKeys(wp.getCustomFieldSchema(), cf.keySet(), wp.getProcessName());
-        st.setParamChecks(ProcessParamCheck.evaluate(wp.getCustomFieldSchema(), cf));
+        // 产品标准: 本计划锁定的那一版画布里该工序节点配的参数覆盖同名字段的标准; 没配/没锁定 = 原 schema
+        st.setParamChecks(ProcessParamCheck.evaluate(
+                standardsSchema(factoryId, planId, wp), cf));
+    }
+
+    /** 工序 schema + 计划锁定的产品工艺版本(selectedWorkflowRevision)里同工序唯一节点的画布参数标准。 */
+    private List<Map<String, Object>> standardsSchema(String factoryId, String planId, WorkProcess wp) {
+        List<Map<String, Object>> schema = wp.getCustomFieldSchema();
+        if (schema == null || planId == null || planRepository == null || workflowRevisionRepository == null) {
+            return schema;
+        }
+        return planRepository.findByIdAndFactoryId(planId, factoryId)
+                .map(com.cretas.aims.entity.ProductionPlan::getSelectedWorkflowRevisionId)
+                .flatMap(id -> id == null ? Optional.<com.cretas.aims.entity.ProductProcessWorkflowRevision>empty()
+                        : workflowRevisionRepository.findByIdAndFactoryId(id, factoryId))
+                .map(rev -> com.cretas.aims.entity.workprocess.ProcessParamStandards.overlay(schema,
+                        com.cretas.aims.entity.workprocess.ProcessParamStandards.paramsOf(
+                                rev.getNodesJson(), null, wp.getId())))
+                .orElse(schema);
     }
 
     /** 将 ProcessChainEntryRequest.Byproduct 列表转换为 jsonb-ready Map 列表 (mirror YieldReportServiceImpl). */
@@ -1261,6 +1330,15 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
      * 跨模式定位报工步对应的 WorkProcess: 优先按工序名 (legacy+workflow 通用), 名字不唯一时按
      * processOrder (legacy 链) 消歧; 名字缺失回退 processOrder。解析不到返 null。
      */
+    /** 物料大类 (原料/辅料/包材); 查不到传 null = 按最严格口径。 */
+    private String rawMainCategory(String factoryId, MaterialBatch rawMb) {
+        if (rawMaterialTypeRepository == null || rawMb.getMaterialTypeId() == null) {
+            return null;
+        }
+        return rawMaterialTypeRepository.findByIdAndFactoryId(rawMb.getMaterialTypeId(), factoryId)
+                .map(com.cretas.aims.entity.RawMaterialType::getMainCategory).orElse(null);
+    }
+
     /**
      * 解析 BOM/调料配方归属的成品 SKU —— 取所属生产计划的产品。
      *
@@ -1621,6 +1699,50 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
             }
         }
         return "kg";
+    }
+
+    /**
+     * D-W-01 (L1): 原地重物化要换批次的产出单位时, 计划量那一侧按建批时的同一条规则重认一次。
+     *
+     * <ul>
+     *   <li>计划量 = 计划的计划量 ⇒ 来自计划: 计划单位 (与新产出单位等价就记产出写法);</li>
+     *   <li>计划没给数、计划量 = 上次的产出量 ⇒ 建批时退回了产出量: 跟着这次的产出走 (数量与单位一起);</li>
+     *   <li>都对不上 ⇒ 认不出, 不动 —— 已记的 plannedUnit 本来就描述没变的 plannedQuantity;
+     *       存量 null 留给实体按计划单位判 (不同就不算)。</li>
+     * </ul>
+     */
+    private void refreshPlannedSideOnRematerialize(String factoryId, ProductionBatch pb,
+                                                   BigDecimal newQuantity, String newUnit) {
+        BigDecimal planned = pb.getPlannedQuantity();
+        if (planned == null) {
+            return;
+        }
+        com.cretas.aims.entity.ProductionPlan plan = planRepository == null || pb.getProductionPlanId() == null
+                ? null : planRepository.findById(pb.getProductionPlanId()).orElse(null);
+        BigDecimal planQuantity = plan == null ? null : plan.getPlannedQuantity();
+        if (planQuantity != null && planned.compareTo(planQuantity) == 0) {
+            pb.setPlannedUnit(plannedUnitForBatch(factoryId, plan.getPlannedUnit(), newUnit));
+        } else if (planQuantity == null && pb.getQuantity() != null && planned.compareTo(pb.getQuantity()) == 0) {
+            pb.setPlannedQuantity(newQuantity);
+            pb.setPlannedUnit(newUnit);
+        }
+    }
+
+    /**
+     * D-W-01: 从计划拷来的计划量按哪个单位计。与产出单位是同一个单位 (单位契约判, ⛔ 不比字符串)
+     * 就记成产出单位的写法, 实体按同单位算效率; 否则记计划单位, 实体判跨单位、效率留 null。
+     * 计划没写单位 = 判不了, 不记 (旧行为)。
+     */
+    private String plannedUnitForBatch(String factoryId, String planUnit, String outputUnit) {
+        String planned = firstNonBlank(planUnit);
+        if (planned == null) {
+            return null;
+        }
+        if (unitContractService != null && outputUnit != null
+                && unitContractService.areEquivalent(factoryId, planned, outputUnit)) {
+            return outputUnit;
+        }
+        return planned;
     }
 
     private static String firstNonBlank(String... values) {

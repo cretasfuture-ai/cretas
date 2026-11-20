@@ -66,6 +66,68 @@ public interface QualityInspectionRepository extends JpaRepository<QualityInspec
                                                 @Param("checkTypePattern") String checkTypePattern,
                                                 Pageable pageable);
     /**
+     * web-admin 质检记录列表: 批次 / 结果(可多个) / 日期区间 / 关键词 / 批量批次号, 全部在分页之前由数据库过滤
+     * (2026-11-14: 前端一直在传 keyword, 后端没声明, 静默不过滤 —— 与 2026-08-28 的 result 同一类坑)。
+     *
+     * <p>关键词匹配: 质检编号包含 (inspection_number, 如 QI-20261119-0003 / 20261119 / 0003)、
+     * 内部 id 前缀 (旧界面显示过 id 前 8 位, 保留可搜) 或 生产批次号包含; 批量批次号是精确匹配。
+     * 每个条件是「布尔标志 + 永远非空的值」(null 在 PG 上绑不出类型, 见 #1357)。
+     * 批次子查询带 factory_id。{@code keyword} 里的 % _ 由调用方去掉。</p>
+     */
+    default Page<QualityInspection> searchForAdminList(String factoryId, Long productionBatchId,
+                                                       java.util.Collection<String> results,
+                                                       LocalDate dateFrom, LocalDate dateTo,
+                                                       String keyword, java.util.Collection<String> batchNos,
+                                                       Pageable pageable) {
+        boolean byResult = results != null && !results.isEmpty();
+        boolean byKeyword = keyword != null && !keyword.isBlank();
+        boolean byNos = batchNos != null && !batchNos.isEmpty();
+        return searchForAdminListBound(factoryId,
+                productionBatchId != null, productionBatchId != null ? productionBatchId : -1L,
+                byResult, byResult ? results : java.util.List.of(""),
+                dateFrom != null, dateFrom != null ? dateFrom : LocalDate.of(1970, 1, 1),
+                dateTo != null, dateTo != null ? dateTo : LocalDate.of(9999, 12, 31),
+                byKeyword, byKeyword ? keyword.trim().toUpperCase(java.util.Locale.ROOT) : "",
+                byNos, byNos ? batchNos : java.util.List.of(""),
+                pageable);
+    }
+
+    /** 只由 {@link #searchForAdminList} 调用: 值参数都非空, 是否生效看布尔标志。 */
+    @Query("SELECT q FROM QualityInspection q WHERE q.factoryId = :factoryId " +
+           "AND (:byBatch = false OR q.productionBatchId = :productionBatchId) " +
+           "AND (:byResult = false OR UPPER(q.result) IN :results) " +
+           "AND (:byFrom = false OR q.inspectionDate >= :dateFrom) " +
+           "AND (:byTo = false OR q.inspectionDate <= :dateTo) " +
+           "AND (:byKeyword = false OR UPPER(q.inspectionNumber) LIKE CONCAT('%', :keyword, '%') " +
+           "     OR UPPER(q.id) LIKE CONCAT(:keyword, '%') " +
+           "     OR q.productionBatchId IN (SELECT b.id FROM ProductionBatch b WHERE b.factoryId = :factoryId " +
+           "                                AND UPPER(b.batchNumber) LIKE CONCAT('%', :keyword, '%'))) " +
+           "AND (:byNos = false OR q.productionBatchId IN (SELECT b2.id FROM ProductionBatch b2 " +
+           "                                WHERE b2.factoryId = :factoryId AND b2.batchNumber IN :batchNos)) " +
+           "ORDER BY q.inspectionDate DESC, q.id DESC")
+    Page<QualityInspection> searchForAdminListBound(@Param("factoryId") String factoryId,
+                                                    @Param("byBatch") boolean byBatch,
+                                                    @Param("productionBatchId") Long productionBatchId,
+                                                    @Param("byResult") boolean byResult,
+                                                    @Param("results") java.util.Collection<String> results,
+                                                    @Param("byFrom") boolean byFrom,
+                                                    @Param("dateFrom") LocalDate dateFrom,
+                                                    @Param("byTo") boolean byTo,
+                                                    @Param("dateTo") LocalDate dateTo,
+                                                    @Param("byKeyword") boolean byKeyword,
+                                                    @Param("keyword") String keyword,
+                                                    @Param("byNos") boolean byNos,
+                                                    @Param("batchNos") java.util.Collection<String> batchNos,
+                                                    Pageable pageable);
+
+    /** 批量批次号查询的「找到哪些」: 本厂内、至少有一条质检记录的批次号 (精确匹配)。 */
+    @Query("SELECT DISTINCT b.batchNumber FROM ProductionBatch b WHERE b.factoryId = :factoryId " +
+           "AND b.batchNumber IN :batchNos " +
+           "AND EXISTS (SELECT 1 FROM QualityInspection q WHERE q.productionBatchId = b.id AND q.factoryId = :factoryId)")
+    List<String> findBatchNumbersHavingInspection(@Param("factoryId") String factoryId,
+                                                  @Param("batchNos") java.util.Collection<String> batchNos);
+
+    /**
      * 根据工厂ID分页查找
      */
     Page<QualityInspection> findByFactoryId(String factoryId, Pageable pageable);
@@ -376,4 +438,14 @@ public interface QualityInspectionRepository extends JpaRepository<QualityInspec
      */
     @Query("SELECT q FROM QualityInspection q WHERE q.id IN :ids")
     List<QualityInspection> findByIdIn(@Param("ids") Collection<String> ids);
+
+    /**
+     * 不良记录列表回填「关联质检编号」: 本厂内这些质检记录的 [id, inspection_number]。
+     * 原生 SQL 故意不过 @Where —— 质检记录被软删后编号仍然是它的编号 (号不复用), 不良记录照样显示;
+     * ⚠️ factory_id 谓词是租户边界: 别厂的质检记录 id 即使被挂到本厂不良上也拿不到它的编号。
+     */
+    @Query(value = "SELECT q.id, q.inspection_number FROM quality_inspections q "
+            + "WHERE q.factory_id = :factoryId AND q.id IN (:ids)", nativeQuery = true)
+    List<Object[]> findInspectionNumbersByFactoryIdAndIdIn(@Param("factoryId") String factoryId,
+                                                            @Param("ids") Collection<String> ids);
 }

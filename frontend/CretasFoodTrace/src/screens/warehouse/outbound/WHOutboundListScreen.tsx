@@ -27,6 +27,7 @@ import { useTranslation } from 'react-i18next';
 import { WHOutboundStackParamList } from "../../../types/navigation";
 import { shipmentApiClient, ShipmentRecord, ShipmentStats } from "../../../services/api/shipmentApiClient";
 import { handleError } from "../../../utils/errorHandler";
+import { shipmentCustomerLabel } from "./shipmentCustomerLabel";
 
 type NavigationProp = NativeStackNavigationProp<WHOutboundStackParamList>;
 
@@ -75,7 +76,7 @@ const mapShipmentToOutbound = (shipment: ShipmentRecord): OutboundItem => {
   return {
     id: shipment.id,
     orderNumber: shipment.shipmentNumber || shipment.orderNumber || `SH-${shipment.id}`,
-    customer: shipment.customerId || '未知客户',
+    customer: shipmentCustomerLabel(shipment),
     products: shipment.productName || '产品',
     quantity: shipment.quantity ?? 0,
     status,

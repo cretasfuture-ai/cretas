@@ -51,6 +51,7 @@ class QcWipReleaseBypassContractTest {
     @Mock private ProductionBatchRepository productionBatchRepository;
     @Mock private FinishedGoodsBatchRepository finishedGoodsBatchRepository;
     @Mock private FactoryRecallService factoryRecallService;
+    @Mock private com.cretas.aims.repository.quality.QcReleaseRecordRepository qcReleaseRecordRepository;
 
     private ReleaseDecisionTool tool;
     private QualityDispositionInventoryService disposition;
@@ -60,11 +61,25 @@ class QcWipReleaseBypassContractTest {
         tool = new ReleaseDecisionTool();
         ReflectionTestUtils.setField(tool, "materialBatchRepository", materialBatchRepository);
         ReflectionTestUtils.setField(tool, "objectMapper", new ObjectMapper());
+        // 纪律排查 A3: release_decision 须有质检权限 (quality:read_write) 并写放行台账
+        com.cretas.aims.ai.tool.ToolRbacGuard qcRbac = org.mockito.Mockito.mock(com.cretas.aims.ai.tool.ToolRbacGuard.class);
+        org.mockito.Mockito.lenient().when(qcRbac.hasAnyPermission(org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(String[].class))).thenReturn(true);
+        ReflectionTestUtils.setField(tool, "rbacGuard", qcRbac);
+        ReflectionTestUtils.setField(tool, "releaseGuard",
+                org.mockito.Mockito.mock(com.cretas.aims.service.discipline.MaterialBatchReleaseGuard.class));
         disposition = new QualityDispositionInventoryService();
         ReflectionTestUtils.setField(disposition, "materialBatchRepository", materialBatchRepository);
         ReflectionTestUtils.setField(disposition, "productionBatchRepository", productionBatchRepository);
         ReflectionTestUtils.setField(disposition, "finishedGoodsBatchRepository", finishedGoodsBatchRepository);
         ReflectionTestUtils.setField(disposition, "factoryRecallService", factoryRecallService);
+        ReflectionTestUtils.setField(tool, "qcReleaseRecordRepository", qcReleaseRecordRepository);
+        ReflectionTestUtils.setField(tool, "processTimeLimitEventRepository",
+                org.mockito.Mockito.mock(com.cretas.aims.repository.foodsafety.ProcessTimeLimitEventRepository.class));
+        ReflectionTestUtils.setField(disposition, "qcReleaseRecordRepository", qcReleaseRecordRepository);
+        ReflectionTestUtils.setField(disposition, "processTimeLimitEventRepository",
+                org.mockito.Mockito.mock(com.cretas.aims.repository.foodsafety.ProcessTimeLimitEventRepository.class));
+        ReflectionTestUtils.setField(disposition, "materialBatchReleaseGuard", org.mockito.Mockito.mock(com.cretas.aims.service.discipline.MaterialBatchReleaseGuard.class));
     }
 
     private MaterialBatch batch(String id, String sourceDocType) {
@@ -140,7 +155,7 @@ class QcWipReleaseBypassContractTest {
     void dispositionRefusesWip() {
         MaterialBatch wip = batch("W2", QcInspectionGuard.WIP_SOURCE_DOC_TYPE);
         QualityDispositionInventoryService.InventoryDispositionResult r =
-                disposition.applyDisposition(inspectionOf("W2"), DispositionAction.RELEASE);
+                disposition.applyDisposition(inspectionOf("W2"), DispositionAction.RELEASE, true);
         assertThat(r.getMaterialFlip()).isEqualTo(QualityDispositionInventoryService.FlipDecision.QC_RELEASE_REQUIRED);
         assertThat(wip.getStatus()).isEqualTo(MaterialBatchStatus.INSPECTING);
         verify(materialBatchRepository, never()).save(any());
@@ -151,7 +166,7 @@ class QcWipReleaseBypassContractTest {
     void dispositionStillReleasesRawMaterial() {
         MaterialBatch raw = batch("R2", "PURCHASE_RECEIVE");
         QualityDispositionInventoryService.InventoryDispositionResult r =
-                disposition.applyDisposition(inspectionOf("R2"), DispositionAction.RELEASE);
+                disposition.applyDisposition(inspectionOf("R2"), DispositionAction.RELEASE, true);
         assertThat(r.getMaterialFlip()).isEqualTo(QualityDispositionInventoryService.FlipDecision.FLIP);
         assertThat(raw.getStatus()).isEqualTo(MaterialBatchStatus.AVAILABLE);
     }

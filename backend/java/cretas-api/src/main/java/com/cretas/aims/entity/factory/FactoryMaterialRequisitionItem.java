@@ -101,6 +101,21 @@ public class FactoryMaterialRequisitionItem extends BaseEntity {
     @Column(name = "self_supplied", nullable = false)
     private Boolean selfSupplied = Boolean.FALSE;
 
+    /**
+     * 确认领料弹窗的辅料自动计算比例 (g 辅料 / kg 投入主料, 单锅基准), <b>不落库</b>:
+     * 只由领料单详情接口按调用者现算 ({@code FactoryMaterialRequisitionService#getDetailForPicking}),
+     * 口径与建单时的 {@code seasoningRequiredQty} 同一份 BOM 调料表。
+     *
+     * <p>为什么放在领料单上: 仓管 (warehouse_worker / warehouse_manager) 能读领料单, 读不了生产计划和 BOM;
+     * 弹窗原来为了拿比例先查计划再查 BOM, 仓管两跳都 403, 还弹「缺少模块 production_plan」(2026-11-10)。
+     *
+     * <p>工艺保密: 这是配比 —— 产品保密且调用者无完整查看权时服务层不填 (null, 不输出),
+     * 字段名又在 {@code ProcessSecretPayloadScrubber.RATIO_FIELDS} 里, 出口裁剪再兜一层。
+     */
+    @Transient
+    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    private BigDecimal dosagePerKgG;
+
     /** FEFO 锁定的批次列表 [{batchNo, qty}]. */
     @Type(JsonBinaryType.class)
     @Column(name = "batch_numbers", columnDefinition = "jsonb")

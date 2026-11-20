@@ -102,6 +102,9 @@ public class ReturnRefundDTO {
     public static class ApproveRequest {
         @Size(max = 200, message = "审批说明最多200字")
         private String note;
+        /** 本人审批原因 (纪律排查 B15): 审批人就是退款申请人、且工厂开了「允许本人审批」时必填; 不填时取审批说明。 */
+        @Size(max = 500, message = "本人审批原因最多500字")
+        private String selfApprovalReason;
     }
 
     @Data
@@ -116,6 +119,9 @@ public class ReturnRefundDTO {
         @NotBlank(message = "付款说明不能为空")
         @Size(max = 500, message = "付款说明最多500字")
         private String remark;
+        /** 本人登记付款原因 (纪律排查 B15): 付款登记人就是退款申请人、且工厂开了「允许本人审批」时必填。 */
+        @Size(max = 500, message = "本人登记付款原因最多500字")
+        private String selfPaidReason;
     }
 
     @Data
@@ -145,6 +151,9 @@ public class ReturnRefundDTO {
         private String reversalTransactionId;
         @Size(max = 200, message = "驳回说明最多200字")
         private String reason;
+        /** 本人审批原因 (纪律排查 B15): 审批人就是撤销申请人、且工厂开了「允许本人审批」时必填; 不填时取说明。 */
+        @Size(max = 500, message = "本人审批原因最多500字")
+        private String selfApprovalReason;
     }
 
     @Data

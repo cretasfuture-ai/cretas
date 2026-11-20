@@ -51,6 +51,10 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 public class ImpactAnalysisServiceImpl implements ImpactAnalysisService {
+    /** 联产计划的产品是内部原料锚点, 对外名字走 ScheduleProductNames (显示原料名)。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.RawMaterialTypeRepository rawMaterialTypeRepository;
+
 
     private final ProductionPlanRepository productionPlanRepository;
     private final MaterialBatchRepository materialBatchRepository;
@@ -138,7 +142,7 @@ public class ImpactAnalysisServiceImpl implements ImpactAnalysisService {
 
         // 5. 检查工人是否充足
         ResourceCheckResult workerCheck = checkWorkerAvailability(
-                factoryId, startTime, endTime, config.getMinWorkers());
+                factoryId, startTime, endTime, config.getStandardShiftWorkers() > 0 ? config.getMinWorkers() : 0);
         if (!workerCheck.isAvailable()) {
             return FeasibilityResult.notFeasible("工人不足: " + workerCheck.getMessage());
         }
@@ -183,7 +187,7 @@ public class ImpactAnalysisServiceImpl implements ImpactAnalysisService {
         // 2. WorkerFactor: 工人可用性 (0-1)
         int availableWorkers = estimateAvailableWorkers(factoryId, slotStartTime, slotEndTime);
         int requiredWorkers = estimateRequiredWorkers(effectiveQuantity, config);
-        double workerFactor = requiredWorkers > 0
+        double workerFactor = requiredWorkers > 0 && config.getStandardShiftWorkers() > 0
                 ? Math.min(1.0, (double) availableWorkers / requiredWorkers)
                 : 1.0;
         result.setWorkerFactor(workerFactor);
@@ -482,6 +486,10 @@ public class ImpactAnalysisServiceImpl implements ImpactAnalysisService {
             int requiredWorkers) {
 
         try {
+            // A1: 没有标准人数 (required<=0) 就没有可比的数: 不拿估算人数去判「工人不足」
+            if (requiredWorkers <= 0) {
+                return ResourceCheckResult.available("WORKER", null, BigDecimal.ZERO);
+            }
             // 估算可用工人数
             int availableWorkers = estimateAvailableWorkers(factoryId, startTime, endTime);
 
@@ -670,7 +678,7 @@ public class ImpactAnalysisServiceImpl implements ImpactAnalysisService {
                 .planId(plan.getId())
                 .planNumber(plan.getPlanNumber())
                 .productName(plan.getProductType() != null
-                        ? plan.getProductType().getName()
+                        ? com.cretas.aims.service.scheduling.daily.ScheduleProductNames.displayName(rawMaterialTypeRepository, plan.getFactoryId(), plan.getProductType())
                         : null)
                 .productTypeId(plan.getProductTypeId())
                 .plannedQuantity(plan.getPlannedQuantity())

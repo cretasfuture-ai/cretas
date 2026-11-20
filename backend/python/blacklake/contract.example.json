@@ -1,0 +1,27 @@
+{
+  "wire_verified": false,
+  "code_path": "REPLACE_FROM_OFFICIAL_DOCUMENT_OR_RESPONSE",
+  "token_path": "REPLACE_FROM_LOGIN_RESPONSE",
+  "auth_expired_codes": [],
+  "resources": {
+    "project": {
+      "mapping_verified": false,
+      "window_verified": false,
+      "updated_only_verified": false,
+      "window_basis": "UNVERIFIED",
+      "items_path": "REPLACE",
+      "total_path": "REPLACE",
+      "page_key": "REPLACE",
+      "size_key": "REPLACE",
+      "first_page": 1,
+      "max_window_days": 7,
+      "window_start_key": "REPLACE",
+      "window_end_key": "REPLACE",
+      "factory_path": "REPLACE_WITH_PROVEN_FACTORY_IDENTIFIER",
+      "id_path": "REPLACE",
+      "updated_path": "REPLACE",
+      "base_body": {},
+      "fields": {}
+    }
+  }
+}

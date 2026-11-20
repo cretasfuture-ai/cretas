@@ -123,6 +123,9 @@ public class PurchaseController {
     public ApiResponse<PageResponse<PurchaseOrder>> listOrders(
             @PathVariable @NotBlank String factoryId,
             @RequestParam(required = false) String salesOrderId,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) java.time.LocalDate startDate,
+            @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) java.time.LocalDate endDate,
             @RequestParam(defaultValue = "1") @Min(value = 1, message = "页码必须大于0") int page,
             @RequestParam(defaultValue = "20") @Min(value = 1, message = "每页大小必须大于0") int size,
             jakarta.servlet.http.HttpServletRequest httpRequest) {
@@ -139,9 +142,12 @@ public class PurchaseController {
                 return ApiResponse.success("查询成功", PageResponse.of(List.of(), page, size, 0L));
             }
         }
+        boolean hasSearch = (keyword != null && !keyword.isBlank()) || startDate != null || endDate != null;
         PageResponse<PurchaseOrder> result = bySalesOrder
                 ? purchaseService.getPurchaseOrdersBySalesOrder(factoryId, salesOrderId, page, size)
-                : purchaseService.getPurchaseOrders(factoryId, page, size);
+                : hasSearch
+                    ? purchaseService.searchPurchaseOrders(factoryId, null, keyword, startDate, endDate, null, page, size)
+                    : purchaseService.getPurchaseOrders(factoryId, page, size);
         return ApiResponse.success("查询成功", result);
     }
 
@@ -166,7 +172,17 @@ public class PurchaseController {
                 || dataScopeResolver.resolveCreatedByChain(scope).contains(order.getCreatedBy()));
     }
 
+    /** Factory row policy for the receiving list (optional so slice tests keep their constructor). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.security.BusinessRowScope businessRowScope;
+
+    /** Shown above the receiving list when this role's factory data scope is narrower than the whole factory. */
+    public static final String SCOPED_RECEIVING_HINT =
+            "按你岗位当前的数据范围显示：只列出你（或你可查看的同事）创建的采购单。"
+            + "需要处理全工厂收货，请工厂总监在网页后台「角色权限 → 数据范围」把本岗位改为「全工厂」。";
+
     @GetMapping("/orders/by-status")
+    @com.cretas.aims.security.RowScopeSupported
     @Operation(summary = "按状态查询采购订单")
     // 仓库员(warehouse_worker)收货前必须能浏览"待收货"采购单列表 (APPROVED/FINANCE_APPROVED/
     // PARTIAL_RECEIVED) — 这是收货流程的必要前置读取, 不构成越权(只读单据, 不能改/审批采购单)。
@@ -179,6 +195,9 @@ public class PurchaseController {
     public ApiResponse<PageResponse<PurchaseOrder>> listOrdersByStatus(
             @PathVariable @NotBlank String factoryId,
             @RequestParam PurchaseOrderStatus status,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) java.time.LocalDate startDate,
+            @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) java.time.LocalDate endDate,
             @RequestParam(defaultValue = "1") @Min(value = 1, message = "页码必须大于0") int page,
             @RequestParam(defaultValue = "20") @Min(value = 1, message = "每页大小必须大于0") int size,
             @RequestHeader("Authorization") String authorization,
@@ -202,8 +221,23 @@ public class PurchaseController {
             httpRequest.setAttribute(com.cretas.aims.security.PriceScope.PURCHASE_REMAP_ATTRIBUTE,
                     com.cretas.aims.security.PriceSensitive.PURCHASE_OR_FINANCE);
         }
-        PageResponse<PurchaseOrder> result = purchaseService.getPurchaseOrdersByStatus(factoryId, status, page, size);
-        return ApiResponse.success("查询成功", result);
+        // Narrower-than-factory scope: the route guard lets this GET through only because rows are
+        // filtered here by purchase-order owner (same rule as the receiving-task list). Whole-factory
+        // scope (owners == null) keeps the original service call unchanged.
+        List<Long> owners = com.cretas.aims.security.BusinessRowScope.recordCreators(businessRowScope, factoryId);
+        boolean hasSearch = (keyword != null && !keyword.isBlank()) || startDate != null || endDate != null;
+        if (owners == null) {
+            PageResponse<PurchaseOrder> result = hasSearch
+                    ? purchaseService.searchPurchaseOrders(factoryId, status, keyword, startDate, endDate, null, page, size)
+                    : purchaseService.getPurchaseOrdersByStatus(factoryId, status, page, size);
+            return ApiResponse.success("查询成功", result);
+        }
+        ApiResponse<PageResponse<PurchaseOrder>> scoped = ApiResponse.success("查询成功",
+                hasSearch
+                    ? purchaseService.searchPurchaseOrders(factoryId, status, keyword, startDate, endDate, owners, page, size)
+                    : purchaseService.getPurchaseOrdersByStatusOwnedBy(factoryId, status, owners, page, size));
+        scoped.setActionHint(SCOPED_RECEIVING_HINT);
+        return scoped;
     }
 
     @GetMapping("/orders/{orderId}")

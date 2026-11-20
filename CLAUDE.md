@@ -59,10 +59,10 @@ API 基础路径：Java `/api/mobile/*`（业务 `/api/mobile/{factoryId}/*`）�
 - `execution-and-verification.md` - Claude Code / Codex 共用的 DIRECT 默认、按风险验证、证据复用与简短交接；先按此规则确定执行方式
 - `standing-authorization-and-visual-acceptance.md` - 🔴 已授权范围内直接做完，⛔ 不要再问「要不要 / 可不可以」，不可逆动作**宣告而非请示**；保留安全与验证门禁；涉及 UI 行为的完成条件须有真实界面、截图和必要对照，验收范围及证据复用见 execution-and-verification.md
 - `concurrent-edit-safety.md` - 并发编辑安全（共享文件修改前必读）
-- `worktree-and-main-only-deploy.md` - worktree 隔离 + prod 只从 main 部署
-- `CREDENTIAL-MANAGEMENT.md` - 凭证与环境变量
+- `worktree-and-main-only-deploy.md` - worktree 隔离 + prod 只从 main 部署（发布命令/fastlane 分档/离线部署在 `deploy-backend` skill 的 `references/main-only-deploy-details.md`）
+- 🔴 凭证：⛔ 密码/密钥/`.env` 不进代码和 git，一律环境变量注入；真值位置见按路径加载的 `CREDENTIAL-MANAGEMENT.md`
 - `measurement-and-wiring.md` - 量对东西 / 接上没有 / 变异打在被守的行为上（硬约束 1–9 + 形态 A–E 判据；全部实测案例在 `docs/rules-casebook/measurement-and-wiring-cases.md`，编号一致）
-- `ci-runner-routing.md` - 🔴 仓库已 public（2026-10-25）：CI 全部走 GitHub 托管 `ubuntu-latest`，⛔ 任何 job 不许指向自建 runner（外部 PR 会在我们机器上执行），闸 `test-public-repo-hosted-only.sh`；外部 PR 须我们批准才运行。`runs-on` 只放字面量。与 `.codex/rules/` 同名文件**逐字相同**，有闸钉着
+- 🔴 CI 默认使用 GitHub 托管 runner。仅 [CI runner 路由规则](.claude/rules/ci-runner-routing.md) 登记的作业可使用 `canada-mini`，外部 PR 一律走托管。门禁为 `scripts/tests/test-public-repo-hosted-only.sh`。
 - `windows-shell-and-paths.md` - Windows 上 **空格才是根因，中文不是**（实测对照：纯 ASCII 带空格不加引号失败 / 纯中文无空格成功）。新建文件目录不带空格；路径变量一律加引号（`Program Files` 改不掉，PATH 上 26/61 条带空格）；命令发给对的 shell；精确字符不经过 shell
 
 规则正文统一在 `.claude/rules/`；`.codex/rules/` 同名文件是指针，只有 `ci-runner-routing.md` 保留由脚本钉住的逐字副本。Claude-only organizer 不复制到 Codex；Codex 的执行与子代理边界见 `AGENTS.md`，共同执行/验证原则见 `execution-and-verification.md`。superpowers 插件在本仓库已关闭（`.claude/settings.json`），按本仓库规则执行。
@@ -76,10 +76,16 @@ API 基础路径：Java `/api/mobile/*`（业务 `/api/mobile/{factoryId}/*`）�
 - `fool-proof-design.md` - 防呆设计 5 规则（frontend/web-admin）
 - `ai-chat-ui.md` - AI 对话界面：指向唯一标准 `docs/ux/ai-chat-standard.md`（助手全宽无气泡、一线硬约束、遥测不用 `__DEV__` 当开关、只有完成的回答有反馈）
 - `playwright-headed-mode.md` - E2E headed 强制（tests）
+- `CREDENTIAL-MANAGEMENT.md` - 凭证与环境变量全表（`backend/**`、`**/.env*`、`scripts/deploy/**`、server-operations skill）
+- `ci-runner-routing.md` - CI runner 路由全文（`.github/workflows/**`、`tools/ci/**`、`scripts/ci/**`）；与 `.codex/rules/` 同名文件**逐字相同**，闸 `check_shared_agent_rules.py`
 
 ## UX Flow Gate（低技术素养用户屏幕）
 
 低技术素养用户（操作员 / 仓管 / 质检员）使用的 RN 屏幕，**提出方案之前先用 `ux-flow` skill 产出「UX Flow Analysis」**，缺失不进入实现。角色 / 路径 / 功能触发词以 `ux-flow` 的 skill description 为唯一清单，不在此重复。
+
+# Compact instructions
+
+压缩摘要必须逐条保留（宁可多保留，不要概括掉）：任务 ID 与目标/完成条件；worktree 路径、分支、HEAD、Base SHA；已开的 PR 号及其 CI 状态、仍在挂的监视与停止条件；合并排队顺序；用户已拍板的决定与原因；待用户裁决的问题；已做完 vs 没做完；下一步第一个动作。organizer 会话另须保留在飞执行会话的 ID 和各自在做什么。
 
 ## Documentation
 

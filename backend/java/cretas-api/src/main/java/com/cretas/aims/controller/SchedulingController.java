@@ -664,6 +664,26 @@ public class SchedulingController {
     }
 
     /**
+     * 产线人数配置: insertMinWorkers 插单最少人数 (存 standard_workers; 插单比较当天排班, 不够只提示不拦; 空 = 不比较)、
+     * 最多人数、所需技能等级 (这两项只保存, 插单不用)。
+     * 整体替换, 传 null = 清空。权限同产线编辑。
+     */
+    @RequirePermission({"scheduling:read_write", "production:read_write"})
+    @RequireModule("scheduling")
+    @PutMapping("/production-lines/{lineId}/staffing")
+    @Operation(summary = "设置产线人数配置", description = "最少人数用于紧急插单比较当天排班人数, 不够只提示不拦; 不填不比较")
+    public ApiResponse<ProductionLineDTO> updateProductionLineStaffing(
+            @Parameter(description = "工厂ID", example = "F001")
+            @PathVariable String factoryId,
+            @Parameter(description = "产线ID", example = "PL-001")
+            @PathVariable String lineId,
+            @RequestBody ProductionLineStaffingRequest request) {
+        log.info("设置产线人数配置: factoryId={}, lineId={}", factoryId, lineId);
+        ProductionLineDTO line = schedulingService.updateProductionLineStaffing(factoryId, lineId, request);
+        return ApiResponse.success("保存成功", line);
+    }
+
+    /**
      * 更新产线状态
      */
     @RequirePermission({"scheduling:read_write", "production:read_write"})
@@ -916,10 +936,11 @@ public class SchedulingController {
             @PathVariable String factoryId,
             @Parameter(description = "时段ID", example = "SLOT-2025-001")
             @PathVariable String slotId,
-            @Valid @RequestBody GetInsertSlotsRequest request) {
+            @Valid @RequestBody GetInsertSlotsRequest request,
+            HttpServletRequest httpRequest) {
         factoryAccessValidator.validateAccess(factoryId);
         java.util.Map<String, Object> preview = urgentInsertService.createInsertPreview(
-                factoryId, slotId, request);
+                factoryId, getUserId(httpRequest), slotId, request);
         return ApiResponse.success("预览创建成功", preview);
     }
 
@@ -939,7 +960,9 @@ public class SchedulingController {
         log.info("确认紧急插单: factoryId={}, slotId={}, productTypeId={}, userId={}",
                 factoryId, request.getSlotId(), request.getProductTypeId(), userId);
         com.cretas.aims.dto.production.ProductionPlanDTO plan = urgentInsertService.confirmInsert(factoryId, userId, request);
-        return ApiResponse.success("插单成功", plan);
+        // 1551-11: 工厂开了「插单一律走审批」时, 普通插单也会进审批 —— 文案不能说「插单成功」
+        return ApiResponse.success("PENDING".equals(plan.getApprovalStatus())
+                ? "插单已提交审批，批准后才会排入" : "插单成功", plan);
     }
 
     /**

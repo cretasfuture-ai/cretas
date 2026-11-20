@@ -141,6 +141,21 @@ def test_real_deltas_terminal_usage_and_fixed_server_model(monkeypatch):
     assert audit.prompt_sha256 and not hasattr(audit, "prompt")
 
 
+def test_system_prompt_sent_to_model_is_factory_persona_without_business_numbers(monkeypatch):
+    # 2026-11-14: 识别不出时闲聊自称「专注古生物学与地球历史的白垩纪AI Agent」、并编出「同比增长 8%」。
+    # 读的是真正发给模型的那条 system 消息, 不是常量本身。
+    observed = install_model(monkeypatch, [frame("先检查温度。", done=True,
+                            prompt_eval_count=10, eval_count=4, done_reason="stop")])
+    collect()
+    messages = json.loads(observed["requests"][0].content)["messages"]
+    assert messages[0]["role"] == "system" and messages[1]["content"] == "如何检查冷链？"
+    system = messages[0]["content"]
+    assert "食品工厂" in system and "只是本系统的品牌名" in system
+    assert "与古生物学、恐龙、地质年代没有任何关系" in system
+    assert "不得给出任何业务数字或业务事实" in system and "同比" in system
+    assert "需要先查一下真实数据" in system
+
+
 def test_missing_usage_remains_unknown_not_zero(monkeypatch):
     observed = install_model(monkeypatch, [frame("检查温度。", done=True)])
     terminal = collect()[-1]
@@ -312,3 +327,25 @@ def test_production_parent_router_mounts_exact_authenticated_pilot(monkeypatch):
     result = request(api, headers())
     assert result.status_code == 200 and "检查冷链。" in result.text
     assert observed == [("如何检查冷链？", False)]
+
+
+def test_upstream_http_error_logs_status_and_body_prefix(monkeypatch, caplog):
+    # 2026-11-19: 网关 400 invalid_request 之前只记 HTTPStatusError 类型, 看不出上游拒绝了什么。
+    # 真流式响应(与生产一致): 错误体必须在流关闭前读出来。
+    install_model(monkeypatch, [{"error": "invalid_request", "pad": "x" * 400}], status=400)
+    with caplog.at_level("WARNING", logger=provider.logger.name):
+        events = collect()
+    assert events[-1]["code"] == "MINI_UNAVAILABLE"
+    text = " ".join(r.getMessage() for r in caplog.records)
+    assert "upstream_status=400" in text and "invalid_request" in text
+    assert "x" * 201 not in text
+
+
+def test_client_read_timeout_outlasts_gateway_wall_but_not_total_deadline(monkeypatch):
+    # 2026-11-19: 网关回 200 头后要等提问处理完才出第一行 (Aurora 实测 18-24s, 长问题更久);
+    # 读超时 28s 会在网关 50s 期限内先断。真实传给 httpx 的读超时必须在 (50, 55) 之间。
+    observed = install_model(monkeypatch, [frame("先检查温度。", done=True, done_reason="stop")])
+    assert collect()[-1]["type"] == "done"
+    timeout = observed["client"][0]["timeout"]
+    assert provider.GATEWAY_WALL_S < timeout.read < provider.TOTAL_TIMEOUT_S
+    assert timeout.connect == 3 and timeout.pool == 1

@@ -158,7 +158,7 @@ class QcFailedPendingQuarantineContractTest {
 
         /** 计数查询按「这个计划里那个批次的真实质检结论」作答 (查询语义另由 H2 上的仓储测试执行)。 */
         private void stubFailedCount() {
-            when(productionBatchRepository.countQcFailedInPlans(eq(FACTORY), any(), any())).thenAnswer(inv -> {
+            when(productionBatchRepository.countUnclearedNotScrappedInPlans(eq(FACTORY), any(), any())).thenAnswer(inv -> {
                 java.util.Collection<?> plans = inv.getArgument(1);
                 return plans.contains(PLAN_ID) && batch.getQualityStatus() == QualityStatus.FAILED ? 1L : 0L;
             });

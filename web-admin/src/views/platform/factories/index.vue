@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { useRouter } from 'vue-router';
-import { menuConfig, type MenuItem } from '@/components/layout/menuConfig';
+import { configurableMenuConfig, type MenuItem } from '@/components/layout/menuConfig';
 import { getFactoryModuleMenuOptions } from '@/components/layout/factoryMenuVisibility';
 import {
   getFactoryMenuConfig,
@@ -15,6 +15,7 @@ import {
 import { usePlatformFactoryContextStore } from '@/store/modules/platformFactoryContext';
 import FactoryAccessPanel from '@/components/FactoryAccessPanel.vue';
 import FactorySecrecyPanel from '@/components/FactorySecrecyPanel.vue';
+import FactoryIntegrationsPanel from '@/components/FactoryIntegrationsPanel.vue';
 
 const router = useRouter();
 const factoryView = usePlatformFactoryContextStore();
@@ -27,7 +28,7 @@ const savingModule = ref<string | null>(null);
 let menuLoadSequence = 0;
 const search = ref('');
 const errorMessage = ref('');
-const activeTab = ref<'activation' | 'roles' | 'employees' | 'secrecy' | 'menu'>('menu');
+const activeTab = ref<'activation' | 'roles' | 'employees' | 'secrecy' | 'integrations' | 'menu'>('menu');
 const accessSaving = ref(false);
 
 const filteredFactories = computed(() => {
@@ -41,7 +42,7 @@ const menuModules = computed(() => menuConfigState.value?.modules || []);
 function menuOptions(moduleId: string) {
   // The legacy SmartBI module id is still returned by older feature rows;
   // its web permission/menu id is analytics and must reuse that tree.
-  return getFactoryModuleMenuOptions(menuConfig as readonly MenuItem[], moduleId === 'smartbi' ? 'analytics' : moduleId);
+  return getFactoryModuleMenuOptions(configurableMenuConfig as readonly MenuItem[], moduleId === 'smartbi' ? 'analytics' : moduleId);
 }
 
 async function loadFactories(): Promise<void> {
@@ -184,6 +185,9 @@ onMounted(() => { void loadFactories(); });
           </el-tab-pane>
           <el-tab-pane label="保密设置" name="secrecy" :disabled="accessSaving">
             <FactorySecrecyPanel v-if="activeTab === 'secrecy'" :factory-id="selectedFactoryId" @writing-change="accessSaving = $event" />
+          </el-tab-pane>
+          <el-tab-pane label="外部软件" name="integrations" :disabled="accessSaving">
+            <FactoryIntegrationsPanel v-if="activeTab === 'integrations'" :factory-id="selectedFactoryId" @writing-change="accessSaving = $event" />
           </el-tab-pane>
           <el-tab-pane label="菜单显示" name="menu" :disabled="accessSaving">
             <el-skeleton v-if="loadingConfig" :rows="8" animated />

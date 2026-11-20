@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ListEmptyExplain from '@/components/common/ListEmptyExplain.vue';
 // 不良品处置/放行 (Quality Disposition) —— 质量主管人工决策界面。
 //
 // 接入既有、此前无 UI 的 QualityDispositionController:
@@ -14,10 +15,12 @@ import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get } from '@/api/request';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import { Refresh, WarningFilled } from '@element-plus/icons-vue';
 import { formatDateTimeCell } from '@/utils/tableFormatters';
 import type { TableRow } from '@/types/api';
+import SelfApprovalReasonField from '@/components/approval/SelfApprovalReasonField.vue';
+import { isSelfApproval, validateSelfApprovalReason } from '@/utils/selfApproval';
 import { dispositionResultFilter } from '../reinspectionRelease';
 import {
   getAvailableActions,
@@ -25,6 +28,9 @@ import {
   executeDisposition,
   getPendingDispositions,
   approveDisposition,
+  listHeldGoodsBatches,
+  releaseHeldGoods,
+  type HeldGoodsBatchDTO,
   type DispositionActionInfo,
   type DispositionActionCode,
   type DispositionEvaluationDTO,
@@ -46,7 +52,65 @@ const contextError = ref('');
 const contextLoading = ref(false);
 const hasBatchContext = computed(() => route.query.batchId != null);
 
-const activeTab = ref<'inspections' | 'approvals'>('inspections');
+const activeTab = ref<'inspections' | 'approvals' | 'heldGoods'>('inspections');
+
+// ==================== 成品仍在隔离的已放行批次 (Owner 2026-11-09) ====================
+// 批次已经放行, 但当时 (例如分不清成品属于哪个批次) 计划里的成品没放。补齐血缘等之后, 一个人申请即可:
+// 后端按现在的数据重跑一遍计划级放行, 每道检查重新来; 仍分不清就一个不放并说原因。
+const heldBatches = ref<HeldGoodsBatchDTO[]>([]);
+const heldLoading = ref(false);
+const releasingHeldId = ref<number | null>(null);
+
+const heldError = ref('');
+
+async function loadHeldBatches() {
+  if (!factoryId.value) return;
+  heldLoading.value = true;
+  try {
+    heldBatches.value = await listHeldGoodsBatches(factoryId.value);
+    heldError.value = '';
+  } catch (error) {
+    // 查不到就明说, 不当成「没有」把页签藏掉 (#1548 第二轮审查 6)
+    heldError.value = error instanceof Error ? error.message : '查询成品隔离情况失败';
+  } finally {
+    heldLoading.value = false;
+  }
+  // 列表空了而页签正开着: 页签会消失, 切回默认页签, 不留一块空白
+  if (heldBatches.value.length === 0 && activeTab.value === 'heldGoods') {
+    activeTab.value = 'inspections';
+  }
+}
+
+async function handleReleaseHeld(row: HeldGoodsBatchDTO) {
+  if (!factoryId.value || releasingHeldId.value != null) return;
+  try {
+    await ElMessageBox.confirm(
+      `批次 ${row.batchNumber}${row.productName ? '（' + row.productName + '）' : ''} 已放行，`
+        + `所在计划 ${row.productionPlanId}：这次能放 ${row.releasableNow} 个成品批次`
+        + (row.unclearOwnership > 0 ? `，${row.unclearOwnership} 个因分不清归属卡住（补齐血缘后才放得出）` : '')
+        + '。\n'
+        + '系统会按现在的数据重新核对（成品归属、召回、超时判废、同计划未处置的批次），能放的才放。',
+      '重新核对并放行成品',
+      { type: 'warning', confirmButtonText: '重新核对并放行', cancelButtonText: '取消', customStyle: { whiteSpace: 'pre-line' } },
+    );
+  } catch {
+    return;
+  }
+  releasingHeldId.value = row.productionBatchId;
+  try {
+    const result = await releaseHeldGoods(factoryId.value, row.productionBatchId);
+    if ((result.finishedGoodsHeld ?? 0) > 0) {
+      ElMessage({ type: 'warning', message: result.message, duration: 0, showClose: true });
+    } else {
+      ElMessage.success(result.message);
+    }
+    await loadHeldBatches();
+  } catch (error) {
+    console.error('申请放行成品失败:', error);
+  } finally {
+    releasingHeldId.value = null;
+  }
+}
 
 // ==================== Tab 1: 待处置质检 ====================
 const inspectionLoading = ref(false);
@@ -326,6 +390,9 @@ async function submitDisposition() {
         duration: 0,
         showClose: true,
       });
+    } else if ((result.finishedGoodsHeld ?? 0) > 0) {
+      // Q2/Q4: 还有成品留在隔离 (要复核 / 同计划还有批次没解除 / 报废召回批次的货等), 原因在 message 里, 不能一闪而过
+      ElMessage({ type: 'warning', message: result.message, duration: 0, showClose: true });
     } else {
       ElMessage.success(`${result.message}${result.nextSteps ? ' — ' + result.nextSteps : ''}`);
     }
@@ -391,10 +458,15 @@ const approveDialogVisible = ref(false);
 const approveRow = ref<PendingDispositionDTO | null>(null);
 const approveForm = ref<{ approved: boolean; comment: string }>({ approved: true, comment: '' });
 const approving = ref(false);
+// 本人审批 (纪律排查 B3): 当前登录人就是处置申请人时, 批准必须写原因 (驳回时拒绝原因即本人原因)
+const selfApprovalReason = ref('');
+const isSelfApprove = computed(() => approveForm.value.approved
+  && isSelfApproval(approveRow.value?.executorId, currentUserId.value));
 
 function openApproveDialog(row: PendingDispositionDTO) {
   approveRow.value = row;
   approveForm.value = { approved: true, comment: '' };
+  selfApprovalReason.value = '';
   approveDialogVisible.value = true;
 }
 
@@ -408,6 +480,13 @@ async function submitApprove() {
     ElMessage.warning('拒绝时请填写审批意见');
     return;
   }
+  if (isSelfApprove.value) {
+    const invalid = validateSelfApprovalReason(selfApprovalReason.value);
+    if (invalid) {
+      ElMessage({ message: invalid, type: 'error', duration: 0, showClose: true });
+      return;
+    }
+  }
   approving.value = true;
   try {
     const result = await approveDisposition(factoryId.value, approveRow.value.id, {
@@ -415,8 +494,13 @@ async function submitApprove() {
       approverId,
       approverName: currentUserName.value || undefined,
       comment: approveForm.value.comment.trim() || undefined,
+      selfApprovalReason: isSelfApprove.value ? selfApprovalReason.value.trim() : undefined,
     });
-    ElMessage.success(result.message);
+    if ((result.finishedGoodsHeld ?? 0) > 0) {
+      ElMessage({ type: 'warning', message: result.message, duration: 0, showClose: true });
+    } else {
+      ElMessage.success(result.message);
+    }
     approveDialogVisible.value = false;
     loadPendingApprovals();
     loadPendingInspections();
@@ -431,11 +515,13 @@ function handleRefresh() {
   loadPendingInspections();
   loadPendingApprovals();
   loadBatchLookup();
+  loadHeldBatches();
 }
 
 onMounted(() => {
   loadActionOptions();
   loadPendingApprovals();
+  loadHeldBatches();
 });
 </script>
 
@@ -469,16 +555,18 @@ onMounted(() => {
         </template>
       </el-alert>
 
+      <el-alert v-if="heldError" type="error" :closable="false" show-icon style="margin-bottom: 12px"
+        :title="`成品隔离情况查不到：${heldError}`" />
       <el-tabs v-model="activeTab">
         <el-tab-pane label="待处置质检" name="inspections">
           <el-table
             :data="inspectionRows"
             v-loading="inspectionLoading"
-            empty-text="暂无待处置质检记录"
             stripe
             border
             style="width: 100%"
           >
+            <template #empty><ListEmptyExplain empty-title="没有待处置的质检记录" empty-hint="质检不合格的批次会出现在这里等待处置；没有则说明暂无不合格批次。" /></template>
             <el-table-column label="生产批次" min-width="200" show-overflow-tooltip>
               <template #default="{ row }">{{ batchLabel(row.productionBatchId) }}</template>
             </el-table-column>
@@ -554,11 +642,11 @@ onMounted(() => {
           <el-table
             :data="filteredApprovalRows"
             v-loading="approvalLoading"
-            empty-text="暂无待审批的处置申请"
             stripe
             border
             style="width: 100%"
           >
+            <template #empty><ListEmptyExplain empty-title="没有待审批的处置申请" empty-hint="提交处置申请后会出现在这里等待审批。" /></template>
             <el-table-column label="生产批次" min-width="200" show-overflow-tooltip>
               <template #default="{ row }">
                 {{ row.batchNumber || batchLabel(row.productionBatchId) }}
@@ -590,6 +678,39 @@ onMounted(() => {
                   @click="openApproveDialog(row)"
                 >审批</el-button>
                 <span v-else>-</span>
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-tab-pane>
+
+        <!-- 只在「已放行批次的计划里有按一下就有用的隔离成品」时出现 (Owner 2026-11-09, #1548 第二轮审查 6) -->
+        <el-tab-pane v-if="heldBatches.length > 0" name="heldGoods" :label="`成品仍在隔离 (${heldBatches.length})`">
+          <el-alert type="info" :closable="false" show-icon style="margin-bottom: 12px"
+            title="这些批次已经放行，但所在计划的成品当时没放。报废、召回、判废的货永远不放，不在这里计数；分不清归属的要先补齐血缘。" />
+          <el-table v-loading="heldLoading" :data="heldBatches" border stripe>
+            <el-table-column prop="batchNumber" label="生产批次" min-width="180" />
+            <el-table-column prop="productName" label="品名" min-width="140" />
+            <el-table-column prop="productionPlanId" label="生产计划" min-width="200" />
+            <el-table-column label="这次能放" width="110" align="right">
+              <template #default="{ row }">{{ row.releasableNow }}</template>
+            </el-table-column>
+            <el-table-column label="分不清归属" min-width="220">
+              <template #default="{ row }">
+                <span v-if="row.unclearOwnership > 0">{{ row.unclearOwnership }} 个：{{ row.unclearReason }}</span>
+                <span v-else>-</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="180" fixed="right">
+              <template #default="{ row }">
+                <el-button
+                  v-if="canWrite"
+                  data-testid="disposition-release-held-goods"
+                  type="primary"
+                  link
+                  :loading="releasingHeldId === row.productionBatchId"
+                  :disabled="releasingHeldId != null"
+                  @click="handleReleaseHeld(row)"
+                >重新核对并放行成品</el-button>
               </template>
             </el-table-column>
           </el-table>
@@ -710,6 +831,7 @@ onMounted(() => {
           />
         </el-form-item>
       </el-form>
+      <SelfApprovalReasonField v-if="isSelfApprove" v-model="selfApprovalReason" action-label="审批" />
 
       <template #footer>
         <el-button @click="approveDialogVisible = false">取消</el-button>

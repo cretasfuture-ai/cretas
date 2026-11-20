@@ -10,8 +10,23 @@ CATALOG = ROOT / "backend/java/cretas-api/src/main/resources/ai/factory-intent-c
 TARGET = ROOT / "backend/java/cretas-api/src/main/resources/db/flyway/V20261104_51__factory_intent_catalog_retirement.sql"
 
 
+# Intents added to the catalog AFTER V20261104_51 was published. Each ships in its own
+# additive migration; V20261104_51 is already applied (Flyway checksum) and must stay
+# byte-identical, so the generator must not embed them.
+POST_V51_INTENTS = frozenset({
+    "REPORT_BATCH_YIELD_RANK", "REPORT_BOM_COST_RANK",
+    "REPORT_SALES_MARGIN_SUMMARY", "REPORT_LABOR_COST_SHARE",
+    "SCHEDULING_RUSH_ORDER_ANALYSIS",
+    # 2026-11-17 v3 review gaps, shipped by V20261118_61__intent_gap_v3_new_intents.sql
+    "CUSTOMER_CREATE", "HR_EMPLOYEE_WORK_LOCATION_QUERY", "HR_MY_WAGE_QUERY",
+    "SSOP_SCHEDULE_PLAN_CREATE",
+})
+
+
 def render() -> str:
     catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
+    catalog["canonical_intents"] = [
+        c for c in catalog["canonical_intents"] if c["intent_code"] not in POST_V51_INTENTS]
     payload = json.dumps(catalog, ensure_ascii=False, separators=(",", ":"))
     assert "$factory_catalog$" not in payload
     assert "${" not in payload, "Catalog text must not contain Flyway placeholders"

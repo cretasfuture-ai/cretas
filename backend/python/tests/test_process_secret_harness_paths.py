@@ -45,6 +45,11 @@ HARNESSED_PATHS = {
     "smartbi/services/llm_structure_analyzer.py": 1,
     "smartbi/services/chart_recommender.py": 1,
     "smartbi/services/scenario_detector.py": 1,
+    # 黑湖成本分析 (本机模型): 匿名化的工厂成本事实进模型, 返回核对建议 / 分节解读
+    "smartbi/services/alert_local_ai.py": 1,
+    "smartbi/services/analysis_batches.py": 1,
+    "smartbi/services/analysis_supplement.py": 1,
+    "smartbi/services/local_analyst.py": 1,
 }
 
 # 写了系统消息但有意不接约束的模块 → 理由 (不给经营数据做解读 / 已废弃 / 离线脚本)

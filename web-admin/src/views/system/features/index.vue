@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { CS_TOKENS } from '@/styles/csTokens';
 import { ref, computed, onMounted } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
@@ -243,7 +244,7 @@ async function saveConfig() {
 
 function getModuleColor(moduleId: string): string {
   const colors: Record<string, string> = {
-    production: '#409EFF',
+    production: CS_TOKENS.primary,
     warehouse: '#67C23A',
     quality: '#E6A23C',
     procurement: '#F56C6C',
@@ -254,7 +255,7 @@ function getModuleColor(moduleId: string): string {
     scheduling: '#ffc53d',
     smartbi: '#597ef7'
   };
-  return colors[moduleId] || '#409EFF';
+  return colors[moduleId] || CS_TOKENS.primary;
 }
 </script>
 
@@ -265,7 +266,7 @@ function getModuleColor(moduleId: string): string {
       <div class="header-row">
         <div>
           <h2 class="page-title">功能模块配置</h2>
-          <p class="page-desc">管理工厂功能模块的启用状态和详细配置。RN App 登录后将自动加载最新配置。</p>
+          <p class="page-desc">管理工厂功能模块的启用状态和详细配置。手机 App 登录后会自动使用最新配置。</p>
         </div>
         <div class="header-actions">
           <el-tag type="info" size="large">工厂: {{ factoryId }}</el-tag>
@@ -316,7 +317,7 @@ function getModuleColor(moduleId: string): string {
 
         <div class="module-stats">
           <div class="stat-item">
-            <span class="stat-label">禁用屏幕</span>
+            <span class="stat-label">隐藏页面</span>
             <el-tag size="small" :type="(config.config?.disabledScreens?.length || 0) > 0 ? 'warning' : 'success'">
               {{ config.config?.disabledScreens?.length || 0 }}
             </el-tag>
@@ -358,7 +359,7 @@ function getModuleColor(moduleId: string): string {
       <div v-if="editingModule" class="drawer-content">
         <div v-if="webMenuOptions.length" class="config-section">
           <h4>隐藏的网页子菜单</h4>
-          <p class="section-hint">勾选后隐藏当前工厂的菜单入口，其他工厂不受影响；已有数据和接口权限保持不变。</p>
+          <p class="section-hint">勾选后隐藏当前工厂的菜单入口，其他工厂不受影响；已有数据和操作权限保持不变。</p>
           <el-checkbox-group v-model="editConfig.disabledMenuPaths">
             <el-checkbox v-for="item in webMenuOptions" :key="item.path" :value="item.path">
               {{ item.label }}
@@ -370,8 +371,8 @@ function getModuleColor(moduleId: string): string {
           v-if="moduleScreens[editingModule.moduleId]"
           class="config-section"
         >
-          <h4>禁用的屏幕</h4>
-          <p class="section-hint">勾选的屏幕将在 RN App 中隐藏</p>
+          <h4>隐藏的页面</h4>
+          <p class="section-hint">勾选的页面将在手机 App 中隐藏</p>
           <el-checkbox-group v-model="editConfig.disabledScreens">
             <el-checkbox
               v-for="screen in moduleScreens[editingModule.moduleId]"
@@ -390,7 +391,7 @@ function getModuleColor(moduleId: string): string {
           class="config-section"
         >
           <h4>快捷操作</h4>
-          <p class="section-hint">选中的操作将出现在 RN App 首页快捷入口</p>
+          <p class="section-hint">选中的操作将出现在手机 App 首页的快捷入口</p>
           <el-checkbox-group v-model="editConfig.quickActions">
             <el-checkbox
               v-for="action in moduleQuickActions[editingModule.moduleId]"
@@ -409,7 +410,7 @@ function getModuleColor(moduleId: string): string {
           class="config-section"
         >
           <h4>禁用的报表类型</h4>
-          <p class="section-hint">勾选的报表将在 RN App 报表中心隐藏</p>
+          <p class="section-hint">勾选的报表将在手机 App 的报表中心隐藏</p>
           <el-checkbox-group v-model="editConfig.disabledReports">
             <el-checkbox
               v-for="report in moduleReportTypes[editingModule.moduleId]"
@@ -432,19 +433,19 @@ function getModuleColor(moduleId: string): string {
           <el-radio-group v-model="editConfig.mode" class="mode-radio-group">
             <el-radio value="BATCH">
               <div class="mode-option">
-                <strong>批次模式 (BATCH)</strong>
+                <strong>批次模式</strong>
                 <span class="mode-desc">默认 — 按批次组织签到和报工</span>
               </div>
             </el-radio>
             <el-radio value="PROCESS">
               <div class="mode-option">
-                <strong>工序模式 (PROCESS)</strong>
+                <strong>工序模式</strong>
                 <span class="mode-desc">按工序任务组织，支持累计报工和审批</span>
               </div>
             </el-radio>
             <el-radio value="ORDER" disabled>
               <div class="mode-option">
-                <strong>订单模式 (ORDER)</strong>
+                <strong>订单模式</strong>
                 <span class="mode-desc">按客户订单排产（暂未开放）</span>
               </div>
             </el-radio>
@@ -478,7 +479,7 @@ function getModuleColor(moduleId: string): string {
         <!-- Priority -->
         <div class="config-section">
           <h4>模块优先级</h4>
-          <p class="section-hint">数值越大，在 RN App 中排序越靠前（1-10）</p>
+          <p class="section-hint">数值越大，在手机 App 中排序越靠前（1-10）</p>
           <el-slider
             v-model="editConfig.priority"
             :min="1"

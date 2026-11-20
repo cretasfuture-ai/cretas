@@ -258,4 +258,229 @@ class ReturnRefundReversalContractTest {
         assertThat(jdbc.queryForObject("select status from probe_reversal",String.class)).isEqualTo("APPROVED");
         assertThat(jdbc.queryForObject("select status from probe_refund",String.class)).isEqualTo("CANCELLED");
     }
+    // ==================== 纪律排查 B15: 工厂级「允许本人审批」开关 ====================
+    // 退款申请人 = 10。本人审批 / 本人登记付款 / 本人确认撤销, 三道四眼共用一个开关, 各自留痕。
+
+    private void selfApprovalSwitchIs(boolean on) {
+        com.cretas.aims.repository.FactorySettingsRepository settings =
+                mock(com.cretas.aims.repository.FactorySettingsRepository.class);
+        when(settings.findAllowSelfApprovalByFactoryId("F")).thenReturn(on);
+        ReflectionTestUtils.setField(service, "selfApprovalGate",
+                new com.cretas.aims.service.workflow.FactorySelfApprovalGate(settings));
+    }
+
+    private void refundBackToFinanceReview() {
+        refund.setStatus(PaymentRequestStatus.FINANCE_REVIEW);
+        refund.setApprovedBy(null); refund.setApprovedAt(null);
+        refund.setPaidBy(null); refund.setPaidAt(null);
+        refund.setPaymentMethod(null); refund.setPaymentReference(null); refund.setArapTransactionId(null);
+        when(em.find(PaymentRequest.class, "PR", LockModeType.NONE)).thenAnswer(i -> refund);
+    }
+
+    private static int httpCode(Throwable e) {
+        return ((com.cretas.aims.exception.BusinessException) e).getCode();
+    }
+
+    private static String errorCode(Throwable e) {
+        return ((com.cretas.aims.exception.BusinessException) e).getErrorCode();
+    }
+
+    @Test void b15ApproveOwnRefundForbiddenWhenSwitchOff() {
+        refundBackToFinanceReview();
+        selfApprovalSwitchIs(false);
+        assertThatThrownBy(() -> service.approve("F", "RO", 10L, "核对", "只有我一个财务"))
+                .satisfies(e -> assertThat(errorCode(e)).isEqualTo("RETURN_REFUND_FOUR_EYES"));
+        assertThat(refund.getStatus()).isEqualTo(PaymentRequestStatus.FINANCE_REVIEW);
+        assertThat(refund.isSelfApproved()).isFalse();
+        verify(requests, never()).save(any());
+    }
+
+    @Test void b15ApproveOwnRefundWithReasonIsTracedWhenSwitchOn() {
+        refundBackToFinanceReview();
+        selfApprovalSwitchIs(true);
+        service.approve("F", "RO", 10L, "核对", "本厂只有我一个财务");
+        assertThat(refund.getStatus()).isEqualTo(PaymentRequestStatus.APPROVED);
+        assertThat(refund.getApprovedBy()).isEqualTo(10L);
+        assertThat(refund.isSelfApproved()).isTrue();
+        assertThat(refund.getSelfApprovalReason()).isEqualTo("本厂只有我一个财务");
+    }
+
+    @Test void b15ApproveOwnRefundWithoutReasonRejectedWhenSwitchOn() {
+        refundBackToFinanceReview();
+        selfApprovalSwitchIs(true);
+        assertThatThrownBy(() -> service.approve("F", "RO", 10L, null, " "))
+                .satisfies(e -> {
+                    assertThat(httpCode(e)).isEqualTo(422);
+                    assertThat(errorCode(e)).isEqualTo(com.cretas.aims.service.workflow.FactorySelfApprovalGate.REASON_REQUIRED);
+                });
+        assertThat(refund.getStatus()).isEqualTo(PaymentRequestStatus.FINANCE_REVIEW);
+        verify(requests, never()).save(any());
+    }
+
+    @Test void b15ApprovalByAnotherPersonIsNotMarkedSelf() {
+        refundBackToFinanceReview();
+        selfApprovalSwitchIs(true);
+        service.approve("F", "RO", 20L, "核对", null);
+        assertThat(refund.getStatus()).isEqualTo(PaymentRequestStatus.APPROVED);
+        assertThat(refund.isSelfApproved()).isFalse();
+        assertThat(refund.getSelfApprovalReason()).isNull();
+    }
+
+    private ReturnRefundDTO.MarkPaidRequest payCommand(String selfPaidReason) {
+        var c = new ReturnRefundDTO.MarkPaidRequest();
+        c.setPaymentMethod("CASH"); c.setPaymentReference("本人付出凭据"); c.setRemark("现金退回客户");
+        c.setSelfPaidReason(selfPaidReason);
+        return c;
+    }
+
+    @Test void b15OnePersonFactoryCanApproveAndPayOwnRefundWithBothTraces() {
+        refundBackToFinanceReview();
+        selfApprovalSwitchIs(true);
+        service.approve("F", "RO", 10L, "核对", "本厂只有我一个财务");
+        service.markPaid("F", "RO", 10L, payCommand("本厂只有我一个出纳"));
+        assertThat(refund.getStatus()).isEqualTo(PaymentRequestStatus.PAID);
+        assertThat(refund.getPaidBy()).isEqualTo(10L);
+        assertThat(refund.isSelfPaid()).isTrue();
+        assertThat(refund.getSelfPaidReason()).isEqualTo("本厂只有我一个出纳");
+        // 退款证据谓词认这条单 (申请=审批=付款 同一人, 但都留了痕)
+        assertThat(com.cretas.aims.service.voucher.ReturnRefundEvidence.hasSelfApprovalTrace(refund)).isTrue();
+        assertThat(com.cretas.aims.service.voucher.ReturnRefundEvidence.hasSelfPaidTrace(refund)).isTrue();
+    }
+
+    @Test void b15PayOwnRefundForbiddenWhenSwitchOff() {
+        refundBackToFinanceReview();
+        refund.setStatus(PaymentRequestStatus.APPROVED); refund.setApprovedBy(20L); refund.setApprovedAt(LocalDateTime.now());
+        selfApprovalSwitchIs(false);
+        assertThatThrownBy(() -> service.markPaid("F", "RO", 10L, payCommand("只有我")))
+                .satisfies(e -> assertThat(errorCode(e)).isEqualTo("RETURN_REFUND_FOUR_EYES"));
+        assertThat(refund.getStatus()).isEqualTo(PaymentRequestStatus.APPROVED);
+        verifyNoInteractions(accounting);
+    }
+
+    @Test void b15PayOwnRefundWithoutReasonRejectedWhenSwitchOn() {
+        refundBackToFinanceReview();
+        refund.setStatus(PaymentRequestStatus.APPROVED); refund.setApprovedBy(20L); refund.setApprovedAt(LocalDateTime.now());
+        selfApprovalSwitchIs(true);
+        assertThatThrownBy(() -> service.markPaid("F", "RO", 10L, payCommand(null)))
+                .satisfies(e -> assertThat(httpCode(e)).isEqualTo(422));
+        assertThat(refund.getStatus()).isEqualTo(PaymentRequestStatus.APPROVED);
+        verifyNoInteractions(accounting);
+    }
+
+    @Test void b15UntracedSelfApprovalIsStillMissingEvidenceEvenWithSwitchOn() {
+        // 申请人 = 审批人 却没有本人审批留痕 (例如开关上线前的脏数据): 开关现在开着也不认, 付款不登记
+        refundBackToFinanceReview();
+        refund.setStatus(PaymentRequestStatus.APPROVED); refund.setApprovedBy(10L); refund.setApprovedAt(LocalDateTime.now());
+        selfApprovalSwitchIs(true);
+        assertThatThrownBy(() -> service.markPaid("F", "RO", 20L, payCommand(null)))
+                .satisfies(e -> assertThat(errorCode(e)).isEqualTo("RETURN_REFUND_APPROVAL_EVIDENCE_MISSING"));
+        verifyNoInteractions(accounting);
+    }
+
+    private void accountingAcceptsSelfReversalBy10() {
+        when(accounting.reverseReturnRefund(eq("F"), eq("PR"), anyString(), eq(10L))).thenAnswer(i -> {
+            Voucher v = reverseVoucher();
+            if (mirror != null) mirror.setApprovedBy(10L);
+            if (original.getStatus() == VoucherStatus.VOID) original.setApprovedBy(10L);
+            return v;
+        });
+    }
+
+    @Test void b15ApproveOwnReversalForbiddenWhenSwitchOff() {
+        selfApprovalSwitchIs(false);
+        service.requestReversal("F", "RO", 10L, command("收回1"));
+        var d = decision(); d.setSelfApprovalReason("只有我一个财务");
+        assertThatThrownBy(() -> service.approveReversal("F", "RO", 10L, d))
+                .satisfies(e -> assertThat(errorCode(e)).isEqualTo("RETURN_REFUND_REVERSAL_FOUR_EYES"));
+        assertThat(customer.getCurrentBalance()).isEqualByComparingTo("540");
+        assertThat(reversals.get(0).getApprovalStatus()).isEqualTo(ArApApprovalStatus.PENDING);
+        verifyNoInteractions(accounting);
+    }
+
+    @Test void b15ApproveOwnReversalWithReasonIsTracedWhenSwitchOn() {
+        selfApprovalSwitchIs(true);
+        accountingAcceptsSelfReversalBy10();
+        service.requestReversal("F", "RO", 10L, command("收回1"));
+        var d = decision(); d.setSelfApprovalReason("本厂只有我一个财务");
+        service.approveReversal("F", "RO", 10L, d);
+        ArApTransaction tx = reversals.get(0);
+        assertThat(tx.getApprovalStatus()).isEqualTo(ArApApprovalStatus.APPROVED);
+        assertThat(tx.getApprovedBy()).isEqualTo(10L);
+        assertThat(tx.isSelfApproved()).isTrue();
+        assertThat(tx.getSelfApprovalReason()).isEqualTo("本厂只有我一个财务");
+        assertThat(customer.getCurrentBalance()).isEqualByComparingTo("525");
+        assertThat(refund.getStatus()).isEqualTo(PaymentRequestStatus.CANCELLED);
+    }
+
+    @Test void b15ApproveOwnReversalWithoutReasonRejectedWhenSwitchOn() {
+        selfApprovalSwitchIs(true);
+        service.requestReversal("F", "RO", 10L, command("收回1"));
+        assertThatThrownBy(() -> service.approveReversal("F", "RO", 10L, decision()))
+                .satisfies(e -> assertThat(httpCode(e)).isEqualTo(422));
+        assertThat(customer.getCurrentBalance()).isEqualByComparingTo("540");
+        verifyNoInteractions(accounting);
+    }
+    // ---- 独立审查必修 1: 一人厂本人审批 + 本人付款的退款, 凭证要能过账 (真 VoucherServiceImpl.post + 真 ReturnVoucherPostingGuard) ----
+
+    /** 真过账服务: 用 markPaid 交给会计的那组分录建凭证, 再走 VoucherServiceImpl.post → ReturnVoucherPostingGuard。 */
+    private Voucher postRefundVoucherBuiltFromMarkPaid() {
+        org.mockito.ArgumentCaptor<List<VoucherEntry>> entries = org.mockito.ArgumentCaptor.forClass(List.class);
+        org.mockito.ArgumentCaptor<VoucherType> type = org.mockito.ArgumentCaptor.forClass(VoucherType.class);
+        org.mockito.ArgumentCaptor<LocalDate> date = org.mockito.ArgumentCaptor.forClass(LocalDate.class);
+        verify(accounting).createCashMovementVoucher(eq("F"), type.capture(), date.capture(), entries.capture(),
+                eq("RETURN_REFUND"), eq("PR"), anyString(), anyLong());
+        BigDecimal debit = entries.getValue().stream().map(VoucherEntry::getDebit).reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal credit = entries.getValue().stream().map(VoucherEntry::getCredit).reduce(BigDecimal.ZERO, BigDecimal::add);
+        Voucher draft = Voucher.builder().id("V-SELF").factoryId("F").sourceBusinessType("RETURN_REFUND").sourceBusinessId("PR")
+                .voucherNumber("凭证-本人").voucherType(type.getValue()).voucherDate(date.getValue()).status(VoucherStatus.DRAFT)
+                .totalDebit(debit).totalCredit(credit).build();
+        draft.getEntries().addAll(entries.getValue());
+
+        when(vouchers.findByIdAndFactoryIdAndDeletedAtIsNull("V-SELF", "F")).thenReturn(Optional.of(draft));
+        when(vouchers.save(any(Voucher.class))).thenAnswer(i -> i.getArgument(0));
+        when(ledger.findById(anyString())).thenAnswer(i -> reversals.stream()
+                .filter(tx -> tx.getId().equals(i.getArgument(0))).findFirst()
+                .or(() -> "PAID".equals(i.getArgument(0)) ? Optional.of(paid) : Optional.empty()));
+        when(em.createNativeQuery(anyString())).thenAnswer(i -> {
+            String sql = i.getArgument(0);
+            Query q = mock(Query.class);
+            when(q.setParameter(anyString(), any())).thenReturn(q);
+            when(q.getResultList()).thenReturn(sql.contains("FROM vouchers") ? List.of("V-SELF")
+                    : sql.contains("payment_requests") ? List.of("PR") : List.of("RO"));
+            return q;
+        });
+
+        com.cretas.aims.service.voucher.impl.VoucherServiceImpl posting = new com.cretas.aims.service.voucher.impl.VoucherServiceImpl(
+                vouchers, null, null, null, null, null, null, null, null, null, null);
+        ReflectionTestUtils.setField(posting, "entityManager", em);
+        ReflectionTestUtils.setField(posting, "returnVoucherPostingGuard",
+                new com.cretas.aims.service.voucher.ReturnVoucherPostingGuard(returns, ledger, requests));
+        return posting.post("F", "V-SELF", 10L);
+    }
+
+    @Test void b15OnePersonRefundVoucherPostsWithRealPostingGuard() {
+        refundBackToFinanceReview();
+        selfApprovalSwitchIs(true);
+        service.approve("F", "RO", 10L, "核对", "本厂只有我一个财务");
+        service.markPaid("F", "RO", 10L, payCommand("本厂只有我一个出纳"));
+        assertThat(refund.getStatus()).isEqualTo(PaymentRequestStatus.PAID);
+
+        Voucher posted = postRefundVoucherBuiltFromMarkPaid();
+
+        assertThat(posted.getStatus()).isEqualTo(VoucherStatus.POSTED);
+        assertThat(posted.getApprovedBy()).isEqualTo(10L);
+    }
+
+    @Test void b15UntracedSelfPaidRefundVoucherStillCannotPost() {
+        // 阴性对照: 同一张一人厂退款, 把本人付款的留痕抹掉 (脏数据 / 开关上线前的单) —— 过账照旧被拦
+        refundBackToFinanceReview();
+        selfApprovalSwitchIs(true);
+        service.approve("F", "RO", 10L, "核对", "本厂只有我一个财务");
+        service.markPaid("F", "RO", 10L, payCommand("本厂只有我一个出纳"));
+        refund.setSelfPaid(false);
+        refund.setSelfPaidReason(null);
+
+        assertThatThrownBy(this::postRefundVoucherBuiltFromMarkPaid)
+                .isInstanceOf(com.cretas.aims.exception.BusinessException.class);
+    }
 }

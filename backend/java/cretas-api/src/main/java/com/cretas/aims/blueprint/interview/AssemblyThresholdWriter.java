@@ -29,6 +29,11 @@ public class AssemblyThresholdWriter {
         if (value == null || value.isBlank() || value.length() > 100) {
             throw new BusinessException(400, "阈值必须填写，且不能超过100字");
         }
+        // 与业务阈值页保存走同一道语义校验: 开关类 key 只认登记的代码 (打错字读取方会静默按默认/最严)
+        String semantic = com.cretas.aims.service.canvas.ThresholdKeys.validateSemantics(key, value.trim());
+        if (semantic != null) {
+            throw new BusinessException(400, semantic);
+        }
         ThresholdValueType type = valueType(factoryId, key, value);
         try {
             switch (type) {

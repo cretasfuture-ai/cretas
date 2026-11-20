@@ -28,6 +28,7 @@ import com.cretas.aims.repository.product.ProductPackagingSpecRepository;
 import com.cretas.aims.entity.product.ProductPackagingSpec;
 import com.cretas.aims.entity.bom.BomProcessInjectionConfig;
 import com.cretas.aims.dto.bom.ProcessInjectionConfigDTO;
+import com.cretas.aims.service.bom.BomRecipeHeadLocks;
 import com.cretas.aims.service.bom.BomRecipeService;
 import com.cretas.aims.service.bom.BomItemSubstituteService;
 import com.cretas.aims.service.bom.BomWorkflowRevisionService;
@@ -137,6 +138,11 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             boolean dropObsoleteInputs) {
         ProductType product = loadProductForUpdate(factoryId, productTypeId);
         validateProductOutputMetadata(product);
+        // 红线 3 锁序「产品 → 草稿整族配方头」: 草稿会被对齐骨架 / 改绑 / 归档并重算整族成本, 先锁再读。
+        for (String draftId : recipeRepo.findIdsByFactoryIdAndProductTypeIdAndStatus(
+                factoryId, productTypeId, BomRecipe.Status.DRAFT)) {
+            BomRecipeHeadLocks.lockWithFamily(entityManager, recipeRepo, factoryId, draftId);
+        }
 
         List<BomRecipe> versions = recipeRepo
                 .findByFactoryIdAndProductTypeIdOrderByVersionDesc(factoryId, productTypeId);
@@ -351,7 +357,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
     @Override
     @Transactional
     public BomRecipe updateRecipe(String factoryId, String recipeId, UpdateBomRecipeRequest req) {
-        BomRecipe recipe = loadRecipe(factoryId, recipeId);
+        BomRecipe recipe = lockProductsThenFamily(factoryId, recipeId);
         if (recipe.getStatus() != BomRecipe.Status.DRAFT) {
             throw new IllegalStateException(
                     "只有 DRAFT 状态的 BOM 配方可以修改; 当前 status=" + recipe.getStatus()
@@ -429,7 +435,8 @@ public class BomRecipeServiceImpl implements BomRecipeService {
     @Transactional   // 终审 #509: 提成接口后自己必须带事务, 否则下一个非事务调用方会留下「2 ACTIVE + 2 DRAFT」半状态
     public BomRecipe activateRecipe(
             String factoryId, String recipeId, Long operatorId, Long publishingWorkflowId) {
-        BomRecipe recipe = loadRecipe(factoryId, recipeId);
+        // 红线 3: 产品 (id 升序) → 整族配方头 (id 升序), 在第一次读配方之前。
+        BomRecipe recipe = lockProductsThenFamily(factoryId, recipeId);
         if (recipe.getStatus() == BomRecipe.Status.ACTIVE && Boolean.TRUE.equals(recipe.getIsCurrent())) {
             throw new IllegalStateException("当前 BOM 已经生效，无需重复激活");
         }
@@ -506,14 +513,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         }
 
         // Archive competing versions for every terminal output before making the new family current.
-        for (BomRecipe member : family) {
-            for (BomRecipe other : recipeRepo.findCompetingVersionsForActivation(
-                    factoryId, member.getProductTypeId(), member.getId(), BomRecipe.Status.ACTIVE)) {
-                other.setStatus(BomRecipe.Status.ARCHIVED);
-                other.setIsCurrent(false);
-                recipeRepo.save(other);
-            }
-        }
+        archiveCompetingVersions(factoryId, family);
         recipeRepo.flush();
 
         LocalDateTime activatedAt = LocalDateTime.now();
@@ -525,6 +525,33 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             recipeRepo.save(member);
         }
         return family.stream().filter(member -> member.getId().equals(recipeId)).findFirst().orElse(recipe);
+    }
+
+    /**
+     * 归档被新族替换的旧 ACTIVE 版本 (锁序第 5 步: 按配方 id 升序加锁并刷新)。
+     *
+     * <p>红线 3: 旧版本可能刚被调价批准 / 包材更正改过成本 (它们只锁旧族, 不锁产品)。配方头整行 UPDATE,
+     * 所以这里写回的必须是加锁后读到的那份 —— 同步链路里克隆时已无锁读进上下文的旧对象, FOR UPDATE 查询
+     * 不会刷新它, 只能 {@code refresh(PESSIMISTIC_WRITE)}。按 id 升序, 与锁整族头的顺序一致, 不成环。</p>
+     */
+    private void archiveCompetingVersions(String factoryId, List<BomRecipe> family) {
+        java.util.Set<String> competingIds = new java.util.LinkedHashSet<>();
+        for (BomRecipe member : family) {
+            for (BomRecipe other : recipeRepo.findCompetingVersionsForActivation(
+                    factoryId, member.getProductTypeId(), member.getId(), BomRecipe.Status.ACTIVE)) {
+                competingIds.add(other.getId());
+            }
+        }
+        // 红线 3 后续: 一条 FOR UPDATE 按 PG 的 ORDER BY id 锁 (与族锁同一比较规则), 加锁前读到的旧对象会被刷新
+        for (BomRecipe other : BomRecipeHeadLocks.lockHeadsInIdOrder(
+                entityManager, recipeRepo, factoryId, competingIds).values()) {
+            if (other.getStatus() != BomRecipe.Status.ACTIVE) {
+                continue;   // 加锁等待期间已被别的事务归档
+            }
+            other.setStatus(BomRecipe.Status.ARCHIVED);
+            other.setIsCurrent(false);
+            recipeRepo.save(other);
+        }
     }
 
     /**
@@ -587,7 +614,9 @@ public class BomRecipeServiceImpl implements BomRecipeService {
     @Override
     @Transactional
     public BomRecipe cloneRecipe(String factoryId, String recipeId) {
-        BomRecipe source = loadRecipe(factoryId, recipeId);
+        // 红线 3 后续: 先按 id 升序锁整个源族再读。之后 cloneRelations 会逐个成员 (主产在前) 锁「源头 + 新克隆」,
+        // 不先锁源族的话, 这个顺序与调价 / 包材更正等按 id 升序锁同一族的路径相反, PG 会判死锁。
+        BomRecipe source = lockFamilyForCostWrite(factoryId, recipeId);
         if (source.getWorkflowRevisionHash() == null) {
             throw bomError(409, "历史 BOM 未固定可证明的 Workflow 修订，不能静默克隆",
                     "BOM_WORKFLOW_LEGACY_MIGRATION_REQUIRED",
@@ -604,6 +633,8 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             assertVersionCapacity(factoryId, member.getProductTypeId());
         }
         String newFamilyId = UUID.randomUUID().toString();
+        // 红线 3: 克隆出的是本事务新建的族, 别的事务看不见; 源族已在入口按 id 升序锁住 (复制的是锁内的已提交行)。
+        BomRecipeHeadLocks.registerCreatedFamily(factoryId, newFamilyId);
         List<BomRecipe> ordered = family.stream()
                 .sorted(Comparator.comparing((BomRecipe member) ->
                         member.getOutputRole() != BomRecipe.OutputRole.MAIN))
@@ -628,7 +659,8 @@ public class BomRecipeServiceImpl implements BomRecipeService {
     @Override
     @Transactional
     public BomRecipe upgradeWorkflowRevision(String factoryId, String recipeId) {
-        BomRecipe source = loadRecipe(factoryId, recipeId);
+        // 红线 3: 草稿会被就地升级并重算整族; 生效版本则克隆 (新族) —— 统一先锁源族再读。
+        BomRecipe source = lockFamilyForCostWrite(factoryId, recipeId);
         BomRecipe editable = source.getStatus() == BomRecipe.Status.DRAFT
                 ? source : cloneRecipe(factoryId, recipeId);
         List<BomRecipe> family = editable.getBomFamilyId() == null
@@ -708,6 +740,10 @@ public class BomRecipeServiceImpl implements BomRecipeService {
 
         String familyId = requested.getBomFamilyId() == null
                 ? UUID.randomUUID().toString() : requested.getBomFamilyId();
+        if (requested.getBomFamilyId() == null) {
+            // 原来没有族的草稿 (调用方已锁住它自己): 新生成的族只在本事务里可见
+            BomRecipeHeadLocks.registerCreatedFamily(factoryId, familyId);
+        }
         for (String productTypeId : targetOutputs.keySet()) {
             if (membersByProduct.containsKey(productTypeId)) {
                 continue;
@@ -834,7 +870,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             String factoryId,
             String recipeId,
             UpdateBomFamilyOutputCostingRequest request) {
-        BomRecipe reference = loadRecipe(factoryId, recipeId);
+        BomRecipe reference = lockFamilyForCostWrite(factoryId, recipeId);
         List<BomRecipe> family = familyForStatus(reference);
         if (family.stream().anyMatch(member -> member.getStatus() != BomRecipe.Status.DRAFT)) {
             throw bomError(409,
@@ -921,6 +957,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
 
     private BomRecipe cloneRecipeInternal(String factoryId, BomRecipe source) {
         String familyId = UUID.randomUUID().toString();
+        BomRecipeHeadLocks.registerCreatedFamily(factoryId, familyId);
         BomRecipe clone = cloneRecipeInternal(factoryId, source, familyId, null);
         clone.setSharedRecipeId(clone.getId());
         clone = recipeRepo.save(clone);
@@ -1074,6 +1111,8 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             BomWorkflowRevisionService.WorkflowBinding requestedBinding) {
         List<BomWorkflowRevisionService.TerminalOutput> outputs = requestedBinding.terminalOutputs();
         String familyId = UUID.randomUUID().toString();
+        // 新族只在本事务里可见; requested 若是已存在的无族草稿, 调用方 (ensureDraft) 已按产品 → 草稿锁住它
+        BomRecipeHeadLocks.registerCreatedFamily(factoryId, familyId);
         Map<String, BomRecipe> membersByProduct = new HashMap<>();
         Map<String, BomWorkflowRevisionService.WorkflowBinding> bindingsByProduct = new HashMap<>();
         membersByProduct.put(requested.getProductTypeId(), requested);
@@ -1799,6 +1838,55 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         recipeRepo.save(recipe);
     }
 
+    /**
+     * 写配方族成本的入口锁 (红线 3): 先按 id 升序锁住整族配方头, 再读配方 —— 读到的是加锁后的值。
+     * 所有会走到 {@link #recomputeFamilyCosts} 的对外入口都在<b>第一次读配方之前</b>调用它
+     * (或 {@link #lockProductsThenFamily}); 本事务新建的族用 {@link BomRecipeHeadLocks#registerCreatedFamily}。
+     */
+    private BomRecipe lockFamilyForCostWrite(String factoryId, String recipeId) {
+        BomRecipeHeadLocks.lockWithFamily(entityManager, recipeRepo, factoryId, recipeId);
+        return loadRecipe(factoryId, recipeId);
+    }
+
+    /**
+     * 先按产品 id 升序锁住目标配方及同族成员的产品行, 再锁整族配方头。激活 / 整表更新之后还要锁产品行,
+     * 而 ensureDraft 是「产品 → 草稿族」; 这里不先锁产品就会形成「头 → 产品」与「产品 → 头」两个方向。
+     */
+    private BomRecipe lockProductsThenFamily(String factoryId, String recipeId) {
+        List<String> productTypeIds = recipeRepo.findFamilyProductTypeIds(factoryId, recipeId).stream()
+                .filter(Objects::nonNull)
+                .sorted()
+                .toList();
+        for (String productTypeId : productTypeIds) {
+            loadProductForUpdate(factoryId, productTypeId);
+        }
+        return lockFamilyForCostWrite(factoryId, recipeId);
+    }
+
+    /**
+     * 明细行入口的锁序「整族配方头 → 明细行」: 先只取行所属配方 id (标量), 锁整族头, 再 FOR UPDATE 读行。
+     * 行在两步之间被挪到别的配方 (同族骨架对齐) 时拒绝, 让调用方刷新重试 —— 不在没锁住的族上继续写。
+     */
+    private BomRecipeItem lockFamilyThenItem(String factoryId, Long itemId) {
+        Optional<String> recipeId = itemRepo.findRecipeIdById(factoryId, itemId);
+        recipeId.ifPresent(id -> BomRecipeHeadLocks.lockWithFamily(entityManager, recipeRepo, factoryId, id));
+        BomRecipeItem item = itemRepo.findByIdForUpdate(factoryId, itemId)
+                .orElseThrow(() -> bomError(404,
+                        "这条 BOM 明细行不存在，可能已被其他人删除",
+                        "BOM_ITEM_MISSING",
+                        "请刷新页面后重试；若仍失败，到「生产配置 → BOM/配方维护」重新打开该配方核对明细。明细行ID: "
+                                + itemId,
+                        "bomItems"));
+        if (recipeId.isPresent() && !recipeId.get().equals(item.getRecipeId())) {
+            throw bomError(409,
+                    "这条 BOM 明细刚被调整到其他产出，本次未做修改",
+                    "BOM_ITEM_MOVED_CONCURRENTLY",
+                    "请刷新页面后重试",
+                    "bomItems");
+        }
+        return item;
+    }
+
     private ProductType loadProductForUpdate(String factoryId, String productTypeId) {
         return productTypeRepo.findByIdAndFactoryIdForUpdate(productTypeId, factoryId)
                 .orElseThrow(() -> bomError(404,
@@ -2058,7 +2146,8 @@ public class BomRecipeServiceImpl implements BomRecipeService {
     @Override
     @Transactional
     public BomRecipe calculateCost(String factoryId, String recipeId) {
-        BomRecipe recipe = loadRecipe(factoryId, recipeId);
+        // 红线 3: 「试算」会把重算结果写回整族配方头 (recipeRepo.save), 不是只读 —— 同样先锁整族。
+        BomRecipe recipe = lockFamilyForCostWrite(factoryId, recipeId);
         if (recipe.getStatus() == BomRecipe.Status.DRAFT) {
             assertPinnedDraft(factoryId, recipe);
         }
@@ -2072,7 +2161,8 @@ public class BomRecipeServiceImpl implements BomRecipeService {
     @Override
     @Transactional
     public BomRecipeItem addItem(String factoryId, String recipeId, BomRecipeItemDTO dto) {
-        BomRecipe recipe = loadRecipe(factoryId, recipeId);
+        // N1: 先按 id 锁整族配方头再读 —— 重算会读同族别的成员的行并改写全族的头
+        BomRecipe recipe = lockFamilyForCostWrite(factoryId, recipeId);
         if (recipe.getStatus() != BomRecipe.Status.DRAFT) {
             throw new IllegalStateException(
                     "只有 DRAFT 状态可加 item; 当前 status=" + recipe.getStatus());
@@ -2100,13 +2190,8 @@ public class BomRecipeServiceImpl implements BomRecipeService {
     @Override
     @Transactional
     public BomRecipeItem updateItem(String factoryId, Long itemId, BomRecipeItemDTO dto) {
-        BomRecipeItem item = itemRepo.findById(itemId)
-                .orElseThrow(() -> bomError(404,
-                        "这条 BOM 明细行不存在，可能已被其他人删除",
-                        "BOM_ITEM_MISSING",
-                        "请刷新页面后重试；若仍失败，到「生产配置 → BOM/配方维护」重新打开该配方核对明细。明细行ID: "
-                                + itemId,
-                        "bomItems"));
+        // 锁序 (红线 3 统一, 与调价批准 / 包材成本更正相同): 整族配方头 (按 id) -> 行 FOR UPDATE -> 再读配方头
+        BomRecipeItem item = lockFamilyThenItem(factoryId, itemId);
         if (!factoryId.equals(item.getFactoryId())) {
             throw new IllegalArgumentException("配方项不属于该工厂");
         }
@@ -2148,13 +2233,13 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             throw new BusinessException(401, "无法识别成本更正操作人");
         }
 
-        BomRecipeItem item = itemRepo.findByIdForUpdate(itemId)
-                .orElseThrow(() -> bomError(404, "这条 BOM 明细行不存在", "BOM_ITEM_MISSING",
-                        "请刷新后重新打开 BOM 明细。明细行ID: " + itemId, "bomItems"));
+        // 锁序 (红线 3 统一, 与调价批准同一顺序): 整族配方头 (按 id 升序) -> 行 FOR UPDATE。
+        BomRecipeItem item = lockFamilyThenItem(factoryId, itemId);
         if (!factoryId.equals(item.getFactoryId())) {
             throw new BusinessException(403, "无权更正其他工厂的 BOM 成本");
         }
-        BomRecipe recipe = recipeRepo.lockByIdAndFactoryId(item.getRecipeId(), factoryId)
+        BomRecipe recipe = recipeRepo.findById(item.getRecipeId())
+                .filter(found -> factoryId.equals(found.getFactoryId()))
                 .orElseThrow(() -> bomError(404, "BOM 配方不存在", "BOM_RECIPE_MISSING",
                         "请刷新后重新打开 BOM。", "bomRecipe"));
         if (recipe.getStatus() != BomRecipe.Status.ACTIVE || !Boolean.TRUE.equals(recipe.getIsCurrent())) {
@@ -2221,13 +2306,8 @@ public class BomRecipeServiceImpl implements BomRecipeService {
     @Override
     @Transactional
     public void deleteItem(String factoryId, Long itemId) {
-        BomRecipeItem item = itemRepo.findById(itemId)
-                .orElseThrow(() -> bomError(404,
-                        "这条 BOM 明细行不存在，可能已被其他人删除",
-                        "BOM_ITEM_MISSING",
-                        "请刷新页面后重试；若仍失败，到「生产配置 → BOM/配方维护」重新打开该配方核对明细。明细行ID: "
-                                + itemId,
-                        "bomItems"));
+        // 锁序 (红线 3 统一, 与调价批准 / 包材成本更正相同): 整族配方头 (按 id) -> 行 FOR UPDATE -> 再读配方头
+        BomRecipeItem item = lockFamilyThenItem(factoryId, itemId);
         if (!factoryId.equals(item.getFactoryId())) {
             throw new IllegalArgumentException("配方项不属于该工厂");
         }
@@ -2324,7 +2404,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
     @Override
     @Transactional
     public BomSeasoningResponse saveSeasoning(String factoryId, String recipeId, BomSeasoningSaveRequest req) {
-        BomRecipe recipe = loadRecipe(factoryId, recipeId);
+        BomRecipe recipe = lockFamilyForCostWrite(factoryId, recipeId);
         // DRAFT-only guard — mirror the same check used in addItem/updateItem/deleteItem.
         if (recipe.getStatus() != BomRecipe.Status.DRAFT) {
             throw new IllegalStateException(
@@ -2533,6 +2613,18 @@ public class BomRecipeServiceImpl implements BomRecipeService {
      * <p>Using {@code clear()} + {@code addAll()} keeps the same collection instance so
      * Hibernate's orphan-removal tracking remains intact.
      */
+    /**
+     * BOM 调价建议批准后重算配方头成本 (与 {@link #correctActivePackagingItemCost} 写完行之后的三步相同)。
+     * MANDATORY: 只能在调用方已持有行锁 / 头锁的事务里调用, 不自己开事务。
+     */
+    @Override
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
+    public void recomputeCostsAfterItemPriceChange(BomRecipe recipe) {
+        refreshItemsInPlace(recipe);
+        recomputeFamilyCosts(recipe);
+        recipeRepo.save(recipe);
+    }
+
     private void refreshItemsInPlace(BomRecipe recipe) {
         List<BomRecipeItem> fresh = itemRepo.findByRecipeIdOrderBySortOrderAsc(recipe.getId());
         recipe.getItems().clear();
@@ -3335,6 +3427,9 @@ public class BomRecipeServiceImpl implements BomRecipeService {
      * <p>诚实 null 传播: 任一行成本 null (未定价) → 整体 totalMaterialCost = null。
      */
     private void recomputeFamilyCosts(BomRecipe changed) {
+        // 红线 3: 唯一入口守卫 —— 被重算的族必须已在本事务里按锁序锁住 (入口最前面加锁, 见 lockFamilyForCostWrite)。
+        // 锁不能放在这里: 走到这里时行和头都已经读过 / 改过, 再加锁既拿不到新值, 也会和「头 → 行」的锁序反向。
+        BomRecipeHeadLocks.requireHeld(changed);
         List<BomRecipe> targets = familyForStatus(changed);
         Set<String> creditingByproducts = creditingByproductIds(targets);
         Map<String, List<BomRecipe>> poolTargets = new LinkedHashMap<>();

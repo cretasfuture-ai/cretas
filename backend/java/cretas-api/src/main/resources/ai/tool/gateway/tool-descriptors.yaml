@@ -2,7 +2,7 @@
 # LEGACY_INFERRED, or APPROVED metadata lacking both permissions and allowed roles, remains review debt.
 # This inventory is an independent source-audit truth and is never sufficient by itself to execute.
 schemaVersion: 1
-expectedToolCount: 493
+expectedToolCount: 501
 expectedLegacyCount: 461
 descriptors:
   - toolName: "gate_diagnose_batch"
@@ -126,6 +126,111 @@ descriptors:
       requiredPermissions: true
       version: false
       domainTags: false
+    governanceStatus: REVIEW_REQUIRED
+  - toolName: "report_batch_yield_rank"
+    implementationClass: "com.cretas.aims.ai.tool.impl.report.ReportBatchYieldRankTool"
+    provenance: EXPLICIT
+    actionType: READ
+    riskLevel: LOW
+    supportsPreview: false
+    requiresPermission: false
+    requiredPermissions: []
+    allowedRoles: []
+    version: "1.0.0"
+    domainTags: ["report", "production"]
+    overrideFlags:
+      actionType: true
+      riskLevel: true
+      supportsPreview: true
+      requiresPermission: false
+      hasPermission: false
+      requiredPermissions: false
+      version: true
+      domainTags: true
+    governanceStatus: REVIEW_REQUIRED
+  - toolName: "scheduling_rush_order_impact"
+    implementationClass: "com.cretas.aims.ai.tool.impl.scheduling.RushOrderImpactTool"
+    provenance: EXPLICIT
+    actionType: READ
+    riskLevel: LOW
+    supportsPreview: false
+    requiresPermission: false
+    requiredPermissions: []
+    allowedRoles: []
+    version: "1.0.0"
+    domainTags: ["scheduling", "production"]
+    overrideFlags:
+      actionType: true
+      riskLevel: true
+      supportsPreview: true
+      requiresPermission: false
+      hasPermission: false
+      requiredPermissions: false
+      version: true
+      domainTags: true
+    governanceStatus: REVIEW_REQUIRED
+  - toolName: "report_bom_cost_rank"
+    implementationClass: "com.cretas.aims.ai.tool.impl.report.ReportBomCostRankTool"
+    provenance: EXPLICIT
+    actionType: READ
+    riskLevel: LOW
+    supportsPreview: false
+    requiresPermission: false
+    requiredPermissions: ["analytics:read_write"]
+    allowedRoles: []
+    version: "1.0.0"
+    domainTags: ["report", "cost"]
+    overrideFlags:
+      actionType: true
+      riskLevel: true
+      supportsPreview: true
+      requiresPermission: false
+      hasPermission: false
+      requiredPermissions: true
+      version: true
+      domainTags: true
+    governanceStatus: REVIEW_REQUIRED
+  - toolName: "report_labor_cost_share"
+    implementationClass: "com.cretas.aims.ai.tool.impl.report.ReportLaborCostShareTool"
+    provenance: EXPLICIT
+    actionType: READ
+    riskLevel: LOW
+    supportsPreview: false
+    requiresPermission: false
+    requiredPermissions: ["analytics:read_write"]
+    allowedRoles: []
+    version: "1.0.0"
+    domainTags: ["report", "cost"]
+    overrideFlags:
+      actionType: true
+      riskLevel: true
+      supportsPreview: true
+      requiresPermission: false
+      hasPermission: false
+      requiredPermissions: true
+      version: true
+      domainTags: true
+    governanceStatus: REVIEW_REQUIRED
+  - toolName: "report_sales_margin_summary"
+    implementationClass: "com.cretas.aims.ai.tool.impl.report.ReportSalesMarginSummaryTool"
+    provenance: EXPLICIT
+    actionType: READ
+    riskLevel: LOW
+    supportsPreview: false
+    requiresPermission: true
+    requiredPermissions: ["finance:read", "finance:read_write"]
+    allowedRoles: []
+    version: "1.0.0"
+    domainTags: ["report", "sales"]
+    overrideFlags:
+      actionType: true
+      riskLevel: true
+      supportsPreview: true
+      requiresPermission: true
+      hasPermission: false
+      requiredPermissions: true
+      version: true
+      domainTags: true
     governanceStatus: REVIEW_REQUIRED
   - toolName: "report_cost_query"
     implementationClass: "com.cretas.aims.ai.tool.impl.report.ReportCostQueryTool"
@@ -1701,7 +1806,7 @@ descriptors:
     riskLevel: LOW
     supportsPreview: false
     requiresPermission: false
-    requiredPermissions: ["sales:read", "sales:read_write", "warehouse:read", "warehouse:read_write"]
+    requiredPermissions: ["sales:read", "sales:read_write", "finance:read", "procurement:read"]
     allowedRoles: []
     version: "1.0.0"
     domainTags: ["shipment"]
@@ -4206,7 +4311,7 @@ descriptors:
     riskLevel: LOW
     supportsPreview: false
     requiresPermission: false
-    requiredPermissions: []
+    requiredPermissions: ["approval_quality_disposition:approve"]
     version: "1.0.0"
     domainTags: ["order"]
     overrideFlags:
@@ -4215,7 +4320,7 @@ descriptors:
       supportsPreview: false
       requiresPermission: false
       hasPermission: false
-      requiredPermissions: false
+      requiredPermissions: true
       version: false
       domainTags: false
     governanceStatus: REVIEW_REQUIRED
@@ -6348,7 +6453,7 @@ descriptors:
     provenance: LEGACY_INFERRED
     actionType: WRITE
     riskLevel: MEDIUM
-    supportsPreview: false
+    supportsPreview: true
     requiresPermission: false
     requiredPermissions: []
     version: "1.0.0"
@@ -6356,10 +6461,73 @@ descriptors:
     overrideFlags:
       actionType: false
       riskLevel: false
-      supportsPreview: false
+      supportsPreview: true
       requiresPermission: false
       hasPermission: false
       requiredPermissions: false
+      version: false
+      domainTags: false
+    governanceStatus: REVIEW_REQUIRED
+  - toolName: "my_wage_query"
+    implementationClass: "com.cretas.aims.ai.tool.impl.hr.MyWageQueryTool"
+    provenance: EXPLICIT
+    actionType: READ
+    riskLevel: LOW
+    supportsPreview: false
+    requiresPermission: false
+    requiredPermissions: ["hr:self_wage:view"]
+    allowedRoles: []
+    version: "1.0.0"
+    domainTags: ["my"]
+    overrideFlags:
+      actionType: false
+      riskLevel: false
+      supportsPreview: false
+      requiresPermission: false
+      hasPermission: false
+      requiredPermissions: true
+      version: false
+      domainTags: false
+    governanceStatus: REVIEW_REQUIRED
+  - toolName: "employee_work_location_query"
+    implementationClass: "com.cretas.aims.ai.tool.impl.hr.EmployeeWorkLocationQueryTool"
+    provenance: EXPLICIT
+    actionType: READ
+    riskLevel: LOW
+    supportsPreview: false
+    requiresPermission: false
+    requiredPermissions: ["production:read", "procurement:read", "sales:read", "scheduling:read"]
+    allowedRoles: []
+    version: "1.0.0"
+    domainTags: ["employee"]
+    overrideFlags:
+      actionType: false
+      riskLevel: false
+      supportsPreview: false
+      requiresPermission: false
+      hasPermission: false
+      requiredPermissions: true
+      version: false
+      domainTags: false
+    governanceStatus: REVIEW_REQUIRED
+  - toolName: "ssop_schedule_plan"
+    implementationClass: "com.cretas.aims.ai.tool.impl.foodsafety.SsopSchedulePlanTool"
+    provenance: EXPLICIT
+    actionType: WRITE
+    riskLevel: MEDIUM
+    supportsPreview: true
+    requiresPermission: false
+    requiredPermissions: ["quality:read_write"]
+    allowedRoles: []
+    version: "1.0.0"
+    domainTags: ["ssop"]
+    overrideFlags:
+      actionType: true
+      riskLevel: true
+      supportsPreview: true
+      requiresPermission: false
+      hasPermission: false
+      requiredPermissions: true
       version: false
       domainTags: false
     governanceStatus: REVIEW_REQUIRED

@@ -671,3 +671,87 @@ describe('销售退货详情的来源与现金退款', () => {
     wrapper.unmount();
   });
 });
+
+describe('本人审批 (纪律排查 B15): 退款申请人自己审批 / 登记付款', () => {
+  function switchIs(on: boolean) {
+    mocks.get.mockImplementation((path: string) => Promise.resolve(path.endsWith('/settings/features')
+      ? { success: true, data: { allowSelfApproval: on } }
+      : { success: true, data: path.endsWith('return-a') ? order('return-a') : order('return-b') }));
+  }
+  function ownRefund(status: string) {
+    return {
+      ...refundEligible,
+      request: {
+        id: 'RF-1', requestNumber: 'RF-20261016-1', status, amount: 12,
+        paymentMethod: null, createdBy: 7, approvedBy: status === 'APPROVED' ? 7 : null, paidBy: null, paidAt: null,
+        paymentReference: null, arapTransactionId: null, voucher: null,
+      },
+    };
+  }
+  const button = (wrapper: ReturnType<typeof render>, text: string) =>
+    wrapper.findAll('button').find(b => b.text().includes(text));
+
+  it('本厂没开开关: 申请人自己的退款, 批准 / 登记付款按钮照旧禁用 (阴性对照)', async () => {
+    switchIs(false);
+    mocks.refund.mockResolvedValueOnce(ownRefund('FINANCE_REVIEW'));
+    const review = render();
+    await flushPromises();
+    expect(button(review, '批准退款')?.attributes('disabled')).toBeDefined();
+    review.unmount();
+
+    mocks.refund.mockResolvedValueOnce(ownRefund('APPROVED'));
+    const pay = render();
+    await flushPromises();
+    expect(button(pay, '登记已退款')?.attributes('disabled')).toBeDefined();
+    pay.unmount();
+  });
+
+  it('本厂开了开关: 申请人可以本人批准, 原因作为 selfApprovalReason 发出, 审批说明留空', async () => {
+    switchIs(true);
+    mocks.refund.mockResolvedValueOnce(ownRefund('FINANCE_REVIEW'));
+    mocks.prompt.mockResolvedValueOnce({ value: ' 本厂只有我一个财务 ' });
+    const wrapper = render();
+    await flushPromises();
+    expect(button(wrapper, '批准退款')?.attributes('disabled')).toBeUndefined();
+    await button(wrapper, '批准退款')!.trigger('click');
+    await flushPromises();
+
+    expect(mocks.prompt).toHaveBeenCalledWith(expect.stringContaining('你自己提交的退款申请'), '本人批准客户退款',
+      expect.objectContaining({ inputValidator: expect.any(Function) }));
+    const validator = mocks.prompt.mock.calls[0][2].inputValidator as (v: string) => true | string;
+    expect(validator('  ')).toContain('必须填写原因');
+    expect(validator('只有我')).toBe(true);
+    expect(mocks.approveRefund).toHaveBeenCalledWith('F001', 'return-a', '', '本厂只有我一个财务');
+    wrapper.unmount();
+  });
+
+  it('本厂开了开关: 申请人登记付款, 对话框出现本人原因, 按默认原因发出 selfPaidReason', async () => {
+    switchIs(true);
+    mocks.refund.mockResolvedValueOnce(ownRefund('APPROVED'));
+    const wrapper = render();
+    await flushPromises();
+    await button(wrapper, '登记已退款')!.trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-testid="self-approval-reason"]').exists()).toBe(true);
+    const vm = wrapper.vm as unknown as { refundPaymentReference: string; refundPaymentRemark: string };
+    vm.refundPaymentReference = '模拟-退款-1';
+    vm.refundPaymentRemark = '本地演练请注明模拟';
+    await button(wrapper, '确认登记')!.trigger('click');
+    await flushPromises();
+
+    expect(mocks.markPaid).toHaveBeenCalledWith('F001', 'return-a', 'CASH', '模拟-退款-1', '本地演练请注明模拟',
+      '本厂只有我一个人负责这项审批');
+    wrapper.unmount();
+  });
+
+  it('他人登记付款不出现本人原因, 也不发原因字段', async () => {
+    switchIs(true);
+    mocks.refund.mockResolvedValueOnce({ ...ownRefund('APPROVED'), request: { ...ownRefund('APPROVED').request, createdBy: 3 } });
+    const wrapper = render();
+    await flushPromises();
+    await button(wrapper, '登记已退款')!.trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-testid="self-approval-reason"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+});

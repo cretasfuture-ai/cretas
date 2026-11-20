@@ -111,13 +111,13 @@ function isActive(id: string | null): boolean {
   white-space: nowrap;
 
   &:hover {
-    border-color: var(--el-color-primary, #409eff);
-    color: var(--el-color-primary, #409eff);
+    border-color: var(--el-color-primary, var(--cs-primary));
+    color: var(--el-color-primary, var(--cs-primary));
   }
 
   &--active {
-    background-color: var(--el-color-primary, #409eff);
-    border-color: var(--el-color-primary, #409eff);
+    background-color: var(--el-color-primary, var(--cs-primary));
+    border-color: var(--el-color-primary, var(--cs-primary));
     color: #fff;
 
     &:hover {
@@ -142,6 +142,6 @@ function isActive(id: string | null): boolean {
 
 .dept-chip--active .dept-chip__badge {
   background-color: #fff;
-  color: var(--el-color-primary, #409eff);
+  color: var(--el-color-primary, var(--cs-primary));
 }
 </style>

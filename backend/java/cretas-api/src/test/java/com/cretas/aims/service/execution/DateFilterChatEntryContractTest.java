@@ -111,12 +111,41 @@ class DateFilterChatEntryContractTest {
     }
 
     @Test
-    void theSameSentenceWithoutATimeIsNotDateFiltered() throws Exception {
+    void theSameSentenceWithoutATimeUsesTheStatedSevenDayDefault() throws Exception {
         SalesService sales = salesReturning();
-        run(withMapper(new OrderListTool(sales)), "ORDER_LIST", "CRM", "查询销售订单", true, "factory_super_admin");
+        IntentExecuteResponse response = run(withMapper(new OrderListTool(sales)), "ORDER_LIST", "CRM", "查询销售订单",
+                true, "factory_super_admin");
 
-        verify(sales).getSalesOrders(eq(F), anyInt(), anyInt());
-        verify(sales, never()).getSalesOrdersFiltered(anyString(), any(), any(), any(), anyInt(), anyInt());
+        // Steve 2026-11-12 口径 1: 没说时间 = 最近 7 天, 回复写明 (以前是不限时间、返回全部订单)
+        verify(sales).getSalesOrdersFiltered(eq(F), isNull(), eq(LocalDate.now().minusDays(6)), eq(LocalDate.now()),
+                anyInt(), anyInt());
+        // 性质: 主查询按日期过滤、不拿不限时间的整页 (size=20) 列表当结果; 默认窗口 0 条时只会另取最近 100 单找最近订单日期 (放宽逻辑)
+        verify(sales, never()).getSalesOrders(anyString(), anyInt(), eq(20));
+        assertThat(String.valueOf(response.getMessage())).startsWith("没说时间，按最近 7 天");
+    }
+
+    @Test
+    void aRangeTheUserNeverSaidIsNotAppliedNorReportedAsSaid() throws Exception {
+        // 工作台实测 (C): 句子里没有时间, 识别分支带来的预处理结果却有一段日期 ("你说的是 2026-11-18 至 2026-11-18"),
+        // 被当成用户说的时间用在查询上。原话没说时间 => 走默认最近 7 天, 不用那段日期。
+        SalesService sales = salesReturning();
+        OrderListTool tool = withMapper(new OrderListTool(sales));
+        AIIntentConfig intent = AIIntentConfig.builder().intentCode("ORDER_LIST").intentCategory("CRM")
+                .intentName("ORDER_LIST").toolName(tool.getToolName()).build();
+        IntentMatchResult match = IntentMatchResult.builder()
+                .preprocessedQuery(preprocessor.preprocessRulesOnly("查询今天的销售订单")).build();
+
+        dispatch.executeWithTool(tool, F, IntentExecuteRequest.builder().userInput("查询销售订单").build(),
+                intent, 1L, "factory_super_admin", match);
+
+        verify(sales).getSalesOrdersFiltered(eq(F), isNull(), eq(LocalDate.now().minusDays(6)), eq(LocalDate.now()),
+                anyInt(), anyInt());
+        // 阴性对照: 原话真说了「今天」, 就按今天查
+        SalesService sales2 = salesReturning();
+        OrderListTool tool2 = withMapper(new OrderListTool(sales2));
+        dispatch.executeWithTool(tool2, F, IntentExecuteRequest.builder().userInput("查询今天的销售订单").build(),
+                intent, 1L, "factory_super_admin", match);
+        verify(sales2).getSalesOrdersFiltered(eq(F), isNull(), eq(LocalDate.now()), eq(LocalDate.now()), anyInt(), anyInt());
     }
 
     @Test
@@ -132,8 +161,8 @@ class DateFilterChatEntryContractTest {
 
         IntentExecuteResponse allowed = run(tool, "ORDER_LIST", "CRM", "查询待财务审核的销售订单", true, "finance_manager");
         assertThat(allowed.getStatus()).as(allowed.getMessage()).isEqualTo("SUCCESS");
-        verify(sales).getSalesOrdersFiltered(eq(F), eq(SalesOrderStatus.PENDING_FINANCE_REVIEW), isNull(), isNull(),
-                anyInt(), anyInt());
+        verify(sales).getSalesOrdersFiltered(eq(F), eq(SalesOrderStatus.PENDING_FINANCE_REVIEW),
+                eq(LocalDate.now().minusDays(6)), eq(LocalDate.now()), anyInt(), anyInt());
     }
 
     // ------------------------------------------------------------------ 质检记录 / 出货记录

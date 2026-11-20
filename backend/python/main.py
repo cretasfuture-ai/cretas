@@ -390,6 +390,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"LLM egress audit enable failed: {e}")
 
+    # 出境出口三层健康探针 + 主备切换 (INTENT-DISTILL-20261111, 2026-11-12)。每个 worker 都起:
+    # 各自要同步「当前出口」和 /metrics; 真正探的只有拿到 flock 的那一个 (见 common/llm_egress_health)。
+    try:
+        from common.llm_egress_health import start_background_probe
+        start_background_probe()
+    except Exception as e:
+        logger.warning(f"LLM egress probe start failed: {e}")
+
     # Phase 3 (Apr 23 2026): template embedding index population.
     # Populates smart_bi_template_embeddings on first boot. Re-runs are
     # idempotent (ON CONFLICT). Fires in background — no blocking.
@@ -801,6 +809,11 @@ async def lifespan(app: FastAPI):
         await disable_llm_metrics()
     except Exception as e:
         logger.warning(f"LLM metrics disable error: {e}")
+    try:
+        from common.llm_egress_health import stop_background_probe
+        await stop_background_probe()
+    except Exception as e:
+        logger.warning(f"LLM egress probe stop error: {e}")
     try:
         from common.llm_egress_audit import disable_egress_audit
         await disable_egress_audit()

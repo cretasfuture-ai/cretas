@@ -400,6 +400,20 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
             @Param("excludedWarehouseId") String excludedWarehouseId,
             @Param("today") java.time.LocalDate today);
 
+    /**
+     * 挂在这张销售单上、还在厂里的客供料批次数 (财务批准后取消前的闸, 2026-11-11)。已报废 / 已用完 / 已耗尽的不算
+     * (报废走的是只改状态不改数量的处置, 不排除就永远拦着)。过期 / 不良品仍是客户的货、还在厂里, 照算。
+     */
+    @Query("SELECT COUNT(m) FROM MaterialBatch m WHERE m.factoryId = :factoryId " +
+           "AND m.ownership = com.cretas.aims.entity.enums.InventoryOwnership.CUSTOMER_OWNED " +
+           "AND m.sourceSalesOrderId = :salesOrderId " +
+           "AND m.status NOT IN (com.cretas.aims.entity.enums.MaterialBatchStatus.SCRAPPED, " +
+           "com.cretas.aims.entity.enums.MaterialBatchStatus.USED_UP, " +
+           "com.cretas.aims.entity.enums.MaterialBatchStatus.DEPLETED) " +
+           "AND (m.receiptQuantity - m.usedQuantity) > 0")
+    long countCustomerOwnedWithStockForSalesOrder(@Param("factoryId") String factoryId,
+                                                  @Param("salesOrderId") String salesOrderId);
+
     /** Customer-owned FEFO candidates are isolated to the same customer and sales order. */
     @Query("SELECT m FROM MaterialBatch m WHERE m.factoryId = :factoryId " +
            "AND m.materialTypeId = :materialTypeId " +
@@ -664,11 +678,16 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
      * <p>JOIN m.materialType mt 取 name/code/category。PG 严格 GROUP BY: 所有非聚合
      * SELECT 列 (m.materialTypeId / m.quantityUnit 及 mt.name/code/category) 均列入 GROUP BY。
      * avgUnitPrice 不在 SQL 聚合, 由 Service 层 totalValue/totalQuantity 计算回填。</p>
+     *
+     * <p><b>缺单价</b>: 同一 (物料, 单位) 组内只要有一个在库批次 unitPrice 为 NULL, 该组 totalValue
+     * 整体返回 NULL (而不是跳过空价批次只加有价的, 那会得到偏低的数); avgUnitPrice 随之为 NULL。
+     * 单价为 0 视为有价。</p>
      */
     @Query("SELECT new com.cretas.aims.dto.material.MaterialStockSummaryDTO(" +
            "m.materialTypeId, mt.name, mt.code, mt.category, m.quantityUnit, " +
            "SUM(m.receiptQuantity - m.usedQuantity - m.reservedQuantity), " +
-           "SUM((m.receiptQuantity - m.usedQuantity - m.reservedQuantity) * m.unitPrice), " +
+           "CASE WHEN COUNT(m.unitPrice) = COUNT(m) THEN " +
+           "SUM((m.receiptQuantity - m.usedQuantity - m.reservedQuantity) * m.unitPrice) ELSE NULL END, " +
            "COUNT(m), COUNT(DISTINCT m.warehouseId)) " +
            "FROM MaterialBatch m JOIN m.materialType mt " +
            "WHERE m.factoryId = :factoryId " +
@@ -1023,6 +1042,10 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
     java.util.List<MaterialBatch> findByFactoryIdAndSourceDocTypeAndSourceDocIdOrderByBatchNumberAsc(
             String factoryId, String sourceDocType, String sourceDocId);
 
+    /** 委外列表页一次取多行的委外仓批次 (#1723 复审 低2, 免得每行查一次)。 */
+    java.util.List<MaterialBatch> findByFactoryIdAndSourceDocTypeAndSourceDocIdIn(
+            String factoryId, String sourceDocType, java.util.Collection<String> sourceDocIds);
+
     /** 期初建账幂等存在性检查 (是否已用该 batchKey 建过期初批次)。 */
     boolean existsByFactoryIdAndSourceDocTypeAndSourceDocId(
             String factoryId, String sourceDocType, String sourceDocId);
@@ -1110,6 +1133,17 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
            "AND m.sourceDocType = 'PRODUCTION_BATCH' AND m.status = :status " +
            "ORDER BY m.updatedAt DESC")
     List<MaterialBatch> findWipBatchesByFactoryIdAndStatus(
+            @Param("factoryId") String factoryId,
+            @Param("status") com.cretas.aims.entity.enums.MaterialBatchStatus status);
+
+    /**
+     * 质检放行待检清单的原料收货批次 (D-S411-04): 本厂、不是在制/副产 (sourceDocType 不是 PRODUCTION_BATCH)、
+     * 处于给定状态。sourceDocType 为 null 的老数据算原料 (与 {@code QcInspectionGuard} 的在制判据互补)。
+     */
+    @Query("SELECT m FROM MaterialBatch m WHERE m.factoryId = :factoryId " +
+           "AND (m.sourceDocType IS NULL OR m.sourceDocType <> 'PRODUCTION_BATCH') AND m.status = :status " +
+           "ORDER BY m.updatedAt DESC")
+    List<MaterialBatch> findRawBatchesByFactoryIdAndStatus(
             @Param("factoryId") String factoryId,
             @Param("status") com.cretas.aims.entity.enums.MaterialBatchStatus status);
 

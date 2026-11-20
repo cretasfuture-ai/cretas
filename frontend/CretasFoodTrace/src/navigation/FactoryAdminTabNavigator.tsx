@@ -9,6 +9,8 @@ import { Icon } from "react-native-paper";
 import { FactoryAdminTabParamList } from "../types/navigation";
 import { useFactoryFeatureStore } from "../store/factoryFeatureStore";
 import { useAuthStore } from "../store/authStore";
+import { useMyTodoEntry } from "../hooks/useMyTodos";
+import { todoTabScreen } from "./todoTab";
 
 // 导入6个Stack导航器
 import FAHomeStackNavigator from "./factory-admin/FAHomeStackNavigator";
@@ -29,6 +31,7 @@ const TAB_COLORS = {
 export function FactoryAdminTabNavigator() {
   const { isScreenEnabled } = useFactoryFeatureStore();
   const user = useAuthStore(state => state.user);
+  const todoEntry = useMyTodoEntry();
 
   return (
     <Tab.Navigator screenLayout={screenErrorBoundary}
@@ -108,6 +111,9 @@ export function FactoryAdminTabNavigator() {
           ),
         }}
       />
+
+      {/* 待办Tab: 显不显示只认后端 /my-todos/types (B4) */}
+      {todoTabScreen(Tab, todoEntry, 'fa-tab-oa-todo')}
 
       {/* 我的Tab */}
       <Tab.Screen

@@ -467,9 +467,30 @@ class ReversalPhantomWipContractTest {
         assertThat(ex.getActionHint())
                 .as("必须告诉用户下一步做什么, 而不是只说撤不了")
                 .isNotBlank()
-                .contains("盘点");
+                .contains("管理员")
+                // C4: 不再叫人先去半成品盘点 —— 盘点留下的调整量会让撤回被 WIP_ADJUSTMENT_PRESENT 拦住, 两边互相指路
+                .doesNotContain("盘点");
         assertThat(ex.getMessage())
                 .as("⛔ 不许出现纯英文错误码 / UUID 之类用户看不懂的东西")
                 .contains("半成品");
+    }
+
+    /** C4: 盘点调整挡住撤回时, 提示与「流水不全」指向同一个出口, 而不是把人送回盘点。 */
+    @Test
+    @DisplayName("C4: 有盘点调整 → WIP_ADJUSTMENT_PRESENT 带同一出口的 hint, 两条拦截不再互相指路")
+    void adjustmentRefusalPointsToSameExitAsLedgerGap() {
+        ProductionReport r = yieldReport(23838L, 10763L);
+        ReversalRig rig = new ReversalRig(16L, 10763L, List.of(r), List.of());
+        SemiFinishedInventory adjusted = wipRow(345L, "B10763-S2-1790", "300", "0", "75");
+        adjusted.setAdjustmentQuantity(new BigDecimal("-5"));
+        when(rig.wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull(FACTORY, 10763L))
+                .thenReturn(List.of(adjusted));
+        when(rig.wipRepo.findByIdForUpdate(345L)).thenReturn(Optional.of(adjusted));
+
+        BusinessException ex = (BusinessException) org.junit.jupiter.api.Assertions
+                .assertThrows(BusinessException.class, () -> rig.service.executeReversal(16L, FACTORY));
+
+        assertThat(ex.getErrorCode()).isEqualTo("WIP_ADJUSTMENT_PRESENT");
+        assertThat(ex.getActionHint()).isNotBlank().contains("管理员").doesNotContain("请先用「半成品盘点」");
     }
 }

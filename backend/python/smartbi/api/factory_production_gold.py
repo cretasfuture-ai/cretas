@@ -28,9 +28,13 @@ import logging
 from datetime import date
 from typing import Any, List, Optional
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 
+from common.tenant_identity import require_same_factory
+from smartbi.gold.factory_production_etl import batch_yield_rate
+from smartbi.services.external_production import external_production_payload, load_external_production
 from smartbi.services.factory_charts import cost_scope as process_secret
+from smartbi_compat._rbac_role import ANALYTICS_READ_ROLES
 from smartbi_compat._rbac_strip import PRICE_VIEW_ROLES, strip_price_for_role
 
 logger = logging.getLogger(__name__)
@@ -277,6 +281,40 @@ async def _query_fact_product_rows(
         return None, str(exc)
 
 
+def _row_value(row, *names):
+    for name in names:
+        value = row.get(name) if hasattr(row, "get") else None
+        if value is not None:
+            return value
+    return None
+
+
+def _row_yield(row) -> Optional[float]:
+    """出成率 = 良品 ÷ 实际产出 × 100, 由数量现算 (见 batch_yield_rate)。
+
+    ⛔ 不读存量 yield_rate / avg_yield_rate 列: 旧 Silver 行是从 production_batches.yield_rate
+    照抄的冻结值 (LSMDEMO 80 vs 按定义 100), ETL 重跑前读端点也必须给对的数。
+    """
+    return batch_yield_rate(_row_value(row, "good_qty", "total_good_qty"),
+                            _row_value(row, "actual_qty", "total_actual_qty"))
+
+
+def _yield_by_day(fact_rows, product_type_id: Optional[str] = None) -> dict:
+    """按天汇总有出成率的批次: {day: (出成率合计, 有出成率的批次数)}。"""
+    out: dict = {}
+    for fact in fact_rows or []:
+        if product_type_id is not None and _row_value(fact, "product_type_id") != product_type_id:
+            continue
+        rate = _row_yield(fact)
+        day = _row_value(fact, "stat_date")
+        if rate is None or day is None:
+            continue
+        key = day.isoformat() if hasattr(day, "isoformat") else str(day)
+        total, count = out.get(key, (0.0, 0))
+        out[key] = (total + rate, count + 1)
+    return out
+
+
 def _row_to_dict(row) -> dict:
     """Convert asyncpg Row to camelCase dict with honest null preservation."""
     return {
@@ -299,6 +337,30 @@ def _row_to_dict(row) -> dict:
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
+
+@router.get("/external-production")
+async def external_production(
+    request: Request,
+    factory_id: str | None = None,
+    startDate: date | None = None,
+    endDate: date | None = None,
+    summaryOnly: bool = False,
+):
+    """Return Blacklake data when the selected period has no native production."""
+    tenant = require_same_factory(request, factory_id)
+    if _get_role(request) not in ANALYTICS_READ_ROLES:
+        raise HTTPException(403, "当前身份没有经营分析查看权限")
+    if startDate and endDate and startDate > endDate:
+        raise HTTPException(422, "开始日期不能晚于结束日期")
+    try:
+        data = await load_external_production(tenant, startDate, endDate, summary_only=summaryOnly)
+    except ValueError as exc:
+        return {"success": False, "data": None, "message": str(exc)}
+    except Exception:
+        logger.exception("[external-production] read failed for %s", tenant)
+        return {"success": False, "data": None, "message": "黑湖生产数据读取失败，请重试"}
+    return {"success": True, "data": external_production_payload(data) if data else None, "message": ""}
+
 
 @router.get("/cost-structure")
 async def cost_structure(
@@ -374,7 +436,20 @@ async def cost_structure(
         vals = [item[key] for item in items if item[key] is not None]
         return round(sum(vals), 2) if vals else None
 
+    # 平均出成率 = 有出成率的批次逐批平均 (等价于按批次加权; 简单按天平均会让 1 批的一天
+    # 和 10 批的一天等权)。分母只数有出成率的批次: 没报良品/实际的批次不该让「按 N 批」虚高。
+    day_yields = _yield_by_day(fact_rows)
+    yield_batches = sum(count for _, count in day_yields.values())
+    weighted_yield = (round(sum(total for total, _ in day_yields.values()) / yield_batches, 2)
+                      if yield_batches else None)
+    for item in items:
+        total, count = day_yields.get(item["statDate"], (0.0, 0))
+        item["avgYieldRate"] = round(total / count, 2) if count else None
+        item["yieldBatchCount"] = count
+
     summary = {
+        "avgYieldRate":       weighted_yield,
+        "yieldBatchCount":    yield_batches,
         "totalMaterialCost":  _sum_field("totalMaterialCost"),
         "totalLaborCost":     _sum_field("totalLaborCost"),
         "totalEquipmentCost": _sum_field("totalEquipmentCost"),
@@ -426,10 +501,20 @@ async def yield_trend(
     if not rows:
         return {"success": True, "data": {"trend": []}, "message": "暂无生产数据"}
 
+    fact_rows, fact_err = await _query_fact_product_rows(factory_id, startDate, endDate)
+    if fact_err:
+        return {"success": False, "data": None, "message": fact_err}
+    day_yields = _yield_by_day(fact_rows, productTypeId)
+
+    def _day_yield(day) -> tuple:
+        total, count = day_yields.get(day.isoformat() if day else None, (0.0, 0))
+        return (round(total / count, 2) if count else None), count
+
     trend = [
         {
             "statDate":      r["stat_date"].isoformat() if r["stat_date"] else None,
-            "avgYieldRate":  float(r["avg_yield_rate"]) if r["avg_yield_rate"] is not None else None,
+            "avgYieldRate":  _day_yield(r["stat_date"])[0],
+            "yieldBatchCount": _day_yield(r["stat_date"])[1],
             "batchCount":    r["batch_count"],
             "totalActualQty": float(r["total_actual_qty"]) if r["total_actual_qty"] is not None else None,
             "totalGoodQty":   float(r["total_good_qty"]) if r["total_good_qty"] is not None else None,
@@ -502,6 +587,9 @@ async def product_cost_compare(
         "yieldRateNumerator": 0.0, "yieldRateDenominator": 0,
         "totalMaterialCost": None, "totalLaborCost": None,
         "totalEquipmentCost": None, "totalOtherCost": None, "totalCost": None,
+        # 单位成本口径: 分子只含「有成本」的批次, 分母必须同口径, 否则漏填成本的批次
+        # 会把单位成本拉低 (只有分子少、分母全的偏差)。
+        "costedBatchCount": 0, "costedActualQty": 0.0,
     })
 
     def _null_add(a, b):
@@ -540,8 +628,13 @@ async def product_cost_compare(
             _value(row, "other_cost", "total_other_cost")) if _value(row, "other_cost", "total_other_cost") is not None else None)
         bucket["totalCost"] = _null_add(bucket["totalCost"], float(
             _value(row, "total_cost")) if _value(row, "total_cost") is not None else None)
-        # Weighted yield: weight by batch_count
-        yield_rate = _value(row, "yield_rate", "avg_yield_rate")
+        if _value(row, "total_cost") is not None:
+            bucket["costedBatchCount"] += int(_value(row, "batch_count") or 1)
+            actual = _value(row, "actual_qty", "total_actual_qty")
+            if actual is not None:
+                bucket["costedActualQty"] += float(actual)
+        # 出成率 = 良品 ÷ 实际产出, 逐批现算 (不读冻结的 yield_rate 列), 只数有出成率的批次
+        yield_rate = _row_yield(row)
         if yield_rate is not None:
             count = int(_value(row, "batch_count") or 1)
             bucket["yieldRateNumerator"] += float(yield_rate) * count
@@ -554,8 +647,8 @@ async def product_cost_compare(
             if bucket["yieldRateDenominator"] > 0 else None
         )
         cost_per_unit: Optional[float] = None
-        if bucket["totalCost"] is not None and bucket["totalActualQty"] and bucket["totalActualQty"] > 0:
-            cost_per_unit = round(bucket["totalCost"] / bucket["totalActualQty"], 4)
+        if bucket["totalCost"] is not None and bucket["costedActualQty"] > 0:
+            cost_per_unit = round(bucket["totalCost"] / bucket["costedActualQty"], 4)
 
         products.append({
             "productTypeId":     pid,
@@ -570,6 +663,8 @@ async def product_cost_compare(
             "totalOtherCost":    round(bucket["totalOtherCost"],     2) if bucket["totalOtherCost"] is not None else None,  # noqa: E501
             "totalCost":         round(bucket["totalCost"],          2) if bucket["totalCost"] is not None else None,
             "costPerUnit":       cost_per_unit,
+            "costedBatchCount":  bucket["costedBatchCount"],
+            "yieldBatchCount":   bucket["yieldRateDenominator"],
         })
 
     hidden: List[dict] = []

@@ -103,6 +103,7 @@ class WorkflowInstanceControllerTest {
     @Mock private SalesService salesService;
     @Mock private TransferService transferService;
     @Mock private FactoryStocktakeService stocktakeService;
+    @Mock private com.cretas.aims.service.ProductionReportCorrectionService productionReportCorrectionService;
 
     @InjectMocks private WorkflowInstanceController controller;
 
@@ -525,5 +526,270 @@ class WorkflowInstanceControllerTest {
         verify(transferService).applyWorkflowAction(
                 FACTORY_ID, "trf-1", "inst-transfer", 109L,
                 "warehouse_manager", HistoryAction.APPROVE, "同意");
+    }
+    @Test
+    @DisplayName("1551-11: 强制插单 OA 动作走插单适配器, 审批意见原样传下去")
+    void force_insert_action_delegates_to_urgent_insert_adapter() {
+        com.cretas.aims.service.UrgentInsertService urgentInsertService =
+                org.mockito.Mockito.mock(com.cretas.aims.service.UrgentInsertService.class);
+        ReflectionTestUtils.setField(controller, "urgentInsertService", urgentInsertService);
+        mockAuth(110L, "f006_production_mgr", "production_manager");
+        ApprovalWorkflowInstance running = buildInstance(
+                "inst-fi", "wf-fi", "FORCE_INSERT", "plan-fi-1", List.of("approval_pm"), 109L);
+        when(workflowEngine.getInstance(FACTORY_ID, "inst-fi")).thenReturn(Optional.of(running));
+        when(workflowEngine.canTransition(eq(running), any(User.class))).thenReturn(true);
+        com.cretas.aims.dto.production.ProductionPlanDTO plan =
+                com.cretas.aims.dto.production.ProductionPlanDTO.builder().approvalStatus("APPROVED").build();
+        when(urgentInsertService.applyWorkflowAction(
+                eq(FACTORY_ID), eq("plan-fi-1"), eq("inst-fi"), eq(110L),
+                eq("production_manager"), eq("approval_pm"), eq(HistoryAction.APPROVE), eq("客户急单, 同意")))
+                .thenReturn(plan);
+        ApprovalWorkflowInstance approved = buildInstance(
+                "inst-fi", "wf-fi", "FORCE_INSERT", "plan-fi-1", List.of(), 109L);
+        approved.setStatus(InstanceStatus.APPROVED);
+        when(workflowEngine.getLatestInstance(FACTORY_ID, "FORCE_INSERT", "plan-fi-1"))
+                .thenReturn(Optional.of(approved));
+
+        ApiResponse<Map<String, Object>> response = controller.executeAction(
+                FACTORY_ID, "inst-fi", AUTH_HEADER,
+                new WorkflowInstanceController.WorkflowActionRequest(
+                        "APPROVE", "客户急单, 同意", "idem-fi-1", "approval_pm"));
+
+        assertEquals("APPROVED", response.getData().get("workflowStatus"));
+        assertEquals("APPROVED", response.getData().get("businessStatus"));
+        assertEquals("plan-fi-1", response.getData().get("businessEntityId"));
+        verify(urgentInsertService).applyWorkflowAction(
+                FACTORY_ID, "plan-fi-1", "inst-fi", 110L,
+                "production_manager", "approval_pm", HistoryAction.APPROVE, "客户急单, 同意");
+    }
+
+    @Test
+    @DisplayName("纪律排查 B2: 盘点 OA 动作走盘点适配器, 审批意见原样作为 notes (= 本人审批原因) 传下去")
+    void inventory_adjustment_action_delegates_to_stocktake_adapter_with_notes() {
+        mockAuth(109L, "f006_admin", "factory_super_admin");
+        ApprovalWorkflowInstance running = buildInstance(
+                "inst-stk", "wf-stk", "INVENTORY_ADJUSTMENT", "stk-1",
+                List.of("approval_finance"), 109L);
+        when(workflowEngine.getInstance(FACTORY_ID, "inst-stk")).thenReturn(Optional.of(running));
+        when(workflowEngine.canTransition(eq(running), any(User.class))).thenReturn(true);
+
+        com.cretas.aims.entity.factory.FactoryStocktake stocktake = new com.cretas.aims.entity.factory.FactoryStocktake();
+        stocktake.setId("stk-1");
+        stocktake.setStatus(com.cretas.aims.entity.factory.FactoryStocktake.Status.APPROVED);
+        when(stocktakeService.applyWorkflowAction(
+                eq(FACTORY_ID), eq("stk-1"), eq("inst-stk"), eq(109L),
+                eq("factory_super_admin"), eq(HistoryAction.APPROVE), eq("本厂只有我盘点")))
+                .thenReturn(stocktake);
+        ApprovalWorkflowInstance approved = buildInstance(
+                "inst-stk", "wf-stk", "INVENTORY_ADJUSTMENT", "stk-1", List.of(), 109L);
+        approved.setStatus(InstanceStatus.APPROVED);
+        when(workflowEngine.getLatestInstance(FACTORY_ID, "INVENTORY_ADJUSTMENT", "stk-1"))
+                .thenReturn(Optional.of(approved));
+
+        ApiResponse<Map<String, Object>> response = controller.executeAction(
+                FACTORY_ID, "inst-stk", AUTH_HEADER,
+                new WorkflowInstanceController.WorkflowActionRequest(
+                        "APPROVE", "本厂只有我盘点", "idem-stk-1", "approval_finance"));
+
+        assertEquals("APPROVED", response.getData().get("businessStatus"));
+        verify(stocktakeService).applyWorkflowAction(
+                FACTORY_ID, "stk-1", "inst-stk", 109L,
+                "factory_super_admin", HistoryAction.APPROVE, "本厂只有我盘点");
+    }
+    @Test
+    @DisplayName("复核 2: 盘点 OA 动作 —— 不在审批流节点角色里的人 (哪怕授了盘点审批权限) 403 OA_TASK_FORBIDDEN, 不进盘点服务")
+    void inventory_adjustment_action_still_requires_the_oa_node_role() {
+        mockAuth(110L, "f006_warehouse", "warehouse_manager");
+        ApprovalWorkflowInstance running = buildInstance(
+                "inst-stk2", "wf-stk", "INVENTORY_ADJUSTMENT", "stk-2", List.of("approval_finance"), 109L);
+        when(workflowEngine.getInstance(FACTORY_ID, "inst-stk2")).thenReturn(Optional.of(running));
+        when(workflowEngine.canTransition(eq(running), any(User.class))).thenReturn(false);
+
+        com.cretas.aims.exception.BusinessException error = org.junit.jupiter.api.Assertions.assertThrows(
+                com.cretas.aims.exception.BusinessException.class,
+                () -> controller.executeAction(FACTORY_ID, "inst-stk2", AUTH_HEADER,
+                        new WorkflowInstanceController.WorkflowActionRequest("APPROVE", "核对无误", "idem-stk-2", "approval_finance")));
+        assertEquals(403, error.getCode());
+        assertEquals("OA_TASK_FORBIDDEN", error.getErrorCode());
+        org.junit.jupiter.api.Assertions.assertTrue(error.getActionHint().contains("审批流模板"));
+        verify(stocktakeService, never()).applyWorkflowAction(any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("复核 2: 盘点 OA 动作 —— 在节点角色里但本厂取消了盘点审批权限: 盘点服务的 403 原样透出")
+    void inventory_adjustment_action_surfaces_the_revoked_approval_permission() {
+        mockAuth(111L, "f006_finance", "finance_manager");
+        ApprovalWorkflowInstance running = buildInstance(
+                "inst-stk3", "wf-stk", "INVENTORY_ADJUSTMENT", "stk-3", List.of("approval_finance"), 109L);
+        when(workflowEngine.getInstance(FACTORY_ID, "inst-stk3")).thenReturn(Optional.of(running));
+        when(workflowEngine.canTransition(eq(running), any(User.class))).thenReturn(true);
+        when(stocktakeService.applyWorkflowAction(eq(FACTORY_ID), eq("stk-3"), eq("inst-stk3"), eq(111L),
+                eq("finance_manager"), eq(HistoryAction.APPROVE), eq("核对无误")))
+                .thenThrow(new com.cretas.aims.exception.BusinessException(403, "当前账号没有盘点差异审批权限")
+                        .withCode("STOCKTAKE_APPROVAL_PERMISSION_REQUIRED"));
+
+        com.cretas.aims.exception.BusinessException error = org.junit.jupiter.api.Assertions.assertThrows(
+                com.cretas.aims.exception.BusinessException.class,
+                () -> controller.executeAction(FACTORY_ID, "inst-stk3", AUTH_HEADER,
+                        new WorkflowInstanceController.WorkflowActionRequest("APPROVE", "核对无误", "idem-stk-3", "approval_finance")));
+        assertEquals("STOCKTAKE_APPROVAL_PERMISSION_REQUIRED", error.getErrorCode());
+    }
+
+    // ==================== G9: 审批中心筛选 (moduleCode / keyword / 岗位 / 发起人) ====================
+
+    private Page<ApprovalWorkflowInstance> threeInstancesPage() {
+        ApprovalWorkflowInstance po1 = buildInstance(
+                "i-po1", "wf-g9", "PURCHASE_ORDER", "po-1", List.of("approval_finance"), 301L);
+        ApprovalWorkflowInstance so1 = buildInstance(
+                "i-so1", "wf-g9", "SALES_ORDER", "so-1", List.of("approval_finance"), 302L);
+        ApprovalWorkflowInstance po2 = buildInstance(
+                "i-po2", "wf-g9", "PURCHASE_ORDER", "po-2", List.of("approval_finance"), 302L);
+        return new PageImpl<>(List.of(po1, so1, po2), PageRequest.of(0, 2000), 3L);
+    }
+
+    private void stubUsersForG9() {
+        buildWorkflow("wf-g9", "财务审批", "finance_manager");
+        when(purchaseOrderRepository.findAllById(any())).thenReturn(List.of());
+        when(userRepository.findAllById(any())).thenReturn(List.of(
+                buildUser(301L, "zhang_san", "operator"),
+                buildUser(302L, "li_si", "operator")));
+    }
+
+    @Test
+    @DisplayName("G9: /my-created 带 moduleCode 先扫全量再筛再分页 —— 命中数不受第 1 页大小限制")
+    void my_created_module_filter_scans_all_then_paginates() {
+        mockAuth(100L, "f006_finance", "finance_manager");
+        stubUsersForG9();
+        when(workflowEngine.findCreatedBy(eq(FACTORY_ID), eq(100L), any(Pageable.class)))
+                .thenReturn(threeInstancesPage());
+
+        PageResponse<WorkflowInstancePendingDTO> r = controller.getMyCreated(
+                FACTORY_ID, AUTH_HEADER, "PURCHASE_ORDER", null, null, null, 1, 1).getData();
+
+        assertEquals(2, r.getTotalElements(), "两条采购单都应命中, 而不是只在当前页 1 条里筛");
+        assertEquals(1, r.getContent().size());
+        assertEquals("PURCHASE_ORDER", r.getContent().get(0).getModuleCode());
+        ArgumentCaptor<Pageable> pc = ArgumentCaptor.forClass(Pageable.class);
+        verify(workflowEngine).findCreatedBy(eq(FACTORY_ID), eq(100L), pc.capture());
+        assertEquals(0, pc.getValue().getPageNumber());
+        assertEquals(2000, pc.getValue().getPageSize());
+    }
+
+    @Test
+    @DisplayName("G9: /acted 按发起人 + 关键词筛选, 第 2 页读到剩余命中")
+    void acted_initiator_and_keyword_filters() {
+        mockAuth(100L, "f006_finance", "factory_super_admin");
+        stubUsersForG9();
+        when(workflowEngine.findActedBy(eq(FACTORY_ID), eq(100L), any(Pageable.class)))
+                .thenReturn(threeInstancesPage());
+
+        PageResponse<WorkflowInstancePendingDTO> byInitiator = controller.getActed(
+                FACTORY_ID, AUTH_HEADER, null, null, null, "LI_SI", 1, 10).getData();
+        assertEquals(2, byInitiator.getTotalElements());
+        assertTrue(byInitiator.getContent().stream()
+                .allMatch(d -> "li_si".equals(d.getInitiatedByUsername())));
+
+        PageResponse<WorkflowInstancePendingDTO> byKeyword = controller.getActed(
+                FACTORY_ID, AUTH_HEADER, null, "zhang", null, null, 1, 10).getData();
+        assertEquals(1, byKeyword.getTotalElements());
+        assertEquals("i-po1", byKeyword.getContent().get(0).getInstanceId());
+
+        PageResponse<WorkflowInstancePendingDTO> page2 = controller.getActed(
+                FACTORY_ID, AUTH_HEADER, null, null, null, "li_si", 2, 1).getData();
+        assertEquals(2, page2.getTotalElements());
+        assertEquals(1, page2.getContent().size());
+    }
+
+    @Test
+    @DisplayName("G9: /copied 按负责岗位筛选 —— 岗位不在当前节点 approverRoles 里则排除")
+    void copied_approver_role_filter() {
+        mockAuth(100L, "f006_finance", "finance_manager");
+        stubUsersForG9();
+        when(workflowEngine.findCopiedTo(eq(FACTORY_ID), eq(100L), eq("finance_manager"), any(Pageable.class)))
+                .thenReturn(threeInstancesPage());
+
+        assertEquals(3, controller.getCopied(FACTORY_ID, AUTH_HEADER, null, null, "finance_manager", null, 1, 20)
+                .getData().getTotalElements());
+        assertEquals(0, controller.getCopied(FACTORY_ID, AUTH_HEADER, null, null, "quality_manager", null, 1, 20)
+                .getData().getTotalElements());
+    }
+
+    @Test
+    @DisplayName("G9: 无筛选参数时分页参数原样传给 service (不触发全量扫描)")
+    void no_filter_keeps_native_pagination() {
+        mockAuth(100L, "f006_finance", "finance_manager");
+        when(workflowEngine.findCreatedBy(eq(FACTORY_ID), eq(100L), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(), PageRequest.of(2, 5), 0L));
+
+        controller.getMyCreated(FACTORY_ID, AUTH_HEADER, null, null, null, null, 3, 5);
+
+        ArgumentCaptor<Pageable> pc = ArgumentCaptor.forClass(Pageable.class);
+        verify(workflowEngine).findCreatedBy(eq(FACTORY_ID), eq(100L), pc.capture());
+        assertEquals(2, pc.getValue().getPageNumber());
+        assertEquals(5, pc.getValue().getPageSize());
+    }
+
+    @Test
+    @DisplayName("G9: /pending 关键词筛选在全量待审里命中, 而不是只在当前页")
+    void pending_keyword_filter_scans_all_pending() {
+        mockAuth(100L, "f006_finance", "finance_manager");
+        stubUsersForG9();
+        when(workflowEngine.findPendingForRole(eq(FACTORY_ID), eq("finance_manager"), eq(null), any(Pageable.class)))
+                .thenReturn(threeInstancesPage());
+
+        PageResponse<WorkflowInstancePendingDTO> r = controller.getPendingForUser(
+                FACTORY_ID, AUTH_HEADER, null, "zhang_san", null, null, 1, 20).getData();
+
+        assertEquals(1, r.getTotalElements());
+        assertEquals("i-po1", r.getContent().get(0).getInstanceId());
+    }
+
+    @Test
+    @DisplayName("G9: 扫描被 2000 条上限截断时响应带 truncated/scanLimit; 未截断不带")
+    void filtered_scan_over_cap_is_flagged_truncated() {
+        mockAuth(100L, "f006_finance", "finance_manager");
+        stubUsersForG9();
+        ApprovalWorkflowInstance po1 = buildInstance(
+                "i-po1", "wf-g9", "PURCHASE_ORDER", "po-1", List.of("approval_finance"), 301L);
+        when(workflowEngine.findCreatedBy(eq(FACTORY_ID), eq(100L), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(po1), PageRequest.of(0, 2000), 2500L));
+
+        PageResponse<WorkflowInstancePendingDTO> r = controller.getMyCreated(
+                FACTORY_ID, AUTH_HEADER, "PURCHASE_ORDER", null, null, null, 1, 10).getData();
+        assertEquals(Boolean.TRUE, r.getTruncated(), "只扫了前 2000 条, 必须告诉前端结果不是全量");
+        assertEquals(2000, r.getScanLimit());
+
+        when(workflowEngine.findCreatedBy(eq(FACTORY_ID), eq(100L), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(po1), PageRequest.of(0, 2000), 1L));
+        PageResponse<WorkflowInstancePendingDTO> ok = controller.getMyCreated(
+                FACTORY_ID, AUTH_HEADER, "PURCHASE_ORDER", null, null, null, 1, 10).getData();
+        org.junit.jupiter.api.Assertions.assertNull(ok.getTruncated());
+    }
+
+    @Test
+    @DisplayName("M4: 报工修正审批摘要一次批量取, 不逐条查库")
+    void report_correction_summaries_are_loaded_in_one_batch() {
+        ReflectionTestUtils.setField(controller, "productionReportCorrectionService", productionReportCorrectionService);
+        mockAuth(100L, "f006_finance", "finance_manager");
+        buildWorkflow("wf-g9", "财务审批", "finance_manager");
+        when(userRepository.findAllById(any())).thenReturn(List.of(buildUser(301L, "zhang_san", "operator")));
+        ApprovalWorkflowInstance c1 = buildInstance(
+                "i-c1", "wf-g9", "PRODUCTION_REPORT_CORRECTION", "corr-1", List.of("approval_finance"), 301L);
+        ApprovalWorkflowInstance c2 = buildInstance(
+                "i-c2", "wf-g9", "PRODUCTION_REPORT_CORRECTION", "corr-2", List.of("approval_finance"), 301L);
+        when(workflowEngine.findCreatedBy(eq(FACTORY_ID), eq(100L), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(c1, c2), PageRequest.of(0, 2000), 2L));
+        when(productionReportCorrectionService.approvalSummaries(eq(FACTORY_ID), any()))
+                .thenReturn(java.util.Map.of(
+                        "corr-1", java.util.Map.of("reportId", 11L, "processCategory", "切配"),
+                        "corr-2", java.util.Map.of("reportId", 12L, "processCategory", "包装")));
+
+        PageResponse<WorkflowInstancePendingDTO> r = controller.getMyCreated(
+                FACTORY_ID, AUTH_HEADER, "PRODUCTION_REPORT_CORRECTION", null, null, null, 1, 10).getData();
+
+        assertEquals(2, r.getContent().size());
+        assertEquals("报工 #11 修正（切配）", r.getContent().get(0).getBusinessSummary());
+        verify(productionReportCorrectionService, times(1)).approvalSummaries(eq(FACTORY_ID), any());
+        verify(productionReportCorrectionService, never()).approvalSummary(anyString(), anyString());
     }
 }

@@ -406,6 +406,13 @@ public class FactoryBuildApplyService {
                     pt.setLevel1Unit(p.getLevel1Unit());
                     pt.setBoxConversionCoefficient(p.getBoxConversionCoefficient());
                     pt.setIsActive(true);
+                    // 只写建厂时问到的: null=没问到, 保留现值/实体默认值, 不覆盖
+                    if (p.getInspectionRequired() != null) {
+                        pt.setInspectionRequired(p.getInspectionRequired());
+                    }
+                    if (p.getMaxReworkRatioPercent() != null) {
+                        pt.setMaxReworkRatioPercent(p.getMaxReworkRatioPercent());
+                    }
                     if (created) {
                         pt.setActor(actor);
                     }
@@ -1033,12 +1040,59 @@ public class FactoryBuildApplyService {
             }
             factorySettingsRepository.save(fs);
         }
+        applyPolicy(factoryId, sd.getPolicy(), result);
         if (sd.getThresholds() != null) {
             for (ApplyAIInitRequest.ThresholdItem t : sd.getThresholds()) {
                 String key = t.getKey().trim();
                 assemblyThresholdWriter.upsert(factoryId, key, t.getValue().trim());
                 result.getWrittenThresholds().add(key + "=" + t.getValue().trim());
             }
+        }
+    }
+
+    /**
+     * 厂规落库: 显式白名单逐项写, 只写问到的(非 null), 其余保持现值。
+     * 校验已保证物料平衡线合法; 没有 factory_settings 行时新建(实体默认值不变)。
+     */
+    private void applyPolicy(String factoryId, ApplyAIInitRequest.FactoryPolicyItem p,
+                             ApplyAIInitResult result) {
+        if (p == null) {
+            return;
+        }
+        FactorySettings fs = factorySettingsRepository.findByFactoryId(factoryId)
+                .orElseGet(() -> {
+                    FactorySettings created = new FactorySettings();
+                    created.setFactoryId(factoryId);
+                    return created;
+                });
+        boolean any = false;
+        if (p.getBlockStartOnOpenShortage() != null) {
+            fs.setBlockStartOnOpenShortage(p.getBlockStartOnOpenShortage());
+            result.getWrittenModules().add("blockStartOnOpenShortage=" + p.getBlockStartOnOpenShortage());
+            any = true;
+        }
+        if (p.getRequireRequisitionBeforeReport() != null) {
+            fs.setRequireRequisitionBeforeReport(p.getRequireRequisitionBeforeReport());
+            result.getWrittenModules().add("requireRequisitionBeforeReport=" + p.getRequireRequisitionBeforeReport());
+            any = true;
+        }
+        if (p.getSkipProcessReportingDefault() != null) {
+            fs.setSkipProcessReportingDefault(p.getSkipProcessReportingDefault());
+            result.getWrittenModules().add("skipProcessReportingDefault=" + p.getSkipProcessReportingDefault());
+            any = true;
+        }
+        if (p.getMaterialBalanceWarnPct() != null) {
+            fs.setMaterialBalanceWarnPct(p.getMaterialBalanceWarnPct());
+            result.getWrittenModules().add("materialBalanceWarnPct=" + p.getMaterialBalanceWarnPct());
+            any = true;
+        }
+        if (p.getMaterialBalanceRedPct() != null) {
+            fs.setMaterialBalanceRedPct(p.getMaterialBalanceRedPct());
+            result.getWrittenModules().add("materialBalanceRedPct=" + p.getMaterialBalanceRedPct());
+            any = true;
+        }
+        if (any) {
+            factorySettingsRepository.save(fs);
         }
     }
 

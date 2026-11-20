@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ListEmptyExplain from '@/components/common/ListEmptyExplain.vue';
 /**
  * 全部请购单 — Sprint 6 W2-A.
  *
@@ -16,7 +17,8 @@ import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { useUserDirectory } from '@/composables/useUserDirectory';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Plus, Refresh } from '@element-plus/icons-vue';
+import type { CsTableColumn as TableColumn } from '@/types/csTable';
+import { badgeColor } from '@/utils/csBadge';
 import {
   listRequisitions,
   deleteRequisition,
@@ -40,6 +42,51 @@ const statusFilter = ref<PurchaseRequisitionStatus | ''>('');
 const requesterIdFilter = ref<number | null>(null);
 const pagination = ref({ page: 1, size: 20, total: 0 });
 const createDialogVisible = ref(false);
+// 请购人 ID 输入框是文本（UInput type=number），请求里仍用 number | null
+const requesterIdText = computed({
+  get: () => (requesterIdFilter.value == null ? '' : String(requesterIdFilter.value)),
+  set: (v: string) => {
+    const n = Number(v);
+    requesterIdFilter.value = v !== '' && Number.isFinite(n) && n >= 1 ? n : null;
+  },
+});
+const columns: TableColumn<PurchaseRequisition>[] = [
+  { id: 'requisitionNumber', header: '单号' },
+  { id: 'requester', header: '请购人' },
+  { id: 'items', header: '明细' },
+  { id: 'expectedDate', header: '期望交货' },
+  { id: 'status', header: '状态' },
+  { id: 'po', header: '关联PO' },
+  { id: 'createdAt', header: '创建时间' },
+  { id: 'actions', header: '操作' },
+];
+
+// USelect 的选项值不能是空串: 页面内用 ALL 表示不筛
+const statusItems = [
+  { label: '全部状态', value: 'ALL' },
+  ...Object.entries(REQUISITION_STATUS_MAP).map(([value, v]) => ({ label: v.text, value })),
+];
+const statusSelect = computed({
+  get: () => statusFilter.value || 'ALL',
+  set: (v: string) => { statusFilter.value = v === 'ALL' ? '' : (v as PurchaseRequisitionStatus); },
+});
+const sizeItems = [10, 20, 50].map((n) => ({ label: `${n} 条/页`, value: n }));
+function statusBadge(status: string) {
+  return badgeColor(REQUISITION_STATUS_MAP[status as PurchaseRequisitionStatus]?.type || 'info');
+}
+function statusText(status: string) {
+  return REQUISITION_STATUS_MAP[status as PurchaseRequisitionStatus]?.text || status;
+}
+function formatCreatedAt(v: unknown) {
+  return v ? String(v).replace('T', ' ').slice(0, 16) : '-';
+}
+function itemSummary(row: PurchaseRequisition) {
+  const items = (row.requestedItems ?? []) as Array<{ materialName?: string }>;
+  return {
+    count: items.length,
+    names: items.slice(0, 2).map((it) => it.materialName || '-').join(', ') + (items.length > 2 ? ' …' : ''),
+  };
+}
 
 async function loadData() {
   if (!factoryId.value) return;
@@ -137,140 +184,69 @@ async function handleDelete(row: PurchaseRequisition) {
 
 <template>
   <div class="page-wrapper">
-    <el-card class="page-card" shadow="never">
-      <template #header>
-        <div class="card-header">
-          <div class="header-left">
-            <span class="page-title">全部请购单</span>
-            <span class="data-count">共 {{ pagination.total }} 条</span>
-          </div>
-          <div class="header-right">
-            <el-button
-              v-if="canWrite"
-              type="primary"
-              :icon="Plus"
-              @click="createDialogVisible = true"
-            >
-              新建请购单
-            </el-button>
-          </div>
-        </div>
-      </template>
+    <div class="cs-page-head">
+      <div>
+        <h2>全部请购单</h2>
+        <p>共 {{ pagination.total }} 条</p>
+      </div>
+      <div class="head-actions">
+        <UButton v-if="canWrite" icon="i-lucide-plus" @click="createDialogVisible = true">新建请购单</UButton>
+      </div>
+    </div>
 
-      <div class="search-bar">
-        <el-select
-          v-model="statusFilter"
-          placeholder="按状态筛选"
-          clearable
-          style="width: 160px"
-          @change="handleFilterChange"
-        >
-          <el-option
-            v-for="(v, k) in REQUISITION_STATUS_MAP"
-            :key="k"
-            :label="v.text"
-            :value="k"
-          />
-        </el-select>
-        <el-input-number
-          v-model="requesterIdFilter"
+    <section class="cs-card">
+      <div class="cs-card-head">
+        <USelect v-model="statusSelect" :items="statusItems" placeholder="按状态筛选" class="w-44" @update:model-value="handleFilterChange" />
+        <UInput
+          v-model="requesterIdText"
+          type="number"
+          min="1"
           placeholder="按请购人 ID"
-          :min="1"
-          :controls="false"
-          style="width: 160px"
+          class="w-44"
           @change="handleFilterChange"
         />
-        <el-button :icon="Refresh" @click="handleRefresh">重置</el-button>
+        <UButton icon="i-lucide-rotate-ccw" color="neutral" variant="outline" @click="handleRefresh">重置</UButton>
       </div>
 
-      <el-table
-        v-loading="loading"
-        :data="tableData"
-        empty-text="暂无请购单"
-        stripe
-        border
-        style="width: 100%"
-      >
-        <el-table-column prop="requisitionNumber" label="单号" width="200" />
-        <el-table-column prop="requesterId" label="请购人" width="100" align="center">
-          <template #default="{ row }">{{ personLabel(row.requesterId) }}</template>
-        </el-table-column>
-        <el-table-column label="明细" min-width="220">
-          <template #default="{ row }">
-            <span v-if="!row.requestedItems || row.requestedItems.length === 0">
-              -
-            </span>
-            <span v-else>
-              {{ row.requestedItems.length }} 项 ·
-              <span class="muted">
-                {{ row.requestedItems
-                  .slice(0, 2)
-                  .map((it: { materialName?: string }) => it.materialName || '-')
-                  .join(', ') }}{{ row.requestedItems.length > 2 ? ' …' : '' }}
-              </span>
-            </span>
-          </template>
-        </el-table-column>
-        <el-table-column prop="expectedDate" label="期望交货" width="120" />
-        <el-table-column label="状态" width="110" align="center">
-          <template #default="{ row }">
-            <el-tag
-              :type="REQUISITION_STATUS_MAP[row.status as PurchaseRequisitionStatus]?.type || 'info'"
-              size="small"
-            >
-              {{ REQUISITION_STATUS_MAP[row.status as PurchaseRequisitionStatus]?.text || row.status }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="关联PO" width="130">
-          <template #default="{ row }">
-            <el-button
-              v-if="row.convertedPoId"
-              type="primary"
-              link
-              size="small"
-              @click="goPO(row.convertedPoId)"
-            >
-              查看PO
-            </el-button>
-            <span v-else class="muted">—</span>
-          </template>
-        </el-table-column>
-        <el-table-column prop="createdAt" label="创建时间" width="170">
-          <template #default="{ row }">
-            {{ row.createdAt ? String(row.createdAt).replace('T', ' ').slice(0, 16) : '-' }}
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="160" fixed="right" align="center">
-          <template #default="{ row }">
-            <el-button type="primary" link size="small" @click="goDetail(row.id)">
-              详情
-            </el-button>
-            <el-button
-              v-if="row.status === 'DRAFT' && canWrite && currentUserId !== null && row.requesterId === currentUserId"
-              type="danger"
-              link
-              size="small"
-              @click="handleDelete(row)"
+      <UTable :data="tableData" :columns="columns" :loading="loading" class="cs-table">
+        <template #empty><ListEmptyExplain empty-title="还没有请购单" empty-hint="车间或仓库需要采购物料时，点右上角新建请购单，审批后转采购订单。" /></template>
+        <template #requisitionNumber-cell="{ row }">{{ row.original.requisitionNumber }}</template>
+        <template #requester-cell="{ row }">{{ personLabel(row.original.requesterId) }}</template>
+        <template #items-cell="{ row }">
+          <span v-if="!row.original.requestedItems || row.original.requestedItems.length === 0">-</span>
+          <span v-else>{{ itemSummary(row.original).count }} 项 · <span class="muted">{{ itemSummary(row.original).names }}</span></span>
+        </template>
+        <template #expectedDate-cell="{ row }"><span class="num">{{ row.original.expectedDate }}</span></template>
+        <template #status-cell="{ row }">
+          <UBadge :color="statusBadge(row.original.status)" variant="soft">{{ statusText(row.original.status) }}</UBadge>
+        </template>
+        <template #po-cell="{ row }">
+          <UButton v-if="row.original.convertedPoId" size="xs" variant="link" @click="goPO(row.original.convertedPoId)">查看PO</UButton>
+          <span v-else class="muted">—</span>
+        </template>
+        <template #createdAt-cell="{ row }"><span class="muted">{{ formatCreatedAt(row.original.createdAt) }}</span></template>
+        <template #actions-cell="{ row }">
+          <div class="row-actions">
+            <UButton size="xs" variant="link" @click="goDetail(row.original.id)">详情</UButton>
+            <UButton
+              v-if="row.original.status === 'DRAFT' && canWrite && currentUserId !== null && row.original.requesterId === currentUserId"
+              size="xs"
+              variant="link"
+              color="error"
+              @click="handleDelete(row.original)"
             >
               删除
-            </el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+            </UButton>
+          </div>
+        </template>
+      </UTable>
 
       <div class="pagination-wrapper">
-        <el-pagination
-          v-model:current-page="pagination.page"
-          v-model:page-size="pagination.size"
-          :page-sizes="[10, 20, 50]"
-          :total="pagination.total"
-          layout="total, sizes, prev, pager, next, jumper"
-          @current-change="handlePageChange"
-          @size-change="handleSizeChange"
-        />
+        <span class="total">共 {{ pagination.total }} 条</span>
+        <USelect v-model="pagination.size" :items="sizeItems" class="w-28" @update:model-value="handleSizeChange" />
+        <UPagination v-model:page="pagination.page" :items-per-page="pagination.size" :total="pagination.total" show-edges :sibling-count="1" @update:page="handlePageChange" />
       </div>
-    </el-card>
+    </section>
 
     <CreateRequisitionDialog
       v-model="createDialogVisible"
@@ -279,61 +255,11 @@ async function handleDelete(row: PurchaseRequisition) {
   </div>
 </template>
 
-<style lang="scss" scoped>
-.page-wrapper {
-  height: 100%;
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-}
-.page-card {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  :deep(.el-card__header) {
-    padding: 16px 20px;
-    border-bottom: 1px solid #ebeef5;
-  }
-  :deep(.el-card__body) {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    padding: 20px;
-  }
-}
-.card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  .header-left {
-    display: flex;
-    align-items: baseline;
-    gap: 12px;
-    .page-title {
-      font-size: 16px;
-      font-weight: 600;
-      color: #303133;
-    }
-    .data-count {
-      font-size: 13px;
-      color: #909399;
-    }
-  }
-}
-.search-bar {
-  display: flex;
-  gap: 12px;
-  margin-bottom: 16px;
-  flex-wrap: wrap;
-}
-.pagination-wrapper {
-  display: flex;
-  justify-content: flex-end;
-  padding-top: 16px;
-  border-top: 1px solid #ebeef5;
-  margin-top: 16px;
-}
-.muted {
-  color: #909399;
-}
+<style scoped>
+.page-wrapper { padding: var(--cs-space-4); }
+.head-actions { display: flex; gap: var(--cs-space-2); align-items: center; }
+.row-actions { display: flex; gap: var(--cs-space-1); align-items: center; }
+.muted { color: var(--cs-muted); }
+.total { color: var(--cs-muted); font-size: var(--cs-font); }
+.pagination-wrapper { display: flex; justify-content: flex-end; align-items: center; gap: var(--cs-space-3); padding: var(--cs-space-3) var(--cs-space-5); border-top: 1px solid var(--cs-border); }
 </style>

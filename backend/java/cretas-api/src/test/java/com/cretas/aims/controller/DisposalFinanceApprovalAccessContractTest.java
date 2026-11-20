@@ -121,6 +121,8 @@ class DisposalFinanceApprovalAccessContractTest {
                 mock(MaterialBatchAdjustmentRepository.class), mock(ProductionBatchRepository.class),
                 mock(FinishedGoodsBatchRepository.class), mock(FinishedGoodsAdjustmentLogRepository.class));
         ReflectionTestUtils.setField(service, "disposalCostAccountingService", mock(DisposalCostAccountingService.class));
+        // 报废审批权限用真实的权限判定 (默认财务经理 + 厂长), 不是桩
+        ReflectionTestUtils.setField(service, "permissionService", new com.cretas.aims.service.impl.PermissionServiceImpl());
 
         mvc = MockMvcBuilders.standaloneSetup(new DisposalController(service))
                 .setControllerAdvice(new GlobalExceptionHandler())
@@ -183,10 +185,10 @@ class DisposalFinanceApprovalAccessContractTest {
         for (Long userId : List.of(3L, 4L)) {
             as(userId, put(BASE + "/7/approve").contentType(MediaType.APPLICATION_JSON).content("{}"))
                     .andExpect(status().isForbidden())
-                    .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("财务经理或工厂管理员")));
+                    .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("报废审批")));
             as(userId, put(BASE + "/7/reject").contentType(MediaType.APPLICATION_JSON).content("{\"reason\":\"x\"}"))
                     .andExpect(status().isForbidden())
-                    .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("财务经理或工厂管理员")));
+                    .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("报废审批")));
         }
         assertThat(pending.getStatus()).isEqualTo("PENDING");
     }

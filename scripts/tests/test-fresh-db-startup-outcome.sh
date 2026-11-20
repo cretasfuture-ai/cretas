@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# GUARDS=scripts/testing/fresh-db-startup-outcome.sh,scripts/testing/fresh-db-gate.sh,.github/workflows/fresh-db-progress.yml
+# GUARDS=scripts/testing/fresh-db-startup-outcome.sh,scripts/testing/fresh-db-gate.sh,.github/workflows/fresh-db-progress.yml,scripts/ci/trigger-paths/fresh-db-progress.txt
 #
 # `fresh-db-gate.sh --progress` 的**启动结局分类**闸 —— 用合成 backend 日志逐态喂分类器,
 # ⛔ 不跑 Docker / Maven。
@@ -213,7 +213,12 @@ grep -qF 'bash scripts/testing/fresh-db-gate.sh --progress 2>&1 | tee -a "$FRESH
 grep -qF '[ -n "${FRESH_DB_OUTPUT:-}" ]' "$NONCOMMENT_PROGRESS" || fail "⑥: progress run 的非注释代码没有校验真实输出目的地"
 grep -qE '^\s+2\) echo "::error title=Fresh DB 没量到\(rc=2\)' "$NONCOMMENT_PROGRESS" || fail "⑥: 工作流没有单独的 rc=2 分支"
 grep -qF 'exit "$rc"' "$NONCOMMENT_PROGRESS" || fail "⑥: 工作流没把脚本 rc 原样退出 —— rc=2 会被吞成绿"
-grep -qF "scripts/testing/fresh-db-startup-outcome.sh" "$WF" || fail "⑥: 改分类库的 PR 触发不到 fresh-db-progress"
+# 2026-11-12 起 pull_request 触发面在 trigger-paths 清单里 (workflow 不再带 paths, 由 changes 作业判定)。
+# ⇒ 钉两头: 清单里有**整行**这条路径 (注释不算), 且 workflow 真的把这份清单交给 changed-paths.py。
+FRESH_TRIGGER="$ROOT_DIR/scripts/ci/trigger-paths/fresh-db-progress.txt"
+grep -qxF "scripts/testing/fresh-db-startup-outcome.sh" "$FRESH_TRIGGER" || fail "⑥: 改分类库的 PR 触发不到 fresh-db-progress"
+grep -qF 'scripts/ci/changed-paths.py --patterns scripts/ci/trigger-paths/fresh-db-progress.txt' "$WF" \
+    || fail "⑥: fresh-db-progress.yml 没有用 changed-paths.py 读触发清单 —— 清单没接上"
 
 mkdir -p "$FIX/runner/scripts/testing"
 cat > "$FIX/runner/scripts/testing/fresh-db-gate.sh" <<'SH'

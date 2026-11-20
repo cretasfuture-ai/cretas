@@ -145,6 +145,24 @@ public class FactorySettingsDTO {
         this.blockStartOnOpenShortageSpecified = true;
     }
 
+    @Schema(description = "允许本人审批 (纪律排查 B1–B3/B11/B15, 默认 false=四眼; true=提交人可自批但须写原因并留痕)",
+            example = "false")
+    private Boolean allowSelfApproval;
+
+    @JsonIgnore
+    private boolean allowSelfApprovalSpecified;
+
+    public void setAllowSelfApproval(Boolean allowSelfApproval) {
+        this.allowSelfApproval = allowSelfApproval;
+        this.allowSelfApprovalSpecified = true;
+    }
+
+    /** 当作没提这一项 (导入别厂导出的设置时用: 「允许本人审批」是本厂自己的决定, 不随导入带过来)。 */
+    public void clearAllowSelfApproval() {
+        this.allowSelfApproval = null;
+        this.allowSelfApprovalSpecified = false;
+    }
+
     @Schema(description = "最后修改时间")
     private LocalDateTime lastModifiedAt;
 

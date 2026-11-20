@@ -6,7 +6,13 @@ import com.cretas.aims.entity.QualityInspection;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.ProductionBatchStatus;
 import com.cretas.aims.entity.enums.QualityStatus;
+import com.cretas.aims.entity.foodsafety.ProcessTimeLimitEvent;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
+import com.cretas.aims.entity.lineage.BatchLineageEdge;
+import com.cretas.aims.repository.lineage.BatchLineageEdgeRepository;
+import com.cretas.aims.service.lineage.LineageEdgeRecorder;
+import com.cretas.aims.repository.foodsafety.ProcessTimeLimitEventRepository;
+import com.cretas.aims.service.foodsafety.timelimit.ProcessTimeLimitService;
 import com.cretas.aims.entity.quality.QcReleaseRecord;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
@@ -18,6 +24,17 @@ import com.cretas.aims.service.quality.FactoryRecallService;
 import com.cretas.aims.service.quality.QualityDispositionInventoryService;
 import com.cretas.aims.service.QualityDispositionRuleService.DispositionAction;
 import com.cretas.aims.service.quality.release.QcInspectionPolicy;
+import com.cretas.aims.dto.quality.ApprovalDecisionRequest;
+import com.cretas.aims.dto.quality.SpecialApprovalRequest;
+import com.cretas.aims.entity.User;
+import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.service.ApprovalChainService;
+import com.cretas.aims.service.SpecialApprovalService;
+import com.cretas.aims.service.impl.DecisionAuditServiceImpl;
+import com.cretas.aims.service.impl.QualityDispositionRuleServiceImpl;
+import com.cretas.aims.service.impl.SpecialApprovalServiceImpl;
+import com.cretas.aims.service.quality.QualityDispositionDecisionGuard;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -69,7 +86,13 @@ class QualityDispositionInventoryPostgresContractTest {
     @EnableAutoConfiguration(exclude = {SecurityAutoConfiguration.class, UserDetailsServiceAutoConfiguration.class})
     @EntityScan("com.cretas.aims.entity")
     @EnableJpaRepositories("com.cretas.aims.repository")
-    @Import({QualityDispositionInventoryService.class, QcInspectionPolicy.class})
+    @Import({QualityDispositionInventoryService.class, QcInspectionPolicy.class,
+            QualityDispositionDecisionGuard.class, QualityDispositionRuleServiceImpl.class,
+            DecisionAuditServiceImpl.class, SpecialApprovalServiceImpl.class,
+            // 纪律排查 A3: 处置放行原料必须写放行台账 (缺了 fail-closed), 上下文里要有真守卫
+            com.cretas.aims.service.discipline.MaterialBatchReleaseGuard.class,
+            com.cretas.aims.service.discipline.FactoryDisciplinePolicy.class,
+            com.cretas.aims.service.canvas.impl.ThresholdResolverServiceImpl.class})
     static class Runtime {
     }
 
@@ -84,9 +107,19 @@ class QualityDispositionInventoryPostgresContractTest {
         registry.add("spring.jpa.database-platform", () -> "org.hibernate.dialect.PostgreSQLDialect");
     }
 
-    /** 召回判断是本合约明确不测的旁路；其它待测仓储和策略均为真实 bean。 */
+    /** 召回记录查询本身在 FactoryRecallServiceContractTest 里测; 这里桩它的答案, 验证放行按答案处理。其它仓储和策略均为真实 bean。 */
     @MockBean
     FactoryRecallService factoryRecallService;
+
+    /** 工厂动态审批规则不在本测试范围: 不匹配任何规则 (动作自身的审批契约照常生效)。 */
+    @MockBean
+    ApprovalChainService approvalChainService;
+
+    /** 审批人 / 申请人只用来取姓名角色; users 表的实体 DDL 与本测试无关。 */
+    @MockBean
+    UserRepository users;
+
+    @Autowired SpecialApprovalService specialApprovals;
 
     @Autowired JdbcTemplate jdbc;
     @Autowired PlatformTransactionManager transactionManager;
@@ -97,6 +130,8 @@ class QualityDispositionInventoryPostgresContractTest {
     @Autowired QcReleaseRecordRepository releaseRecords;
     @Autowired ProductTypeRepository productTypes;
     @Autowired QualityInspectionRepository inspections;
+    @Autowired ProcessTimeLimitEventRepository timeLimitEvents;
+    @Autowired BatchLineageEdgeRepository lineageEdges;
 
     private TransactionTemplate tx;
 
@@ -128,10 +163,20 @@ class QualityDispositionInventoryPostgresContractTest {
         assertDbFinishedGoods(secondFg, FinishedGoodsBatch.Status.AVAILABLE);
         assertDbMaterial(f.materialId(), MaterialBatchStatus.AVAILABLE);
         assertInspectionRetained(f.inspectionId());
+        // 纪律排查 A3: 真库里放行台账同一事务落了一行 (不良 → 可用, 质检处置通道, 带质检单号)
+        assertThat(jdbc.queryForObject("select count(*) from material_batch_releases where material_batch_id = ?"
+                        + " and channel = 'QC_DISPOSITION' and from_status = 'DEFECTIVE' and to_status = 'AVAILABLE'"
+                        + " and inspection_id = ?",
+                Long.class, f.materialId(), f.inspectionId())).isEqualTo(1L);
     }
 
+    /**
+     * Q2 改写 (Owner 2026-11-09 裁定「计划里所有批次都解除后, 一次放行这个计划的全部成品」): 原名
+     * differentSkuAndDifferentFactoryRemainProtected, 钉的是「同计划其他 SKU 不放」—— 联产计划的副产品同样是
+     * 这个计划的货, 现在一起放行。跨工厂保护不变: 别厂同计划号的成品一行不动 (阴性对照)。
+     */
     @Test
-    void differentSkuAndDifferentFactoryRemainProtected() {
+    void otherSkuOfThePlanIsReleasedButOtherFactoryStaysProtected() {
         Fixture f = fixture(false);
         String otherSku = "PT-OTHER-" + suffix();
         String sameFactoryOtherSku = saveFinishedGoods(f.factoryId(), f.planId(), otherSku, "FG-OTHER-" + suffix(),
@@ -141,10 +186,10 @@ class QualityDispositionInventoryPostgresContractTest {
 
         QualityDispositionInventoryService.InventoryDispositionResult result = release(f);
 
-        assertThat(result.getFinishedGoodsReleased()).isEqualTo(1);
-        assertThat(result.getFinishedGoodsHeld()).isEqualTo(1);
+        assertThat(result.getFinishedGoodsReleased()).isEqualTo(2);
+        assertThat(result.getFinishedGoodsHeld()).isZero();
         assertDbFinishedGoods(f.firstFgId(), FinishedGoodsBatch.Status.AVAILABLE);
-        assertDbFinishedGoods(sameFactoryOtherSku, FinishedGoodsBatch.Status.DEFECTIVE);
+        assertDbFinishedGoods(sameFactoryOtherSku, FinishedGoodsBatch.Status.AVAILABLE);
         assertDbFinishedGoods(otherFactory, FinishedGoodsBatch.Status.DEFECTIVE);
         assertDbMaterial(f.materialId(), MaterialBatchStatus.AVAILABLE);
         assertInspectionRetained(f.inspectionId());
@@ -165,6 +210,7 @@ class QualityDispositionInventoryPostgresContractTest {
 
         assertThat(result.getFinishedGoodsReleased()).isZero();
         assertThat(result.getFinishedGoodsHeld()).isEqualTo(2);
+        assertThat(result.getFinishedGoodsNotice()).contains("还有 1 个批次没有解除隔离");
         assertDbFinishedGoods(f.firstFgId(), FinishedGoodsBatch.Status.DEFECTIVE);
         assertDbFinishedGoods(siblingFg, FinishedGoodsBatch.Status.DEFECTIVE);
         assertDbQualityStatus(f.productionBatchId(), QualityStatus.PASSED);
@@ -194,6 +240,171 @@ class QualityDispositionInventoryPostgresContractTest {
         assertInspectionRetained(f.inspectionId());
     }
 
+    /** Q7 (2026-11-09): 工序时限复检判不合格写下的 DEFECTIVE 成品, 计划放行时读回 REJECTED 事件留在隔离。 */
+    @Test
+    void timeLimitRejectedFinishedGoodsStayDefective() {
+        Fixture f = fixture(false);
+        String expiredFg = saveFinishedGoods(f.factoryId(), f.planId(), f.productId(), "FG-EXPIRED-" + suffix(),
+                FinishedGoodsBatch.Status.DEFECTIVE);
+        saveTimeLimitEvent(f.factoryId(), expiredFg, ProcessTimeLimitEvent.Status.REJECTED);
+        // 阴性对照: 复检放行 (RELEASED) 的事件不是判废, 不挡放行
+        String recheckedFg = saveFinishedGoods(f.factoryId(), f.planId(), f.productId(), "FG-RECHECKED-" + suffix(),
+                FinishedGoodsBatch.Status.DEFECTIVE);
+        saveTimeLimitEvent(f.factoryId(), recheckedFg, ProcessTimeLimitEvent.Status.RELEASED);
+
+        QualityDispositionInventoryService.InventoryDispositionResult result = release(f);
+
+        assertThat(result.getFinishedGoodsReleased()).isEqualTo(2);
+        assertThat(result.getFinishedGoodsHeld()).isEqualTo(1);
+        assertDbFinishedGoods(f.firstFgId(), FinishedGoodsBatch.Status.AVAILABLE);
+        assertDbFinishedGoods(recheckedFg, FinishedGoodsBatch.Status.AVAILABLE);
+        assertDbFinishedGoods(expiredFg, FinishedGoodsBatch.Status.DEFECTIVE);
+    }
+
+    private void saveTimeLimitEvent(String factoryId, String finishedGoodsId, String status) {
+        tx.executeWithoutResult(state -> {
+            LocalDateTime start = LocalDateTime.of(2026, 11, 9, 8, 0);
+            timeLimitEvents.saveAndFlush(ProcessTimeLimitEvent.builder()
+                    .factoryId(factoryId)
+                    .targetType(ProcessTimeLimitService.TargetType.FINISHED_GOODS)
+                    .targetId(finishedGoodsId)
+                    .limitMinutes(30)
+                    .startEvent("OUTPUT_POSTED")
+                    .mixRule("EARLIEST")
+                    .startAt(start)
+                    .deadlineAt(start.plusMinutes(30))
+                    .blockedAt(start.plusMinutes(45))
+                    .coveredUntil(start.plusMinutes(45))
+                    .status(status)
+                    .conclusion("复检结论")
+                    .build());
+        });
+    }
+
+    /** Q4: 没有经过复核的放行不翻转任何成品 (批次状态照写)。 */
+    @Test
+    void unreviewedReleaseLeavesAllFinishedGoodsDefective() {
+        Fixture f = fixture(false);
+
+        QualityDispositionInventoryService.InventoryDispositionResult result = release(f, false);
+
+        assertThat(result.getFinishedGoodsReleased()).isZero();
+        assertThat(result.getFinishedGoodsHeld()).isEqualTo(1);
+        assertThat(result.getFinishedGoodsNotice()).contains("复核");
+        assertDbFinishedGoods(f.firstFgId(), FinishedGoodsBatch.Status.DEFECTIVE);
+        assertDbQualityStatus(f.productionBatchId(), QualityStatus.PASSED);
+    }
+
+    /** Q4: 同计划兄弟批有召回记录时, 被召回冻结的成品 (批号 = 兄弟批号) 读回仍 DEFECTIVE; FROZEN 成品不受影响。 */
+    @Test
+    void siblingRecallAndFrozenGoodsStayPut() {
+        Fixture f = fixture(false);
+        String siblingNumber = "PB-RECALLED-" + suffix();
+        Long siblingId = tx.execute(state -> productionBatches.saveAndFlush(productionBatch(
+                f.factoryId(), f.planId(), f.productId(), QualityStatus.PASSED, siblingNumber)).getId());
+        String recalledFg = saveFinishedGoods(f.factoryId(), f.planId(), f.productId(), siblingNumber,
+                FinishedGoodsBatch.Status.DEFECTIVE);
+        String frozenFg = saveFinishedGoods(f.factoryId(), f.planId(), f.productId(), "FG-FROZEN-" + suffix(),
+                FinishedGoodsBatch.Status.FROZEN);
+        org.mockito.Mockito.when(factoryRecallService.hasRecallRecord(f.factoryId(), siblingId)).thenReturn(true);
+
+        QualityDispositionInventoryService.InventoryDispositionResult result = release(f);
+
+        assertThat(result.getFinishedGoodsReleased()).isZero();
+        assertThat(result.getFinishedGoodsNotice()).contains("召回");
+        assertDbFinishedGoods(recalledFg, FinishedGoodsBatch.Status.DEFECTIVE);
+        assertDbFinishedGoods(frozenFg, FinishedGoodsBatch.Status.FROZEN);
+    }
+
+    /** #1548 第二轮审查 1: 逐道录入的 CLERK_WIP 批次判了不合格, 真 PG 上同样挡住整个计划 (锁 + 锁后重读都含它)。 */
+    @Test
+    void failedClerkWipBatchKeepsThePlanQuarantined() {
+        Fixture f = fixture(false);
+        tx.executeWithoutResult(state -> {
+            ProductionBatch wip = productionBatch(f.factoryId(), f.planId(), f.productId(), QualityStatus.FAILED,
+                    "CLK-B-" + suffix());
+            wip.setBatchType("CLERK_WIP");
+            productionBatches.saveAndFlush(wip);
+        });
+
+        QualityDispositionInventoryService.InventoryDispositionResult result = release(f);
+
+        assertThat(result.getFinishedGoodsReleased()).isZero();
+        assertThat(result.getFinishedGoodsNotice()).contains("还有 1 个批次没有解除隔离");
+        assertDbFinishedGoods(f.firstFgId(), FinishedGoodsBatch.Status.DEFECTIVE);
+    }
+
+    /** Q2: 报废兄弟批的成品 (真血缘边读回) 留在隔离, 其余放行; 报废不算「未解除」。 */
+    @Test
+    void scrappedSiblingGoodsStayButTheRestIsReleased() {
+        Fixture f = fixture(false);
+        Long scrappedId = tx.execute(state -> productionBatches.saveAndFlush(productionBatch(
+                f.factoryId(), f.planId(), f.productId(), QualityStatus.SCRAPPED, "PB-SCRAPPED-" + suffix())).getId());
+        String scrappedFg = saveFinishedGoods(f.factoryId(), f.planId(), f.productId(), "FG-SCRAPPED-" + suffix(),
+                FinishedGoodsBatch.Status.DEFECTIVE);
+        saveEdge(f.factoryId(), f.productionBatchId(), f.firstFgId());
+        saveEdge(f.factoryId(), scrappedId, scrappedFg);
+
+        QualityDispositionInventoryService.InventoryDispositionResult result = release(f);
+
+        assertThat(result.getFinishedGoodsReleased()).isEqualTo(1);
+        assertThat(result.getFinishedGoodsHeld()).isEqualTo(1);
+        assertThat(result.getFinishedGoodsNotice()).contains("报废批次的成品 1 个");
+        assertDbFinishedGoods(f.firstFgId(), FinishedGoodsBatch.Status.AVAILABLE);
+        assertDbFinishedGoods(scrappedFg, FinishedGoodsBatch.Status.DEFECTIVE);
+        assertDbQualityStatus(scrappedId, QualityStatus.SCRAPPED);
+    }
+
+    /** Q2: 有报废兄弟批、没有血缘、批号对不上 —— 分不清归属, 整个计划不放 (读回仍 DEFECTIVE)。 */
+    @Test
+    void unattributableGoodsWithScrappedSiblingHoldTheWholePlan() {
+        Fixture f = fixture(false);
+        tx.execute(state -> productionBatches.saveAndFlush(productionBatch(
+                f.factoryId(), f.planId(), f.productId(), QualityStatus.SCRAPPED, "PB-SCRAPPED-" + suffix())).getId());
+        String otherFg = saveFinishedGoods(f.factoryId(), f.planId(), f.productId(), "FG-UNKNOWN-" + suffix(),
+                FinishedGoodsBatch.Status.DEFECTIVE);
+
+        QualityDispositionInventoryService.InventoryDispositionResult result = release(f);
+
+        assertThat(result.getFinishedGoodsReleased()).isZero();
+        assertThat(result.getFinishedGoodsHeld()).isEqualTo(2);
+        assertThat(result.getFinishedGoodsNotice()).contains("分不清");
+        assertDbFinishedGoods(f.firstFgId(), FinishedGoodsBatch.Status.DEFECTIVE);
+        assertDbFinishedGoods(otherFg, FinishedGoodsBatch.Status.DEFECTIVE);
+    }
+
+    /** Q2: 血缘指向别的计划的生产批次 —— 归属不明, 整个计划不放。 */
+    @Test
+    void lineagePointingOutsideThePlanHoldsEverything() {
+        Fixture f = fixture(false);
+        Long foreignBatch = tx.execute(state -> productionBatches.saveAndFlush(productionBatch(
+                f.factoryId(), "PLAN-ELSEWHERE-" + suffix(), f.productId(), QualityStatus.FAILED,
+                "PB-ELSEWHERE-" + suffix())).getId());
+        saveEdge(f.factoryId(), foreignBatch, f.firstFgId());
+
+        QualityDispositionInventoryService.InventoryDispositionResult result = release(f);
+
+        assertThat(result.getFinishedGoodsReleased()).isZero();
+        assertThat(result.getFinishedGoodsNotice()).contains("本计划以外");
+        assertDbFinishedGoods(f.firstFgId(), FinishedGoodsBatch.Status.DEFECTIVE);
+    }
+
+    private void saveEdge(String factoryId, Long productionBatchId, String finishedGoodsId) {
+        tx.executeWithoutResult(state -> {
+            BatchLineageEdge edge = new BatchLineageEdge();
+            edge.setFactoryId(factoryId);
+            edge.setEdgeType(LineageEdgeRecorder.EDGE_PRODUCTION_TO_FINISHED);
+            edge.setSourceType(LineageEdgeRecorder.NODE_PRODUCTION_BATCH);
+            edge.setSourceId(String.valueOf(productionBatchId));
+            edge.setTargetType(LineageEdgeRecorder.NODE_FINISHED_BATCH);
+            edge.setTargetId(finishedGoodsId);
+            edge.setQuantityUsed(BigDecimal.ONE);
+            edge.setUnit("kg");
+            edge.setEventTime(LocalDateTime.of(2026, 11, 9, 9, 0));
+            lineageEdges.saveAndFlush(edge);
+        });
+    }
+
     @Test
     void inspectionRequiredProductReturnsToPendingInspection() {
         Fixture f = fixture(true);
@@ -206,6 +417,118 @@ class QualityDispositionInventoryPostgresContractTest {
         assertDbQualityStatus(f.productionBatchId(), QualityStatus.PASSED);
         assertDbMaterial(f.materialId(), MaterialBatchStatus.AVAILABLE);
         assertInspectionRetained(f.inspectionId());
+    }
+
+    // ==================== Q11 特批审批 / Q6 报废不能返工 (真事务 + 真 PG 读回) ====================
+    //
+    // 旧实现特批通过后调的是 executeDisposition (按未复核处理): 内层 @Transactional 抛 409 被外层吞掉,
+    // 事务已标记回滚, 提交时炸 UnexpectedRollbackException —— 只有真事务代理才照得出, 内存桩看不到。
+
+    private static final Long APPROVER_ID = 7002L;
+
+    private void stubUsers() {
+        org.mockito.Mockito.when(users.findById(org.mockito.ArgumentMatchers.any())).thenAnswer(call -> {
+            User user = new User();
+            user.setId(call.getArgument(0));
+            user.setFullName("质量经理");
+            user.setRoleCode("quality_manager");
+            return java.util.Optional.of(user);
+        });
+    }
+
+    private String submitSpecial(Fixture f, String action) {
+        SpecialApprovalRequest request = new SpecialApprovalRequest();
+        request.setRequestedAction(action);
+        request.setReason("客户同意让步接收");
+        return specialApprovals.submitSpecialApproval(f.factoryId(), f.inspectionId(), request, USER_ID).getApprovalId();
+    }
+
+    private void approveSpecial(Fixture f, String approvalId) {
+        ApprovalDecisionRequest decision = new ApprovalDecisionRequest();
+        decision.setDecision(ApprovalDecisionRequest.ApprovalDecision.APPROVE);
+        decision.setComment("同意");
+        // 审批人 = 已认证的质量经理 (不是申请人 USER_ID)
+        specialApprovals.processDecision(f.factoryId(), approvalId, decision, APPROVER_ID, APPROVER_ID, "quality_manager");
+    }
+
+    private long pendingApprovals(String inspectionId) {
+        return jdbc.queryForObject("select count(*) from decision_audit_logs where entity_id = ? "
+                + "and requires_approval = true and approval_status = 'PENDING'", Long.class, inspectionId);
+    }
+
+    private long executions(String inspectionId) {
+        return jdbc.queryForObject("select count(*) from decision_audit_logs where entity_id = ? "
+                + "and decision_type = 'RULE_EXECUTION'", Long.class, inspectionId);
+    }
+
+    private String approvalStatus(String approvalId) {
+        return jdbc.queryForObject("select approval_status from decision_audit_logs where id = ?",
+                String.class, approvalId);
+    }
+
+    @Test
+    void specialApprovalExecutesOnceAndCommitsTheRelease() {
+        stubUsers();
+        Fixture f = fixture(false);
+        String approvalId = submitSpecial(f, "CONDITIONAL_RELEASE");
+        assertThat(pendingApprovals(f.inspectionId())).isEqualTo(1);
+
+        approveSpecial(f, approvalId);
+
+        assertThat(approvalStatus(approvalId)).isEqualTo("APPROVED");
+        assertThat(pendingApprovals(f.inspectionId())).isZero();
+        assertThat(executions(f.inspectionId())).isEqualTo(1);
+        assertDbQualityStatus(f.productionBatchId(), QualityStatus.PARTIAL_PASS);
+        assertDbFinishedGoods(f.firstFgId(), FinishedGoodsBatch.Status.AVAILABLE);
+        assertDbMaterial(f.materialId(), MaterialBatchStatus.AVAILABLE);
+
+        // 再批一次被拒, 处置不执行第二次
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> approveSpecial(f, approvalId));
+        assertThat(executions(f.inspectionId())).isEqualTo(1);
+    }
+
+    @Test
+    void specialApprovalFailureSurfacesAndRollsBackTheApproval() {
+        stubUsers();
+        Fixture f = fixture(false);
+        // 申请挂着时本批进了召回: 复核通过的执行 (库存桥接) 拒绝放行, 必须原样报给审批人并整体回滚
+        String approvalId = submitSpecial(f, "CONDITIONAL_RELEASE");
+        org.mockito.Mockito.doThrow(new BusinessException(409, "本批次召回中，不能放行").withCode("RECALL_IN_PROGRESS"))
+                .when(factoryRecallService).assertReleaseAllowed(f.factoryId(), f.productionBatchId());
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> approveSpecial(f, approvalId))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getErrorCode()).isEqualTo("RECALL_IN_PROGRESS"));
+
+        assertThat(approvalStatus(approvalId)).isEqualTo("PENDING");
+        assertThat(executions(f.inspectionId())).isZero();
+        assertDbQualityStatus(f.productionBatchId(), QualityStatus.FAILED);
+        assertDbFinishedGoods(f.firstFgId(), FinishedGoodsBatch.Status.DEFECTIVE);
+    }
+
+    @Test
+    void scrappedBatchCannotBeReworkedThroughSpecialApproval() {
+        stubUsers();
+        Fixture f = fixture(false);
+        String pendingRework = submitSpecial(f, "REWORK");
+        jdbc.update("update production_batches set quality_status = 'SCRAPPED' where id = ?", f.productionBatchId());
+        long auditsBefore = jdbc.queryForObject("select count(*) from decision_audit_logs where entity_id = ?",
+                Long.class, f.inspectionId());
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> submitSpecial(f, "REWORK"))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getErrorCode())
+                        .isEqualTo(QualityDispositionDecisionGuard.BATCH_SCRAPPED_CANNOT_REWORK));
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> approveSpecial(f, pendingRework))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getErrorCode())
+                        .isEqualTo(QualityDispositionDecisionGuard.BATCH_SCRAPPED_CANNOT_REWORK));
+
+        assertThat(jdbc.queryForObject("select count(*) from decision_audit_logs where entity_id = ?",
+                Long.class, f.inspectionId())).isEqualTo(auditsBefore);
+        assertThat(approvalStatus(pendingRework)).isEqualTo("PENDING");
+        assertDbQualityStatus(f.productionBatchId(), QualityStatus.SCRAPPED);
+        assertDbFinishedGoods(f.firstFgId(), FinishedGoodsBatch.Status.DEFECTIVE);
     }
 
     private Fixture fixture(boolean inspectionRequired) {
@@ -319,9 +642,14 @@ class QualityDispositionInventoryPostgresContractTest {
         });
     }
 
+    /** 复核通过后的放行 (executeApprovedDisposition 走的就是 reviewed=true)。 */
     private QualityDispositionInventoryService.InventoryDispositionResult release(Fixture fixture) {
+        return release(fixture, true);
+    }
+
+    private QualityDispositionInventoryService.InventoryDispositionResult release(Fixture fixture, boolean reviewed) {
         return tx.execute(state -> disposition.applyDisposition(
-                inspections.findById(fixture.inspectionId()).orElseThrow(), DispositionAction.RELEASE));
+                inspections.findById(fixture.inspectionId()).orElseThrow(), DispositionAction.RELEASE, reviewed));
     }
 
     private void assertDbFinishedGoods(String id, String expectedStatus) {

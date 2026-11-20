@@ -1,6 +1,5 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { menuConfig, type MenuItem } from '@/components/layout/menuConfig';
 
 /**
  * 用户点菜单里的「X」，落地页的面包屑就该说「X」。
@@ -48,8 +47,6 @@ import { describe, expect, it } from 'vitest';
  * ⛔ 往 BASELINE 里加新条目 = 承认又漂了一处。加之前先问：能不能直接改成一致？
  */
 
-const ROOT = resolve(__dirname, '../..');
-
 /**
  * 建闸当天已存在的措辞漂移。**只减不增。**
  * key 是完整路由路径，value 是 `[菜单标签, 面包屑]`。
@@ -82,11 +79,13 @@ const BASELINE: Record<string, [string, string]> = {
 
 /** 菜单里的 `{ path, title }`。 */
 function menuTitles(): Map<string, string> {
-  const src = readFileSync(resolve(ROOT, 'components/layout/menuConfig.ts'), 'utf8');
   const out = new Map<string, string>();
-  for (const m of src.matchAll(/path:\s*'([^']+)'\s*,\s*title:\s*'([^']+)'/g)) {
-    out.set(m[1].replace(/\/$/, '') || '/', m[2]);
-  }
+  // Read the actual menu, including titles supplied by the shared specialist registry.
+  const visit = (items: MenuItem[]) => items.forEach(item => {
+    out.set(item.path.replace(/\/$/, '') || '/', item.title);
+    if (item.children) visit(item.children);
+  });
+  visit(menuConfig);
   return out;
 }
 

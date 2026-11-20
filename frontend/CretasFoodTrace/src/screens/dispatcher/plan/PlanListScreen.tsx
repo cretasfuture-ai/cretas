@@ -8,7 +8,7 @@
  * - 新建计划入口
  */
 
-import React, { useState, useCallback, useEffect, useMemo } from 'react';
+import React, { useState, useCallback, useMemo, useRef } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
   RefreshControl, ActivityIndicator, Alert, Modal,
@@ -21,7 +21,9 @@ import { DISPATCHER_THEME } from '../../../types/dispatcher';
 import { productionPlanApiClient } from '../../../services/api/productionPlanApiClient';
 import { RowActionBottomSheet, StickyFooterSummary } from '../../../components/list';
 import { useRowActions, type RowContext } from '../../../hooks/useRowActions';
-import { useListSummary } from '../../../hooks/useListSummary';
+import {
+  PLAN_PAGE_SIZE, coverageNote, filterPlans, hasMorePlans, mergePlanPage, summarizePlans,
+} from './planListSummary';
 import { formatSummaryForAI } from '../../../utils/aiSummaryContext';
 import { safePrint } from '../../../services/api/printApiClient';
 
@@ -69,6 +71,8 @@ interface PlanItem {
   productName?: string;
   plannedQuantity?: number;
   actualQuantity?: number;
+  plannedUnit?: string;
+  productUnit?: string;
   plannedDate?: string;
   planDate?: string;
   status?: string;
@@ -100,7 +104,17 @@ const getStatusStyle = (status?: string) => {
 
 export default function PlanListScreen() {
   const navigation = useNavigation<any>();
-  const [plans, setPlans] = useState<PlanItem[]>([]);
+  /**
+   * 已从后端加载的全部页 (未筛选)。2026-11-12 起分页累加, 不再只取第一页 100 条;
+   * 页签 / 搜索在这份上做 (filterPlans), 切换页签或搜索不用重新请求。
+   */
+  const [loadedPlans, setLoadedPlans] = useState<PlanItem[]>([]);
+  const loadedRef = useRef<PlanItem[]>([]);
+  /** 后端全部计划数 (未筛选, PageResponse.totalElements); 读不到为 null。 */
+  const [serverTotal, setServerTotal] = useState<number | null>(null);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [activeTab, setActiveTab] = useState('all');
@@ -117,9 +131,14 @@ export default function PlanListScreen() {
    */
   const [toolsOpen, setToolsOpen] = useState(false);
   const [page, setPage] = useState(1);
-  const [total, setTotal] = useState(0);
   const [selectedPlan, setSelectedPlan] = useState<PlanItem | null>(null);
   const [actionSheetVisible, setActionSheetVisible] = useState(false);
+
+  /** 屏上这份: 已加载的全部页按页签 + 搜索过滤 (列表、计数、底部汇总都用它)。 */
+  const plans = useMemo(
+    () => filterPlans(loadedPlans, activeTab, search, Date.now()),
+    [loadedPlans, activeTab, search],
+  );
 
   const handlers = useMemo(() => ({
     'view-detail': (e: RowContext) => {
@@ -138,82 +157,72 @@ export default function PlanListScreen() {
 
   const openSheet = (plan: PlanItem) => { setSelectedPlan(plan); setActionSheetVisible(true); };
 
+  /** 读一页 (1 起); 第 1 页替换, 之后追加。返回这一页之后还有没有。 */
+  const fetchPage = useCallback(async (p: number): Promise<boolean> => {
+    const res = await productionPlanApiClient.getProductionPlans({ page: p, size: PLAN_PAGE_SIZE } as any);
+    const dataObj = (res?.data || res) as any;
+    if (res?.success === false || !dataObj) throw new Error((res as any)?.message || '生产计划读取失败');
+    const list = dataObj.content || (Array.isArray(dataObj) ? dataObj : []);
+    const items: PlanItem[] = Array.isArray(list) ? list : [];
+    const totalRaw = Number(dataObj.totalElements);
+    const total = Number.isFinite(totalRaw) && totalRaw >= 0 ? totalRaw : null;
+    // 用 ref 算合并结果: setState 的更新函数不一定当场执行, 不能靠它拿「已加载多少」来判断还有没有下一页
+    const next = mergePlanPage(loadedRef.current, items, p);
+    loadedRef.current = next;
+    setLoadedPlans(next);
+    const more = hasMorePlans(next.length, total, items.length);
+    setServerTotal(total);
+    setHasMore(more);
+    setPage(p);
+    return more;
+  }, []);
+
   const loadPlans = useCallback(async (p = 1, isRefresh = false) => {
     try {
-      if (!isRefresh) setLoading(true);
-      const params: Record<string, unknown> = { page: p, size: 100 };
-
-      const res = await productionPlanApiClient.getProductionPlans(params as any);
-      const dataObj = (res?.data || res) as any;
-      if (res?.success !== false && dataObj) {
-        const list = dataObj.content || (Array.isArray(dataObj) ? dataObj : []);
-        let items: PlanItem[] = Array.isArray(list) ? list : [];
-
-        // Filter out drafts older than 1 day
-        const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-        items = items.filter(i => {
-          if ((i.status || '').toUpperCase() === 'DRAFT') {
-            return (i.createdAt || '') >= oneDayAgo;
-          }
-          return true;
-        });
-
-        // Client-side status filter
-        if (activeTab !== 'all') {
-          const statusMap: Record<string, string[]> = {
-            'PLANNED': ['PLANNED', 'PENDING'],
-            'IN_PROGRESS': ['IN_PROGRESS'],
-            'COMPLETED': ['COMPLETED'],
-            'CANCELLED': ['CANCELLED'],
-          };
-          const targets = statusMap[activeTab];
-          if (targets) items = items.filter(i => targets.includes((i.status || '').toUpperCase()));
-        }
-
-        // Client-side search filter
-        if (search.trim()) {
-          const q = search.trim().toLowerCase();
-          items = items.filter(i =>
-            ((i as any).planName || '').toLowerCase().includes(q) ||
-            (i.productTypeName || '').toLowerCase().includes(q) ||
-            (i.planNumber || '').toLowerCase().includes(q)
-          );
-        }
-
-        // Sort: drafts on top (by createdAt desc), then rest by createdAt desc
-        items.sort((a, b) => {
-          const aIsDraft = (a.status || '').toUpperCase() === 'DRAFT' ? 0 : 1;
-          const bIsDraft = (b.status || '').toUpperCase() === 'DRAFT' ? 0 : 1;
-          if (aIsDraft !== bIsDraft) return aIsDraft - bIsDraft;
-          return (b.createdAt || '').localeCompare(a.createdAt || '');
-        });
-
-        setPlans(items);
-        setTotal(items.length);
-        setPage(p);
-      } else {
-        if (p === 1) { setPlans([]); setTotal(0); }
-      }
-    } catch {
-      // silent
+      if (p === 1 && !isRefresh) setLoading(true);
+      if (p > 1) setLoadingMore(true);
+      await fetchPage(p);
+      setLoadError(null);
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : '生产计划读取失败');
     } finally {
       setLoading(false);
       setRefreshing(false);
+      setLoadingMore(false);
     }
-  }, [activeTab, search]);
+  }, [fetchPage]);
 
-  useFocusEffect(useCallback(() => { loadPlans(1); }, [loadPlans]));
+  /** 「加载剩余」: 按页 (每页 100) 往下读到底, 不是一次拉一万条。 */
+  const loadAllRemaining = useCallback(async () => {
+    setLoadingMore(true);
+    try {
+      let p = page;
+      let more = hasMore;
+      while (more) {
+        p += 1;
+        more = await fetchPage(p);
+      }
+      setLoadError(null);
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : '生产计划读取失败');
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [fetchPage, hasMore, page]);
 
-  // U-FOOTER-1
-  const summaryRequest = useMemo(
-    () => ({ filterConditions: activeTab !== 'all' ? { status: activeTab } : {} }),
-    [activeTab],
+  const coverage = coverageNote(loadedPlans.length, serverTotal, hasMore);
+
+  useFocusEffect(useCallback(() => { void loadPlans(1); }, [loadPlans]));
+
+  // U-FOOTER-1: 底部汇总按屏上这份列表算, 跟着页签和搜索走 (2026-11-12 验收: 原来筛选后仍是全部 156 条)。
+  // 后端 list-summary 表达不了本屏的前端筛选 (待执行 = PLANNED+PENDING / 去旧草稿 / 搜计划名), 见 planListSummary.ts。
+  const summary = useMemo(
+    () => ({ entityType: 'productionPlan', stats: summarizePlans(plans) }),
+    [plans],
   );
-  const { summary, refresh: refreshSummary } = useListSummary('productionPlan', summaryRequest);
-  useEffect(() => { refreshSummary(); }, [refreshSummary, refreshing]);
 
   const onRefresh = () => { setRefreshing(true); loadPlans(1, true); };
-  const onEndReached = () => { if (plans.length > 0 && plans.length < total) loadPlans(page + 1); };
+  const onEndReached = () => { if (hasMore && !loadingMore && !loading) void loadPlans(page + 1); };
 
   const renderPlanCard = useCallback(({ item }: { item: PlanItem }) => {
     const s = getStatusStyle(item.status);
@@ -385,7 +394,10 @@ export default function PlanListScreen() {
           </TouchableOpacity>
         ))}
         <View style={{ flex: 1 }} />
-        <Text style={styles.totalText}>共 {total} 条</Text>
+        {/* 没加载完时只写已显示多少, 原因与「加载剩余」在列表下方的黄条里 */}
+        <Text style={styles.totalText} testID="plan-list-count" numberOfLines={1}>
+          {hasMore ? `已显示 ${plans.length} 条` : `共 ${plans.length} 条`}
+        </Text>
       </View>
 
       {/* Plan List wrapped so sticky footer can sit below */}
@@ -401,6 +413,19 @@ export default function PlanListScreen() {
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
           onEndReached={onEndReached}
           onEndReachedThreshold={0.3}
+          ListFooterComponent={
+            loadingMore ? (
+              <ActivityIndicator style={{ marginVertical: 16 }} color={DISPATCHER_THEME.primary} testID="plan-list-loading-more" />
+            ) : loadError && loadedPlans.length > 0 ? (
+              <TouchableOpacity style={styles.moreBtn} onPress={() => { void loadPlans(page + 1); }} testID="plan-list-retry-more">
+                <Text style={styles.moreBtnText}>没读到后面的计划：{loadError}，点这里重试</Text>
+              </TouchableOpacity>
+            ) : hasMore ? (
+              <TouchableOpacity style={styles.moreBtn} onPress={() => { void loadPlans(page + 1); }} testID="plan-list-load-more">
+                <Text style={styles.moreBtnText}>加载更多（每次 {PLAN_PAGE_SIZE} 条）</Text>
+              </TouchableOpacity>
+            ) : null
+          }
           ListEmptyComponent={
             <View style={styles.empty}>
               <MaterialCommunityIcons name="clipboard-text-outline" size={56} color="#ddd" />
@@ -417,15 +442,26 @@ export default function PlanListScreen() {
       )}
       </View>
 
+      {coverage ? (
+        <View style={styles.coverageBar} testID="plan-list-coverage">
+          <Text style={styles.coverageText}>{coverage}</Text>
+          <TouchableOpacity onPress={() => { void loadAllRemaining(); }} disabled={loadingMore} testID="plan-list-load-all">
+            <Text style={styles.coverageAction}>
+              {loadingMore ? '加载中…' : `加载剩余 ${serverTotal != null ? Math.max(0, serverTotal - loadedPlans.length) + ' 条' : ''}`}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+
       <StickyFooterSummary
-        stats={summary?.stats ?? []}
-        loading={summary == null && !loading}
+        stats={summary.stats}
+        loading={loading && plans.length === 0}
         onAIAnalyze={() =>
           navigation.dispatch(CommonActions.navigate('FAAITab', {
             screen: 'AIChat',
             params: {
               entityType: 'PRODUCTION_PLAN',
-              initialMessage: `分析当前生产计划列表${formatSummaryForAI(summary, { filter: { status: activeTab } })}`,
+              initialMessage: `分析当前生产计划列表${formatSummaryForAI(summary, { filter: { status: activeTab, keyword: search.trim() }, note: coverage ?? undefined })}`,
             },
           }))
         }
@@ -497,6 +533,14 @@ const styles = StyleSheet.create({
   tabText: { fontSize: 13, fontWeight: '500', color: '#666' },
   tabTextActive: { color: '#fff' },
   totalText: { fontSize: 12, color: '#999' },
+  moreBtn: { marginVertical: 12, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
+  moreBtnText: { fontSize: 14, color: DISPATCHER_THEME.primary, fontWeight: '600' },
+  coverageBar: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+    paddingHorizontal: 16, paddingVertical: 8, backgroundColor: '#FFF8E6', borderTopWidth: 1, borderTopColor: '#F5E3B3',
+  },
+  coverageText: { flex: 1, fontSize: 12, color: '#8A5A00', lineHeight: 17 },
+  coverageAction: { fontSize: 13, fontWeight: '700', color: DISPATCHER_THEME.primary, paddingVertical: 6 },
 
   // List
   listContent: { padding: 16, paddingBottom: 40 },

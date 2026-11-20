@@ -50,29 +50,82 @@ on:
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/impl/PermissionServiceImpl.java'
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/inventory/impl/SalesServiceImpl.java'
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/sales/impl/SalesDeliveryBatchAllocationServiceImpl.java'
+  # pull_request 不带 paths (合并队列/必需检查要求每个 PR 都报告结果); 触发路径清单在
+  # scripts/ci/trigger-paths/rn-gate.txt, 由下面的 changes 作业判定原作业跑不跑。
   pull_request:
-    paths:
-      - 'frontend/CretasFoodTrace/**'
-      - '.github/workflows/rn-gate.yml'
-      # 🔴 2026-08-27: 下面这些是 RN 的契约测试用 readFileSync **真读**的后端源码
-      # (transferEnumLabels / editBatchAccountFieldsLockContract / warehouseBatchAllocation
-      #  等，做枚举标签、字段锁、批次分配口径的两份一致比对)。
-      # 建元判据闸当天实测: 7 个文件被读着, 而触发面里一个都没有 ——
-      # 一个**只改 Java 枚举**的 PR 恰好是这几道闸要守的那类漂移, 而它们看不见它。
-      # ⚠️ 以后新增读后端源码的测试, 必须同步加到这里, 否则
-      #    frontend/CretasFoodTrace/src/__tests__/gates/gateTriggerSurfaceCoversWhatItReads.test.ts 会红。
-      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/entity/enums/**'
-      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/impl/MaterialBatchServiceImpl.java'
-      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/impl/PermissionServiceImpl.java'
-      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/inventory/impl/SalesServiceImpl.java'
-      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/sales/impl/SalesDeliveryBatchAllocationServiceImpl.java'
+    types: [opened, synchronize, reopened, labeled]
+  merge_group:
+    types: [checks_requested]
 
 concurrency:
-  group: rn-gate-${{ github.ref }}
+  # An unrelated label must never cancel a queued or running gate for this PR.
+  group: rn-gate-${{ (github.event.action == 'labeled' && github.event.label.name != 'ci-hosted' && github.event.label.name != 'java-full-ready' && format('ignored-label-{0}', github.run_id)) || github.ref }}
   cancel-in-progress: true
 
 jobs:
+  # 合并队列准备 (2026-11-12): 判断这次 PR 有没有改到本闸的触发路径。
+  #   清单: scripts/ci/trigger-paths/rn-gate.txt (原 on.pull_request.paths 原样搬过去)。
+  #   pull_request / merge_group 按 diff 判, 其余事件 (push / schedule / workflow_dispatch) 一律 run=true;
+  #   取不到 diff 也 run=true —— 宁可多跑, ⛔ 不因为没量到而跳过。
+  # 必需检查在步骤中判断 run，并在本作业失败时显式报错。
+  # 2026-11-19 (Steve「其他检查也上 mini」): 本作业兼做 mini 路由, ⛔ 必须留在托管机上 (放 mini 上 mini 一满它自己也排队)。
+  # 可信 base 路由验证合并组来源、心跳、空闲槽与队列，再输出 runner。
+  changes:
+    if: ${{ github.event.action != 'labeled' || github.event.label.name == 'ci-hosted' || github.event.label.name == 'java-full-ready' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read   # 路由脚本读运行/作业列表
+      pull-requests: read  # merge_group 的 PR 元数据
+    outputs:
+      run: ${{ steps.filter.outputs.run }}
+      runner: ${{ steps.route.outputs.runner }}
+      route_policy: ${{ steps.route.outputs.route_policy }}
+      mini_group_verified: ${{ steps.route.outputs.mini_group_verified }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 三点 diff 要 merge-base; 只要提交与树, blob 按需取。
+          fetch-depth: 0
+          filter: blob:none
+      # Run only code from the protected base, before the candidate's path filter.
+      - id: route
+        if: ${{ github.event.label.name != 'ci-hosted' && ((vars.MINI_POOL_V2_ENABLED == '1' && github.event.pull_request.base.ref == 'main') || ((vars.MINI_POOL_V2_ENABLED == '0' || vars.MINI_POOL_V2_ENABLED == '1') && github.event.merge_group.base_ref == 'refs/heads/main')) }}
+        continue-on-error: true # missing route outputs select GitHub-hosted
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+          GROUP_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
+          GROUP_BASE_REF: ${{ github.event.merge_group.base_ref }}
+          TRUSTED_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          GH_GATE_DAY_FULL: ${{ vars.MINI_DAY_FULL }}
+          MINI_POOL_CAPACITY: ${{ vars.MINI_POOL_CAPACITY }}
+          MINI_POOL_V2_ENABLED: ${{ vars.MINI_POOL_V2_ENABLED }}
+        run: |
+          [[ "$TRUSTED_BASE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          git merge-base --is-ancestor "$TRUSTED_BASE_SHA" refs/remotes/origin/main
+          route_dir=$(mktemp -d)
+          trap 'rm -rf "$route_dir"' EXIT
+          timeout 45s git archive --output="$route_dir/router.tar" "$TRUSTED_BASE_SHA" scripts/ci/route-mini-or-hosted.sh scripts/ci/canada-mini-gate
+          tar -xf "$route_dir/router.tar" -C "$route_dir"
+          timeout 45s bash "$route_dir/scripts/ci/route-mini-or-hosted.sh"
+      - id: filter
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
+        run: python3 scripts/ci/changed-paths.py --patterns scripts/ci/trigger-paths/rn-gate.txt
+
   jest:
+    # GitHub 不展开 skipped job 的 name 表达式。run=false 时仅跳过实际工作步骤。
+    name: ${{ (github.event.action == 'labeled' && github.event.label.name != 'ci-hosted' && github.event.label.name != 'java-full-ready') && 'jest (ignored label)' || 'jest' }}
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.result != 'skipped' }}
     # 2026-08-26: 组织 Actions 免费额度(2000 分钟/月)用尽后, 托管 runner 起不来
     #   —— job 2~4 秒、0 个 step、无日志地失败。改用自建 runner(139, 4 核/7G)。
     # ⚠️ 用具体标签 `cretas` 而不是裸 `self-hosted`: 将来多一台 runner 时
@@ -89,7 +142,10 @@ jobs:
     # ⇒ 改用**分支/文件**级切换: 平时保持 ubuntu-latest;
     #    额度耗尽时执行 `python scripts/ci/switch_ci_runner.py self-hosted` 并提交,
     #    额度恢复时 `... hosted`。一条命令改三个文件, 有闸钉着三处一致。
-    runs-on: ubuntu-latest
+    # 2026-11-19 (Steve「其他检查也上 mini」): 本仓库分支 PR / 合并队列且 changes 路由给了 cretas-mini 时跑 canada-mini
+    # 共用槽池 (macOS arm64; setup-node 装 darwin node), 否则托管; fork PR / ci-hosted 标签一律托管。表达式逐字登记在
+    # scripts/tests/test-public-repo-hosted-only.sh 的 SELF_HOSTED_ALLOWED。
+    runs-on: ${{ github.run_attempt == '1' && needs.changes.outputs.runner == 'cretas-mini' && needs.changes.outputs.route_policy == 'v2' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'merge_group' && needs.changes.outputs.mini_group_verified == 'true')) && !contains(github.event.pull_request.labels.*.name, 'ci-hosted') && 'cretas-mini' || 'ubuntu-latest' }}
     # 2026-09-15: 没有超时 + jest 在 CI 下 maxWorkers=50% (WSL 报 16 核 → 8 个 worker, RN 的 jest
     #   每个 ~1G) → 撞主 runner 的 cgroup MemoryHigh=7G 被节流 → 一个 job 跑了 20 小时, runner 连
     #   GitHub 的取消指令都收不到 (TLS 超时), 显示 offline, 之后所有 Java job 落到 4G 的 extra 上 OOM。
@@ -103,17 +159,29 @@ jobs:
       run:
         working-directory: frontend/CretasFoodTrace
     steps:
+      - name: Require change detection to succeed
+        if: ${{ needs.changes.result != 'success' }}
+        working-directory: .
+        run: |
+          echo '::error::RN Gate change detection did not succeed'
+          exit 1
       - uses: actions/checkout@v4
+        if: ${{ needs.changes.outputs.run != 'false' }}
       - uses: actions/setup-node@v4
+        if: ${{ needs.changes.outputs.run != 'false' }}
         with:
           node-version: '20'
-          cache: 'npm'
+          # ⛔ mini 上不用 actions/cache 恢复 npm 缓存: 各槽共用 ~ghgate/.npm, 原地解压会撞别的槽 (同 Java Gate 的 .m2);
+          #    npm 自己的缓存常驻在那里, 本来就是热的。
+          cache: ${{ runner.environment == 'github-hosted' && 'npm' || '' }}
           cache-dependency-path: frontend/CretasFoodTrace/package-lock.json
-      - run: npm ci --legacy-peer-deps
+      - if: ${{ needs.changes.outputs.run != 'false' }}
+        run: npm ci --legacy-peer-deps
 
       # 2026-09-07 (#678 终审 follow-up b): 此前「tsc 0 错」只是本地读数, PR 上没有任何东西跑类型检查。
       # ts-jest 只检查被测试 import 到的文件, 没被任何测试碰到的屏 (大多数) 一个类型错都报不出来。
       - name: TypeScript (tsc --noEmit)
+        if: ${{ needs.changes.outputs.run != 'false' }}
         env:
           NODE_OPTIONS: --max-old-space-size=3072
         run: npx tsc --noEmit
@@ -121,6 +189,7 @@ jobs:
       # --forceExit: 套件跑完后有 worker 不能优雅退出 (既有情况, ci.yml 的
       # rn-test 同样带这个 flag)。没有它 job 会挂到超时而不是在测试跑完就结束。
       - name: Jest unit tests
+        if: ${{ needs.changes.outputs.run != 'false' }}
         # One warm transform cache avoids per-suite worker cold starts. The
         # single heap stays inside the unchanged 6GiB runner memory boundary.
         env:

@@ -1,95 +1,95 @@
 <template>
-  <el-drawer
-    :model-value="modelValue"
-    size="760px"
-    :before-close="beforeClose"
-    destroy-on-close
-    @update:model-value="$emit('update:modelValue', $event)"
+  <!-- 非模态（modal=false）+ 不靠点外部/ESC 关闭（dismissible=false，只有右上角 X，且走 onOpenChange 的未保存确认）：
+       抽屉里还要打开 Element 的命令式确认框（ElMessageBox）和共享的 SupplyImpactDialog（Element 对话框）。
+       模态 USlideover 会给 body 加 pointer-events:none + 焦点陷阱，Element 浮层继承后点不了（本机实测：
+       ElMessageBox 的「取消」点击超时）。关系/规格编辑是 UModal，嵌在里面照常工作。 -->
+  <USlideover
+    :open="modelValue"
+    :modal="false"
+    :overlay="false"
+    :dismissible="false"
+    side="right"
+    title="供应商详情"
+    description="供应商详情"
+    :ui="slideUi"
+    @update:open="onOpenChange"
   >
-    <template #header>
-      <div class="drawer-header">
-        <div>
-          <div class="drawer-title">
-            <el-tag v-if="detail?.shortName" type="primary" size="small" effect="plain" class="short-name-tag">
-              {{ detail.shortName }}
-            </el-tag>
-            {{ detail?.name || supplier?.name || '供应商详情' }}
-          </div>
-          <div class="drawer-meta">
-            {{ detail?.supplierCode || detail?.code || '-' }}
-            <el-tag :type="isActive ? 'success' : 'info'" size="small">{{ isActive ? '合作中' : '暂停合作' }}</el-tag>
-            <el-tag v-if="detail && !supplierProfileComplete(detail)" type="warning" size="small">资料不完整</el-tag>
-          </div>
-        </div>
-        <div class="header-actions">
-          <el-button data-test="supplier-supply-impact" @click="impactVisible = true">影响分析</el-button>
-        </div>
-        <div v-if="canWrite" class="header-actions">
-          <el-button v-if="!editing" @click="startEdit">编辑资料</el-button>
-          <el-button v-if="!editing" :type="isActive ? 'warning' : 'success'" plain @click="changeStatus">
+    <template #title>
+      <span class="drawer-title">
+        <UBadge v-if="detail?.shortName" color="primary" variant="outline" class="short-name-tag">{{ detail.shortName }}</UBadge>
+        {{ detail?.name || supplier?.name || '供应商详情' }}
+      </span>
+    </template>
+    <template #description>
+      <span class="drawer-meta">
+        {{ detail?.supplierCode || detail?.code || '-' }}
+        <UBadge :color="isActive ? 'success' : 'neutral'" variant="soft">{{ isActive ? '合作中' : '暂停合作' }}</UBadge>
+        <UBadge v-if="detail && !supplierProfileComplete(detail)" color="warning" variant="soft">资料不完整</UBadge>
+      </span>
+    </template>
+    <template #actions>
+      <div class="header-actions">
+        <UButton data-test="supplier-supply-impact" color="neutral" variant="outline" size="sm" @click="impactVisible = true">影响分析</UButton>
+        <template v-if="canWrite">
+          <UButton v-if="!editing" color="neutral" variant="outline" size="sm" @click="startEdit">编辑资料</UButton>
+          <UButton v-if="!editing" :color="isActive ? 'warning' : 'success'" variant="soft" size="sm" @click="changeStatus">
             {{ isActive ? '暂停合作' : '恢复合作' }}
-          </el-button>
-        </div>
+          </UButton>
+        </template>
       </div>
     </template>
 
-    <SupplyImpactDialog
-      v-if="impactVisible"
-      v-model="impactVisible"
-      :factory-id="factoryId"
-      :target="{ supplierId: detail?.id }"
-      :target-name="detail?.name ?? ''"
-    />
-    <el-skeleton v-if="loading" :rows="8" animated />
-    <template v-else-if="detail">
-      <el-tabs v-model="activeTab">
-        <el-tab-pane label="基本资料" name="profile">
-          <el-alert
+    <template #body>
+      <div v-if="loading" class="skeleton" data-testid="supplier-drawer-loading">
+        <USkeleton v-for="n in 8" :key="n" class="h-4 w-full" />
+      </div>
+      <UTabs v-else-if="detail" v-model="activeTab" :items="TAB_ITEMS" variant="link" :ui="{ trigger: 'px-[10px] py-[8px] text-[13px]', content: 'pt-3' }">
+        <template #profile>
+          <UAlert :ui="alertUi"
             v-if="!supplierProfileComplete(detail) && !editing"
+            color="warning"
+            variant="subtle"
+            icon="i-lucide-triangle-alert"
             title="资料不完整：历史数据可继续查看，编辑保存时必须补齐联系人、电话和地址。"
-            type="warning"
-            :closable="false"
-            show-icon
           />
-          <el-form
+          <UForm
             v-if="editing"
             ref="formRef"
-            :model="form"
-            :rules="supplierFormRules"
-            label-width="110px"
+            :state="form"
+            :validate="validateSupplierForm"
             class="profile-form"
+            @submit="saveProfile"
           >
-            <el-form-item label="供应商名称" prop="name"><el-input v-model="form.name" maxlength="200" /></el-form-item>
-            <el-form-item label="简称" prop="shortName">
-              <el-input v-model="form.shortName" maxlength="50" show-word-limit placeholder="选填，下拉里优先显示，例如「飞熊」" />
-              <div class="field-hint">留空时下拉显示全称。同一工厂内简称不能重复。</div>
-            </el-form-item>
-            <el-form-item label="联系人" prop="contactPerson"><el-input v-model="form.contactPerson" maxlength="100" /></el-form-item>
-            <el-form-item label="联系电话" prop="phone"><el-input v-model="form.phone" maxlength="40" /></el-form-item>
-            <el-form-item label="地址" prop="address"><el-input v-model="form.address" type="textarea" maxlength="500" show-word-limit /></el-form-item>
-            <el-form-item label="邮箱"><el-input v-model="form.email" maxlength="100" /></el-form-item>
-            <el-form-item label="银行账户"><el-input v-model="form.bankAccount" maxlength="100" /></el-form-item>
-            <el-form-item label="税号"><el-input v-model="form.taxNumber" maxlength="50" /></el-form-item>
-            <el-form-item label="备注"><el-input v-model="form.notes" type="textarea" maxlength="5000" show-word-limit /></el-form-item>
+            <UFormField label="供应商名称" name="name" required><UInput v-model="form.name" :maxlength="200" class="w-full" /></UFormField>
+            <UFormField label="简称" name="shortName" help="留空时下拉显示全称。同一工厂内简称不能重复。">
+              <UInput v-model="form.shortName" :maxlength="50" placeholder="选填，下拉里优先显示，例如「飞熊」" class="w-full" />
+            </UFormField>
+            <UFormField label="联系人" name="contactPerson" required><UInput v-model="form.contactPerson" :maxlength="100" class="w-full" /></UFormField>
+            <UFormField label="联系电话" name="phone" required><UInput v-model="form.phone" :maxlength="40" class="w-full" /></UFormField>
+            <UFormField label="地址" name="address" required><UTextarea v-model="form.address" :maxlength="500" :rows="2" class="w-full" /></UFormField>
+            <UFormField label="邮箱" name="email"><UInput v-model="form.email" :maxlength="100" class="w-full" /></UFormField>
+            <UFormField label="银行账户" name="bankAccount"><UInput v-model="form.bankAccount" :maxlength="100" class="w-full" /></UFormField>
+            <UFormField label="税号" name="taxNumber"><UInput v-model="form.taxNumber" :maxlength="50" class="w-full" /></UFormField>
+            <UFormField label="备注" name="notes"><UTextarea v-model="form.notes" :maxlength="5000" :rows="2" class="w-full" /></UFormField>
             <div class="edit-actions">
-              <el-button @click="cancelEdit">取消</el-button>
-              <el-button type="primary" :loading="saving" @click="saveProfile">保存资料</el-button>
+              <UButton color="neutral" variant="outline" @click="cancelEdit">取消</UButton>
+              <UButton type="submit" :loading="saving">保存资料</UButton>
             </div>
-          </el-form>
-          <el-descriptions v-else :column="2" border class="profile-descriptions">
-            <el-descriptions-item label="供应商名称">{{ detail.name || '资料不完整' }}</el-descriptions-item>
-            <el-descriptions-item label="简称">{{ detail.shortName || '未设置（下拉里显示全称）' }}</el-descriptions-item>
-            <el-descriptions-item label="联系人">{{ detail.contactPerson || '资料不完整' }}</el-descriptions-item>
-            <el-descriptions-item label="联系电话">{{ detail.phone || detail.contactPhone || '资料不完整' }}</el-descriptions-item>
-            <el-descriptions-item label="邮箱">{{ detail.email || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="地址" :span="2">{{ detail.address || '资料不完整' }}</el-descriptions-item>
-            <el-descriptions-item label="银行账户">{{ detail.bankAccount || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="税号">{{ detail.taxNumber || detail.taxId || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="备注" :span="2">{{ detail.notes || '-' }}</el-descriptions-item>
-          </el-descriptions>
-        </el-tab-pane>
+          </UForm>
+          <dl v-else class="info-grid" data-testid="supplier-profile-info">
+            <div><dt>供应商名称</dt><dd>{{ detail.name || '资料不完整' }}</dd></div>
+            <div><dt>简称</dt><dd>{{ detail.shortName || '未设置（下拉里显示全称）' }}</dd></div>
+            <div><dt>联系人</dt><dd>{{ detail.contactPerson || '资料不完整' }}</dd></div>
+            <div><dt>联系电话</dt><dd>{{ detail.phone || detail.contactPhone || '资料不完整' }}</dd></div>
+            <div><dt>邮箱</dt><dd>{{ detail.email || '-' }}</dd></div>
+            <div><dt>银行账户</dt><dd>{{ detail.bankAccount || '-' }}</dd></div>
+            <div class="wide"><dt>地址</dt><dd>{{ detail.address || '资料不完整' }}</dd></div>
+            <div><dt>税号</dt><dd>{{ detail.taxNumber || detail.taxId || '-' }}</dd></div>
+            <div class="wide"><dt>备注</dt><dd>{{ detail.notes || '-' }}</dd></div>
+          </dl>
+        </template>
 
-        <el-tab-pane label="联系人/地址/账户" name="collections">
+        <template #collections>
           <SupplierProfileCollections
             v-if="detail"
             :factory-id="factoryId"
@@ -98,164 +98,163 @@
             :can-write="canWrite && isActive"
             @changed="onCollectionsChanged"
           />
-        </el-tab-pane>
+        </template>
 
-        <el-tab-pane label="供应原料" name="materials">
-          <el-alert
+        <template #materials>
+          <UAlert :ui="alertUi"
             v-if="!isActive"
-            type="warning"
-            :closable="false"
-            show-icon
+            color="warning"
+            variant="subtle"
+            icon="i-lucide-triangle-alert"
             title="供应商已暂停合作，供应原料关系仅可查看；恢复合作后才能新增或修改。"
             class="relation-status-alert"
           />
           <div class="tab-toolbar">
             <span>独立供应关系主数据；采购历史在“采购记录”中展示。</span>
-            <el-button
+            <UButton
               v-if="canWrite"
-              type="primary"
-              plain
+              color="neutral"
+              variant="outline"
               :disabled="!isActive"
               @click="openRelationCreate"
-            >管理供应原料</el-button>
+            >管理供应原料</UButton>
           </div>
-          <el-table :data="materialRelations" border stripe empty-text="暂无供应原料关系">
-            <el-table-column label="物料" min-width="190" show-overflow-tooltip>
-              <template #default="{ row }">
-                <div>{{ row.materialName || row.materialTypeId }}</div>
-                <small>{{ row.materialCode || row.materialTypeId }}</small>
-              </template>
-            </el-table-column>
-            <el-table-column label="供应商料号" width="130">
-              <template #default="{ row }">{{ row.supplierMaterialCode || '-' }}</template>
-            </el-table-column>
+          <UTable :data="materialRelations" :columns="relationColumns" class="cs-table" data-testid="supplier-material-relations">
+            <template #empty>暂无供应原料关系</template>
+            <template #material-cell="{ row }">
+              <div>{{ row.original.materialName || row.original.materialTypeId }}</div>
+              <small class="muted">{{ row.original.materialCode || row.original.materialTypeId }}</small>
+            </template>
+            <template #supplierCode-cell="{ row }">{{ row.original.supplierMaterialCode || '-' }}</template>
             <!-- 🔴 缺陷 35: 列头不说口径、值却有口径 —— owner 表单填含税 2.00, 列表显示 1.77,
                  长得像「我填的数被系统改了」。列头与取值必须**一起**改, ⛔ 不能只改一头。
                  现在列头写明含税, 取的也是含税那个字段; 存量基准未知的行单独标出来。 -->
-            <el-table-column label="含税默认采购价" width="165" align="right">
-              <template #default="{ row }">
-                <span v-if="row.taxIncludedDefaultPurchasePrice != null">
-                  {{ row.currency || 'CNY' }} {{ Number(row.taxIncludedDefaultPurchasePrice).toFixed(2) }}/{{ displayUnit(row.purchaseUnit) }}
-                </span>
-                <!-- ⛔ 基准未知的存量值不能摆在「含税」列头下面 —— 那是把同一个谎反过来说一遍。 -->
-                <el-tooltip v-else-if="row.defaultPurchasePrice != null" placement="top"
-                            content="这条关系是在「含税/未税」区分之前录入的，无法确定该价格是含税还是未税；编辑并填写含税价即可确认。">
-                  <span class="price-basis-unknown">
-                    {{ row.currency || 'CNY' }} {{ Number(row.defaultPurchasePrice).toFixed(2) }}/{{ displayUnit(row.purchaseUnit) }}
-                    · 基准未知
-                  </span>
-                </el-tooltip>
-                <span v-else>未设置</span>
-              </template>
-            </el-table-column>
-            <el-table-column label="起订量" width="105" align="right">
-              <template #default="{ row }">{{ row.minOrderQuantity ?? '-' }} {{ displayUnit(row.purchaseUnit) }}</template>
-            </el-table-column>
-            <el-table-column label="交期" width="85">
-              <template #default="{ row }">{{ row.leadTimeDays == null ? '-' : `${row.leadTimeDays}天` }}</template>
-            </el-table-column>
-            <el-table-column label="关系状态" width="105">
-              <template #default="{ row }">
-                <el-tag :type="row.active === false ? 'info' : 'success'" size="small">
-                  {{ row.active === false ? '已停用' : row.preferred ? '首选' : '启用' }}
-                </el-tag>
-              </template>
-            </el-table-column>
+            <template #price-cell="{ row }">
+              <span v-if="row.original.taxIncludedDefaultPurchasePrice != null">
+                {{ row.original.currency || 'CNY' }} {{ Number(row.original.taxIncludedDefaultPurchasePrice).toFixed(2) }}/{{ displayUnit(row.original.purchaseUnit) }}
+              </span>
+              <!-- ⛔ 基准未知的存量值不能摆在「含税」列头下面 —— 那是把同一个谎反过来说一遍。 -->
+              <!-- 说明用原生 title: 全局没包 UApp，UTooltip 缺 TooltipProvider 会让整个页签渲染失败（实测）。 -->
+              <span
+                v-else-if="row.original.defaultPurchasePrice != null"
+                class="price-basis-unknown"
+                data-tip="basis-unknown"
+                title="这条关系是在「含税/未税」区分之前录入的，无法确定该价格是含税还是未税；编辑并填写含税价即可确认。"
+              >
+                {{ row.original.currency || 'CNY' }} {{ Number(row.original.defaultPurchasePrice).toFixed(2) }}/{{ displayUnit(row.original.purchaseUnit) }}
+                · 基准未知
+              </span>
+              <span v-else>未设置</span>
+            </template>
+            <template #moq-cell="{ row }">{{ row.original.minOrderQuantity ?? '-' }} {{ displayUnit(row.original.purchaseUnit) }}</template>
+            <template #lead-cell="{ row }">{{ row.original.leadTimeDays == null ? '-' : `${row.original.leadTimeDays}天` }}</template>
+            <template #state-cell="{ row }">
+              <UBadge :color="row.original.active === false ? 'neutral' : 'success'" variant="soft">
+                {{ row.original.active === false ? '已停用' : row.original.preferred ? '首选' : '启用' }}
+              </UBadge>
+            </template>
             <!-- 🔒 缺陷 16: 「采购规格」/「编辑」两个按钮 -> 一个动作。
                  单一按钮永远可点(不带 canWrite/isActive 门槛), 因为「查看」这个能力
                  之前挂在「采购规格」按钮上、不受写权限/停用状态限制 —— 合并后必须继续保留。
                  可写与否只改按钮文案和弹窗内部能不能动, 不改按钮是否出现。 -->
-            <el-table-column label="操作" width="210" fixed="right">
-              <template #default="{ row }">
-                <el-button type="primary" link @click="openRelationEdit(row)">
+            <template #actions-cell="{ row }">
+              <div class="row-actions">
+                <UButton size="xs" variant="link" @click="openRelationEdit(row.original)">
                   {{ canWrite && isActive ? '编辑' : '查看' }}
-                </el-button>
-                <el-button v-if="canWrite && isActive && row.active !== false" type="warning" link @click="removeRelation(row)">停用</el-button>
-              </template>
-            </el-table-column>
-          </el-table>
-        </el-tab-pane>
+                </UButton>
+                <UButton v-if="canWrite && isActive && row.original.active !== false" size="xs" variant="link" color="warning" @click="removeRelation(row.original)">停用</UButton>
+              </div>
+            </template>
+          </UTable>
+        </template>
 
-        <el-tab-pane label="价格/报价" name="prices">
-          <el-empty description="当前后端未提供独立供应商报价台账；历史价格仍保留在采购单据中。" />
-        </el-tab-pane>
-        <el-tab-pane label="采购记录" name="purchases">
-          <el-table :data="history" border stripe empty-text="暂无采购记录摘要">
-            <el-table-column prop="materialName" label="物料" min-width="180" />
-            <el-table-column prop="purchaseCount" label="采购次数" width="100" />
-            <el-table-column prop="lastPurchaseDate" label="最近采购日期" width="140" />
-          </el-table>
-        </el-tab-pane>
-        <el-tab-pane label="对账/应付" name="payables">
-          <el-descriptions :column="2" border>
-            <el-descriptions-item label="采购单数">{{ detail.totalOrders ?? '-' }}</el-descriptions-item>
-            <el-descriptions-item label="最近采购">{{ detail.lastOrderDate || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="累计采购金额">{{ formatMoney(detail.totalAmount) }}</el-descriptions-item>
-            <el-descriptions-item label="当前应付余额">{{ formatMoney(detail.currentBalance) }}</el-descriptions-item>
-          </el-descriptions>
-        </el-tab-pane>
-        <el-tab-pane label="变更记录" name="changes">
-          <el-timeline>
-            <el-timeline-item v-if="detail.createdAt" :timestamp="detail.createdAt">
-              创建供应商 · {{ detail.createdByName || '系统记录' }}
-            </el-timeline-item>
-            <el-timeline-item v-if="detail.updatedAt" :timestamp="detail.updatedAt" type="primary">
-              最近更新
-            </el-timeline-item>
-          </el-timeline>
-          <el-empty v-if="!detail.createdAt && !detail.updatedAt" description="暂无可展示的变更记录" />
-        </el-tab-pane>
-      </el-tabs>
+        <template #prices>
+          <UEmpty icon="i-lucide-receipt-text" description="当前后端未提供独立供应商报价台账；历史价格仍保留在采购单据中。" />
+        </template>
+
+        <template #purchases>
+          <UTable :data="history" :columns="historyColumns" class="cs-table" data-testid="supplier-purchase-history">
+            <template #empty>暂无采购记录摘要</template>
+          </UTable>
+        </template>
+
+        <template #payables>
+          <dl class="info-grid" data-testid="supplier-payables-info">
+            <div><dt>采购单数</dt><dd>{{ detail.totalOrders ?? '-' }}</dd></div>
+            <div><dt>最近采购</dt><dd>{{ detail.lastOrderDate || '-' }}</dd></div>
+            <div><dt>累计采购金额</dt><dd>{{ formatMoney(detail.totalAmount) }}</dd></div>
+            <div><dt>当前应付余额</dt><dd>{{ formatMoney(detail.currentBalance) }}</dd></div>
+          </dl>
+        </template>
+
+        <template #changes>
+          <UTimeline v-if="changeItems.length" :items="changeItems" :default-value="changeItems.length - 1" />
+          <UEmpty v-else icon="i-lucide-history" description="暂无可展示的变更记录" />
+        </template>
+      </UTabs>
     </template>
-    <!-- 🔒 缺陷 16: 新增/编辑现在是同一个弹窗形状 —— 关系表单 + 采购规格管理合在一起,
-         ⛔ 不再拆成「关系」「采购规格」两个 el-dialog。
-         新增: 关系还不存在, 只给「顺手新增一个采购规格」的轻量入口(原样保留)。
-         编辑/查看: 关系表单之后紧跟完整的规格列表管理器(原 specDialogVisible 的内容原样搬进来)。
-         `relationWritable` 统一控制"能不能改"; 查看态下相同表单以只读(disabled)呈现,
-         ⛔ 不是新做一套 el-descriptions —— 复用同一批 v-model, 避免两份口径漂移。 -->
-    <el-dialog
-      v-model="relationDialogVisible"
-      :title="relationDialogTitle"
-      width="760px"
-      append-to-body
-      :close-on-click-modal="false"
-    >
-      <el-form label-width="120px">
-        <el-form-item label="物料" required>
-          <el-select v-model="relationForm.materialTypeId" filterable :disabled="Boolean(relationEditingId) || !relationWritable" style="width: 100%" @change="onRelationMaterialChange">
-            <el-option
-              v-for="material in materialOptions"
-              :key="material.id"
-              :label="`${material.name} (${material.code || material.id})`"
-              :value="material.id"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="供应商料号"><el-input v-model="relationForm.supplierMaterialCode" maxlength="100" :disabled="!relationWritable" /></el-form-item>
-        <el-form-item label="采购单位" required>
-          <UnitSelect
+  </USlideover>
+
+  <SupplyImpactDialog
+    v-if="impactVisible"
+    v-model="impactVisible"
+    :factory-id="factoryId"
+    :target="{ supplierId: detail?.id }"
+    :target-name="detail?.name ?? ''"
+  />
+
+  <!-- 🔒 缺陷 16: 新增/编辑现在是同一个弹窗形状 —— 关系表单 + 采购规格管理合在一起,
+       ⛔ 不再拆成「关系」「采购规格」两个弹窗。
+       新增: 关系还不存在, 只给「顺手新增一个采购规格」的轻量入口(原样保留)。
+       编辑/查看: 关系表单之后紧跟完整的规格列表管理器(原 specDialogVisible 的内容原样搬进来)。
+       `relationWritable` 统一控制"能不能改"; 查看态下相同表单以只读(disabled)呈现,
+       ⛔ 不是新做一套只读展示 —— 复用同一批 v-model, 避免两份口径漂移。
+       Nuxt UI 弹层里不放 Element 控件: 物料/单位下拉、数字框、开关全是 Nuxt UI。 -->
+  <UModal
+    v-model:open="relationDialogVisible"
+    :title="relationDialogTitle"
+    description="供应商供应原料关系与采购规格"
+    :dismissible="false"
+    :ui="modalUi('max-w-[760px]')"
+  >
+    <template #body>
+      <div class="relation-form">
+        <UFormField label="物料" required>
+          <USelectMenu
+            :model-value="relationForm.materialTypeId || undefined"
+            :items="materialItems"
+            value-key="value"
+            placeholder="请选择物料"
+            :search-input="{ placeholder: '搜索…' }"
+            :disabled="Boolean(relationEditingId) || !relationWritable"
+            class="w-full"
+            @update:model-value="onMaterialPick"
+          />
+        </UFormField>
+        <UFormField label="供应商料号"><UInput v-model="relationForm.supplierMaterialCode" :maxlength="100" :disabled="!relationWritable" class="w-full" /></UFormField>
+        <UFormField label="采购单位" required help="采购订单将沿用该单位；系统内部保存标准单位代码，页面只显示中文业务单位。">
+          <SupplierUnitSelect
             v-model="relationForm.purchaseUnit"
-            :factory-id="factoryId"
             :options="relationPurchaseUnitOptions"
-            usage-scope="PURCHASE_QUANTITY"
             placeholder="请选择采购单位"
             :disabled="!relationWritable"
           />
-          <el-alert
+          <UAlert :ui="alertUi"
             v-if="relationUnitReason"
             class="relation-unit-alert"
-            type="error"
-            :closable="false"
-            show-icon
+            color="error"
+            variant="subtle"
+            icon="i-lucide-circle-alert"
             :title="relationUnitReason"
           />
-          <div class="field-hint">采购订单将沿用该单位；系统内部保存标准单位代码，页面只显示中文业务单位。</div>
-        </el-form-item>
+        </UFormField>
         <!-- 🔒 19②: 人填含税, 未税只读派生 (owner: 「未税报价……只能是自动计算出来」)。
-             ⚠️ :218 原本【一个基准都没说】—— 用户填 50, 系统不知道那是含税还是未税,
+             ⚠️ 原本【一个基准都没说】—— 用户填 50, 系统不知道那是含税还是未税,
              而它会一路流到采购单和入库批次。现在标题就把基准说清楚。 -->
-        <el-form-item :label="isExemptMaterial(relationMaterial) ? `免税采购价（元/${displayUnit(relationForm.purchaseUnit) || '采购单位'}）` : `含税默认采购价（元/${displayUnit(relationForm.purchaseUnit) || '采购单位'}）`">
-          <el-input-number v-model="relationForm.taxIncludedDefaultPurchasePrice" :min="0" :precision="4" controls-position="right" style="width: 100%" :disabled="!relationWritable" />
+        <UFormField
+          :label="isExemptMaterial(relationMaterial) ? `免税采购价（元/${displayUnit(relationForm.purchaseUnit) || '采购单位'}）` : `含税默认采购价（元/${displayUnit(relationForm.purchaseUnit) || '采购单位'}）`"
+        >
+          <UInputNumber v-model="relationForm.taxIncludedDefaultPurchasePrice" :step-snapping="false" :min="0" :format-options="PRICE_FORMAT" :increment="false" :decrement="false" class="w-full" :disabled="!relationWritable" />
           <!-- 形态 B⁵ 第二次打在同一句 hint 上: 缺陷 17 改过一次(价格从选填变必填),
                owner 2026-09-02 改判 A(一律必填、存量也要补)之后又得改一次。
                ⛔ 删掉一条承诺就要在同一个 commit 里删掉它的描述 —— 过期的描述比没有描述更糟,
@@ -265,145 +264,178 @@
                `supplierMaterialRelation.source.spec.ts` 有一条阴性对照钉着它们不许回来,
                而源码闸是按字面匹配的 —— 把被禁的措辞抄进注释, 闸就会匹配到注释本身,
                既弄红了正确的代码, 又正是本仓记过的「闸把自己的注释当成被测对象」那个形态。 -->
-          <div class="field-hint">
+          <template #help>
             价格与采购单位绑定，按含税价填写。新增与编辑都必须填写；存量没有价格的关系，需要补上价格才能保存。
-          </div>
-        </el-form-item>
+          </template>
+        </UFormField>
         <!-- ⛔ 算不出来时【不渲染】这一行, 而不是显示 0 或空白 —— 空白会被读成 0。
              镜像 material-types/list.vue:1772 的 v-if 写法。 -->
-        <el-form-item v-if="relationDerivedUntaxed != null" :label="`未税采购价（元/${displayUnit(relationForm.purchaseUnit) || '采购单位'}）`">
-          <el-input :model-value="relationDerivedUntaxed.toFixed(4)" disabled style="width: 100%" />
-          <div class="field-hint">{{ isExemptMaterial(relationMaterial) ? '免税时未税价等于采购价' : '= 含税价 ÷ (1 + 税率)，按物料税率自动计算，不需要填写' }}</div>
-        </el-form-item>
-        <div v-else-if="relationForm.taxIncludedDefaultPurchasePrice != null" class="field-hint">
+        <UFormField
+          v-if="relationDerivedUntaxed != null"
+          :label="`未税采购价（元/${displayUnit(relationForm.purchaseUnit) || '采购单位'}）`"
+          :help="isExemptMaterial(relationMaterial) ? '免税时未税价等于采购价' : '= 含税价 ÷ (1 + 税率)，按物料税率自动计算，不需要填写'"
+        >
+          <UInput :model-value="relationDerivedUntaxed.toFixed(4)" disabled class="w-full" />
+        </UFormField>
+        <div v-else-if="relationForm.taxIncludedDefaultPurchasePrice != null" class="field-hint wide">
           该物料未配置税率，暂时算不出未税价。⛔ 这不代表未税价等于含税价。
         </div>
-        <div v-else-if="relationEditingId && relationForm.defaultPurchasePrice != null" class="field-hint">
+        <div v-else-if="relationEditingId && relationForm.defaultPurchasePrice != null" class="field-hint wide">
           ⚠️ 这条关系是在「含税/未税」区分之前录入的，存量价格 {{ relationForm.defaultPurchasePrice }} 的基准未知。
           填写含税价即可确认；在此之前它不会被用来自动带价。
         </div>
-        <el-form-item label="最小起订量"><el-input-number v-model="relationForm.minOrderQuantity" :min="0.0001" :precision="4" style="width: 100%" :disabled="!relationWritable" /></el-form-item>
-        <el-form-item label="交期（天）"><el-input-number v-model="relationForm.leadTimeDays" :min="0" :precision="0" style="width: 100%" :disabled="!relationWritable" /></el-form-item>
-        <el-form-item label="首选供应商"><el-switch v-model="relationForm.preferred" :disabled="!relationWritable" /></el-form-item>
-        <el-form-item label="关系启用"><el-switch v-model="relationForm.active" :disabled="!relationWritable" /></el-form-item>
-      </el-form>
+        <UFormField label="最小起订量"><UInputNumber v-model="relationForm.minOrderQuantity" :step-snapping="false" :min="0.0001" :format-options="PRICE_FORMAT" :increment="false" :decrement="false" class="w-full" :disabled="!relationWritable" /></UFormField>
+        <UFormField label="交期（天）"><UInputNumber v-model="relationForm.leadTimeDays" :step-snapping="false" :min="0" :format-options="INT_FORMAT" :increment="false" :decrement="false" class="w-full" :disabled="!relationWritable" /></UFormField>
+        <UFormField label="首选供应商"><USwitch v-model="relationForm.preferred" :disabled="!relationWritable" /></UFormField>
+        <UFormField label="关系启用"><USwitch v-model="relationForm.active" :disabled="!relationWritable" /></UFormField>
+      </div>
 
       <!-- 新增: 关系还不存在, 规格只给"顺手加一个"的轻量入口。 -->
       <template v-if="!relationEditingId">
-        <el-divider><span class="inline-spec-divider">采购规格（选填，不填按 {{ displayUnit(relationForm.purchaseUnit) || '库存基本单位' }} 直采）</span></el-divider>
+        <USeparator class="my-4" :label="`采购规格（选填，不填按 ${displayUnit(relationForm.purchaseUnit) || '库存基本单位'} 直采）`" />
         <div v-if="!inlineSpecEnabled" class="inline-spec-toggle">
-          <el-button type="primary" plain @click="inlineSpecEnabled = true">+ 顺手新增一个采购规格（例如「10kg/箱」）</el-button>
+          <UButton color="neutral" variant="outline" icon="i-lucide-plus" @click="inlineSpecEnabled = true">顺手新增一个采购规格（例如「10kg/箱」）</UButton>
         </div>
         <template v-else>
-          <el-form label-width="120px" class="inline-spec-form">
-            <el-form-item label="规格名称" required><el-input v-model="inlineSpecForm.name" maxlength="100" placeholder="例如 10kg/箱" /></el-form-item>
-            <el-form-item label="采购包装单位" required>
-              <UnitSelect v-model="inlineSpecForm.purchasePackageUnit" :factory-id="factoryId" :options="purchaseUnitOptions" usage-scope="PURCHASE_QUANTITY" />
-            </el-form-item>
-            <el-form-item label="换算系数" required>
-              <el-input-number v-model="inlineSpecForm.factor" :min="0.0001" :precision="4" style="width: 220px" />
-              <span class="field-hint">1 {{ displayUnit(inlineSpecForm.purchasePackageUnit) }} = {{ inlineSpecForm.factor || '?' }} {{ displayUnit(relationForm.purchaseUnit) || '库存基本单位' }}</span>
-            </el-form-item>
-            <el-form-item :label="isExemptMaterial(relationMaterial) ? `免税报价（元/${displayUnit(inlineSpecForm.purchasePackageUnit) || '采购包装单位'}）` : `含税报价（元/${displayUnit(inlineSpecForm.purchasePackageUnit) || '采购包装单位'}）`">
-              <el-input-number v-model="inlineSpecForm.taxIncludedQuotedPrice" :min="0" :precision="4" style="width: 220px" />
-            </el-form-item>
-            <el-form-item v-if="inlineSpecDerivedUntaxed != null" :label="`未税报价（元/${displayUnit(inlineSpecForm.purchasePackageUnit) || '采购包装单位'}）`">
-              <el-input :model-value="inlineSpecDerivedUntaxed.toFixed(4)" disabled style="width: 220px" />
-              <span class="field-hint">{{ isExemptMaterial(relationMaterial) ? '免税时未税价等于报价' : '= 含税报价 ÷ (1 + 税率)，自动计算' }}</span>
-            </el-form-item>
-          </el-form>
+          <div class="relation-form inline-spec-form">
+            <UFormField label="规格名称" required><UInput v-model="inlineSpecForm.name" :maxlength="100" placeholder="例如 10kg/箱" class="w-full" /></UFormField>
+            <UFormField label="采购包装单位" required>
+              <SupplierUnitSelect v-model="inlineSpecForm.purchasePackageUnit" :options="purchaseUnitOptions" />
+            </UFormField>
+            <UFormField label="换算系数" required :help="`1 ${displayUnit(inlineSpecForm.purchasePackageUnit)} = ${inlineSpecForm.factor || '?'} ${displayUnit(relationForm.purchaseUnit) || '库存基本单位'}`">
+              <UInputNumber v-model="inlineSpecForm.factor" :step-snapping="false" :min="0.0001" :format-options="PRICE_FORMAT" :increment="false" :decrement="false" class="w-full" />
+            </UFormField>
+            <UFormField :label="isExemptMaterial(relationMaterial) ? `免税报价（元/${displayUnit(inlineSpecForm.purchasePackageUnit) || '采购包装单位'}）` : `含税报价（元/${displayUnit(inlineSpecForm.purchasePackageUnit) || '采购包装单位'}）`">
+              <UInputNumber v-model="inlineSpecForm.taxIncludedQuotedPrice" :step-snapping="false" :min="0" :format-options="PRICE_FORMAT" :increment="false" :decrement="false" class="w-full" />
+            </UFormField>
+            <UFormField
+              v-if="inlineSpecDerivedUntaxed != null"
+              :label="`未税报价（元/${displayUnit(inlineSpecForm.purchasePackageUnit) || '采购包装单位'}）`"
+              :help="isExemptMaterial(relationMaterial) ? '免税时未税价等于报价' : '= 含税报价 ÷ (1 + 税率)，自动计算'"
+            >
+              <UInput :model-value="inlineSpecDerivedUntaxed.toFixed(4)" disabled class="w-full" />
+            </UFormField>
+          </div>
           <div class="inline-spec-toggle">
-            <el-button @click="inlineSpecEnabled = false; resetInlineSpecForm()">不加了，收起</el-button>
+            <UButton color="neutral" variant="outline" @click="inlineSpecEnabled = false; resetInlineSpecForm()">不加了，收起</UButton>
           </div>
         </template>
       </template>
 
       <!-- 编辑/查看: 已有关系, 展示完整的采购规格列表 + 增改停用(原 specDialogVisible 内容)。 -->
       <template v-else>
-        <el-divider>采购规格</el-divider>
-        <el-alert
-          :closable="false"
-          type="info"
-          show-icon
+        <USeparator class="my-4" label="采购规格" />
+        <UAlert :ui="alertUi"
+          color="info"
+          variant="subtle"
+          icon="i-lucide-info"
           :title="`${specRelation?.materialName || '当前物料'} · 库存基本单位 ${displayUnit(specRelation?.baseUnit)}`"
           description="采购订单选择规格后按包装数量下单，系统按换算系数折合库存基本单位；换算系数由后端快照锁定。"
-          style="margin-bottom: 12px"
+          class="mb-3"
         />
-        <el-table :data="purchaseSpecs" border stripe empty-text="暂无采购规格；采购订单将按库存基本单位直采">
-          <el-table-column prop="name" label="规格名称" min-width="130" />
-          <el-table-column label="采购包装单位" width="120"><template #default="{ row }">{{ displayUnit(row.purchasePackageUnit) }}</template></el-table-column>
-          <el-table-column label="换算" min-width="150"><template #default="{ row }">1 {{ displayUnit(row.purchasePackageUnit) }} = {{ row.factor }} {{ displayUnit(row.inventoryBaseUnit) }}</template></el-table-column>
+        <UTable :data="purchaseSpecs" :columns="specColumns" class="cs-table" data-testid="supplier-purchase-specs">
+          <template #empty>暂无采购规格；采购订单将按库存基本单位直采</template>
+          <template #pkg-cell="{ row }">{{ displayUnit(row.original.purchasePackageUnit) }}</template>
+          <template #factor-cell="{ row }">1 {{ displayUnit(row.original.purchasePackageUnit) }} = {{ row.original.factor }} {{ displayUnit(row.original.inventoryBaseUnit) }}</template>
           <!-- 缺陷 35 第二处: 与上面那一列同一个形状(列头无口径 / 值是未税)。
                ⚠️ 只修关系那一列就又是「改共享结构只改了一部分」—— 这次一起改。 -->
-          <el-table-column label="含税报价" width="165">
-            <template #default="{ row }">
-              <span v-if="row.taxIncludedQuotedPrice != null">
-                {{ row.currency || 'CNY' }} {{ Number(row.taxIncludedQuotedPrice).toFixed(2) }}/{{ displayUnit(row.purchasePackageUnit) }}
-              </span>
-              <el-tooltip v-else-if="row.quotedPrice != null" placement="top"
-                          content="该规格的报价是在「含税/未税」区分之前录入的，无法确定口径；编辑并填写含税报价即可确认。">
-                <span class="price-basis-unknown">
-                  {{ row.currency || 'CNY' }} {{ Number(row.quotedPrice).toFixed(2) }}/{{ displayUnit(row.purchasePackageUnit) }}
-                  · 基准未知
-                </span>
-              </el-tooltip>
-              <span v-else>-</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="状态" width="90"><template #default="{ row }"><el-tag :type="row.active === false ? 'info' : 'success'">{{ row.active === false ? '停用' : row.defaultSpec ? '默认' : '启用' }}</el-tag></template></el-table-column>
-          <el-table-column v-if="relationWritable" label="操作" width="130">
-            <template #default="{ row }">
-              <el-button type="primary" link @click="editPurchaseSpec(row)">编辑</el-button>
-              <el-button v-if="row.active !== false" type="warning" link @click="removePurchaseSpec(row)">停用</el-button>
-            </template>
-          </el-table-column>
-        </el-table>
+          <template #quote-cell="{ row }">
+            <span v-if="row.original.taxIncludedQuotedPrice != null">
+              {{ row.original.currency || 'CNY' }} {{ Number(row.original.taxIncludedQuotedPrice).toFixed(2) }}/{{ displayUnit(row.original.purchasePackageUnit) }}
+            </span>
+            <span
+              v-else-if="row.original.quotedPrice != null"
+              class="price-basis-unknown"
+              data-tip="basis-unknown"
+              title="该规格的报价是在「含税/未税」区分之前录入的，无法确定口径；编辑并填写含税报价即可确认。"
+            >
+              {{ row.original.currency || 'CNY' }} {{ Number(row.original.quotedPrice).toFixed(2) }}/{{ displayUnit(row.original.purchasePackageUnit) }}
+              · 基准未知
+            </span>
+            <span v-else>-</span>
+          </template>
+          <template #state-cell="{ row }">
+            <UBadge :color="row.original.active === false ? 'neutral' : 'success'" variant="soft">{{ row.original.active === false ? '停用' : row.original.defaultSpec ? '默认' : '启用' }}</UBadge>
+          </template>
+          <template #actions-cell="{ row }">
+            <div class="row-actions">
+              <UButton size="xs" variant="link" @click="editPurchaseSpec(row.original)">编辑</UButton>
+              <UButton v-if="row.original.active !== false" size="xs" variant="link" color="warning" @click="removePurchaseSpec(row.original)">停用</UButton>
+            </div>
+          </template>
+        </UTable>
         <template v-if="relationWritable">
           <div v-if="!specEditingId && !showNewSpecForm" class="spec-add-toggle">
-            <el-button type="primary" plain @click="showNewSpecForm = true">+ 新增规格</el-button>
+            <UButton color="neutral" variant="outline" icon="i-lucide-plus" @click="showNewSpecForm = true">新增规格</UButton>
           </div>
           <template v-else>
-            <el-divider>{{ specEditingId ? '编辑规格' : '新增规格' }}</el-divider>
-            <el-form label-width="125px" :model="specForm">
-              <el-form-item label="规格名称" required><el-input v-model="specForm.name" maxlength="100" placeholder="例如 10kg/箱" /></el-form-item>
-              <el-form-item label="采购包装单位" required>
-                <UnitSelect v-model="specForm.purchasePackageUnit" :factory-id="factoryId" usage-scope="PURCHASE_QUANTITY" />
-              </el-form-item>
-              <el-form-item label="换算系数" required>
-                <el-input-number v-model="specForm.factor" :min="0.0001" :precision="4" style="width: 220px" />
-                <span class="field-hint">1 {{ displayUnit(specForm.purchasePackageUnit) }} = {{ specForm.factor || '?' }} {{ displayUnit(specRelation?.baseUnit) }}</span>
-              </el-form-item>
-              <el-form-item :label="isExemptMaterial(specMaterial) ? `免税报价（元/${displayUnit(specForm.purchasePackageUnit) || '采购包装单位'}）` : `含税报价（元/${displayUnit(specForm.purchasePackageUnit) || '采购包装单位'}）`"><el-input-number v-model="specForm.taxIncludedQuotedPrice" :min="0" :precision="4" style="width: 220px" /></el-form-item>
-              <el-form-item v-if="specDerivedUntaxed != null" :label="`未税报价（元/${displayUnit(specForm.purchasePackageUnit) || '采购包装单位'}）`">
-                <el-input :model-value="specDerivedUntaxed.toFixed(4)" disabled style="width: 220px" />
-                <span class="field-hint">{{ isExemptMaterial(specMaterial) ? '免税时未税价等于报价' : '= 含税报价 ÷ (1 + 税率)，自动计算' }}</span>
-              </el-form-item>
-              <el-form-item label="默认规格"><el-switch v-model="specForm.defaultSpec" /></el-form-item>
-              <el-form-item label="启用"><el-switch v-model="specForm.active" /></el-form-item>
-              <el-form-item>
-                <el-button v-if="specEditingId" @click="resetSpecForm">取消编辑</el-button>
-                <el-button v-else @click="showNewSpecForm = false; resetSpecForm()">收起</el-button>
-                <el-button type="primary" :loading="specSaving" @click="savePurchaseSpec">{{ specEditingId ? '保存规格' : '新增规格' }}</el-button>
-              </el-form-item>
-            </el-form>
+            <USeparator class="my-4" :label="specEditingId ? '编辑规格' : '新增规格'" />
+            <div class="relation-form">
+              <UFormField label="规格名称" required><UInput v-model="specForm.name" :maxlength="100" placeholder="例如 10kg/箱" class="w-full" /></UFormField>
+              <UFormField label="采购包装单位" required>
+                <SupplierUnitSelect v-model="specForm.purchasePackageUnit" :options="purchaseUnitOptions" />
+              </UFormField>
+              <UFormField label="换算系数" required :help="`1 ${displayUnit(specForm.purchasePackageUnit)} = ${specForm.factor || '?'} ${displayUnit(specRelation?.baseUnit)}`">
+                <UInputNumber v-model="specForm.factor" :step-snapping="false" :min="0.0001" :format-options="PRICE_FORMAT" :increment="false" :decrement="false" class="w-full" />
+              </UFormField>
+              <UFormField :label="isExemptMaterial(specMaterial) ? `免税报价（元/${displayUnit(specForm.purchasePackageUnit) || '采购包装单位'}）` : `含税报价（元/${displayUnit(specForm.purchasePackageUnit) || '采购包装单位'}）`">
+                <UInputNumber v-model="specForm.taxIncludedQuotedPrice" :step-snapping="false" :min="0" :format-options="PRICE_FORMAT" :increment="false" :decrement="false" class="w-full" />
+              </UFormField>
+              <UFormField
+                v-if="specDerivedUntaxed != null"
+                :label="`未税报价（元/${displayUnit(specForm.purchasePackageUnit) || '采购包装单位'}）`"
+                :help="isExemptMaterial(specMaterial) ? '免税时未税价等于报价' : '= 含税报价 ÷ (1 + 税率)，自动计算'"
+              >
+                <UInput :model-value="specDerivedUntaxed.toFixed(4)" disabled class="w-full" />
+              </UFormField>
+              <UFormField label="默认规格"><USwitch v-model="specForm.defaultSpec" /></UFormField>
+              <UFormField label="启用"><USwitch v-model="specForm.active" /></UFormField>
+            </div>
+            <div class="spec-actions">
+              <UButton v-if="specEditingId" color="neutral" variant="outline" @click="resetSpecForm">取消编辑</UButton>
+              <UButton v-else color="neutral" variant="outline" @click="showNewSpecForm = false; resetSpecForm()">收起</UButton>
+              <UButton :loading="specSaving" @click="savePurchaseSpec">{{ specEditingId ? '保存规格' : '新增规格' }}</UButton>
+            </div>
           </template>
         </template>
       </template>
+    </template>
 
-      <template #footer>
-        <el-button @click="relationDialogVisible = false">{{ relationWritable ? '取消' : '关闭' }}</el-button>
-        <el-button v-if="relationWritable" type="primary" :loading="relationSaving" @click="saveRelation">保存</el-button>
-      </template>
-    </el-dialog>
-  </el-drawer>
+    <template #footer>
+      <UButton color="neutral" variant="outline" @click="relationDialogVisible = false">{{ relationWritable ? '取消' : '关闭' }}</UButton>
+      <UButton v-if="relationWritable" :loading="relationSaving" @click="saveRelation">保存</UButton>
+    </template>
+  </UModal>
+
+  <!-- 停用采购规格的确认：这一步发生在上面那个 UModal 里面，模态 UModal 会让 Element 的 ElMessageBox 点不了
+       （body pointer-events:none），所以确认也是 UModal。v-if：没有待确认的规格时不渲染，
+       「关系 + 规格合在同一个弹窗」那条断言数到的弹窗数仍是 1。 -->
+  <UModal
+    v-if="specToStop"
+    :open="true"
+    title="停用采购规格"
+    description="停用采购规格前的确认"
+    :dismissible="false"
+    :ui="modalUi('max-w-[440px]')"
+    @update:open="(open: boolean) => { if (!open) specToStop = null; }"
+  >
+    <template #body>
+      <p class="confirm-text">停用后，新采购订单不能再选择该规格；历史订单快照不受影响。</p>
+    </template>
+    <template #footer>
+      <UButton color="neutral" variant="outline" data-testid="spec-stop-cancel" @click="specToStop = null">取消</UButton>
+      <UButton color="warning" :loading="specStopping" data-testid="spec-stop-confirm" @click="confirmStopSpec">确认停用</UButton>
+    </template>
+  </UModal>
 </template>
 
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue';
-import { ElMessage, ElMessageBox, type FormInstance } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
+import type { CsTableColumn as TableColumn, CsTabItem as TabsItem } from '@/types/csTable';
 import { get } from '@/api/request';
 import { listSystemUnits, type SystemUnit } from '@/api/systemUnits';
-import UnitSelect from '@/components/common/UnitSelect.vue';
+import SupplierUnitSelect from './SupplierUnitSelect.vue';
 import SupplierProfileCollections from './SupplierProfileCollections.vue';
 import SupplyImpactDialog from '@/components/common/SupplyImpactDialog.vue';
 import {
@@ -430,9 +462,10 @@ import { displayUnit } from '@/utils/unitPricing';
 import { purchaseUntaxedUnitPrice } from '@/views/procurement/orders/purchaseOrderTaxInclusivePricing';
 import { purchaseUnitSelectionReason, resolvePurchaseUnits } from '@/utils/purchaseUnitContract';
 import {
-  supplierFormRules, supplierProfileComplete, supplierStatus, normalizeSupplierPayload,
+  validateSupplierForm, supplierProfileComplete, supplierStatus, normalizeSupplierPayload,
 } from './supplierModel';
 import { toSupplierHistoryViewRow, type SupplierHistoryApiRow, type SupplierHistoryViewRow } from './supplierHistory';
+import { alertUi, modalUi, slideUi } from './supplierOverlayUi';
 
 const impactVisible = ref(false);
 
@@ -478,20 +511,69 @@ const specRelation = ref<SupplierMaterialRelation | null>(null);
 const purchaseSpecs = ref<SupplierPurchaseSpec[]>([]);
 const specEditingId = ref('');
 const specSaving = ref(false);
+const specToStop = ref<SupplierPurchaseSpec | null>(null);
+const specStopping = ref(false);
 const showNewSpecForm = ref(false);
 // 🔒 缺陷 16 phase 1: minOrderQuantity/leadTimeDays 已从规格表单移除 —— 见 supplierManagement.ts 注释。
 const specForm = reactive<SupplierPurchaseSpecPayload>({
   name: '', purchasePackageUnit: '', inventoryBaseUnit: '', factor: 1, quotedPrice: null, taxIncludedQuotedPrice: null, currency: 'CNY',
   defaultSpec: false, active: true,
 });
-const formRef = ref<FormInstance>();
+const formRef = ref<{ submit: () => Promise<void> } | null>(null);
 const originalForm = ref('');
 const form = reactive<SupplierSavePayload>({
   name: '', shortName: '', contactPerson: '', phone: '', address: '', email: '', bankAccount: '', taxNumber: '', notes: '',
 });
 
+const TAB_ITEMS: TabsItem[] = [
+  { label: '基本资料', value: 'profile', slot: 'profile' },
+  { label: '联系人/地址/账户', value: 'collections', slot: 'collections' },
+  { label: '供应原料', value: 'materials', slot: 'materials' },
+  { label: '价格/报价', value: 'prices', slot: 'prices' },
+  { label: '采购记录', value: 'purchases', slot: 'purchases' },
+  { label: '对账/应付', value: 'payables', slot: 'payables' },
+  { label: '变更记录', value: 'changes', slot: 'changes' },
+];
+// UInputNumber 没有 precision：用 Intl 的小数位上限（原 el-input-number precision=4 / 0）
+const PRICE_FORMAT = { maximumFractionDigits: 4 };
+const INT_FORMAT = { maximumFractionDigits: 0 };
+const relationColumns: TableColumn<SupplierMaterialRelation>[] = [
+  { id: 'material', header: '物料' },
+  { id: 'supplierCode', header: '供应商料号' },
+  { id: 'price', header: '含税默认采购价' },
+  { id: 'moq', header: '起订量' },
+  { id: 'lead', header: '交期' },
+  { id: 'state', header: '关系状态' },
+  { id: 'actions', header: '操作' },
+];
+const historyColumns: TableColumn<SupplierHistoryViewRow>[] = [
+  { accessorKey: 'materialName', header: '物料' },
+  { accessorKey: 'purchaseCount', header: '采购次数' },
+  { accessorKey: 'lastPurchaseDate', header: '最近采购日期' },
+];
+const specColumns = computed<TableColumn<SupplierPurchaseSpec>[]>(() => [
+  { accessorKey: 'name', header: '规格名称' },
+  { id: 'pkg', header: '采购包装单位' },
+  { id: 'factor', header: '换算' },
+  { id: 'quote', header: '含税报价' },
+  { id: 'state', header: '状态' },
+  ...(relationWritable.value ? [{ id: 'actions', header: '操作' } as TableColumn<SupplierPurchaseSpec>] : []),
+]);
+const changeItems = computed(() => {
+  const d = detail.value;
+  if (!d) return [];
+  return [
+    ...(d.createdAt ? [{ value: 'created', date: d.createdAt, title: `创建供应商 · ${d.createdByName || '系统记录'}` }] : []),
+    ...(d.updatedAt ? [{ value: 'updated', date: d.updatedAt, title: '最近更新' }] : []),
+  ];
+});
+
 const isActive = computed(() => detail.value ? supplierStatus(detail.value) === 'ACTIVE' : false);
 const relationMaterial = computed(() => materialOptions.value.find((row) => row.id === relationForm.materialTypeId));
+const materialItems = computed(() => materialOptions.value.map((material) => ({
+  label: `${material.name} (${material.code || material.id})`,
+  value: material.id,
+})));
 
 /**
  * 🔒 缺陷 16: 合并弹窗之后，同一个表单形状既要给"编辑"用也要给"查看"用。
@@ -624,8 +706,8 @@ function startEdit(): void {
 }
 
 async function saveProfile(): Promise<void> {
-  if (!detail.value || !formRef.value) return;
-  await formRef.value.validate();
+  // 校验由 UForm 的 validate（validateSupplierForm）在 @submit 之前完成
+  if (!detail.value) return;
   saving.value = true;
   try {
     detail.value = await updateSupplier(props.factoryId, detail.value.id, normalizeSupplierPayload(form));
@@ -644,13 +726,14 @@ async function cancelEdit(): Promise<void> {
   editing.value = false;
 }
 
-async function beforeClose(done: () => void): Promise<void> {
-  if (dirty.value) {
+/** USlideover 的 update:open：打开直通；关闭（X / ESC / 点遮罩）有未保存修改时先确认。 */
+async function onOpenChange(open: boolean): Promise<void> {
+  if (!open && dirty.value) {
     try {
       await ElMessageBox.confirm('尚有未保存修改，关闭后将丢失，确定关闭吗？', '未保存修改', { type: 'warning' });
     } catch { return; }
   }
-  done();
+  emit('update:modelValue', open);
 }
 
 async function changeStatus(): Promise<void> {
@@ -741,6 +824,11 @@ function priceProblem(value: number | null | undefined): string | null {
   if (value == null) return '请填写价格';
   if (!(Number(value) > 0)) return '价格必须大于 0';
   return null;
+}
+
+function onMaterialPick(value: string | undefined): void {
+  relationForm.materialTypeId = value ?? '';
+  onRelationMaterialChange(relationForm.materialTypeId);
 }
 
 function onRelationMaterialChange(materialTypeId: string): void {
@@ -929,13 +1017,25 @@ async function savePurchaseSpec(): Promise<void> {
   }
 }
 
-async function removePurchaseSpec(row: SupplierPurchaseSpec): Promise<void> {
+/** 点「停用」只是请求确认（打开确认弹窗）；真正的停用在 confirmStopSpec。 */
+function removePurchaseSpec(row: SupplierPurchaseSpec): void {
   if (!detail.value || !specRelation.value) return;
-  await ElMessageBox.confirm('停用后，新采购订单不能再选择该规格；历史订单快照不受影响。', '停用采购规格', { type: 'warning' });
-  await deleteSupplierPurchaseSpec(
-    props.factoryId, detail.value.id, specRelation.value.id, row.id, row.version,
-  );
-  purchaseSpecs.value = await listSupplierPurchaseSpecs(props.factoryId, detail.value.id, specRelation.value.id);
+  specToStop.value = row;
+}
+
+async function confirmStopSpec(): Promise<void> {
+  const row = specToStop.value;
+  if (!row || !detail.value || !specRelation.value) return;
+  specStopping.value = true;
+  try {
+    await deleteSupplierPurchaseSpec(
+      props.factoryId, detail.value.id, specRelation.value.id, row.id, row.version,
+    );
+    purchaseSpecs.value = await listSupplierPurchaseSpecs(props.factoryId, detail.value.id, specRelation.value.id);
+    specToStop.value = null;
+  } finally {
+    specStopping.value = false;
+  }
 }
 
 function formatMoney(value: number | null | undefined): string {
@@ -943,21 +1043,32 @@ function formatMoney(value: number | null | undefined): string {
 }
 </script>
 
-<style scoped lang="scss">
-.drawer-header { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.drawer-title { color: var(--el-text-color-primary); font-size: 18px; font-weight: 600; }
-.drawer-meta { display: flex; align-items: center; gap: 8px; margin-top: 8px; color: var(--el-text-color-secondary); font-size: 13px; }
-.header-actions, .edit-actions, .tab-toolbar { display: flex; align-items: center; gap: 8px; }
-.profile-form { margin-top: 16px; }
-.profile-descriptions { margin-top: 16px; }
-.edit-actions { justify-content: flex-end; }
-.tab-toolbar { justify-content: space-between; margin-bottom: 12px; color: var(--el-text-color-secondary); font-size: 13px; }
-.contract-alert { margin-top: 12px; }
-.field-hint { margin-left: 10px; color: var(--el-text-color-secondary); font-size: 12px; }
+<style scoped>
+.drawer-title { display: inline-flex; align-items: center; gap: var(--cs-space-2); color: var(--cs-text); }
+.drawer-meta { display: inline-flex; align-items: center; gap: var(--cs-space-2); margin-top: var(--cs-space-1); color: var(--cs-muted); font-size: var(--cs-font-small); }
+.header-actions, .edit-actions, .tab-toolbar, .row-actions, .spec-actions { display: flex; align-items: center; gap: var(--cs-space-2); }
+.skeleton { display: flex; flex-direction: column; gap: var(--cs-space-3); }
+.profile-form { display: flex; flex-direction: column; gap: var(--cs-space-3); margin-top: var(--cs-space-3); }
+.info-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--cs-space-3); margin: var(--cs-space-3) 0 0; padding: var(--cs-space-3) var(--cs-space-4); background: var(--cs-surface-subtle); border: 1px solid var(--cs-border); border-radius: var(--cs-radius-sm); }
+.info-grid dt { font-size: var(--cs-font-small); color: var(--cs-muted); }
+.info-grid dd { margin: 2px 0 0; color: var(--cs-text); word-break: break-all; }
+.info-grid .wide { grid-column: 1 / -1; }
+.edit-actions, .spec-actions { justify-content: flex-end; }
+.spec-actions { margin-top: var(--cs-space-3); }
+.tab-toolbar { justify-content: space-between; margin: var(--cs-space-3) 0; color: var(--cs-muted); font-size: var(--cs-font-small); }
+.relation-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--cs-space-3) var(--cs-space-4); }
+.relation-form .wide { grid-column: 1 / -1; }
+.relation-unit-alert { margin-top: var(--cs-space-2); }
+.field-hint { color: var(--cs-muted); font-size: var(--cs-font-small); }
+.muted { color: var(--cs-muted); }
+.confirm-text { margin: 0; color: var(--cs-text); }
 /* 缺陷 35: 基准未知的存量价格 —— 视觉上要与「已确认含税」区分开,
    ⛔ 但不能弱到看不见: 它是一个需要人去确认的状态, 不是次要信息。 */
-.price-basis-unknown { color: var(--el-color-warning); }
-.inline-spec-divider { color: var(--el-text-color-secondary); font-size: 13px; font-weight: 400; }
-.inline-spec-toggle, .spec-add-toggle { display: flex; justify-content: center; margin: 4px 0 12px; }
-.inline-spec-form { margin-top: 4px; }
+.price-basis-unknown { color: var(--cs-warning); }
+.inline-spec-toggle, .spec-add-toggle { display: flex; justify-content: center; margin: var(--cs-space-1) 0 var(--cs-space-3); }
+.inline-spec-form { margin-top: var(--cs-space-1); }
+</style>
+<style>
+/* USlideover 自带 sm:max-w-md，同名工具类合并不掉；宽度用一条全局规则（同 production/outsource） */
+.supplier-slide { width: 100%; max-width: min(880px, 92vw) !important; }
 </style>

@@ -279,6 +279,26 @@ class FactoryRecallServiceContractTest {
         assertTrue(service.isManagedRecall(FACTORY, 903L));
     }
 
+    /** Q4: 处置放行读这个答案 —— 召回结束 (COMPLETED) 之后那批货仍是召回货, 别厂的事件不算。 */
+    @Test
+    void recallRecordCountsActiveAndCompletedEventsOfThisFactoryOnly() {
+        BusinessLink inbound = new BusinessLink();
+        inbound.setOwnerType("RECALL_EVENT");
+        inbound.setOwnerId("904");
+        RecallEvent event = RecallEvent.builder().id(904L).factoryId(FACTORY)
+                .eventCode("RECALL-20261109-Q4").status("FROZEN").build();
+        when(linkArrayService.getInboundLinks(FACTORY, "PRODUCTION_BATCH", String.valueOf(BATCH_ID)))
+                .thenReturn(List.of(inbound));
+        when(recallEventRepository.findById(904L)).thenReturn(Optional.of(event));
+
+        assertTrue(service.hasRecallRecord(FACTORY, BATCH_ID));
+        event.setStatus("COMPLETED");
+        assertTrue(service.hasRecallRecord(FACTORY, BATCH_ID));
+        event.setFactoryId("OTHER-FACTORY");
+        assertFalse(service.hasRecallRecord(FACTORY, BATCH_ID));
+        assertFalse(service.hasRecallRecord(FACTORY, BATCH_ID + 1));
+    }
+
     @Test
     void releaseGuardLocksBatchBeforeCheckingManagedRecall() {
         service.assertReleaseAllowed(FACTORY, BATCH_ID);

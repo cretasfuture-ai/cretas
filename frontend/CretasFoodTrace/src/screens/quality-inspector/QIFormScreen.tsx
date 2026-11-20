@@ -33,6 +33,7 @@ import {
   checkQualityInspectionSubmission,
   deriveQualityInspectionCounts,
   deriveQualityInspectionResult,
+  describeQualityBatchLoadError,
   getQualityInspectionSubmitErrorMessage,
 } from './qualityInspectionSubmission.logic';
 
@@ -153,8 +154,19 @@ export default function QIFormScreen() {
       setDynamicForm(standard);
     } catch (error) {
       console.error('加载批次失败:', error);
-      setDynamicFormError(error instanceof Error ? error.message : t('form.cannotLoadBatch'));
-      appAlert(t('form.loadBatchFailed'), t('form.cannotLoadBatch'));
+      const described = describeQualityBatchLoadError(error, {
+        genericTitle: t('form.loadBatchFailed'),
+        genericMessage: t('form.cannotLoadBatch'),
+        noStandardTitle: t('form.noStandardTitle'),
+        noStandardMessage: t('form.noStandardMessage'),
+      });
+      // 屏上那行字: 没配标准 → 专门文案; 其余保持原行为 (Error.message, 非 Error 才用通用)
+      setDynamicFormError(
+        described.kind === 'no-standard'
+          ? described.message
+          : error instanceof Error ? error.message : t('form.cannotLoadBatch'),
+      );
+      appAlert(described.title, described.message);
     } finally {
       setLoading(false);
     }
@@ -635,13 +647,15 @@ function DynamicQualityFormScreen({ batch, form, batchNumber, onRefreshStandard 
       const response = await qualityInspectorApi.submitDynamicInspection(batch.id, { standardRevision: form.standardRevision, sampleSize: 1, answers, notes });
       const inspectionId = response.inspection?.id;
       const result = response.inspection?.result;
-      if (inspectionId == null || !['PASS', 'FAIL'].includes(result)) {
+      // CONDITIONAL: 有项目不合格, 但按本厂设置不判整批不合格, 已交质量经理决定
+      if (inspectionId == null || !['PASS', 'FAIL', 'CONDITIONAL'].includes(result)) {
         throw new Error('服务端未返回完整的质检结果，请保留当前填写内容后重试');
       }
       navigation.replace('QIResult', {
         recordId: String(inspectionId),
         passed: result === 'PASS',
         ...(response.dispositionRequired ? { dispositionRequired: true } : {}),
+        ...(result === 'CONDITIONAL' && response.reviewItems?.length ? { reviewItems: response.reviewItems } : {}),
       });
     } catch (e) {
       const message = getQualityInspectionSubmitErrorMessage(e, '提交失败，请检查标准版本后重试', t('form.checkNetworkAndRetry'));

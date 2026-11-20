@@ -203,7 +203,7 @@ class ToolAccessModeDeclarationTest {
     @DisplayName("存量全覆盖: 每个工具都有访问模式声明 (类内覆写 或 迁移种子表)")
     void everyToolDeclaresItsAccessMode() {
         List<ToolInfo> tools = scanRegisteredTools();
-        assertThat(tools).as("classpath 上应扫到大量工具, 扫不到说明包名或过滤器坏了").hasSize(493);
+        assertThat(tools).as("classpath 上应扫到大量工具, 扫不到说明包名或过滤器坏了").hasSize(501); // 2026-11-18 v3 复核缺口 +3 新工具 (my_wage_query / employee_work_location_query / ssop_schedule_plan)
 
         List<String> undeclared = new ArrayList<>();
         for (ToolInfo t : tools) {

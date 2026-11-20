@@ -77,17 +77,24 @@ class ProcessSecretAggregateExclusionPostgresRepositoryQueryValidationTest {
     @BeforeEach
     void createFixture() {
         jdbcTemplate.execute("DROP TABLE IF EXISTS production_reports, work_process_tasks, work_processes, "
-                + "production_batches, process_sheet_rows CASCADE");
-        jdbcTemplate.execute("CREATE TABLE production_batches (id BIGINT PRIMARY KEY, production_plan_id VARCHAR(191))");
+                + "production_batches, process_sheet_rows, processing_stage_records CASCADE");
+        // factory_id / product_type_id 排在最后: 上面老用例的 VALUES (id, plan) 仍成立, 只有环节记录用例会填
+        jdbcTemplate.execute("CREATE TABLE production_batches (id BIGINT PRIMARY KEY, production_plan_id VARCHAR(191), "
+                + "factory_id VARCHAR(50), product_type_id VARCHAR(100))");
+        jdbcTemplate.execute("CREATE TABLE processing_stage_records (id BIGINT PRIMARY KEY, factory_id VARCHAR(50) NOT NULL, "
+                + "production_batch_id BIGINT NOT NULL, stage_type VARCHAR(30) NOT NULL, stage_name VARCHAR(100), "
+                + "stage_order INTEGER, start_time TIMESTAMP, created_at TIMESTAMP NOT NULL DEFAULT now(), "
+                + "input_weight NUMERIC(12,3), output_weight NUMERIC(12,3), deleted_at TIMESTAMP)");
         jdbcTemplate.execute("CREATE TABLE work_processes (id VARCHAR(50) PRIMARY KEY, process_name VARCHAR(100), "
-                + "unit VARCHAR(20), output_unit VARCHAR(20), deleted_at TIMESTAMP)");
+                + "unit VARCHAR(20), output_unit VARCHAR(20), deleted_at TIMESTAMP, factory_id VARCHAR(50))");
         jdbcTemplate.execute("CREATE TABLE work_process_tasks (id BIGINT PRIMARY KEY, factory_id VARCHAR(50) NOT NULL, "
                 + "production_batch_id BIGINT NOT NULL, work_process_id VARCHAR(50) NOT NULL, "
                 + "product_type_id VARCHAR(50) NOT NULL, "
                 + "process_order INTEGER NOT NULL, deleted_at TIMESTAMP)");
         jdbcTemplate.execute("CREATE TABLE production_reports (id BIGINT PRIMARY KEY, factory_id VARCHAR(50) NOT NULL, "
                 + "batch_id BIGINT, work_process_task_id BIGINT, report_type VARCHAR(20), report_date DATE, "
-                + "input_quantity NUMERIC(12,2), output_quantity NUMERIC(12,2), deleted_at TIMESTAMP)");
+                + "input_quantity NUMERIC(12,2), output_quantity NUMERIC(12,2), deleted_at TIMESTAMP, "
+                + "input_unit VARCHAR(20), output_unit VARCHAR(20))");
         jdbcTemplate.execute("CREATE TABLE process_sheet_rows (id BIGINT PRIMARY KEY, factory_id VARCHAR(50) NOT NULL, "
                 + "plan_id VARCHAR(64) NOT NULL, batch_id BIGINT, batch_number VARCHAR(100), row_payload JSONB NOT NULL, "
                 + "row_status VARCHAR(20) NOT NULL, interim_settled_at TIMESTAMP, deleted_at TIMESTAMP)");
@@ -124,6 +131,11 @@ class ProcessSecretAggregateExclusionPostgresRepositoryQueryValidationTest {
         assertThat(all).hasSize(1);
         assertThat(new BigDecimal(all.get(0).get("total_input").toString())).isEqualByComparingTo("230");
         assertThat(((Number) all.get(0).get("batch_count")).intValue()).isEqualTo(2);
+        // 报工没记单位 → 退回工序标准 kg; 三条报工全部「记了单位」(退回后), 只有一种
+        assertThat(all.get(0).get("input_unit_min")).isEqualTo("kg");
+        assertThat(((Number) all.get(0).get("input_unit_kinds")).intValue()).isEqualTo(1);
+        assertThat(((Number) all.get(0).get("input_unit_known")).intValue()).isEqualTo(3);
+        assertThat(((Number) all.get(0).get("report_count")).intValue()).isEqualTo(3);
 
         List<Map<String, Object>> withoutHiddenPlan = repository.aggregateYieldByProcess(FACTORY, FROM, TO, "", NONE,
                 List.of("plan-hidden"));
@@ -134,6 +146,52 @@ class ProcessSecretAggregateExclusionPostgresRepositoryQueryValidationTest {
 
         // 按产品排除照旧
         assertThat(repository.aggregateYieldByProcess(FACTORY, FROM, TO, "", List.of("Q-OPEN"), NONE)).isEmpty();
+    }
+
+    /**
+     * 2026-11-12 网页验收: 工序汇总单位要按报工实际所记 (不是只看工序标准), 'unitless' 占位与空串算「没有单位」,
+     * 产出两处都没记时退回投入单位。用另一个工厂号, 不碰上面那组保密排除的读数。
+     */
+    @Test
+    void byProcessAggregateReportsTheUnitsActuallyRecordedPerSide() {
+        String f = "IT-UNIT";
+        // 定量包装: 工序标准 kg→kg, 但两条报工实际记的是 kg→袋、袋→盒
+        jdbcTemplate.update("INSERT INTO work_processes VALUES ('WP-PACK', '定量包装', 'kg', NULL, NULL)");
+        // 腌制: 新建工序的占位单位 unitless, 报工也没记
+        jdbcTemplate.update("INSERT INTO work_processes VALUES ('WP-PICKLE', '腌制', 'unitless', NULL, NULL)");
+        // 清洗: 报工只记投入 kg, 产出没记, 工序也没声明产出单位 → 产出按投入单位
+        jdbcTemplate.update("INSERT INTO work_processes VALUES ('WP-WASH', '清洗', '', '', NULL)");
+        long id = 100;
+        for (Object[] r : new Object[][]{
+                {"WP-PACK", 1, "10", "kg", "40", "袋"},
+                {"WP-PACK", 1, "20", "袋", "5", "盒"},
+                {"WP-PICKLE", 2, "0.2", null, "0.1", "unitless"},
+                {"WP-WASH", 3, "100", "kg", "90", " "}}) {
+            id++;
+            jdbcTemplate.update("INSERT INTO production_batches VALUES (?, 'plan-unit')", id);
+            jdbcTemplate.update("INSERT INTO work_process_tasks VALUES (?, ?, ?, ?, 'Q-OPEN', ?, NULL)",
+                    id, f, id, r[0], r[1]);
+            jdbcTemplate.update("INSERT INTO production_reports VALUES (?, ?, ?, ?, 'YIELD', DATE '2026-11-12', ?, ?, NULL, ?, ?)",
+                    id, f, id, id, new BigDecimal((String) r[2]), new BigDecimal((String) r[4]), r[3], r[5]);
+        }
+
+        List<Map<String, Object>> rows = repository.aggregateYieldByProcess(f, FROM, TO, "", NONE, NONE);
+        assertThat(rows).extracting(m -> m.get("process_name")).containsExactly("定量包装", "腌制", "清洗");
+
+        Map<String, Object> pack = rows.get(0);
+        assertThat(((Number) pack.get("input_unit_kinds")).intValue()).isEqualTo(2);
+        assertThat(((Number) pack.get("output_unit_kinds")).intValue()).isEqualTo(2);
+        assertThat(((Number) pack.get("report_count")).intValue()).isEqualTo(2);
+
+        Map<String, Object> pickle = rows.get(1);
+        assertThat(((Number) pickle.get("input_unit_known")).intValue()).isZero();
+        assertThat(((Number) pickle.get("output_unit_known")).intValue()).isZero();
+        assertThat(pickle.get("input_unit_min")).isNull();
+
+        Map<String, Object> wash = rows.get(2);
+        assertThat(wash.get("input_unit_min")).isEqualTo("kg");
+        assertThat(wash.get("output_unit_min")).isEqualTo("kg");
+        assertThat(((Number) wash.get("output_unit_known")).intValue()).isEqualTo(1);
     }
 
     @Test
@@ -149,6 +207,105 @@ class ProcessSecretAggregateExclusionPostgresRepositoryQueryValidationTest {
         assertThat(withoutHiddenPlan.getTotalInputKg()).isEqualByComparingTo("50");
         assertThat(withoutHiddenPlan.getTotalOutputKg()).isEqualByComparingTo("45");
         assertThat(withoutHiddenPlan.getBatchCount()).isEqualTo(1L);
+    }
+
+
+    // ==================== PROTO-STAGE-IO: 加工环节记录兼读 ====================
+
+    private void stageBatch(String factory, long id, String plan, String productType) {
+        jdbcTemplate.update("INSERT INTO production_batches VALUES (?, ?, ?, ?)", id, plan, factory, productType);
+    }
+
+    private void stageRecord(String factory, long id, long batchId, String name, String type, String input, String output,
+                             boolean deleted) {
+        jdbcTemplate.update("INSERT INTO processing_stage_records (id, factory_id, production_batch_id, stage_type, "
+                        + "stage_name, stage_order, start_time, input_weight, output_weight, deleted_at) "
+                        + "VALUES (?, ?, ?, ?, ?, 1, TIMESTAMP '2026-11-10 09:00:00', ?, ?, "
+                        + (deleted ? "now()" : "NULL") + ")",
+                id, factory, batchId, type, name, input == null ? null : new BigDecimal(input),
+                output == null ? null : new BigDecimal(output));
+    }
+
+    private void reportFor(String factory, long id, long batchId, String wpId, String input, String output) {
+        jdbcTemplate.update("INSERT INTO work_process_tasks VALUES (?, ?, ?, ?, 'Q-OPEN', 1, NULL)", id, factory, batchId, wpId);
+        jdbcTemplate.update("INSERT INTO production_reports VALUES (?, ?, ?, ?, 'YIELD', DATE '2026-11-10', ?, ?, NULL, 'kg', 'kg')",
+                id, factory, batchId, id, new BigDecimal(input), new BigDecimal(output));
+    }
+
+    /** 样本 1: 只有环节记录 (没有任何报工) —— 过去整页没有这道工序, 现在要有, 并标明条数来自环节记录。 */
+    @Test
+    void stageRecordsAloneNowShowUpAsTheirOwnProcessRow() {
+        String f = "IT-STAGE-ONLY";
+        stageBatch(f, 301, "plan-s1", "Q-OPEN");
+        stageRecord(f, 1, 301, "切片", "SLICING", "100", "80", false);
+        stageRecord(f, 2, 301, null, "WASHING", "50", "48", false);   // 没填环节名 -> 退回 stage_type 码
+
+        List<Map<String, Object>> rows = repository.aggregateYieldByProcess(f, FROM, TO, "", NONE, NONE);
+        assertThat(rows).extracting(m -> m.get("process_name")).containsExactlyInAnyOrder("切片", "WASHING");
+        Map<String, Object> slice = rows.stream().filter(m -> "切片".equals(m.get("process_name"))).findFirst().orElseThrow();
+        assertThat(new BigDecimal(slice.get("total_input").toString())).isEqualByComparingTo("100");
+        assertThat(new BigDecimal(slice.get("total_output").toString())).isEqualByComparingTo("80");
+        assertThat(slice.get("input_unit_min")).isEqualTo("kg");
+        assertThat(((Number) slice.get("stage_record_count")).intValue()).isEqualTo(1);
+        assertThat(((Number) slice.get("batch_count")).intValue()).isEqualTo(1);
+    }
+
+    /** 样本 2: 只有报工 —— 与改动前一致, stage_record_count = 0。 */
+    @Test
+    void reportsAloneAreUnchangedAndCountNoStageRecords() {
+        String f = "IT-REPORT-ONLY";
+        jdbcTemplate.update("INSERT INTO work_processes VALUES ('WP-R', '切片', 'kg', 'kg', NULL, ?)", f);
+        stageBatch(f, 311, "plan-r1", "Q-OPEN");
+        reportFor(f, 311, 311, "WP-R", "50", "40");
+
+        List<Map<String, Object>> rows = repository.aggregateYieldByProcess(f, FROM, TO, "", NONE, NONE);
+        assertThat(rows).hasSize(1);
+        assertThat(new BigDecimal(rows.get(0).get("total_input").toString())).isEqualByComparingTo("50");
+        assertThat(((Number) rows.get(0).get("stage_record_count")).intValue()).isZero();
+    }
+
+    /**
+     * 样本 3: 两者都有。同名工序合并成一行; 同一批次既有报工又有环节记录时只算报工 (不重复计数);
+     * 已删除、投入为 0、别厂、保密计划的环节记录都不进。
+     */
+    @Test
+    void bothSourcesMergeByProcessNameAndABatchWithReportsIsNeverCountedTwice() {
+        String f = "IT-STAGE-BOTH";
+        jdbcTemplate.update("INSERT INTO work_processes VALUES ('WP-B', '切片', 'kg', 'kg', NULL, ?)", f);
+        // 321: 只有环节记录 100->80 (进)
+        stageBatch(f, 321, "plan-ok", "Q-OPEN");
+        stageRecord(f, 11, 321, "切片", "SLICING", "100", "80", false);
+        // 322: 只有报工 50->40 (进)
+        stageBatch(f, 322, "plan-ok", "Q-OPEN");
+        reportFor(f, 322, 322, "WP-B", "50", "40");
+        // 323: 报工 20->10 + 环节记录 999->1: 同一批只算报工
+        stageBatch(f, 323, "plan-ok", "Q-OPEN");
+        reportFor(f, 323, 323, "WP-B", "20", "10");
+        stageRecord(f, 12, 323, "切片", "SLICING", "999", "1", false);
+        // 应被挡掉的环节记录: 已软删 / 投入 0 (工位累计行) / 保密计划 / 别的工厂的批次
+        stageBatch(f, 324, "plan-ok", "Q-OPEN");
+        stageRecord(f, 13, 324, "切片", "SLICING", "777", "7", true);
+        stageRecord(f, 14, 324, "切片", "SLICING", "0", "7", false);
+        stageBatch(f, 325, "plan-hidden", "Q-OPEN");
+        stageRecord(f, 15, 325, "切片", "SLICING", "555", "5", false);
+        stageBatch("IT-OTHER-FACTORY", 326, "plan-ok", "Q-OPEN");
+        stageRecord("IT-OTHER-FACTORY", 16, 326, "切片", "SLICING", "444", "4", false);
+
+        List<Map<String, Object>> rows = repository.aggregateYieldByProcess(f, FROM, TO, "", NONE, List.of("plan-hidden"));
+        assertThat(rows).hasSize(1);
+        Map<String, Object> row = rows.get(0);
+        assertThat(row.get("process_name")).isEqualTo("切片");
+        assertThat(new BigDecimal(row.get("total_input").toString())).isEqualByComparingTo("170");
+        assertThat(new BigDecimal(row.get("total_output").toString())).isEqualByComparingTo("130");
+        assertThat(((Number) row.get("batch_count")).intValue()).isEqualTo(3);
+        assertThat(((Number) row.get("stage_record_count")).intValue()).isEqualTo(1);
+        assertThat(((Number) row.get("input_unit_kinds")).intValue()).isEqualTo(1);
+
+        // 日期窗: 环节记录在 2026-11-10, 窗外不进
+        assertThat(repository.aggregateYieldByProcess(f, LocalDate.of(2026, 12, 1), TO, "", NONE, List.of("plan-hidden")))
+                .isEmpty();
+        // 按产品排除对环节记录同样生效
+        assertThat(repository.aggregateYieldByProcess(f, FROM, TO, "", List.of("Q-OPEN"), NONE)).isEmpty();
     }
 
     private static String requiredEnv(String name) {

@@ -10,6 +10,7 @@ const props = defineProps<{
   config: AiEntryConfig;
   confirmGuard?: (params: Record<string, unknown>) => string | null;
   guardActionLabel?: string;
+  initialInput?: string;
 }>();
 
 const emit = defineEmits<{
@@ -19,6 +20,16 @@ const emit = defineEmits<{
 }>();
 
 const { messages, loading, previewParams, sendMessage, retry, continueEditing, confirmParams, reset } = useAiChat(props.config);
+const HIDDEN_PREVIEW_KEYS = new Set(['factoryId', 'userId', 'createdBy', 'updatedBy', 'createdAt', 'updatedAt', 'token', 'accessToken', 'refreshToken', 'password']);
+const previewFields = computed(() => {
+  const fields = props.config.fields.filter((field) => !HIDDEN_PREVIEW_KEYS.has(field.key));
+  const known = new Set(fields.map((field) => field.key));
+  const extra = Object.keys(previewParams.value || {})
+    .filter((key) => !known.has(key) && !HIDDEN_PREVIEW_KEYS.has(key)
+      && previewParams.value?.[key] !== undefined && previewParams.value?.[key] !== null && previewParams.value?.[key] !== '')
+    .map((key) => ({ key, label: itemKeyLabel(key), required: false }));
+  return [...fields, ...extra];
+});
 
 /** W1: 骨架屏 3 条, 宽度 92% / 78% / 62%; 超过 3 秒没回就把文字从「正在理解」换成「正在处理」 */
 const SKELETON_BAR_WIDTHS = [92, 78, 62] as const;
@@ -194,9 +205,8 @@ function formatPreviewValue(key: string, value: unknown): string {
     if (value.length === 0) return EMPTY_VALUE_TEXT;
     return value.map((item, i) => {
       if (typeof item === 'object' && item !== null) {
-        // 过滤规则与改前一致 (空串 / 0 / null 不进文本); 只改键名的写法, 不改哪些值显示
         const parts = Object.entries(item)
-          .filter(([, v]) => v !== '' && v !== 0 && v !== null)
+          .filter(([k, v]) => !HIDDEN_PREVIEW_KEYS.has(k) && v !== undefined && v !== '' && v !== null)
           .map(([k, v]) => `${itemKeyLabel(k)}：${v}`);
         return `(${i + 1}) ${parts.join('，')}`;
       }
@@ -222,12 +232,12 @@ function formatPreviewValue(key: string, value: unknown): string {
 watch(() => props.modelValue, (visible) => {
   if (visible) {
     reset();
-    chatInput.value = '';
+    chatInput.value = props.initialInput || '';
     showTutorial.value = false;
     tutorialActive.value = false;
     tutorialStep.value = 0;
   }
-});
+}, { immediate: true });
 </script>
 
 <template>
@@ -496,9 +506,9 @@ watch(() => props.modelValue, (visible) => {
                     </span>
                     <span class="preview-count">{{ filledFieldCount }}/{{ config.fields.length }} 已填</span>
                   </div>
-                  <div class="preview-body">
+                  <div class="preview-body" data-testid="ai-confirm-rows">
                     <div
-                      v-for="field in config.fields"
+                      v-for="field in previewFields"
                       :key="field.key"
                       class="preview-row"
                       data-testid="aie-preview-row"
@@ -696,7 +706,7 @@ $ai-font-stack: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang
 
 .progress-fill {
   height: 100%;
-  background: linear-gradient(90deg, #2D8B57, #409EFF);
+  background: linear-gradient(90deg, #2D8B57, var(--cs-primary));
   border-radius: 2px;
   transition: width 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
@@ -736,7 +746,7 @@ $ai-font-stack: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang
   width: 56px;
   height: 56px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #2D8B57, #409EFF);
+  background: linear-gradient(135deg, #2D8B57, var(--cs-primary));
   color: #fff;
   font-size: 24px;
   font-weight: 700;
@@ -798,7 +808,7 @@ $ai-font-stack: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang
   animation: fadeSlideIn 0.3s ease-out both;
 
   &.demo-user {
-    background: linear-gradient(135deg, #2D8B57, #409EFF);
+    background: linear-gradient(135deg, #2D8B57, var(--cs-primary));
     color: #fff;
     align-self: flex-end;
     border-radius: 10px 10px 4px 10px;
@@ -847,7 +857,7 @@ $ai-font-stack: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang
 .demo-form-btn {
   margin-top: 4px;
   padding: 6px 0;
-  background: linear-gradient(135deg, #2D8B57, #409EFF);
+  background: linear-gradient(135deg, #2D8B57, var(--cs-primary));
   color: #fff;
   text-align: center;
   border-radius: 6px;
@@ -889,7 +899,7 @@ $ai-font-stack: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang
   width: 32px;
   height: 32px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #2D8B57, #409EFF);
+  background: linear-gradient(135deg, #2D8B57, var(--cs-primary));
   color: #fff;
   font-size: 14px;
   font-weight: 700;
@@ -1265,7 +1275,7 @@ $ai-font-stack: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang
   transition: all 0.25s ease;
 
   &.active {
-    background: linear-gradient(135deg, #2D8B57, #409EFF);
+    background: linear-gradient(135deg, #2D8B57, var(--cs-primary));
     color: #fff;
     cursor: pointer;
     box-shadow: 0 2px 8px rgba(45, 139, 87, 0.25);

@@ -12,6 +12,8 @@
 
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { myTodoApiClient, TodoItemDTO } from '../services/api/myTodoApiClient';
+import { useAuthStore } from '../store/authStore';
+import { getFactoryId } from '../types/auth';
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Hook: useMyTodos — 完整待办列表（供 MyTodoListScreen 使用）
@@ -153,4 +155,83 @@ export function useMyTodoCount(
   }, [fetchCount]);
 
   return { count, refetchCount };
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Hook: useMyTodoEntry — 「待办」入口显不显示 + 徽标（B4 App 按权限拼界面）
+// ──────────────────────────────────────────────────────────────────────────────
+
+export interface MyTodoEntry {
+  /** 后端说我有能办的待办类型 → 显示入口（0 条也显示，入口不随条数忽隐忽现） */
+  visible: boolean;
+  /** 待办条数（徽标）；入口不显示时恒为 0，也不去查 */
+  count: number;
+}
+
+/**
+ * 各岗位导航共用的「待办」入口判断。只认后端 `GET /my-todos/types`：
+ * - 非空 → visible，然后才查条数并轮询徽标；
+ * - 空 / 未登录 → 不显示，也不查条数；
+ * - 请求失败 → 保持上一次的结论（首次失败 = 不显示）：宁可晚一点出现，不出一个打开就报错的空入口。
+ * 换账号（user.id / 工厂变化）重新问一次。
+ */
+export function useMyTodoEntry(pollIntervalMs = 30000): MyTodoEntry {
+  const userKey = useAuthStore((state) => {
+    const u = state.user;
+    return u ? `${u.id}:${getFactoryId(u)}` : '';
+  });
+  const [visible, setVisible] = useState(false);
+  const [count, setCount] = useState(0);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    setVisible(false);
+    setCount(0);
+    if (!userKey) return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const resp = await myTodoApiClient.getMyTodoTypes();
+        if (cancelled || !mountedRef.current) return;
+        if (resp.success) {
+          setVisible(Array.isArray(resp.data) && resp.data.length > 0);
+        }
+      } catch {
+        // 保持当前结论（首次 = 不显示）
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [userKey]);
+
+  const fetchCount = useCallback(async () => {
+    try {
+      const resp = await myTodoApiClient.getMyTodoCount();
+      if (mountedRef.current && resp.success) {
+        setCount(resp.data ?? 0);
+      }
+    } catch {
+      // 徽标失败不打扰用户，保留旧值
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!visible) return undefined;
+    void fetchCount();
+    if (!pollIntervalMs) return undefined;
+    const timer = setInterval(() => {
+      void fetchCount();
+    }, pollIntervalMs);
+    return () => clearInterval(timer);
+  }, [visible, fetchCount, pollIntervalMs]);
+
+  return { visible, count: visible ? count : 0 };
 }

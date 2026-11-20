@@ -576,6 +576,7 @@
               :context="selectedNodeContext"
               :context-label="aiContextLabel"
               :quick-prompts="aiQuickPrompts"
+              :is-check-only="isWorkflowCheckOnlyRequest"
               :preview-spec="previewWorkflowSpec"
               :apply-spec="applyWorkflowAIDraft"
               @apply-draft="applyWorkflowAIDraft"
@@ -1161,6 +1162,8 @@ import {
   workflowAiStableJson,
   type WorkflowAiPreview,
 } from './workflowAiPreview';
+import { fillOmittedSpecFields, preserveExistingWorkflowValues } from './workflowAiPreserve';
+import { isWorkflowCheckOnlyRequest } from './workflowAiIntent';
 import WorkflowMaterialNode from './WorkflowMaterialNode.vue';
 import WorkflowProcessNode from './WorkflowProcessNode.vue';
 import WorkflowAuxiliaryNode from './WorkflowAuxiliaryNode.vue';
@@ -1172,7 +1175,7 @@ import WorkflowReworkConfigDrawer from './WorkflowReworkConfigDrawer.vue';
 import WorkflowTimeLimitConfigDrawer from './WorkflowTimeLimitConfigDrawer.vue';
 import type { TimeLimitPortRow } from './workflowTimeLimit';
 import type { WorkflowPortTimeLimit } from '@/api/processTimeLimit';
-import { buildCcpPointsFromSpec, listPendingItems } from './workflowPendingConfirmations';
+import { buildCcpPointsFromSpec, buildProcessParamsFromSpec, listPendingItems } from './workflowPendingConfirmations';
 import {
   FUSED_MATERIAL_OWNER_WIDTH,
   FUSED_PROCESS_OWNER_WIDTH,
@@ -7103,8 +7106,11 @@ async function applyWorkflowAIDraft(
       return (await applyPreparedWorkflowDefinition(applied, identity))
         ? { status: 'applied' } : { status: 'aborted' };
     } else {
-      const compiled = await compileWorkflowSpec(payload.spec as WorkflowSpec, identity);
-      return compiled ? { status: 'applied' } : { status: 'aborted' };
+      // BP-38: 也走「编译出定义 → 保留现有字段 → 应用」, 不再由编译器直接覆写画布。
+      const compiled = await compileWorkflowSpec(payload.spec as WorkflowSpec, identity, false, false);
+      if (!compiled) return { status: 'aborted' };
+      return (await applyPreparedWorkflowDefinition(compiled, identity))
+        ? { status: 'applied' } : { status: 'aborted' };
     }
   }
   if (!Array.isArray(payload.patches)) {
@@ -7206,6 +7212,8 @@ interface WorkflowSpecStep {
   reworkSources?: Array<{ output?: string; inputRatioPercent?: number | null }>;
   /** 本工序的 CCP 控制点; AI 没说的限值/单位保持空 = 待确认。 */
   ccps?: unknown;
+  /** 本工序的工艺标准参数(油温范围等); 没说清的数值/单位保持空 = 待确认, 发布时才写进工序标准参数。 */
+  processParams?: unknown;
 }
 interface WorkflowSpec { rawMaterials?: string[]; steps?: WorkflowSpecStep[] }
 
@@ -7258,11 +7266,15 @@ function projectCompiledDefinitionMetadata(input: ProductProcessWorkflowDefiniti
  * 产出 SKU 先不自动建, 留待用户绑定 (安全)。
  */
 async function compileWorkflowSpec(
-  spec: WorkflowSpec,
+  aiSpec: WorkflowSpec,
   identity: WorkflowIdentity,
   dryRun = false,
   commit = true,
 ): Promise<ProductProcessWorkflowDefinition | null> {
+  // BP-38: 编译器从零建图。模型没写的投入/产出/入口原料先按当前画布补上,
+  // 建完再把能对上号的旧字段(单位、辅料、物料绑定…)补回去 —— 没说的不动。
+  const canvasBeforeCompile = currentDefinition();
+  const spec = fillOmittedSpecFields(canvasBeforeCompile, aiSpec);
   const operationGeneration = loadGeneration;
   const canContinue = () => loadGeneration === operationGeneration
     && isLoadedIdentityCurrent(identity) && canEdit.value;
@@ -7588,6 +7600,9 @@ async function compileWorkflowSpec(
       const ccpPoints = buildCcpPointsFromSpec(
         String(processData.processName), step.ccps, () => `ccp:${nextCompileGraphId()}`, specNotices);
       if (ccpPoints.length) (processData as Record<string, unknown>).ccpPoints = ccpPoints;
+      const processParams = buildProcessParamsFromSpec(
+        String(processData.processName), step.processParams, () => `param:${nextCompileGraphId()}`, specNotices);
+      if (processParams.length) (processData as Record<string, unknown>).processParams = processParams;
       if (pendingMarks.length) (processData as Record<string, unknown>).pendingConfirmations = pendingMarks;
       processDatas[i] = processData;
       // ── 阶段 4: 规格里的调味参数 ──────────────────────────────────────
@@ -7679,9 +7694,13 @@ async function compileWorkflowSpec(
         id: edge.id, source: edge.source, sourceHandle: edge.sourceHandle || 'output',
         target: edge.target, targetHandle: edge.targetHandle || 'input',
       }));
-      compiledDefinition = projectCompiledDefinitionMetadata({
+      const kept = preserveExistingWorkflowValues(canvasBeforeCompile, projectCompiledDefinitionMetadata({
         ...currentDefinition(), nodes: compiledNodes, edges: compiledEdges,
-      });
+      }));
+      compiledDefinition = kept.definition;
+      if (kept.preserved > 0) {
+        specNotices.push(`清空 ${kept.preserved} 项现有配置（AI 没有给出这些值，如单位、辅料、物料绑定），已保留原值`);
+      }
     } else {
       flowNodes.value = nodes;
       flowEdges.value = edges;
@@ -7773,7 +7792,7 @@ function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boole
   z-index: 10;
   border-radius: 10px;
   box-shadow:
-    0 0 0 5px color-mix(in srgb, var(--pair-color, #409eff) 32%, transparent),
+    0 0 0 5px color-mix(in srgb, var(--pair-color, var(--cs-primary)) 32%, transparent),
     0 12px 30px rgba(27, 101, 168, 0.2);
   transition: box-shadow 140ms ease;
 }
@@ -7791,7 +7810,7 @@ function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boole
   z-index: 11;
   border-radius: 10px;
   box-shadow:
-    0 0 0 5px color-mix(in srgb, var(--pair-color, #409eff) 32%, transparent),
+    0 0 0 5px color-mix(in srgb, var(--pair-color, var(--cs-primary)) 32%, transparent),
     0 14px 34px rgba(27, 101, 168, 0.22);
 }
 .workflow-canvas :deep(.vue-flow__node.wf-pair-remote)::before {
@@ -7799,14 +7818,14 @@ function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boole
   position: absolute; left: 8px; top: -25px; height: 20px;
   display: flex; align-items: center; padding: 0 8px;
   border-radius: 10px; color: #fff;
-  background: var(--pair-color, #409eff);
-  box-shadow: 0 3px 10px color-mix(in srgb, var(--pair-color, #409eff) 28%, transparent);
+  background: var(--pair-color, var(--cs-primary));
+  box-shadow: 0 3px 10px color-mix(in srgb, var(--pair-color, var(--cs-primary)) 28%, transparent);
   font-size: 12px; font-weight: 700; white-space: nowrap; pointer-events: none;
 }
 .workflow-canvas :deep(.vue-flow__node.wf-pair-remote)::after {
   content: ''; position: absolute; right: -8px; top: -8px;
   width: 14px; height: 14px; border-radius: 50%;
-  border: 3px solid var(--pair-color, #409eff); background: #fff; pointer-events: none;
+  border: 3px solid var(--pair-color, var(--cs-primary)); background: #fff; pointer-events: none;
 }
 @media (prefers-reduced-motion: no-preference) {
   .workflow-canvas :deep(.vue-flow__node.wf-pair-remote)::after {
@@ -7814,7 +7833,7 @@ function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boole
   }
 }
 @keyframes wf-pair-beacon {
-  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--pair-color, #409eff) 44%, transparent); }
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--pair-color, var(--cs-primary)) 44%, transparent); }
   70% { box-shadow: 0 0 0 13px transparent; }
   100% { box-shadow: 0 0 0 13px transparent; }
 }
@@ -7966,7 +7985,7 @@ function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boole
 }
 .canvas-tool-actions { display: flex; gap: 8px; }
 .canvas-floating-tools.is-batch-selecting {
-  border-color: #409eff;
+  border-color: var(--el-color-primary);
   box-shadow: 0 5px 18px rgb(64 158 255 / 22%);
 }
 .batch-selection-guide {
@@ -8128,7 +8147,7 @@ function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boole
 }
 @keyframes workflow-selected-cell-glow {
   from {
-    outline-color: #409eff;
+    outline-color: var(--el-color-primary);
     box-shadow: 0 0 0 7px rgb(64 158 255 / 18%), 0 0 20px 5px rgb(22 119 255 / 38%);
     filter: drop-shadow(0 0 6px rgb(22 119 255 / 68%)) drop-shadow(0 0 13px rgb(64 158 255 / 44%));
   }
@@ -8199,8 +8218,8 @@ function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boole
   font-size: 13px;
 }
 .raw-input-mode.is-active {
-  border-color: var(--el-color-primary, #409eff);
-  color: var(--el-color-primary, #409eff);
+  border-color: var(--el-color-primary, var(--cs-primary));
+  color: var(--el-color-primary, var(--cs-primary));
   background: var(--el-color-primary-light-9, #ecf5ff);
 }
 .raw-input-relations { display: grid; gap: 8px; }
@@ -8215,7 +8234,7 @@ function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boole
   cursor: pointer;
 }
 .raw-input-relation.is-active {
-  border-color: var(--el-color-primary, #409eff);
+  border-color: var(--el-color-primary, var(--cs-primary));
   background: var(--el-color-primary-light-9, #ecf5ff);
 }
 .raw-input-relation input { grid-area: radio; margin-top: 3px; }
@@ -8264,7 +8283,7 @@ function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boole
   border: 1px solid #ebeef5; border-radius: 8px; font-size: 13px;
 }
 /* 用户点的是哪一行 —— 抽屉里必须认得出来, 否则一行都定位不到就等于没带 rowId。 */
-.bom-detail-row.is-focused { border-color: #409eff; background: #ecf5ff; }
+.bom-detail-row.is-focused { border-color: var(--el-color-primary); background: #ecf5ff; }
 .bom-detail-row-name { color: #303133; font-weight: 600; min-width: 0; overflow-wrap: anywhere; white-space: normal; }
 .bom-detail-row-markers { display: flex; gap: 4px; }
 .bom-detail-marker {

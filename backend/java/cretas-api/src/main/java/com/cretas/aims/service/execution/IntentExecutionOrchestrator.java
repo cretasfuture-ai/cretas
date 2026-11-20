@@ -59,7 +59,6 @@ import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -97,6 +96,7 @@ public class IntentExecutionOrchestrator {
     private final SemanticCacheService semanticCacheService;
     private final RuleEngineService ruleEngineService;
     private final ConversationService conversationService;
+
     private final ConversationMemoryService conversationMemoryService;
     private final ObjectMapper objectMapper;
     private final DashScopeClient dashScopeClient;
@@ -147,6 +147,21 @@ public class IntentExecutionOrchestrator {
 
     static final String CONVERSATIONAL_PROVENANCE_SITE = "conversational-with-report";
 
+    /**
+     * 没有数据支撑的闲聊 / 兜底回复的业务事实护栏 (与 SSE 入口同一个类)。
+     * 默认实例保证裸构造的单测和生产一样走闸: 字段不会是 null, 不存在「没注入就不拦」。
+     */
+    @Autowired(required = false)
+    private com.cretas.aims.ai.grounding.ChatBusinessFactGuard chatBusinessFactGuard =
+            new com.cretas.aims.ai.grounding.ChatBusinessFactGuard();
+
+    static final String CHAT_FACT_GUARD_SITE = "conversational-no-data";
+
+    /** 没有经营报告时的咨询提示词 (报告脱敏失败退回的也是它)。 */
+    static final String NO_DATA_ADVICE_PROMPT = com.cretas.aims.ai.grounding.ChatBusinessFactGuard.PERSONA
+            + com.cretas.aims.ai.grounding.ChatBusinessFactGuard.NO_DATA_RULES
+            + "请提供专业、实用的生产管理建议，不超过300字，使用中文。";
+
     @Autowired(required = false)
     private PreviewTokenService previewTokenService;
 
@@ -188,6 +203,7 @@ public class IntentExecutionOrchestrator {
     @Autowired(required = false)
     private IntentAccessModeFilter intentAccessModeFilter;
 
+
     // C1 clarification business-type filter (restaurant-chat-qa): resolve the factory's business
     // domain + each candidate intent's business_type so the NEED_CLARIFICATION choice list never
     // shows manufacturing options (查询原料库存 / 查询生产批次) to a RESTAURANT tenant.
@@ -201,14 +217,14 @@ public class IntentExecutionOrchestrator {
     @Autowired
     private IntentPermissionGate intentPermissionGate;
 
+    // INTENT-DISTILL D2: 低置信澄清的候选与 SSE 同一个按权限过滤的服务。裸构造的单测里为 null ⇒ 只给「重新描述」
+    // (fail closed), ⛔ 不回落旧的未过滤候选或默认业务按钮。
+    @Autowired(required = false)
+    private ClarificationCandidateService clarificationCandidateService;
+
     @Autowired
     private com.cretas.aims.repository.config.AIIntentConfigRepository intentConfigRepository;
 
-    // ===== Route counters =====
-    private final AtomicLong branchToolDirect = new AtomicLong();
-    private final AtomicLong branchSkill = new AtomicLong();
-    private final AtomicLong branchDynamic = new AtomicLong();
-    private final AtomicLong branchNoMatch = new AtomicLong();
 
     @Value("${cretas.ai.validation.enabled:true}")
     private boolean validationEnabled;
@@ -219,16 +235,6 @@ public class IntentExecutionOrchestrator {
     // 2026-08-05: DEMO_REST 随租户收敛停用, 从 fallback 移除 (与 application.properties 同步)。
     @Value("${cretas.demo.factory-ids:DEMO_REST,DEMO_FACTORY2}")
     private String demoFactoryIdsCsv;
-
-    /** 通用短回复集合 */
-    private static final Set<String> GENERIC_SHORT_REPLIES = Set.of(
-            "查询完成，暂无数据", "操作完成", "查询完成", "查询成功", "执行成功",
-            "查询完成,暂无数据", "处理完成", "请求成功",
-            // 2026-07-23 工厂 AI 复盘: ToolDispatchService 对无 message 的工具
-            // 结果默认填 "操作已完成。" — 该占位符掩盖 formattedText 里的真答案
-            // (前端显示 message || formattedText, 占位符非空则真答案永不露出)。
-            "操作已完成", "操作已完成。"
-    );
 
     @Autowired
     public IntentExecutionOrchestrator(
@@ -292,487 +298,60 @@ public class IntentExecutionOrchestrator {
              var aiAccess = com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.beginOrNoop(aiAccessAudit, factoryId,
                      com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Entry.INTENT_EXECUTION)) {
             IntentExecuteResponse response = executeInScope(factoryId, request, userId, userRole);
-            // Only an unselected, non-executing answer can default to READ. Known
-            // intents must be stamped where their declaration is available; neither
-            // a missing stamp nor caller-supplied text/code proves a read operation.
-            if (response != null && response.getAiMode() == null
-                    && !Boolean.TRUE.equals(response.getIntentRecognized())
-                    && (response.getIntentCode() == null || response.getIntentCode().isBlank())
-                    && response.getConfirmableAction() == null && response.getResultData() == null
-                    && (response.getAffectedEntities() == null || response.getAffectedEntities().isEmpty())
-                    && !Boolean.TRUE.equals(response.getRequiresApproval())) {
-                applyAiModeStamp(response, null, null);
-            }
+            applyUnselectedAnswerReadStamp(response);
             return response;
         }
     }
 
-    private IntentExecuteResponse executeInScope(String factoryId, IntentExecuteRequest request,
-                                          Long userId, String userRole) {
-        IntentExecuteResponse tenantGate = analysisAdmissionResponse(factoryId, userRole);
-        if (tenantGate != null) return tenantGate;
-        if (com.cretas.aims.ai.catalog.FactoryIntentCatalog.isRetiredIntent(request.getIntentCode())) {
-            return retiredCapabilityResponse();
+    /**
+     * Only an unselected, non-executing answer can default to READ. Known intents must be stamped where
+     * their declaration is available; neither a missing stamp nor caller-supplied text/code proves a read
+     * operation. 普通入口经流式管线时 ({@link StreamTurnCollector}) 也调这一份。
+     */
+    public void applyUnselectedAnswerReadStamp(IntentExecuteResponse response) {
+        if (response != null && response.getAiMode() == null
+                && !Boolean.TRUE.equals(response.getIntentRecognized())
+                && (response.getIntentCode() == null || response.getIntentCode().isBlank())
+                && response.getConfirmableAction() == null && response.getResultData() == null
+                && (response.getAffectedEntities() == null || response.getAffectedEntities().isEmpty())
+                && !Boolean.TRUE.equals(response.getRequiresApproval())) {
+            applyAiModeStamp(response, null, null);
         }
+    }
 
-        log.info("执行意图: factoryId={}, userInput={}, intentCode={}, userId={}, role={}",
-                factoryId,
-                request.getUserInput() != null && request.getUserInput().length() > 50 ?
-                        request.getUserInput().substring(0, 50) + "..." : request.getUserInput(),
-                request.getIntentCode(), userId, userRole);
+    // ==================== 流式管线每一轮都调的步骤 (单一实现; PR-2b 抽出, PR-3 起两个入口都跑) ====================
+    // 原普通入口独有的步骤。识别 / 执行收成流式一条管线后 (意图蒸馏③ PR-3, Steve 2026-11-16 口径),
+    // App 流式与 /execute 每一轮都在同一位置调它们; 编排器自己的显式意图路径也调同一份。
 
-        FactoryCapabilityPackRoutingPolicy.Route factoryPackRoute =
-                evaluateFactoryPackRoute(factoryId, request, userRole);
-        if (factoryPackRoute.shouldBlock()) {
-            // 📊 [NarrowPath] 埋点 1/3 —— 只打 taken=true 一侧。
-            // ⚠️ 这道闸有**两个**入口(本方法 + executeWithExplicitIntent), 两处都打。
-            //    只打一处会得出「几乎没人走」的假读数。
-            log.info("[NarrowPath] gate=factoryPack taken=true factoryId={} intentCode={} q={}",
-                    factoryId, request.getIntentCode(),
-                    truncateForTelemetry(request.getUserInput()));
-            return buildFactoryPackNoMatch(factoryPackRoute, factoryPackRoute.reason());
+    /** Drools 校验 (只读查询不进): 不通过返回校验失败卡, 通过返回 null。 */
+    public IntentExecuteResponse droolsValidationBlock(String factoryId, AIIntentConfig intent,
+                                                       IntentExecuteRequest request, Long userId, String userRole) {
+        if (!shouldRunDroolsValidation(intent)) {
+            return null;
         }
-        boolean factoryPackConstrained = factoryPackRoute.isConstrained();
+        ValidationResult validationResult = validateWithDrools(factoryId, intent, request, userId, userRole);
+        return validationResult.isValid() ? null : buildDroolsFailureResponse(intent, validationResult);
+    }
 
-        if (hasNamedSession(request) && !hasTrustedConversationIdentity(
-                factoryId, userId, request.getSessionId())) {
-            return sessionAdmissionDeniedResponse();
+    /** NEED_MORE_INFO 补问 (追问问题 + 参数收集会话); 其它状态原样返回。 */
+    public IntentExecuteResponse enrichNeedMoreInfo(IntentExecuteResponse response, IntentExecuteRequest request,
+                                                    AIIntentConfig intent, String factoryId, Long userId) {
+        if (response == null || !"NEED_MORE_INFO".equals(response.getStatus())) {
+            return response;
         }
+        return enrichWithClarificationQuestions(response, request, intent, factoryId, userId);
+    }
 
-        {}
-
-        // 0. 显式意图代码
-        if (request.getIntentCode() != null && !request.getIntentCode().isEmpty()) {
-            return factoryPackConstrained
-                    ? executeWithExplicitIntent(
-                            factoryId, request, userId, userRole, factoryPackRoute)
-                    : executeWithExplicitIntent(factoryId, request, userId, userRole);
-        }
-
-        String userInput = request.getUserInput();
-        {}
-
-        {}
-        // 📊 [NarrowPath] 埋点 2/3 —— 只打 taken=true 一侧。
-        // ⚠️ 单独一个 if, 不合进上面的表达式: 那是短路求值, 走到 `isRestaurantTenant`
-        //    为 false 时 `hasExplicitReadVeto` 根本不会被求值, 顺带记一笔就会漏。
-        //    多调一次是纯字符串判断, 没有副作用。
-        {}
-        // 写动词是唯一让语义权威被跳过的那个原因时记下来 —— 后面识别层要靠它判「闸说改、
-        // 解析器说看」的矛盾。两个布尔从同一个前提推导, 不各写一遍, 免得日后只改一处。
-
-
-        // 0.1. W1b: early VETO gate in the execution layer. The orchestrator's own phrase shortcut
-        // (#0.2 below) is contains-based and would execute "看订单" inside "别给我看订单" — bypassing
-        // the recognition-layer veto gate. Mirror it here. Skipped for explicit intentCode (handled
-        // above), so a user explicitly confirming a write is never vetoed.
-        //   - VETO_READ  → return clarification immediately (no phrase shortcut, no execution).
-        //   - VETO_WRITE → guard the short-circuits below so the request falls through to
-        //                  recognizeIntentWithConfidence, which already handles VETO_WRITE safely
-        //                  (OUT_OF_DOMAIN / read-twin, never an executed write).
-        boolean negationVetoWrite = false;
-        {}
-        {}
-        {}
-        {}
-        {}
-        // The comprehensive synthesis engine is an existing deterministic
-        // multi-dimension path (FactBook + optional narrative LLM). Route
-        // explicit synthesis wording, or a genuine multi-dimension analysis
-        // request, before the restaurant single-intent semantic planner.
-        // Otherwise a dimension word such as "排班" can be intercepted by an
-        // early single-intent phrase and the 21-dimension engine never runs.
-        // The multi-dimension form needs at least three distinct business
-        // dimensions plus analysis/cause/advice wording, so ordinary
-        // revenue/dish/margin questions remain under the immutable QueryPlan.
-        {}
-        {}
-        if (!factoryPackConstrained
-                && userInput != null && !userInput.isEmpty()
-                && !hasExplicitReadVeto(userInput)) {
-
-            {}
-        }
-        String vInput = request.getUserInput();
-        if (vInput != null && !vInput.isEmpty()) {
-            QueryPreprocessorService.NegationKind vk;
-            try {
-                vk = queryPreprocessorService.detectNegationVeto(vInput, knowledgeBase);
-            } catch (Exception e) {
-                log.warn("[W1b] orchestrator detectNegationVeto failed, fail-open NONE for input='{}': {}", vInput, e.toString());
-                vk = QueryPreprocessorService.NegationKind.NONE;
-            }
-            {}
-            if (vk == QueryPreprocessorService.NegationKind.VETO_READ) {
-                log.info("[W1b] orchestrator VETO_READ → clarification (no phrase shortcut, no execution): '{}'", vInput);
-                return buildNegationVetoClarificationResponse(vInput);
-            }
-            negationVetoWrite = (vk == QueryPreprocessorService.NegationKind.VETO_WRITE);
-        }
-
-        // 0.15. 餐饮老板动作建议统一入口:
-        // Web Admin 只调用 Java /ai-intents/execute；需要 Python 深度分析时由 Java 内部路由。
-        // 放在普通餐饮 phrase shortcut 前面，避免“提高营收/排班/套餐/桌型”被普通查询工具抢走。
-        // Owner-action is advisory/read-only. Keep routing restaurant老板 follow-ups like
-        // "不要套餐，今天排班和备货怎么调？" through this path even when negation
-        // pre-processing marks the wording as VETO_WRITE; otherwise it falls into a
-        // low-level report intent and returns "missing month_summary" instead of a decision.
-        {}
-
-        // 0.2. Sprint 12 cache-fix Phase C — Phrase shortcut moved AHEAD of conversation
-        //      continuation to defeat auto-mount inheritance bug.
-        //
-        // PRIOR STATE (Sprint 11 Round 7 + Sprint 12 PR #246):
-        //   #0.3 conversation continuation ran FIRST. When a Vue Workdesk auto-mounted with
-        //   intentCode=DAILY_CUSTOMER_FOLLOWUP, the response set conversation status=COMPLETED
-        //   bound to that intent. When the user then typed a phrase ("帮我看上月损溢异常" etc.),
-        //   handleConversationContinuation (line 576-580) detected isCompleted + non-null
-        //   intentCode → setIntentCode(DAILY_CUSTOMER_FOLLOWUP) + forceExecute → routed via
-        //   executeWithExplicitIntent. Phrase shortcut at the old #0.25 position never ran.
-        //   This is the 9/12 misroute mechanism per AI 工厂 5/28 audit gh issue #277 H2 hypothesis.
-        //
-        // CURRENT FIX (Sprint 12 cache-fix Phase C):
-        //   Phrase shortcut at #0.2 runs FIRST when userInput is non-empty. If the user's input
-        //   matches a known phrase AND resolves to a configured (or platform-level) intent, the
-        //   shortcut takes over — user-intent always wins over inherited conversation state.
-        //   Conversation continuation still runs at #0.3 for the cases shortcut declines to handle
-        //   (one-word answers, clarification responses, anything not in the phrase map).
-        //
-        // Safety: tryOrchestratorPhraseShortcut returns null when no phrase matches, so non-phrase
-        // inputs fall through unchanged to continuation → identical behavior for clarification flows.
-        // executeWithExplicitIntent does NOT route through continuation (sessionId is passed through
-        // but conversationService is only consulted for in-progress sessions — explicit intent
-        // bypasses the inheritance path).
-        //
-        // Phrase confidence is 0.96 (matching v33.1 EarlyPhrase tier so /recognize and /execute
-        // produce consistent routing).
-        if (!factoryPackConstrained
-                && !negationVetoWrite && userInput != null && !userInput.isEmpty()) {
-
-            {}
-        }
-        if (!negationVetoWrite && userInput != null && !userInput.isEmpty()) {
-            IntentMatchResult earlyPhraseMatch = tryOrchestratorPhraseShortcut(
-                    userInput,
-                    factoryId,
-                    factoryPackConstrained ? "FACTORY" : null);
-            if (earlyPhraseMatch != null && earlyPhraseMatch.hasMatch()) {
-                AIIntentConfig phraseIntent = earlyPhraseMatch.getBestMatch();
-                // R20c: 餐饮租户的 OUT_OF_DOMAIN 短语 ("今天天气怎么样") 不在此
-                // 短路 — 放行到 tiered 反转, Python 给餐饮语境的域外诚实拒答;
-                // 此处执行会落到工厂措辞的通用助手回复。
-                IntentExecuteResponse phraseWriteReadAmbiguity =
-                        null;
-                if (phraseWriteReadAmbiguity != null) {
-                    return phraseWriteReadAmbiguity;
-                }
-                {
-                log.info("[Sprint12-CacheFix-EarlyPhrase] Pre-continuation phrase shortcut: input='{}', intentCode={}",
-                        userInput, phraseIntent.getIntentCode());
-                IntentExecuteRequest phraseRequest = IntentExecuteRequest.builder()
-                        .userInput(userInput)
-                        .intentCode(phraseIntent.getIntentCode())
-                        .sessionId(request.getSessionId())
-                        .enableThinking(request.getEnableThinking())
-                        .thinkingBudget(request.getThinkingBudget())
-                        .context(request.getContext())
-                        // P1 读写分块: mode 随短语短路透传, READ 模式在显式意图路径继续生效
-                        .mode(request.getMode())
-                        // P1.5b: previewOnly 是请求级硬契约, 内部重建必须携带 —
-                        // 否则预览请求被 SITE A 误判为执行而拦成确认卡 (实测发现)
-                        .previewOnly(request.getPreviewOnly())
-                        .build();
-                return executeWithExplicitIntent(
-                        factoryId, phraseRequest, userId, userRole, factoryPackRoute);
-                }
-            }
-        }
-
-        // Parameter-filling continuations stay in Java when the semantic-first
-        // restaurant path is disabled or the request is an operational write.
-        if (!factoryPackConstrained
-                && request.getSessionId() != null && !request.getSessionId().isEmpty()) {
-            IntentExecuteResponse conversationResponse = handleConversationContinuation(
-                    factoryId, request, userId, userRole);
-            if (conversationResponse != null) {
-                return conversationResponse;
-            }
-        }
-
-        // 0.3. 早期问题类型检测
-        if (!factoryPackConstrained
-                && !negationVetoWrite && userInput != null && !userInput.isEmpty()) {
-            IntentExecuteResponse earlyRouteResponse = handleEarlyQuestionTypeDetection(
-                    factoryId, userInput, request, userId, userRole);
-            if (earlyRouteResponse != null) {
-                return earlyRouteResponse;
-            }
-        }
-
-        // 0.5. 语义缓存
-        if (userInput != null && !userInput.isEmpty()) {
-            handleSemanticCache(factoryId, userInput, request);
-        }
-
-        // 1. 识别意图 (former phrase shortcut moved up to position #0.25; this branch is now
-        //    only the normal recognition pipeline)
-        IntentMatchResult matchResult = null;
-
-        if (matchResult == null) {
-            try {
-                // spec §8.2 洞②: 把 tab 模式带进识别层, 让写意图在咨询 tab 根本不进候选集,
-                // 而不是靠下面 #4.4 的"识别后拦"。bestMatch 仍会保留写意图, 那是有意的 ——
-                // 拦截卡需要它来渲染"请切换到【操作】页"的导航。
-                Long recognizerUserId = hasTrustedConversationIdentity(
-                        factoryId, userId, request.getSessionId()) ? userId : null;
-                String recognizerSessionId = recognizerUserId == null ? null : request.getSessionId();
-                matchResult = aiIntentService.recognizeIntentWithConfidence(
-                        request.getUserInput(), factoryId, 3, recognizerUserId, userRole, recognizerSessionId,
-                        request.getMode(), resolveUserPermissionsForFiltering(request.getMode(), userId, factoryId));
-            } catch (LlmSchemaValidationException e) {
-                log.warn("LLM Schema 验证失败: type={}, message={}", e.getFailureType(), e.getMessage());
-                return buildValidationFailureResponse(factoryId, request.getUserInput(), e);
-            }
-        }
-
-        if (matchResult != null && matchResult.hasMatch()
-                && SupplierComparisonReadIntent.CODE.equals(matchResult.getBestMatch().getIntentCode())) {
-            Optional<AIIntentConfig> canonical = SupplierComparisonReadIntent.resolve(
-                    factoryId, toolRegistry, intentConfigRepository);
-            if (canonical.isEmpty()) return buildNoPermissionResponse(matchResult.getBestMatch());
-            matchResult.setBestMatch(canonical.get());
-            IntentExecuteResponse denied = checkIntentPermission(canonical.get(), factoryId, userId, userRole);
-            if (denied != null) return denied;
-        }
-
-        if (factoryPackConstrained
-                && (matchResult.getQuestionType() == QuestionType.GENERAL_QUESTION
-                || matchResult.getQuestionType() == QuestionType.CONVERSATIONAL)) {
-            return buildFactoryPackNoMatch(factoryPackRoute, "general-analysis-not-allowed");
-        }
-
-        // 2. 二次确认
-        if (!factoryPackConstrained
-                && matchResult.hasMatch() && Boolean.TRUE.equals(matchResult.getRequiresConfirmation())
-                && !Boolean.TRUE.equals(request.getForceExecute())) {
-            return buildClarificationResponse(matchResult, factoryId);
-        }
-
-        // 2b. 通用咨询/闲聊
-        if (matchResult.getQuestionType() == QuestionType.GENERAL_QUESTION ||
-            matchResult.getQuestionType() == QuestionType.CONVERSATIONAL) {
-            String llmResponse = generateConversationalResponse(factoryId, request.getUserInput(),
-                    matchResult.getQuestionType(), request.getEnableThinking(), request.getThinkingBudget());
-            return IntentExecuteResponse.builder()
-                    .intentRecognized(false)
-                    .status("COMPLETED")
-                    .message(llmResponse)
-                    .formattedText(llmResponse)
-                    .executedAt(LocalDateTime.now())
-                    .build();
-        }
-
-        // 3. 无匹配
-        if (!matchResult.hasMatch()) {
-            return factoryPackConstrained
-                    ? buildFactoryPackNoMatch(factoryPackRoute, "recognizer-no-match")
-                    : buildNoMatchResponse(matchResult, factoryId, request, userId, userRole);
-        }
-
-        AIIntentConfig intent = matchResult.getBestMatch();
-        if (com.cretas.aims.ai.catalog.FactoryIntentCatalog.isRetiredIntent(intent.getIntentCode())) {
-            return retiredCapabilityResponse();
-        }
-        log.info("识别到意图: code={}, category={}, sensitivity={}, matchMethod={}, confidence={}",
-                intent.getIntentCode(), intent.getIntentCategory(), intent.getSensitivityLevel(),
-                matchResult.getMatchMethod(), matchResult.getConfidence());
-
-        IntentExecuteResponse writeReadAmbiguity =
-                null;
-        if (writeReadAmbiguity != null) {
-            return writeReadAmbiguity;
-        }
-
-        if (factoryPackConstrained) {
-            IntentExecuteResponse permissionDenied = checkIntentPermission(intent, factoryId, userId, userRole);
-            if (permissionDenied != null) {
-                return permissionDenied;
-            }
-            IntentExecuteResponse factoryPackDecision = applyFactoryPackDecision(
-                    factoryPackRoute, intent);
-            if (factoryPackDecision != null) {
-                return factoryPackDecision;
-            }
-            if (Boolean.TRUE.equals(matchResult.getRequiresConfirmation())
-                    && !Boolean.TRUE.equals(request.getForceExecute())) {
-                IntentExecuteResponse clarification = buildFactoryPackNoMatch(
-                        factoryPackRoute, "recognizer-confirmation-required");
-                applyAiModeStamp(clarification, intent, intent.getToolName());
-                return clarification;
-            }
-        }
-
-        // 权限检查 (P1: required_permission 权限码优先, 空回落 requiredRoles 旧逻辑)
-        if (!factoryPackConstrained) {
-            IntentExecuteResponse permissionDenied = checkIntentPermission(intent, factoryId, userId, userRole);
-            if (permissionDenied != null) {
-                return permissionDenied;
-            }
-        }
-
-        // P1 读写分块 §4.4: 咨询 tab (mode=READ) 强制只读 — 写意图不进审批/slot-filling/执行,
-        // 返回跳转提示卡 (防呆 Rule 5: dead-end 改导航)。
-        if ("READ".equalsIgnoreCase(request.getMode()) && isWriteIntentDeclarationAware(intent)) {
-            return buildReadModeWriteBlockedResponse(intent);
-        }
-
-        // 审批检查
-        if (Boolean.TRUE.equals(intent.getRequiresApproval())
-                && !Boolean.TRUE.equals(request.getPreviewOnly())) {
-            return buildApprovalResponse(intent);
-        }
-
-        // 业态门控 (Sprint 13 #305): a domain-exclusive intent (business_type RESTAURANT/FACTORY)
-        // matched on a mismatched factory.type → honest "本厂非该业态" empty-state + appropriate
-        // next-action, instead of executing a tool that returns a misleading half-broken "数据不可用".
-        if (!factoryPackConstrained) {
-            IntentExecuteResponse businessTypeGate = checkBusinessTypeGate(factoryId, intent);
-            if (businessTypeGate != null) {
-                return businessTypeGate;
-            }
-        }
-
-        // Drools 验证
-        // Read-only query intents should not enter the Drools validation engine:
-        // the engine is meant to guard writes/critical actions, and repeated
-        // compilation on high-volume chat queries can exhaust JVM Metaspace.
-        if (shouldRunDroolsValidation(intent)) {
-            ValidationResult validationResult = validateWithDrools(factoryId, intent, request, userId, userRole);
-            if (!validationResult.isValid()) {
-                return buildDroolsFailureResponse(intent, validationResult);
-            }
-        }
-
-        // 3.5. Skill 优先检查
-        String boundToolName = intent.getToolName();
-        if (dynamicToolSelectionService.isSkillsEnabled()
-                && (boundToolName == null || boundToolName.isBlank())) {
-            IntentExecuteResponse skillResponse = dynamicToolSelectionService.trySkillRoute(
-                    request.getUserInput(), factoryId, userId, userRole);
-            if (skillResponse != null) {
-                long count = branchSkill.incrementAndGet();
-                log.info("[Branch:Skill] Skill 优先匹配成功: total={}", count);
-                return finishSkillBranchResponse(factoryId, request, intent, userId, skillResponse);
-            }
-
-            // Sprint 9 P0.1 fix (2026-05-21): Sprint 8 WORKDESK intents (DAILY_CUSTOMER_FOLLOWUP /
-            // MONTHLY_FINANCIAL_CLOSE / FOOD_SAFETY_RECALL 等) bind tool_name=NULL + 依赖 Skill 路由.
-            // 但 trySkillRoute 用 Skill 自己 keywords 匹用户原文 — 若 LLM 已正确识别 intent
-            // 但用户原文不含 Skill triggers (例如 "客户跟进" 在 intent keywords 但 Skill triggers
-            // 是 "今天跟谁" / "今日跟进"), trySkillRoute 返 null → fall through 到
-            // buildNoToolResponse → 报 "暂不支持此类型的意图执行: WORKDESK". P0 阻塞性 bug.
-            //
-            // Fix: 当 intent 已识别且 tool_name=NULL 时, 用 intent_code (UPPER_SNAKE) →
-            // skill_name (lower-kebab) 直接 lookup Skill, 绕过 keyword 匹配.
-            IntentExecuteResponse explicitSkillResponse = dynamicToolSelectionService
-                    .tryExplicitSkillRouteForIntent(intent, request.getUserInput(), factoryId, userId, userRole);
-            if (explicitSkillResponse != null) {
-                long count = branchSkill.incrementAndGet();
-                log.info("[Branch:Skill] 显式 Skill 路由 (by intent_code) 成功: intentCode={}, total={}",
-                        intent.getIntentCode(), count);
-                return finishSkillBranchResponse(factoryId, request, intent, userId, explicitSkillResponse);
-            }
-        }
-
-        // 3.6. Slot Filling
-        if (canUseStatefulConversation(factoryId, userId, request)
-                && !Boolean.TRUE.equals(request.getSkipSlotFilling()) && slotFillingService != null) {
-            IntentExecuteResponse slotFillingResponse = slotFillingService.checkAndStartSlotFilling(
-                    factoryId, userId, intent, request, matchResult);
-            if (slotFillingResponse != null) {
-                if (slotFillingResponse.getFormattedText() == null
-                        && slotFillingResponse.getMessage() != null
-                        && slotFillingResponse.getMessage().length() >= 5) {
-                    slotFillingResponse.setFormattedText(slotFillingResponse.getMessage());
-                }
-                applyAiModeStamp(slotFillingResponse, intent, intent.getToolName());
-                return slotFillingResponse;
-            }
-        }
-
-        // 4. 路由到执行器
-        String toolName = intent.getToolName();
-        IntentExecuteResponse response;
-
-        if (toolName != null && !toolName.isEmpty()) {
-            Optional<ToolExecutor> toolOpt = toolRegistry.getExecutor(toolName);
-            if (toolOpt.isPresent()) {
-                long count = branchToolDirect.incrementAndGet();
-                log.info("[Branch:ToolDirect] 使用 Tool 执行: intentCode={}, toolName={}, total={}",
-                        intent.getIntentCode(), toolName, count);
-                response = toolDispatchService.executeWithTool(toolOpt.get(), factoryId, request, intent, userId, userRole, matchResult);
-            } else {
-                log.warn("Tool 未找到: toolName={}, intentCode={}", toolName, intent.getIntentCode());
-                response = toolDispatchService.buildNoToolResponse(intent);
-            }
-        } else if (dynamicToolSelectionService.isSkillsEnabled()
-                && dynamicToolSelectionService.requiresDynamicSelection(matchResult)) {
-            long count = branchDynamic.incrementAndGet();
-            log.info("[Branch:Dynamic] 触发动态工具选择: total={}", count);
-            response = dynamicToolSelectionService.executeWithDynamicToolSelection(
-                    factoryId, request, intent, matchResult, userId, userRole);
-        } else if (dynamicToolSelectionService.requiresDynamicSelection(matchResult)) {
-            long count = branchDynamic.incrementAndGet();
-            log.info("[Branch:Dynamic] 触发动态工具选择(无Skill): total={}", count);
-            response = dynamicToolSelectionService.executeWithDynamicToolSelection(
-                    factoryId, request, intent, matchResult, userId, userRole);
-        } else {
-            // Sprint 9 P0.1 fix (2026-05-21): 最终 fallback 前再尝试一次显式 Skill 路由
-            // (覆盖 dynamicToolSelectionService.isSkillsEnabled() = false 但 SkillRouter
-            // 仍可用 / Skill 已注册但 keyword 没匹的 corner case).
-            IntentExecuteResponse explicitSkillFallback = dynamicToolSelectionService
-                    .tryExplicitSkillRouteForIntent(intent, request.getUserInput(), factoryId, userId, userRole);
-            if (explicitSkillFallback != null) {
-                long count = branchSkill.incrementAndGet();
-                log.info("[Branch:Skill] 显式 Skill 路由 (NoMatch fallback) 成功: intentCode={}, total={}",
-                        intent.getIntentCode(), count);
-                response = explicitSkillFallback;
-            } else {
-                long count = branchNoMatch.incrementAndGet();
-                log.warn("[Branch:NoMatch] 无路由匹配: intentCode={}, total={}", intent.getIntentCode(), count);
-                response = toolDispatchService.buildNoToolResponse(intent);
-            }
-        }
-
-        // 路由分支统计
-        logBranchStats();
-
-        // 6.5. NEED_MORE_INFO enrichment
-        if ("NEED_MORE_INFO".equals(response.getStatus())) {
-            response = enrichWithClarificationQuestions(response, request, intent, factoryId, userId);
-        }
-
-        // 6.8. 结果格式化 (先换成这个人看得到的那一份数据)
-        boolean priceMasked = applyCallerPriceView(response, userId);
-        applyResultFormatting(response, userId);
-
-        // 6.9. formattedText 兜底
-        applyFormattedTextFallback(factoryId, response, priceMasked);
-
-        // 6.95. P1 读写分块: 终点统一补 aiMode (前端据此选卡片形态)
-        applyAiModeStamp(response, intent, toolName);
-
-        // 7. 缓存
-        processResponseCaching(factoryId, request, matchResult, response);
-
-        // 8. 对话记忆
+    /** 8. 对话记忆: 执行过的一轮 (任何状态) 写进本人会话记忆 + 实体槽; 只给绑定的工厂账号。 */
+    public void recordExecutedTurnMemory(String factoryId, IntentExecuteRequest request,
+                                         IntentExecuteResponse response, IntentMatchResult matchResult, Long userId) {
         // D1-fix: Ensure ConversationMemory row exists before writing slots/messages.
         // ConversationMemoryServiceImpl.updateEntitySlot / addMessage silently bail out
         // when the session row does not yet exist (no auto-create). The explicit-intent
         // path (executeWithExplicitIntent → persistConversationMemoryForExplicitIntent)
         // already calls getOrCreateContext first; mirror that guarantee here so DISH /
         // STORE slots written by extractAndUpdateEntitySlots are actually persisted.
-        if (hasBoundSupplierFactoryActor(factoryId, userId)
+        if (request != null && hasBoundSupplierFactoryActor(factoryId, userId)
                 && request.getSessionId() != null && !request.getSessionId().isEmpty()) {
             try {
                 ConversationContext owner = conversationMemoryService.getOrCreateContext(factoryId, userId, request.getSessionId());
@@ -784,8 +363,58 @@ public class IntentExecutionOrchestrator {
                         request.getSessionId(), e.getMessage());
             }
         }
+    }
 
-        return response;
+    /** 个人工资明细: 整轮拒答 (识别之前), 见 PersonalPayRefusalGuard。 */
+    public static IntentExecuteResponse personalPayRefusalResponse() {
+        String message = com.cretas.aims.ai.tool.PersonalPayRefusalGuard.MESSAGE;
+        return IntentExecuteResponse.builder()
+                .intentRecognized(false)
+                .status(com.cretas.aims.ai.tool.PersonalPayRefusalGuard.STATUS)
+                .aiMode("READ")
+                .message(message)
+                .formattedText(message)
+                .executedAt(java.time.LocalDateTime.now())
+                .build();
+    }
+
+    /**
+     * 问别家 (竞争对手 / 同行 / 行业平均) 的成本、价格、毛利: 整轮拒答 (识别和权限判定之前), 见
+     * OwnFactoryDataOnlyGuard#refusesBeforeRouting。不执行任何查询, 也不拿本厂数代替。
+     */
+    public static IntentExecuteResponse externalDataRefusalResponse(String entry, String factoryId) {
+        // 被拒的轮次留一条带标记的日志 (飞轮 / 评测能数到这类问题); ⛔ 不记原话等数据内容
+        log.info("[PreRoutingRefusal] guard=externalData status={} entry={} factoryId={}",
+                com.cretas.aims.ai.tool.OwnFactoryDataOnlyGuard.STATUS, entry, factoryId);
+        String message = com.cretas.aims.ai.tool.OwnFactoryDataOnlyGuard.MESSAGE;
+        return IntentExecuteResponse.builder()
+                .intentRecognized(false)
+                .status(com.cretas.aims.ai.tool.OwnFactoryDataOnlyGuard.STATUS)
+                .aiMode("READ")
+                .message(message)
+                .formattedText(message)
+                .executedAt(java.time.LocalDateTime.now())
+                .build();
+    }
+
+    private IntentExecuteResponse executeInScope(String factoryId, IntentExecuteRequest request,
+                                          Long userId, String userRole) {
+        // 意图蒸馏③ PR-3: 识别 / 执行只有流式管线一条 (StreamTurnCollector → SseStreamingService), 编排器的
+        // 识别分支 (短语快捷、续轮、任务恢复、早期问题类型、识别、2b 直答、Skill / 动态选工具 / 执行) 已删。
+        // 这里只剩显式意图码 (按钮点选、参数确认后执行、预览、公开演示、多意图子请求) 的路径。
+        if (request == null || request.getIntentCode() == null || request.getIntentCode().isBlank()) {
+            // 生产上门面 / 多意图回退都把无意图码的请求交给流式管线, 走到这里是接线错了: 如实失败, 不在这里另识别一遍
+            log.error("编排器收到无意图码的请求 (应走流式管线): factoryId={}", factoryId);
+            String message = "这次请求没有交给识别管线，未执行任何操作。请重试。";
+            return IntentExecuteResponse.builder()
+                    .intentRecognized(false)
+                    .status("FAILED")
+                    .message(message)
+                    .formattedText(message)
+                    .executedAt(LocalDateTime.now())
+                    .build();
+        }
+        return executeWithExplicitIntentInScope(factoryId, request, userId, userRole);
     }
 
     /**
@@ -806,6 +435,12 @@ public class IntentExecutionOrchestrator {
                                                              Long userId, String userRole) {
         IntentExecuteResponse tenantGate = analysisAdmissionResponse(factoryId, userRole);
         if (tenantGate != null) return tenantGate;
+        if (com.cretas.aims.ai.tool.PersonalPayRefusalGuard.refuses(request.getUserInput())) {
+            return personalPayRefusalResponse();
+        }
+        if (com.cretas.aims.ai.tool.OwnFactoryDataOnlyGuard.refusesBeforeRouting(request.getUserInput())) {
+            return externalDataRefusalResponse("explicit", factoryId);
+        }
         if (com.cretas.aims.ai.catalog.FactoryIntentCatalog.isRetiredIntent(request.getIntentCode())) {
             return retiredCapabilityResponse();
         }
@@ -867,84 +502,21 @@ public class IntentExecutionOrchestrator {
             return factoryPackDecision;
         }
 
-        // P1 读写分块 §4.4: 咨询 tab (mode=READ) 兜底 — 显式意图/短语短路路径命中写意图同样拦截,
-        // 先于 W0 写确认门 (READ 模式下不该出现确认卡, 只给跳转提示)。
-        if ("READ".equalsIgnoreCase(request.getMode()) && isWriteIntentDeclarationAware(intent)) {
-            return buildReadModeWriteBlockedResponse(intent);
-        }
-
-        // W0 write-guard (intent-w0) — SITE A: the convergence point all explicit-code / forced /
-        // multi-intent / phrase-shortcut / conversation-continuation paths funnel through. The guard
-        // is deliberately NOT conditioned on request.getForceExecute() (which is hard-set true by the
-        // multi-intent and conversation-continuation paths and is exactly what must NOT skip the
-        // guard). previewOnly requests are allowed (they preview, not execute). Confirmation is
-        // process-local authority issued only after an atomic single-use token claim; raw request
-        // context values such as confirmed=true are never trusted.
-        java.util.Map<String, Object> ctx = request.getContext() != null ? request.getContext() : java.util.Map.of();
-        if (writeGuardService.isWriteIntent(intent)
-                && !Boolean.TRUE.equals(request.getPreviewOnly())
-                && !writeGuardService.isConfirmed(ctx)) {
-            log.info("W0 write-guard: blocked write intent {} (forceExecute={}, confirmed=false)",
-                    intent.getIntentCode(), request.getForceExecute());
-            return IntentExecuteResponse.builder()
-                    .intentRecognized(true)
-                    .intentCode(intent.getIntentCode())
-                    .intentName(intent.getIntentName())
-                    .status("WRITE_CONFIRM_REQUIRED")
-                    .message("「" + intent.getIntentName() + "」是写入/修改操作，执行前需要确认。")
-                    .requiresApproval(true)
-                    // P1 读写分块: 确认卡属写路径, 显式标记 (早退路径不经 6.95 统一 stamp)
-                    .aiMode("WRITE")
-                    .executedAt(java.time.LocalDateTime.now())
-                    .build();
-        }
-
-        // Approval governs the mutation, not its read-only TCC preview. Keeping
-        // previewOnly outside this gate lets the user inspect before/after and
-        // impact details before deciding whether to request approval/confirm.
-        if (Boolean.TRUE.equals(intent.getRequiresApproval())
-                && !Boolean.TRUE.equals(request.getPreviewOnly())) {
-            return buildApprovalResponse(intent);
-        }
-
-        // 业态门控 (Sprint 13 #305): this explicit-intent path is reached for an explicit
-        // intentCode AND for phrase-shortcut matches (execute() #0 / #0.2 delegate here),
-        // bypassing the gate in the main matching flow. Gate here too so a domain-exclusive
-        // intent (e.g. RESTAURANT_ECONOMICS_ANALYSIS) on a mismatched factory.type returns the
-        // honest "本厂非该业态" empty-state instead of executing a tool with no data.
-        if (!factoryPackRoute.isConstrained()) {
-            IntentExecuteResponse businessTypeGate = checkBusinessTypeGate(factoryId, intent);
-            if (businessTypeGate != null) {
-                return businessTypeGate;
-            }
-        }
-
-        // Preview mode
-        if (Boolean.TRUE.equals(request.getPreviewOnly()) && intent.getToolName() != null && !intent.getToolName().isEmpty()) {
-            Optional<ToolExecutor> previewToolOpt = toolRegistry.getExecutor(intent.getToolName());
-            if (previewToolOpt.isPresent() && previewToolOpt.get().supportsPreview()) {
-                IntentExecuteResponse preview = toolDispatchService.executeToolPreview(
-                        previewToolOpt.get(), factoryId, request, intent, userId, userRole);
-                applyAiModeStamp(preview, intent, intent.getToolName());
-                return preview;
-            }
-            IntentExecuteResponse unsupportedPreview = IntentExecuteResponse.builder()
-                    .intentRecognized(true)
-                    .intentCode(intent.getIntentCode())
-                    .intentName(intent.getIntentName())
-                    .status("FAILED")
-                    .message("预览模式暂不支持此意图类型")
-                    .executedAt(LocalDateTime.now())
-                    .build();
-            applyAiModeStamp(unsupportedPreview, intent, intent.getToolName());
-            return unsupportedPreview;
+        // 咨询页拦写 → 审批 → 业态门 → 先列可选对象 → 一线未开放 → W0 写确认卡 → 预览: 两入口一份 (PR-3b)
+        IntentExecuteResponse stopped = explicitIntentStopBeforeExecution(
+                factoryId, request, intent, userId, userRole, factoryPackRoute);
+        if (stopped != null) {
+            return stopped;
         }
 
         // Tool 执行
         String toolName = intent.getToolName();
         IntentExecuteResponse response;
 
-        if (toolName != null && !toolName.isEmpty()) {
+        IntentExecuteResponse paginationReplay = executePaginationReplay(factoryId, request, intent, userId, userRole);
+        if (paginationReplay != null) {
+            response = paginationReplay;
+        } else if (toolName != null && !toolName.isEmpty()) {
             Optional<ToolExecutor> toolOpt = toolRegistry.getExecutor(toolName);
             if (toolOpt.isPresent()) {
                 response = toolDispatchService.executeWithTool(toolOpt.get(), factoryId, request, intent, userId, userRole, null);
@@ -1036,6 +608,10 @@ public class IntentExecutionOrchestrator {
                         userId,
                         confirmationProof.commandDigest());
         if (!claimResult.isSuccess()) {
+            IntentExecuteResponse replay = replayedConfirmationResponse(claimResult.getExistingStatus());
+            if (replay != null) {
+                return replay;
+            }
             return IntentExecuteResponse.builder()
                     .status("FAILED")
                     .message(claimResult.getMessage())
@@ -1046,6 +622,8 @@ public class IntentExecutionOrchestrator {
         var token = claimResult.getToken();
         String claimId = claimResult.getClaimId();
         String intentCode = token.getIntentCode();
+        // 工具一旦被调用, 之后的任何异常都可能发生在写入提交之后 → 只能记「结果不明」, 不能记失败
+        boolean toolInvoked = false;
 
         try {
             if (com.cretas.aims.ai.catalog.FactoryIntentCatalog.isRetiredIntent(intentCode)) {
@@ -1102,7 +680,7 @@ public class IntentExecutionOrchestrator {
                     previewTokenService.resolveClaim(confirmToken, claimId, false, denied.getMessage());
                     return denied;
                 }
-                if (Boolean.TRUE.equals(intentConfig.getRequiresApproval())) {
+                if (IntentTurnSharedSteps.stopsForApproval(intentConfig, null)) {
                     IntentExecuteResponse approval = buildApprovalResponse(intentConfig);
                     previewTokenService.resolveClaim(confirmToken, claimId, false, approval.getMessage());
                     return approval;
@@ -1133,6 +711,33 @@ public class IntentExecutionOrchestrator {
 
             if (com.cretas.aims.service.intent.PurchaseTaskGrantService.CANONICAL_TOOL.equals(boundToolName)) {
                 return confirmControlledPurchase(factoryId, token, claimId, confirmationProof, intentConfig, userId, userRole);
+            }
+
+            // 确认时比对状态 (Fable 审阅 §8.2): 重读对象当前的改前值, 与预览时记下的比对;
+            // 预览之后有人改过 / 前提已不成立 / 无法核对 → 本次不执行, 让用户重新预览。
+            com.cretas.aims.ai.tool.gateway.PreviewStateRecheck.ConfirmStateCheck stateCheck = toolDispatchService.recheckPreviewState(
+                    tool, intentConfig, token.getCurrentValues(), claimResult.getParameters(),
+                    factoryId, userId, userRole);
+            if (!stateCheck.proceed()) {
+                previewTokenService.resolveClaim(confirmToken, claimId, false,
+                        "确认前状态核对未通过(" + stateCheck.code() + "): " + stateCheck.message());
+                Map<String, Object> stale = new HashMap<>();
+                stale.put("reason", stateCheck.code());
+                stale.put("changedFields", stateCheck.changedFields());
+                stale.put("needsRepreview", stateCheck.repreviewHelps());
+                return IntentExecuteResponse.builder()
+                        .intentRecognized(true)
+                        .intentCode(intentCode)
+                        // 重新预览能解决 → PREVIEW_STALE (前端给「重新生成预览」);
+                        // 无法核对的工具重新预览还是一样 → CONFIRM_NOT_SUPPORTED (只给去业务页面), 不能原地打转
+                        // (与执行网关同一口径: PreviewStateRecheck.ConfirmStateCheck#responseStatus)
+                        .status(stateCheck.responseStatus())
+                        .message(stateCheck.message())
+                        .formattedText(stateCheck.message())
+                        .resultData(stale)
+                        .aiMode("WRITE")
+                        .executedAt(LocalDateTime.now())
+                        .build();
             }
 
             Map<String, Object> context = claimResult.getParameters() != null
@@ -1166,22 +771,34 @@ public class IntentExecutionOrchestrator {
                     .context(context)
                     .build();
 
+            toolInvoked = true;
             IntentExecuteResponse response = toolDispatchService.executeWithTool(
                     tool, factoryId, execRequest, intentConfig, userId, userRole, null);
             boolean toolSucceeded = response != null
                     && ("SUCCESS".equals(response.getStatus())
                         || "COMPLETED".equals(response.getStatus()));
+            // 工具执行中抛异常 / 超时时 executeWithTool 不重试写操作, 回的是 OUTCOME_UNKNOWN:
+            // 写入可能已提交, 凭据记「结果不明」而不是「失败」(失败会诱导用户重新预览再写一遍)。
+            boolean outcomeUnknown = response == null || OUTCOME_UNKNOWN.equals(response.getStatus());
             String resolution = response == null
                     ? "工具未返回执行结果"
                     : (response.getMessage() != null ? response.getMessage() : response.getStatus());
-            boolean resolved = previewTokenService.resolveClaim(
-                    confirmToken, claimId, toolSucceeded, resolution);
+            boolean resolved = outcomeUnknown
+                    ? previewTokenService.resolveClaimOutcomeUnknown(confirmToken, claimId, resolution)
+                    : previewTokenService.resolveClaim(confirmToken, claimId, toolSucceeded, resolution);
+            if (outcomeUnknown) {
+                // 「先核对、勿重复提交」永远在前; 派发层带来的出错原因 (如有) 接在后面, 用户要知道为什么停下
+                String reason = failureReason(response);
+                return outcomeUnknownResponse(intentCode,
+                        reason == null ? OUTCOME_UNKNOWN_MESSAGE : OUTCOME_UNKNOWN_MESSAGE + "出错原因：" + reason);
+            }
             if (!resolved) {
                 log.error("确认状态完成失败: claimFingerprint={}",
                         com.cretas.aims.ai.tool.gateway.ToolCommandDigest.tokenFingerprint(claimId));
                 return IntentExecuteResponse.builder()
-                        .status("FAILED")
-                        .message("执行结果状态记录失败，请勿重复提交并联系管理员")
+                        .status(OUTCOME_UNKNOWN)
+                        .aiMode("WRITE")
+                        .message("执行结果状态记录失败，请先在业务页面核对结果，勿重复提交")
                         .executedAt(LocalDateTime.now())
                         .build();
             }
@@ -1201,6 +818,17 @@ public class IntentExecutionOrchestrator {
                     .build();
 
         } catch (Exception e) {
+            if (toolInvoked) {
+                try {
+                    previewTokenService.resolveClaimOutcomeUnknown(confirmToken, claimId,
+                            "执行异常, 结果不明: " + com.cretas.aims.util.ErrorSanitizer.sanitize(e));
+                } catch (Exception resolutionError) {
+                    log.error("确认结果不明状态写入异常: factoryId={}, error={}",
+                            factoryId, resolutionError.getMessage());
+                }
+                log.error("确认执行异常, 结果不明: factoryId={}, error={}", factoryId, e.getMessage(), e);
+                return outcomeUnknownResponse(intentCode);
+            }
             try {
                 previewTokenService.resolveClaim(confirmToken, claimId, false,
                         "执行异常: " + com.cretas.aims.util.ErrorSanitizer.sanitize(e));
@@ -1216,6 +844,88 @@ public class IntentExecutionOrchestrator {
                     .executedAt(LocalDateTime.now())
                     .build();
         }
+    }
+
+    static final String OUTCOME_UNKNOWN = "OUTCOME_UNKNOWN";
+    /** 确认前状态核对没过: 什么都没执行, 需要重新预览。 */
+    static final String PREVIEW_STALE = com.cretas.aims.ai.tool.gateway.PreviewStateRecheck.PREVIEW_STALE;
+    /** 这个工具给不出可核对的改前值, 不能在助手里确认: 什么都没执行, 重新预览也没用, 去业务页面。 */
+    static final String CONFIRM_NOT_SUPPORTED = com.cretas.aims.ai.tool.gateway.PreviewStateRecheck.CONFIRM_NOT_SUPPORTED;
+    /** 同一张凭据已经执行成功过: 这次没有重复执行。 */
+    static final String ALREADY_EXECUTED = "ALREADY_EXECUTED";
+
+    static final String OUTCOME_UNKNOWN_MESSAGE =
+            "操作结果暂时无法确认（可能已经写入）。请先在业务页面核对这条记录，确认没有写入再重新发起，勿直接重复提交。";
+
+    private static final String FAILURE_REASON_MARK = "出错原因：";
+
+    /** 派发层结果不明回执里「出错原因：」后面那段 (工具给的真实原因); 没有就 null。 */
+    private static String failureReason(IntentExecuteResponse response) {
+        String message = response == null ? null : response.getMessage();
+        if (message == null) {
+            return null;
+        }
+        int at = message.indexOf(FAILURE_REASON_MARK);
+        if (at < 0) {
+            return null;
+        }
+        String reason = message.substring(at + FAILURE_REASON_MARK.length()).trim();
+        return reason.isEmpty() ? null : reason;
+    }
+
+    private static IntentExecuteResponse outcomeUnknownResponse(String intentCode) {
+        return outcomeUnknownResponse(intentCode, OUTCOME_UNKNOWN_MESSAGE);
+    }
+
+    private static IntentExecuteResponse outcomeUnknownResponse(String intentCode, String message) {
+        return IntentExecuteResponse.builder()
+                .intentRecognized(true)
+                .intentCode(intentCode)
+                .status(OUTCOME_UNKNOWN)
+                .aiMode("WRITE")
+                .message(message)
+                .formattedText(message)
+                .metadata(Map.of("retryable", false))
+                .executedAt(LocalDateTime.now())
+                .build();
+    }
+
+    /**
+     * 同一张凭据再次点确认 (重复点击 / 超时后重发): 凭据早已不是待确认, 认领被拒, 工具不会再执行。
+     * 按凭据此刻的状态如实回答, 不笼统回「失败」: 执行中 / 结果不明 / 已成功 都不能诱导用户重做。
+     */
+    static IntentExecuteResponse replayedConfirmationResponse(
+            com.cretas.aims.entity.intent.IntentPreviewToken.TokenStatus existing) {
+        if (existing == null) {
+            return null;
+        }
+        String message;
+        String status;
+        switch (existing) {
+            case EXECUTING -> {
+                status = OUTCOME_UNKNOWN;
+                message = "这次确认已经在执行中，没有重复执行。请稍后在业务页面核对结果，勿重复提交。";
+            }
+            case OUTCOME_UNKNOWN -> {
+                status = OUTCOME_UNKNOWN;
+                message = "这次确认的结果待核对（可能已经写入），没有重复执行。请先在业务页面核对，勿重复提交。";
+            }
+            case CONFIRMED -> {
+                status = ALREADY_EXECUTED;
+                message = "这次确认已经执行过，没有重复执行。";
+            }
+            default -> {
+                return null;
+            }
+        }
+        return IntentExecuteResponse.builder()
+                .status(status)
+                .aiMode("WRITE")
+                .message(message)
+                .formattedText(message)
+                .metadata(Map.of("retryable", false))
+                .executedAt(LocalDateTime.now())
+                .build();
     }
 
     // ==================== 内部路由方法 ====================
@@ -1257,91 +967,168 @@ public class IntentExecutionOrchestrator {
                 .resultData(outcome).executedAt(LocalDateTime.now()).build();
     }
 
-    private IntentExecuteResponse handleConversationContinuation(String factoryId, IntentExecuteRequest request,
-                                                                   Long userId, String userRole) {
-        log.info("检测到会话延续: sessionId={}", request.getSessionId());
-        // Session rows are keyed by factory-user numeric IDs, never by platform identity.
-        if (!hasTrustedConversationIdentity(factoryId, userId, request.getSessionId())) {
-            return sessionAdmissionDeniedResponse();
+    /**
+     * 显式意图码 (Web 按钮点选 / 参数确认后执行、App 澄清按钮): 权限与能力包决定之后、执行之前的停步 ——
+     * 唯一实现, 编排器显式意图路径 (SITE A) 与流式显式意图路径都调它 (意图蒸馏③ PR-3b, Steve 定「先判审批再出写确认」)。
+     *
+     * <p>顺序 (⛔ 不要调换, {@code StreamTurnCollectorEntryParityContractTest} 的显式意图用例守着):
+     * <ol>
+     *   <li>咨询页 (mode=READ) 拦写 —— READ 模式下不该出现确认卡;</li>
+     *   <li>审批 —— 声明需要审批的请求 (含 previewOnly) 在这里就停, 返回 PENDING_APPROVAL, 不列可选对象、
+     *       不出确认卡、不预览 (不铸令牌)、不执行 (PR-3b 前编排器是先出确认卡、确认时才判审批; 预览放行);</li>
+     *   <li>业态门 (能力包受限路由不判);</li>
+     *   <li>写操作 (非预览、未确认): 先列可选对象 → 一线未开放的写如实拒 (不出确认卡) → W0 写确认卡;</li>
+     *   <li>预览 (previewOnly): 支持安全预览的工具只预览 (预览出口自己再判工具开关 / 身份 / 一线 / 旧角色检查);
+     *       不支持 → PREVIEW_UNSUPPORTED, 不执行 (与工具层执行出口同一状态)。</li>
+     * </ol>
+     *
+     * <p>W0 写确认 (intent-w0) SITE A: 不看 forceExecute (多意图子请求把它恒设 true, 那正是不能跳过的);
+     * 确认凭据只来自原子单次占用令牌之后的进程内标记, 请求里的 confirmed=true 一律不认。工具层 SITE B 仍在, 是兜底。
+     *
+     * @return 这一轮到此为止的回答 (已补 aiMode); null = 照常执行
+     */
+    public IntentExecuteResponse explicitIntentStopBeforeExecution(
+            String factoryId, IntentExecuteRequest request, AIIntentConfig intent,
+            Long userId, String userRole, FactoryCapabilityPackRoutingPolicy.Route factoryPackRoute) {
+        IntentExecuteResponse readModeBlocked = IntentTurnSharedSteps.readModeWriteBlocked(
+                request, intent, intentAccessModeFilter, writeGuardService);
+        if (readModeBlocked != null) {
+            return readModeBlocked;
         }
-        try {
-            Optional<ConversationSession> pending = conversationService.getSession(
-                    factoryId, userId, request.getSessionId());
-            if (pending.isPresent()
-                    && SupplierComparisonReadIntent.CODE.equals(pending.get().getKnownIntentCode())) {
-                AIIntentConfig supplier = AIIntentConfig.builder()
-                        .intentCode(SupplierComparisonReadIntent.CODE).intentName("供应商报价比较").build();
-                if (!hasBoundSupplierFactoryActor(factoryId, userId)) return buildNoPermissionResponse(supplier);
-                Optional<AIIntentConfig> canonical = SupplierComparisonReadIntent.resolve(
-                        factoryId, toolRegistry, intentConfigRepository);
-                if (canonical.isEmpty()) return buildNoPermissionResponse(supplier);
-                IntentExecuteResponse denied = checkIntentPermission(canonical.get(), factoryId, userId, userRole);
-                if (denied != null) return denied;
+
+        if (IntentTurnSharedSteps.stopsForApproval(intent, request)) {
+            log.info("显式意图需要审批, 在写确认之前停下: intentCode={}", intent.getIntentCode());
+            return buildApprovalResponse(intent);
+        }
+
+        // 业态门控 (Sprint 13 #305): domain-exclusive intent on a mismatched factory.type → honest
+        // "本厂非该业态" empty-state instead of a confirm card / a tool run with no data.
+        if (factoryPackRoute == null || !factoryPackRoute.isConstrained()) {
+            IntentExecuteResponse businessTypeGateResponse = checkBusinessTypeGate(factoryId, intent);
+            if (businessTypeGateResponse != null) {
+                return businessTypeGateResponse;
             }
-            ConversationService.ConversationResponse conversationResp =
-                    conversationService.continueConversation(
-                            factoryId, userId, request.getSessionId(), request.getUserInput());
+        }
 
-            if (conversationResp == null ||
-                conversationResp.getStatus() == ConversationSession.SessionStatus.CANCELLED) {
-                return null; // Continue normal flow
+        boolean previewOnly = Boolean.TRUE.equals(request.getPreviewOnly());
+        Optional<ToolExecutor> boundTool = intent.getToolName() == null || intent.getToolName().isBlank()
+                ? Optional.empty() : toolRegistry.getExecutor(intent.getToolName());
+        java.util.Map<String, Object> ctx = request.getContext() != null ? request.getContext() : java.util.Map.of();
+        boolean writeOperation = writeGuardService.isWriteIntent(intent)
+                || boundTool.map(writeGuardService::isWriteTool).orElse(false);
+        if (writeOperation && !previewOnly && !writeGuardService.isConfirmed(ctx)) {
+            // 缺「要操作哪一个」(「我要报工，产量100」): 先列本人可选的让他选, 不出一张不知道报哪一道的空确认卡
+            // (prod 2026-11-14 F006)。只有一个时带出来, 仍出下面的确认卡。
+            IntentExecuteResponse choiceAsked = askWhichOneBeforeWriteGuard(
+                    factoryId, request, intent, userId, userRole);
+            if (choiceAsked != null) {
+                return choiceAsked;
             }
-
-            if (conversationResp.isCompleted() && conversationResp.getIntentCode() != null) {
-                conversationService.endConversation(
-                        factoryId, userId, request.getSessionId(), conversationResp.getIntentCode());
-                request.setIntentCode(conversationResp.getIntentCode());
-                request.setForceExecute(true);
-                return executeWithExplicitIntent(factoryId, request, userId, userRole);
-            }
-
-            // Conversation continues
-            IntentExecuteResponse.IntentExecuteResponseBuilder responseBuilder = IntentExecuteResponse.builder()
-                    .intentRecognized(false)
-                    .status("CONVERSATION_CONTINUE")
-                    .message(conversationResp.getMessage())
-                    .formattedText(conversationResp.getMessage())
-                    .executedAt(LocalDateTime.now());
-
-            Map<String, Object> metadata = new HashMap<>();
-            metadata.put("sessionId", conversationResp.getSessionId());
-            metadata.put("currentRound", conversationResp.getCurrentRound());
-            metadata.put("maxRounds", conversationResp.getMaxRounds());
-            metadata.put("status", conversationResp.getStatus() != null ? conversationResp.getStatus().name() : null);
-
-            if (conversationResp.getCandidates() != null && !conversationResp.getCandidates().isEmpty()) {
-                List<IntentExecuteResponse.SuggestedAction> candidateActions = new ArrayList<>();
-                for (ConversationService.CandidateInfo candidate : conversationResp.getCandidates()) {
-                    Map<String, Object> params = new HashMap<>();
-                    params.put("intentCode", candidate.getIntentCode());
-                    params.put("sessionId", conversationResp.getSessionId());
-                    candidateActions.add(IntentExecuteResponse.SuggestedAction.builder()
-                            .actionCode("SELECT_INTENT")
-                            .actionName(candidate.getIntentName())
-                            // 副标题只给人话, 不再用「置信度」兜底 (见 ClarificationButtonText)
-                            .description(ClarificationButtonText.subtitle(candidate.getDescription()))
-                            .endpoint("/api/mobile/" + factoryId + "/ai-intents/execute")
-                            .parameters(params)
-                            .build());
+            // 一线角色 + 未开放的写: 如实拒, 不出确认卡 (原来 App 在工具层 SITE B 才拒, /execute 先出卡、预览时才拒)
+            if (boundTool.isPresent()) {
+                IntentExecuteResponse frontlineDenied = toolDispatchService.frontlineWriteDenied(
+                        boundTool.get(), factoryId, intent, userRole);
+                if (frontlineDenied != null) {
+                    applyAiModeStamp(frontlineDenied, intent, intent.getToolName());
+                    return frontlineDenied;
                 }
-                metadata.put("candidates", conversationResp.getCandidates());
-                responseBuilder.suggestedActions(candidateActions);
             }
-            responseBuilder.metadata(metadata);
-            return responseBuilder.build();
-        } catch (Exception e) {
-            log.error("会话延续失败: sessionId={}, error={}", request.getSessionId(), e.getMessage(), e);
-            return null;
+            log.info("W0 write-guard: blocked write intent {} (forceExecute={}, confirmed=false)",
+                    intent.getIntentCode(), request.getForceExecute());
+            IntentExecuteResponse confirmCard = IntentExecuteResponse.builder()
+                    .intentRecognized(true)
+                    .intentCode(intent.getIntentCode())
+                    .intentName(intent.getIntentName())
+                    .status("WRITE_CONFIRM_REQUIRED")
+                    .message("「" + intent.getIntentName() + "」是写入/修改操作，执行前需要确认。")
+                    .requiresApproval(true)
+                    // P1 读写分块: 确认卡属写路径, 显式标记 (早退路径不经 6.95 统一 stamp)
+                    .aiMode("WRITE")
+                    .executedAt(java.time.LocalDateTime.now())
+                    .build();
+            // 确认卡带上已定下的工具参数 (形状同流式工具层那张卡), App / Web 拿它请求 /preview;
+            // 预览照常重绑主体、过本人可报。
+            boundTool.ifPresent(tool -> SseStreamingService.attachPreviewParams(confirmCard, request, tool));
+            return confirmCard;
         }
+
+        if (previewOnly && intent.getToolName() != null && !intent.getToolName().isEmpty()) {
+            if (boundTool.isPresent() && boundTool.get().supportsPreview()) {
+                IntentExecuteResponse preview = toolDispatchService.executeToolPreview(
+                        boundTool.get(), factoryId, request, intent, userId, userRole);
+                applyAiModeStamp(preview, intent, intent.getToolName());
+                return preview;
+            }
+            IntentExecuteResponse unsupportedPreview = IntentExecuteResponse.builder()
+                    .intentRecognized(true)
+                    .intentCode(intent.getIntentCode())
+                    .intentName(intent.getIntentName())
+                    // 与工具层执行出口 (ToolDispatchService) 同一状态与文案; 前端 aiWriteConfirm 按 PREVIEW_UNSUPPORTED 映射
+                    .status("PREVIEW_UNSUPPORTED")
+                    .message("该工具不支持安全预览，未执行任何操作。")
+                    .formattedText("该工具不支持安全预览，未执行任何操作。")
+                    .executedAt(LocalDateTime.now())
+                    .build();
+            applyAiModeStamp(unsupportedPreview, intent, intent.getToolName());
+            return unsupportedPreview;
+        }
+        return null;
     }
 
-    private IntentExecuteResponse handleEarlyQuestionTypeDetection(String factoryId, String userInput,
-                                                                     IntentExecuteRequest request,
-                                                                     Long userId, String userRole) {
-        QuestionType earlyQuestionType = knowledgeBase.detectQuestionType(userInput);
+    /** 意图绑的工具是「先选要操作哪一个」那类 (ParameterChoiceResolver, 如报工) 时返回它。 */
+    private Optional<ToolExecutor> choiceResolverTool(AIIntentConfig intent) {
+        if (intent == null || intent.getToolName() == null || intent.getToolName().isBlank()) {
+            return Optional.empty();
+        }
+        return toolRegistry.getExecutor(intent.getToolName())
+                .filter(tool -> tool instanceof com.cretas.aims.ai.tool.ParameterChoiceResolver);
+    }
 
-        if (earlyQuestionType != QuestionType.GENERAL_QUESTION &&
-            earlyQuestionType != QuestionType.CONVERSATIONAL) {
+    /**
+     * 写意图缺「要操作哪一个」: 在通用缺参追问 (3.6 Slot Filling) 与 W0 写确认之前先列本人可选的
+     * ({@link ToolDispatchService#askWhichOneBeforeWriteGuard}, 与流式 7a.6、预览同一个出口)。
+     * 普通入口这时还没抽过参, 由那里抽 (产量保留)。返回 null = 不需要 / 只有一个已带出, 原流程继续。
+     */
+    private IntentExecuteResponse askWhichOneBeforeWriteGuard(String factoryId, IntentExecuteRequest request,
+                                                             AIIntentConfig intent, Long userId, String userRole) {
+        if (Boolean.TRUE.equals(request.getPreviewOnly())
+                || writeGuardService.isConfirmed(request.getContext() != null ? request.getContext() : Map.of())) {
+            return null;
+        }
+        Optional<ToolExecutor> tool = choiceResolverTool(intent);
+        if (tool.isEmpty() || !(writeGuardService.isWriteIntent(intent) || writeGuardService.isWriteTool(tool.get()))) {
+            return null;
+        }
+        IntentExecuteResponse asked;
+        try {
+            asked = toolDispatchService.askWhichOneBeforeWriteGuard(
+                    tool.get(), factoryId, request, intent, userId, userRole, true);
+        } catch (RuntimeException e) {
+            log.warn("列可选对象失败, 照原流程: intentCode={}, error={}", intent.getIntentCode(), e.getMessage());
+            return null;
+        }
+        if (asked != null) {
+            applyAiModeStamp(asked, intent, intent.getToolName());
+        }
+        return asked;
+    }
+
+    /** (意图码, 参数名) → 绑定工具的参数说明, 恢复/重问时不把字段名说给用户 (两个入口同一个来源)。 */
+    /**
+     * 早期即判为通用咨询 / 闲聊的句子 (识别之前) 的路由 —— 唯一实现, 流式管线 (App 与 /execute 同一条) 调它
+     * (意图蒸馏③ PR-3, 原先只有普通入口有; PR-2b C 类 #16):
+     * 分析请求 → 分析流 (复杂度路由: 单代理 / 多代理协作); 食品知识 → FOOD_KNOWLEDGE_QUERY (本厂配了且在用);
+     * RAG 路由 (知识检索 / 联网 / 溯源转意图); 短语表里有本厂配置的意图 → 显式意图路径。
+     *
+     * @return 这一轮的回答; null = 不归这里: 业务问法交给识别, 其余由调用方做闲聊回复 (流式模型)
+     */
+    public IntentExecuteResponse routeEarlyGeneralQuestion(String factoryId, String userInput,
+                                                           QuestionType earlyQuestionType,
+                                                           IntentExecuteRequest request,
+                                                           Long userId, String userRole) {
+        if (userInput == null || userInput.isBlank()
+                || (earlyQuestionType != QuestionType.GENERAL_QUESTION
+                && earlyQuestionType != QuestionType.CONVERSATIONAL)) {
             return null;
         }
 
@@ -1351,8 +1138,8 @@ public class IntentExecutionOrchestrator {
             return executeAnalysisFlow(factoryId, userInput, request, userId, userRole);
         }
 
-        // Food knowledge intercept
-        if (earlyQuestionType == QuestionType.GENERAL_QUESTION) {
+        // Food knowledge intercept (本厂配了且在用才接, 否则交给识别 —— 原流式口径, 不回「未找到意图配置」)
+        if (earlyQuestionType == QuestionType.GENERAL_QUESTION && foodKnowledgeIntentActive(factoryId)) {
             Optional<String> foodPhraseMatch = knowledgeBase.matchPhrase(userInput);
             if (foodPhraseMatch.isPresent() && "FOOD_KNOWLEDGE_QUERY".equals(foodPhraseMatch.get())) {
                 IntentExecuteRequest foodRequest = IntentExecuteRequest.builder()
@@ -1361,7 +1148,7 @@ public class IntentExecutionOrchestrator {
                         .mode(request.getMode())
                         .previewOnly(request.getPreviewOnly())
                         .build();
-                return execute(factoryId, foodRequest, userId, userRole);
+                return executeWithExplicitIntent(factoryId, foodRequest, userId, userRole);
             }
             if (knowledgeBase.hasEntityIntentConflict(userInput, "PROCESSING_GENERIC")) {
                 IntentExecuteRequest foodRequest = IntentExecuteRequest.builder()
@@ -1370,14 +1157,14 @@ public class IntentExecutionOrchestrator {
                         .mode(request.getMode())
                         .previewOnly(request.getPreviewOnly())
                         .build();
-                return execute(factoryId, foodRequest, userId, userRole);
+                return executeWithExplicitIntent(factoryId, foodRequest, userId, userRole);
             }
         }
 
         // Agentic RAG routing
-        if (earlyQuestionType == QuestionType.GENERAL_QUESTION) {
-            RAGRouteResult ragRouteResult = agenticRAGRouterService.route(userInput);
-
+        RAGRouteResult ragRouteResult = earlyQuestionType == QuestionType.GENERAL_QUESTION
+                ? agenticRAGRouterService.route(userInput) : null;
+        if (ragRouteResult != null && ragRouteResult.getConsultationType() != null) {
             switch (ragRouteResult.getConsultationType()) {
                 case KNOWLEDGE_SEARCH:
                     String knowledgeResponse = agenticRAGRouterService.executeKnowledgeSearch(userInput, ragRouteResult);
@@ -1404,7 +1191,7 @@ public class IntentExecutionOrchestrator {
                                 .mode(request.getMode())
                                 .previewOnly(request.getPreviewOnly())
                                 .build();
-                        return execute(factoryId, traceabilityRequest, userId, userRole);
+                        return executeWithExplicitIntent(factoryId, traceabilityRequest, userId, userRole);
                     }
                     break;
                 case GENERAL:
@@ -1436,7 +1223,7 @@ public class IntentExecutionOrchestrator {
                         .mode(request.getMode())
                         .previewOnly(request.getPreviewOnly())
                         .build();
-                return execute(factoryId, interceptRequest, userId, userRole);
+                return executeWithExplicitIntent(factoryId, interceptRequest, userId, userRole);
             }
             // Sprint 12 P0 — any other phrase-matched intent that exists in this factory
             // should route to executeWithExplicitIntent (NOT fall through to LLM conversational).
@@ -1458,45 +1245,17 @@ public class IntentExecutionOrchestrator {
             }
         }
 
-        // Default: LLM conversational response
-        String llmResponse = generateConversationalResponse(factoryId, userInput, earlyQuestionType,
-                request.getEnableThinking(), request.getThinkingBudget());
-        return IntentExecuteResponse.builder()
-                .intentRecognized(false)
-                .status("COMPLETED")
-                .message(llmResponse)
-                .formattedText(llmResponse)
-                .executedAt(LocalDateTime.now())
-                .build();
+        // 业务问法 (交给识别) 与闲聊 (流式模型回复) 由调用方决定 —— 闲聊回复只有流式那一份
+        return null;
     }
 
-    private void handleSemanticCache(String factoryId, String userInput, IntentExecuteRequest request) {
+    private boolean foodKnowledgeIntentActive(String factoryId) {
         try {
-            SemanticCacheHit cacheHit = semanticCacheService.queryCache(factoryId, userInput);
-            if (cacheHit.isHit()) {
-                if (cacheHit.hasExecutionResult()) {
-                    // Note: execute() 目前并不会为 execution-result 缓存命中做提前返回 —
-                    // 无论 hasExecutionResult() 与否, 这个方法都只是把下面的意图匹配缓存
-                    // 结果标记进 request context (__cacheHit/__cacheHitType), 流程仍会继续
-                    // 走完整识别流水线。此分支目前是 no-op (曾设想的"直接返回缓存执行结果"
-                    // 未实现)。
-                    // ⛔ 工艺保密 (Steve 2026-10-29): 缓存按「工厂 + 原话」存完整执行结果, 不分调用者。
-                    // 要在这里回放执行结果, 必须先按调用者的保密访问档位隔离缓存 (工厂 + 调用者能
-                    // FULL 查看的保密产品集合), 否则未授权的人会拿到授权用户问出来的保密产品完整内容。
-                    // 没有这层隔离不许实现回放 (见 SemanticCacheServiceImpl.cacheResult)。
-                }
-                IntentMatchResult cachedMatch = deserializeIntentResult(cacheHit.getIntentResult());
-                if (cachedMatch != null && cachedMatch.hasMatch()) {
-                    if (request.getContext() == null) {
-                        request.setContext(new HashMap<>());
-                    }
-                    request.getContext().put("__cacheHit", true);
-                    request.getContext().put("__cacheHitType",
-                            cacheHit.getHitType() != null ? cacheHit.getHitType().name() : "SEMANTIC");
-                }
-            }
-        } catch (Exception e) {
-            log.warn("语义缓存查询失败: {}", e.getMessage());
+            return aiIntentService.getIntentByCode(factoryId, "FOOD_KNOWLEDGE_QUERY")
+                    .filter(config -> Boolean.TRUE.equals(config.getIsActive())).isPresent();
+        } catch (RuntimeException e) {
+            log.warn("FOOD_KNOWLEDGE_QUERY 配置查询失败, 交给识别: {}", e.getClass().getSimpleName());
+            return false;
         }
     }
 
@@ -1519,51 +1278,6 @@ public class IntentExecutionOrchestrator {
      * @param factoryId factory ID, used to resolve business domain (RESTAURANT vs FACTORY)
      * @return phrase-matched IntentMatchResult, or null if no phrase match
      */
-    private IntentMatchResult tryOrchestratorPhraseShortcut(String userInput, String factoryId) {
-        return tryOrchestratorPhraseShortcut(userInput, factoryId, null);
-    }
-
-    private IntentMatchResult tryOrchestratorPhraseShortcut(
-            String userInput, String factoryId, String trustedBusinessDomain) {
-        try {
-            String normalized = userInput.toLowerCase().trim();
-            String businessDomain = trustedBusinessDomain != null
-                    ? trustedBusinessDomain
-                    : resolvePhraseBusinessDomain(factoryId);
-
-
-            {}
-
-            Optional<String> phraseMatch = knowledgeBase.matchPhrase(normalized, businessDomain);
-            if (phraseMatch.isEmpty()) {
-                return null;
-            }
-
-            String matchedCode = phraseMatch.get();
-            Optional<AIIntentConfig> intentOpt = getIntentByCodeWithPlatformFallback(factoryId, matchedCode);
-            if (intentOpt.isEmpty()) {
-                // Phrase mapped to a code that doesn't exist in this factory's intent config —
-                // skip the shortcut and let the normal pipeline decide.
-                log.debug("[Round7-EarlyPhrase] phrase matched {} but intent not configured for factory {} — falling through",
-                        matchedCode, factoryId);
-                return null;
-            }
-
-            AIIntentConfig phraseIntent = intentOpt.get();
-            log.info("[Round7-EarlyPhrase] Orchestrator phrase shortcut: input='{}', intentCode={}, domain={}",
-                    userInput, matchedCode, businessDomain);
-            return IntentMatchResult.builder()
-                    .userInput(userInput)
-                    .bestMatch(phraseIntent)
-                    .confidence(0.96)
-                    .matchMethod(IntentMatchResult.MatchMethod.PHRASE_MATCH)
-                    .build();
-        } catch (Exception e) {
-            log.debug("[Round7-EarlyPhrase] shortcut failed (fall through): {}", e.getMessage());
-            return null;
-        }
-    }
-
     private String resolvePhraseBusinessDomain(String factoryId) {
         String businessDomain = resolveFactoryDomainSafe(factoryId);
         return businessDomain == null || businessDomain.isBlank() ? "FACTORY" : businessDomain;
@@ -1654,75 +1368,6 @@ public class IntentExecutionOrchestrator {
      * requests that need the tiered analysis path.
      */
 
-    private static boolean containsAny(String input, String... terms) {
-        if (input == null || terms == null) {
-            return false;
-        }
-        for (String term : terms) {
-            if (term != null && !term.isBlank() && input.contains(term)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    // 16 \u4e2a\u663e\u5f0f\u53ea\u8bfb\u5426\u5b9a\u8bcd (\u4e0d\u8981\u67e5/\u4e0d\u8981\u770b/\u522b\u67e5/\u522b\u770b/\u4e0d\u7528\u67e5/\u4e0d\u7528\u770b/\u4e0d\u9700\u8981\u67e5/\u4e0d\u9700\u8981\u770b/
-    // \u4e0d\u60f3\u67e5/\u4e0d\u60f3\u770b/\u5148\u522b\u67e5/\u5148\u522b\u770b/\u65e0\u9700\u67e5/\u65e0\u9700\u770b/\u4e0d\u67e5/\u4e0d\u770b)\u3002
-    private static final String[] READ_VETO_TERMS = {
-            "\u4e0d\u8981\u67e5",
-            "\u4e0d\u8981\u770b",
-            "\u522b\u67e5",
-            "\u522b\u770b",
-            "\u4e0d\u7528\u67e5",
-            "\u4e0d\u7528\u770b",
-            "\u4e0d\u9700\u8981\u67e5",
-            "\u4e0d\u9700\u8981\u770b",
-            "\u4e0d\u60f3\u67e5",
-            "\u4e0d\u60f3\u770b",
-            "\u5148\u522b\u67e5",
-            "\u5148\u522b\u770b",
-            "\u65e0\u9700\u67e5",
-            "\u65e0\u9700\u770b",
-            "\u4e0d\u67e5",
-            "\u4e0d\u770b",
-    };
-
-    // \u7ef4\u5ea6\u7ea7\u5426\u5b9a\u653e\u884c\u6807\u8bb0 (\u53ea\u770b/\u53ea\u8981/\u53ea\u67e5/\u4f46\u770b/\u4f46\u8981/\u4f46\u67e5/\u800c\u770b/\u800c\u8981/\u800c\u67e5)\u3002\u5426\u5b9a\u8bcd\u540e\u9762
-    // \u7d27\u8ddf\u8fd9\u4e9b\u5bf9\u6bd4\u5b50\u53e5 (\u5982 "\u4e0d\u770b\u5802\u98df\u53ea\u770b\u5916\u5356\u8425\u6536") \u8bf4\u660e\u53ea\u662f\u6392\u9664\u67d0\u4e00\u4e2a\u7ef4\u5ea6\u3001\u5f15\u51fa\u53e6\u4e00\u4e2a
-    // \u5173\u6ce8\u5bf9\u8c61, \u5e76\u975e\u5426\u5b9a\u6574\u6761\u67e5\u8be2 \u2014 \u5e94\u653e\u884c\u8bed\u4e49\u89c4\u5212, \u4e0d\u7b97 veto\u3002
-    private static final String[] READ_VETO_DIMENSION_CONTRAST_MARKERS = {
-            "\u53ea\u770b",
-            "\u53ea\u8981",
-            "\u53ea\u67e5",
-            "\u4f46\u770b",
-            "\u4f46\u8981",
-            "\u4f46\u67e5",
-            "\u800c\u770b",
-            "\u800c\u8981",
-            "\u800c\u67e5",
-    };
-
-    // \u5426\u5b9a\u8bcd\u4e4b\u540e\u5f80\u540e\u770b\u591a\u5c11\u4e2a\u5b57\u7b26\u627e\u5bf9\u6bd4\u5b50\u53e5 \u2014 \u591f\u8986\u76d6 "\u4e0d\u770b\u5802\u98df\u53ea\u770b\u5916\u5356\u8425\u6536" \u8fd9\u7c7b\u77ed\u53e5,
-    // \u53c8\u4e0d\u81f3\u4e8e\u628a\u5f88\u8fdc\u5904\u4e0d\u76f8\u5173\u7684 "\u53ea\u770b" \u8bef\u5224\u6210\u540c\u4e00\u5426\u5b9a\u7684\u5bf9\u6bd4\u5bf9\u8c61\u3002
-    private static final int READ_VETO_DIMENSION_CONTRAST_WINDOW = 12;
-
-    /**
-     * R? (2026-07-28 \u98de\u8f6e\u56de\u63a5\u53611): \u5224\u65ad\u5426\u5b9a\u5bf9\u8c61, \u800c\u975e\u7eaf contains \u5339\u914d\u3002
-     *
-     * <p>\u65e7\u5b9e\u73b0\u5bf9 16 \u4e2a\u5426\u5b9a\u8bcd\u505a\u7eaf contains \u5339\u914d \u2014\u2014 "\u4e0d\u770b\u5802\u98df\u53ea\u770b\u5916\u5356\u8425\u6536" \u53ea\u662f\u6392\u9664
-     * "\u5802\u98df" \u8fd9\u4e00\u4e2a\u7ef4\u5ea6, \u540e\u534a\u53e5 "\u53ea\u770b\u5916\u5356\u8425\u6536" \u4ecd\u7136\u662f\u4e00\u4e2a\u660e\u786e\u7684\u8bfb\u8bf7\u6c42, \u4f46\u65e7\u903b\u8f91\u4e00\u89c1
-     * "\u4e0d\u770b" \u5b50\u4e32\u5c31\u6574\u6761 veto, \u628a\u8bf7\u6c42\u6253\u56de Java 8 \u5c42\u65e7\u94fe (\u77ed\u8bed\u76f4\u6267\u884c + Stage-8 \u76f4\u9009)\u3002
-     *
-     * <p>\u65b0\u903b\u8f91: \u5426\u5b9a\u8bcd\u547d\u4e2d\u540e, \u68c0\u67e5\u5176\u540e {@link #READ_VETO_DIMENSION_CONTRAST_WINDOW}
-     * \u4e2a\u5b57\u7b26\u5185\u662f\u5426\u7d27\u8ddf "\u53ea\u770b/\u53ea\u8981/\u53ea\u67e5/\u4f46\u770b/\u4f46\u8981/\u4f46\u67e5/\u800c\u770b/\u800c\u8981/\u800c\u67e5" \u7c7b\u5bf9\u6bd4\u5b50\u53e5 \u2014
-     * \u547d\u4e2d\u5219\u8bf4\u660e\u662f\u7ef4\u5ea6\u7ea7\u5426\u5b9a (\u6392\u9664\u5b50\u96c6, \u4fdd\u7559\u53e6\u4e00\u4e2a\u5173\u6ce8\u5bf9\u8c61), \u653e\u884c\u8bed\u4e49\u89c4\u5212; \u5426\u5219\u624d\u662f
-     * \u5426\u5b9a\u6574\u6761\u67e5\u8be2\u7684 veto\u3002
-     *
-     * <p>Card4 (2026-07-28 \u5165\u53e3\u6536\u655b): package-private static, \u65e0\u5b9e\u4f8b\u72b6\u6001,
-     * \u4e13\u95e8\u4e3a\u8ba9 {@code SseStreamingService} \u540c\u5305\u76f4\u63a5\u590d\u7528\u2014\u2014\u540c\u4e00\u4e2a\u5224\u65ad\u53ea\u80fd\u6709
-     * \u4e00\u4efd\u5b9e\u73b0, \u5426\u5219 SSE \u548c /execute \u4e24\u4e2a\u5165\u53e3\u5bf9\u540c\u4e00\u53e5\u8bdd\u7684 veto \u5224\u65ad\u4f1a\u56e0\u526f\u672c
-     * \u6f02\u79fb\u800c\u5206\u5c90 \u2014\u2014 \u6b63\u662f\u672c\u5361\u8981\u6d88\u706d\u7684\u75c5\u3002\u5207\u52ff\u518d\u590d\u5236\u4e00\u4efd\u3002
-     */
     /**
      * [NarrowPath] 埋点用的问句截断。40 字 —— 够认出是哪一类问法, 又不至于把整句
      * 用户输入抄进日志。null 打成 "-" 而不是 "null", 免得取数时把它当成一个问句。
@@ -1733,27 +1378,6 @@ public class IntentExecutionOrchestrator {
         }
         String flat = q.replace('\n', ' ').replace('\r', ' ');
         return flat.length() <= 40 ? flat : flat.substring(0, 40);
-    }
-
-    static boolean hasExplicitReadVeto(String input) {
-        if (input == null || input.isBlank()) {
-            return false;
-        }
-        String q = input.replaceAll("\\s+", "");
-        for (String term : READ_VETO_TERMS) {
-            int idx = q.indexOf(term);
-            if (idx < 0) {
-                continue;
-            }
-            int remainderStart = idx + term.length();
-            int windowEnd = Math.min(q.length(), remainderStart + READ_VETO_DIMENSION_CONTRAST_WINDOW);
-            String window = q.substring(remainderStart, windowEnd);
-            if (containsAny(window, READ_VETO_DIMENSION_CONTRAST_MARKERS)) {
-                continue;
-            }
-            return true;
-        }
-        return false;
     }
 
     // ==================== 分析流程 ====================
@@ -1808,9 +1432,48 @@ public class IntentExecutionOrchestrator {
     // 匹配会把内嵌的预设短语抢走, 只答一半; 复合句放行到 tiered 反转由
     // python agent 拆解回答。与 python restaurant_agent._COMPOUND_HINT_RE 同款。
 
+    /**
+     * 分析流 (早期分析问法: 复杂度路由 / 多代理, 失败时以本厂存档经营报告为上下文兜底) 的准入权限:
+     * 与 App 经营分析 / 财务报表数据同一组码 ({@code ReportFinanceTool.FINANCE_REPORT_SURFACE}), 逗号 = 任一即可。
+     * 2026-11-04 Steve 裁定「手机分析入口开放给有 analytics 的工厂角色」—— 没有 analytics 的操作员 / 仓管不进分析流。
+     */
+    static final String ANALYSIS_FLOW_PERMISSION = "analytics:read,analytics:read_write";
+
+    /**
+     * 分析流准入 (PR-3 复审 M2): App 与 /execute 共用这一处 (两入口的早期分析问法都从 {@link #routeEarlyGeneralQuestion} 进来)。
+     * 走与意图权限同一个门 ({@link IntentPermissionGate}, fail-closed); 门没装配也按拒绝。
+     *
+     * @return null = 放行; 否则是标准的无权限回复 (不进分析、不碰存档报告、不调模型)
+     */
+    private IntentExecuteResponse analysisFlowPermissionDenied(Long userId, String userRole) {
+        AIIntentConfig analysis = AIIntentConfig.builder()
+                .intentCode("ANALYSIS_FLOW").intentName("经营分析")
+                .requiredPermission(ANALYSIS_FLOW_PERMISSION).build();
+        IntentPermissionGate.PermissionCheck check = intentPermissionGate == null
+                ? IntentPermissionGate.PermissionCheck.denied(ANALYSIS_FLOW_PERMISSION)
+                : intentPermissionGate.check(analysis, userId, userRole);
+        if (check.isAllowed()) {
+            return null;
+        }
+        String required = check.requiredPermission() != null ? check.requiredPermission() : ANALYSIS_FLOW_PERMISSION;
+        log.info("分析流准入拒绝: userId={}, role={}, requiredPermission={}", userId, userRole, required);
+        String msg = "您没有权限执行此操作。需要权限: " + required + "，请联系工厂管理员开通。";
+        return IntentExecuteResponse.builder()
+                .intentRecognized(false)
+                .status("NO_PERMISSION")
+                .requiredPermission(required)
+                .message(msg).formattedText(msg)
+                .executedAt(LocalDateTime.now())
+                .build();
+    }
+
     private IntentExecuteResponse executeAnalysisFlow(String factoryId, String userInput,
                                                        IntentExecuteRequest request,
                                                        Long userId, String userRole) {
+        IntentExecuteResponse analysisDenied = analysisFlowPermissionDenied(userId, userRole);
+        if (analysisDenied != null) {
+            return analysisDenied;
+        }
         try {
             AnalysisTopic topic = analysisRouterService.detectAnalysisTopic(userInput);
             AnalysisContext analysisContext = AnalysisContext.builder()
@@ -1868,19 +1531,22 @@ public class IntentExecutionOrchestrator {
         if (questionType == QuestionType.GENERAL_QUESTION) {
             factoryAnalysisContext = getPrecomputedAnalysisContext(factoryId);
             if (factoryAnalysisContext != null && !factoryAnalysisContext.isEmpty()) {
-                systemPrompt = """
-                    你是白垩纪AI Agent的智能助手。用户正在询问一个关于生产管理、质量控制或成本优化的咨询问题。
-                    **重要**: 下面是该工厂的最新运营分析报告：
+                systemPrompt = com.cretas.aims.ai.grounding.ChatBusinessFactGuard.PERSONA + """
+
+                    用户正在询问一个关于生产管理、质量控制或成本优化的咨询问题。
+                    **重要**: 下面是该工厂的最新运营分析报告（报告之外的业务数字一律不得给出）：
                     ---
                     %s
                     ---
                     请基于数据提供针对性建议，不超过500字，使用中文。
                     """.formatted(factoryAnalysisContext) + llmCostScope.harnessFor(factoryId);
             } else {
-                systemPrompt = "你是白垩纪AI Agent的智能助手。请提供专业、实用的生产管理建议，不超过300字，使用中文。";
+                systemPrompt = NO_DATA_ADVICE_PROMPT;
             }
         } else {
-            systemPrompt = "你是白垩纪AI Agent的智能助手。友好回应，不超过100字，使用中文。";
+            systemPrompt = com.cretas.aims.ai.grounding.ChatBusinessFactGuard.PERSONA
+                    + com.cretas.aims.ai.grounding.ChatBusinessFactGuard.NO_DATA_RULES
+                    + "友好回应，不超过100字，使用中文。";
         }
 
         // 经营报告 + 原话发给模型前脱敏 (报告里有客户 / 供应商 / 人名); 报告脱敏不了就不带报告, 原话也脱敏不了就不发
@@ -1890,7 +1556,7 @@ public class IntentExecutionOrchestrator {
         if (redacted.refused() && factoryAnalysisContext != null) {
             factoryAnalysisContext = null;
             redacted = llmEgressGuard.texts(CONVERSATIONAL_EGRESS_SITE, factoryId,
-                    "你是白垩纪AI Agent的智能助手。请提供专业、实用的生产管理建议，不超过300字，使用中文。", userInput);
+                    NO_DATA_ADVICE_PROMPT, userInput);
         }
         if (redacted.refused()) {
             return "抱歉，这句话里有无法脱敏的内容，没有发给 AI。您可以换个说法，或直接使用系统的查询功能。";
@@ -1919,6 +1585,10 @@ public class IntentExecutionOrchestrator {
             if (factoryAnalysisContext != null && !factoryAnalysisContext.isEmpty()) {
                 response = numberProvenance.enforceText(
                         CONVERSATIONAL_PROVENANCE_SITE, response, factoryAnalysisContext, userInput);
+            } else {
+                // 没有任何数据进模型: 回复里的业务数字 / 业务事实都没有出处, 不下发 (常识数字照常放行)
+                response = chatBusinessFactGuard.enforce(CHAT_FACT_GUARD_SITE, userInput, response,
+                        questionType == QuestionType.GENERAL_QUESTION);
             }
             return response;
         } catch (Exception e) {
@@ -2120,12 +1790,6 @@ public class IntentExecutionOrchestrator {
                 || DemoConversationScope.allows(factoryId, userId, sessionId);
     }
 
-    private boolean canUseStatefulConversation(String factoryId, Long userId, IntentExecuteRequest request) {
-        return hasBoundSupplierFactoryActor(factoryId, userId)
-                || (request != null && DemoConversationScope.allows(
-                        factoryId, userId, request.getSessionId()));
-    }
-
     private IntentExecuteResponse sessionAdmissionDeniedResponse() {
         String message = "当前会话身份未通过工厂/演示会话绑定校验，未执行操作。";
         return IntentExecuteResponse.builder()
@@ -2154,20 +1818,7 @@ public class IntentExecutionOrchestrator {
      * 保持不变; 其余按 WriteGuardService 意图判定, 意图未判写时以已匹配工具兜底。
      */
     private void applyAiModeStamp(IntentExecuteResponse response, AIIntentConfig intent, String matchedToolName) {
-        if (response == null || response.getAiMode() != null) {
-            return;
-        }
-        boolean write = intent != null && writeGuardService != null && writeGuardService.isWriteIntent(intent);
-        if (!write && matchedToolName != null && !matchedToolName.isEmpty()) {
-            try {
-                write = toolRegistry.getExecutor(matchedToolName)
-                        .map(writeGuardService::isWriteTool)
-                        .orElse(false);
-            } catch (Exception e) {
-                // aiMode 是展示元数据, 判定失败不阻断响应
-            }
-        }
-        response.setAiMode(write ? "WRITE" : "READ");
+        IntentTurnSharedSteps.applyAiModeStamp(response, intent, matchedToolName, writeGuardService, toolRegistry);
     }
 
     /**
@@ -2180,14 +1831,10 @@ public class IntentExecutionOrchestrator {
      * {@link IntentAccessModeFilter#isWriteIntent(AIIntentConfig)} 后, 绑定 Tool 的
      * {@code getAccessMode()} 声明成为第一判据, 原启发式保留为第二判据 (任一判写即拦)。
      */
-    private boolean isWriteIntentDeclarationAware(AIIntentConfig intent) {
-        return isWriteIntentDeclarationAware(intent, intentAccessModeFilter, writeGuardService);
-    }
-
     /**
      * 同上, 但把两个判定器显式传进来 —— {@code SseStreamingService} 复用同一份实现。
      * 两个入口对同一个意图的写判定必须一致, 否则同一句话在流式和非流式下会走出不同的路
-     * (card4 2026-07-28 已经踩过一次同形状的副本漂移, 见 {@link #hasExplicitReadVeto})。
+     * (card4 2026-07-28 已经踩过一次同形状的副本漂移)。
      */
     static boolean isWriteIntentDeclarationAware(AIIntentConfig intent,
                                                  IntentAccessModeFilter accessModeFilter,
@@ -2209,36 +1856,8 @@ public class IntentExecutionOrchestrator {
      *
      * @return 权限码集合; null = 不按权限过滤 (真正的鉴权在 checkIntentPermission / ToolRbacEnforcer)
      */
-    private java.util.Set<String> resolveUserPermissionsForFiltering(String mode, Long userId, String factoryId) {
-        if (userId == null || intentPermissionGate == null
-                || !IntentAccessModeFilter.MODE_OPERATE.equalsIgnoreCase(mode)) {
-            return null;
-        }
-        try {
-            return intentPermissionGate.resolveUserPermissions(userId, factoryId);
-        } catch (Exception e) {
-            log.warn("候选过滤权限集解析失败, 跳过权限过滤: userId={}, err={}", userId, e.getMessage());
-            return null;
-        }
-    }
-
-    /**
-     * P1 读写分块 §4.4: 咨询 tab (mode=READ) 命中写意图/写工具时的拦截响应。
-     * aiMode=WRITE 供前端渲染「前往操作页」跳转卡。
-     */
-    private IntentExecuteResponse buildReadModeWriteBlockedResponse(AIIntentConfig intent) {
-        String msg = "这是操作类请求，请切换到【操作】页处理。";
-        return IntentExecuteResponse.builder()
-                .intentRecognized(true).intentCode(intent.getIntentCode())
-                .intentName(intent.getIntentName()).intentCategory(intent.getIntentCategory())
-                .sensitivityLevel(intent.getSensitivityLevel())
-                .status("READ_MODE_WRITE_BLOCKED").message(msg).formattedText(msg)
-                .aiMode("WRITE")
-                .executedAt(LocalDateTime.now()).build();
-    }
-
     private IntentExecuteResponse buildNoPermissionResponse(AIIntentConfig intent) {
-        String msg = "您没有权限执行此操作。需要角色: " + intent.getRequiredRoles();
+        String msg = "您没有权限执行此操作。需要角色: " + com.cretas.aims.ai.tool.RoleDisplay.listOf(intent.getRequiredRoles());
         IntentExecuteResponse response = IntentExecuteResponse.builder()
                 .intentRecognized(true).intentCode(intent.getIntentCode())
                 .intentName(intent.getIntentName()).intentCategory(intent.getIntentCategory())
@@ -2250,16 +1869,7 @@ public class IntentExecutionOrchestrator {
     }
 
     private IntentExecuteResponse buildApprovalResponse(AIIntentConfig intent) {
-        String msg = "此操作需要审批，当前 AI 入口尚不支持提交和核验审批。未提交审批、未执行操作，请通过业务页面完成审批。";
-        IntentExecuteResponse response = IntentExecuteResponse.builder()
-                .intentRecognized(true).intentCode(intent.getIntentCode())
-                .intentName(intent.getIntentName()).intentCategory(intent.getIntentCategory())
-                .sensitivityLevel(intent.getSensitivityLevel())
-                .status("PENDING_APPROVAL").message(msg).formattedText(msg)
-                .requiresApproval(true).approvalChainId(intent.getApprovalChainId())
-                .executedAt(LocalDateTime.now()).build();
-        applyAiModeStamp(response, intent, intent.getToolName());
-        return response;
+        return IntentTurnSharedSteps.approvalResponse(intent, writeGuardService, toolRegistry);
     }
 
     private IntentExecuteResponse buildDroolsFailureResponse(AIIntentConfig intent, ValidationResult validationResult) {
@@ -2305,31 +1915,24 @@ public class IntentExecutionOrchestrator {
      * can no longer execute the embedded "看订单" intent.
      */
     IntentExecuteResponse buildNegationVetoClarificationResponse(String userInput) {
-        final String msg = "您是要取消这次操作吗?需要我帮您查询或处理什么?";
-        log.info("[W1b] orchestrator negation veto clarification for input='{}'", userInput);
-        return IntentExecuteResponse.builder()
-                .intentRecognized(false)
-                .status("NEED_CLARIFICATION")
-                .message(msg)
-                .formattedText(msg)
-                .executedAt(LocalDateTime.now())
-                .build();
+        return IntentTurnSharedSteps.negationVetoClarification();
     }
 
 
 
+    /** 澄清选项会话记的「原话」: 请求原话优先 (识别层可能改写过 matchResult 里的), 缺则回落识别结果。 */
     IntentExecuteResponse buildClarificationResponse(IntentMatchResult matchResult, String factoryId) {
-        AIIntentConfig matchedIntent = matchResult.getBestMatch();
-        List<IntentExecuteResponse.SuggestedAction> candidateActions = buildCandidateActions(matchResult, factoryId);
+        return buildClarificationResponse(matchResult, factoryId, null, null, null);
+    }
 
-        // Sprint 12: enrich clarification message with inline candidate intent names so the
-        // formattedText itself carries the choices (not just suggestedActions UI buttons).
-        // Audit gate requires NEED_CLARIFICATION to include specific 2+ choice question
-        // visible in formattedText / message — bare "请确认您想要执行的操作" fails.
-        String clarificationMessage = matchResult.getClarificationQuestion();
-        if (clarificationMessage == null || clarificationMessage.isEmpty()) {
-            clarificationMessage = buildClarificationWithChoices(candidateActions, factoryId);
-        }
+    IntentExecuteResponse buildClarificationResponse(IntentMatchResult matchResult, String factoryId,
+                                                     Long userId, String userRole, String mode) {
+        AIIntentConfig matchedIntent = matchResult.getBestMatch();
+        ClarificationCandidateService.Clarification clarification =
+                clarify(matchResult, factoryId, userId, userRole, mode);
+        List<IntentExecuteResponse.SuggestedAction> candidateActions = clarification.actions();
+        // 与 SSE 同一份话术: 有业务候选就列出来; 全被权限滤掉就按标准拒答说明缺什么权限; 确实没有就给可问的示例。
+        String clarificationMessage = clarification.message();
 
         Map<String, Object> metadata = new HashMap<>();
         if (matchResult.getSessionId() != null && !matchResult.getSessionId().isEmpty()) {
@@ -2345,7 +1948,7 @@ public class IntentExecutionOrchestrator {
                 .intentCode(matchedIntent.getIntentCode())
                 .intentName(matchedIntent.getIntentName())
                 .intentCategory(matchedIntent.getIntentCategory())
-                .status("NEED_CLARIFICATION")
+                .status(clarification.status())
                 .message(clarificationMessage)
                 .formattedText(clarificationMessage)
                 .confidence(matchResult.getConfidence())
@@ -2357,77 +1960,6 @@ public class IntentExecutionOrchestrator {
         IntentExecuteResponse response = builder.build();
         applyAiModeStamp(response, matchedIntent, matchedIntent.getToolName());
         return response;
-    }
-
-    private IntentExecuteResponse buildNoMatchResponse(IntentMatchResult matchResult,
-                                                       String factoryId,
-                                                       IntentExecuteRequest request,
-                                                       Long userId,
-                                                       String userRole) {
-        {}
-
-        Map<String, Object> metadata = new HashMap<>();
-        if (matchResult.getSessionId() != null && !matchResult.getSessionId().isEmpty()) {
-            metadata.put("sessionId", matchResult.getSessionId());
-            metadata.put("needMoreInfo", true);
-            if (matchResult.getConversationMessage() != null) {
-                metadata.put("conversationMessage", matchResult.getConversationMessage());
-            }
-        }
-
-        if (matchResult.getTopCandidates() != null && !matchResult.getTopCandidates().isEmpty()) {
-            List<IntentExecuteResponse.SuggestedAction> candidateActions = buildCandidateActions(matchResult, factoryId);
-            // Sprint 12: enrich weak-signal message with inline candidate intent names.
-            String weakSignalMsg = "我不太确定您想执行什么操作。" + buildChoicesLine(candidateActions)
-                    + "请回复对应序号, 或更详细地描述您的需求 (例如指定时段 / 物料 / 批次)。";
-            IntentExecuteResponse.IntentExecuteResponseBuilder builder = IntentExecuteResponse.builder()
-                    .intentRecognized(false).status("NEED_CLARIFICATION")
-                    .message(weakSignalMsg).formattedText(weakSignalMsg)
-                    .suggestedActions(candidateActions).executedAt(LocalDateTime.now());
-            if (!metadata.isEmpty()) builder.metadata(metadata);
-            return builder.build();
-        }
-
-        List<IntentExecuteResponse.SuggestedAction> defaultSuggestions = buildDefaultSuggestions(factoryId);
-        // Sprint 12 Task 5: enrich default no-match message with inline choices + domain hint
-        // so audit content_len ≥80 + chinese_run ≥20 + actionable for user.
-        String message = matchResult.getConversationMessage() != null && !matchResult.getConversationMessage().isEmpty()
-                ? matchResult.getConversationMessage()
-                : "我没有理解您的意图。" + buildChoicesLine(defaultSuggestions)
-                        + "请回复对应序号, 或更详细描述需求 (例如指定客户 / 物料 / 批次 / 月份 / 工序)。";
-
-        IntentExecuteResponse.IntentExecuteResponseBuilder builder = IntentExecuteResponse.builder()
-                .intentRecognized(false).status("NEED_CLARIFICATION")
-                .message(message).formattedText(message)
-                .executedAt(LocalDateTime.now()).suggestedActions(defaultSuggestions);
-        if (!metadata.isEmpty()) builder.metadata(metadata);
-        return builder.build();
-    }
-
-    private IntentExecuteResponse buildValidationFailureResponse(String factoryId, String userInput,
-                                                                   LlmSchemaValidationException e) {
-        String truncatedInput = userInput != null && userInput.length() > 30 ? userInput.substring(0, 30) + "..." : userInput;
-        String clarificationMessage = switch (e.getFailureType()) {
-            case PARSE_ERROR -> String.format("AI 无法正确理解您的请求「%s」，请重新描述您的需求。", truncatedInput);
-            case UNKNOWN_INTENT_CODE -> "AI 识别的操作类型无法执行，请从常用操作中选择。";
-            case INVALID_CONFIDENCE -> String.format("AI 对您的请求「%s」理解不够确定，请更详细地描述。", truncatedInput);
-            default -> String.format("AI 无法准确理解您的意图「%s」，请重新描述。", truncatedInput);
-        };
-
-        List<IntentExecuteResponse.SuggestedAction> suggestedActions = new ArrayList<>();
-        suggestedActions.add(IntentExecuteResponse.SuggestedAction.builder()
-                .actionCode("REPHRASE").actionName("重新描述您的需求")
-                .description("请尝试用不同的方式描述").build());
-        suggestedActions.add(IntentExecuteResponse.SuggestedAction.builder()
-                .actionCode("SHOW_INTENTS").actionName("从常用操作中选择")
-                .endpoint("/api/mobile/" + factoryId + "/ai-intents").build());
-
-        return IntentExecuteResponse.builder()
-                .intentRecognized(false).status("VALIDATION_FAILED")
-                .message(clarificationMessage).suggestedActions(suggestedActions)
-                .metadata(Map.of("validationFailureType", e.getFailureType().name(),
-                        "requiresDoubleCheck", true))
-                .executedAt(LocalDateTime.now()).build();
     }
 
     private IntentExecuteResponse buildRAGResponse(String responseContent, RAGRouteResult ragRouteResult, String routeType) {
@@ -2450,15 +1982,6 @@ public class IntentExecutionOrchestrator {
      * <p>Audit close-gate row "NEED_CLARIFICATION contains specific 2+ choices" requires
      * the user-facing text to enumerate the candidate intents inline.
      */
-    private String buildClarificationWithChoices(List<IntentExecuteResponse.SuggestedAction> candidateActions,
-                                                  String factoryId) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("您的请求可能匹配多个操作, 请选择您实际想做的:");
-        sb.append(buildChoicesLine(ensureMinChoices(candidateActions, 2, factoryId)));
-        sb.append("回复对应序号, 或更详细描述需求 (例如指定时段 / 物料 / 批次 / 客户)。");
-        return sb.toString();
-    }
-
     /**
      * Sprint 12 close-gate row "NEED_CLARIFICATION returns specific 2-or-3-choice question"
      * requires ≥2 data choices in the user-visible text. When the candidate set has <2
@@ -2503,33 +2026,6 @@ public class IntentExecutionOrchestrator {
      * Render top candidate intents as a "1. X 2. Y 3. Z" choice line.
      * Skips REPHRASE / SHOW_INTENTS placeholders (they're UI affordances, not data choices).
      */
-    private String buildChoicesLine(List<IntentExecuteResponse.SuggestedAction> candidateActions) {
-        if (candidateActions == null || candidateActions.isEmpty()) {
-            return "\n暂无候选操作可建议。\n";
-        }
-        StringBuilder sb = new StringBuilder("\n");
-        int idx = 1;
-        for (IntentExecuteResponse.SuggestedAction action : candidateActions) {
-            if (action == null) continue;
-            String code = action.getActionCode();
-            if ("REPHRASE".equals(code) || "SHOW_INTENTS".equals(code)) continue;
-            String name = action.getActionName();
-            if (name == null || name.isBlank()) continue;
-            sb.append(idx++).append(". ").append(name);
-            String desc = action.getDescription();
-            if (desc != null && !desc.isBlank() && !desc.startsWith("置信度")) {
-                sb.append(" — ").append(desc);
-            }
-            sb.append("\n");
-            if (idx > 3) break;  // cap at top 3 data choices
-        }
-        if (idx == 1) {
-            // No data choices found, only UI affordances
-            sb.append("暂无候选操作可建议。\n");
-        }
-        return sb.toString();
-    }
-
     // ==================== C1 业态过滤 helpers (restaurant-chat-qa) ====================
 
     /**
@@ -2596,103 +2092,24 @@ public class IntentExecutionOrchestrator {
      * ownerActionSessionId must not turn "删除/下架菜品" into advisory chat.
      */
 
-    private void putIfPresent(Map<String, Object> target, String key, String value) {
-        if (value != null && !value.isBlank()) {
-            target.put(key, value);
-        }
+    /**
+     * 澄清候选: 与 SSE 同一个服务 ({@link ClarificationCandidateService}) —— 按当前工厂配置、业态、模式、
+     * 意图权限与一线受众逐个核过才出; 业务候选为 0 时只有「重新描述」(明确失败), 不再回落未过滤的
+     * 识别候选或默认业务按钮 (INTENT-DISTILL D2)。
+     */
+    private List<IntentExecuteResponse.SuggestedAction> buildCandidateActions(IntentMatchResult matchResult,
+                                                                          String factoryId, Long userId,
+                                                                          String userRole, String mode) {
+        return clarify(matchResult, factoryId, userId, userRole, mode).actions();
     }
 
-    private String stringValue(Object value) {
-        return value == null ? null : String.valueOf(value);
-    }
-
-    private String stringValueOrDefault(Object value, String fallback) {
-        String actual = stringValue(value);
-        return actual == null || actual.isBlank() ? fallback : actual;
-    }
-
-    private String firstNonBlank(String first, String second, String fallback) {
-        if (first != null && !first.isBlank()) {
-            return first;
+    private ClarificationCandidateService.Clarification clarify(IntentMatchResult matchResult,
+                                                                String factoryId, Long userId,
+                                                                String userRole, String mode) {
+        if (clarificationCandidateService == null) {
+            return ClarificationCandidateService.rephraseOnlyClarification();
         }
-        if (second != null && !second.isBlank()) {
-            return second;
-        }
-        return fallback;
-    }
-
-    private Object firstNonNull(Object first, Object second) {
-        return first != null ? first : second;
-    }
-
-    private List<Map<String, Object>> normalizeOwnerActionFollowups(Object followUps, String scenario) {
-        if (!(followUps instanceof List<?> items)) {
-            return Collections.emptyList();
-        }
-        List<Map<String, Object>> normalized = new ArrayList<>();
-        for (Object item : items) {
-            String question;
-            String label;
-            String itemScenario = scenario;
-            if (item instanceof Map<?, ?> followupMap) {
-                question = firstNonBlank(
-                        stringValue(followupMap.get("question")),
-                        stringValue(followupMap.get("text")),
-                        stringValue(followupMap.get("label")));
-                label = firstNonBlank(stringValue(followupMap.get("label")), question, question);
-                itemScenario = firstNonBlank(stringValue(followupMap.get("ownerActionScenario")), scenario, scenario);
-            } else {
-                question = stringValue(item);
-                label = question;
-            }
-            if (question == null || question.isBlank()) {
-                continue;
-            }
-            Map<String, Object> followup = new LinkedHashMap<>();
-            followup.put("label", label != null && label.length() > 18 ? label.substring(0, 18) + "..." : label);
-            followup.put("question", question);
-            if (itemScenario != null && !itemScenario.isBlank()) {
-                followup.put("ownerActionScenario", itemScenario);
-            }
-            normalized.add(followup);
-            if (normalized.size() >= 4) {
-                break;
-            }
-        }
-        return normalized;
-    }
-
-    private List<IntentExecuteResponse.SuggestedAction> buildCandidateActions(IntentMatchResult matchResult, String factoryId) {
-        List<IntentExecuteResponse.SuggestedAction> actions = new ArrayList<>();
-        // C1: drop candidates whose owning intent's business_type is incompatible with this
-        // factory's domain (e.g. a RESTAURANT tenant must not see 查询原料库存 manufacturing options).
-        String factoryDomain = resolveFactoryDomainSafe(factoryId);
-        if (matchResult.getTopCandidates() != null) {
-            for (IntentMatchResult.CandidateIntent candidate : matchResult.getTopCandidates()) {
-                if (actions.size() >= 3) break;
-                if (!isCandidateCompatible(factoryId, factoryDomain, candidate.getIntentCode())) {
-                    continue; // business-type mismatch — skip noise
-                }
-                actions.add(ClarificationCandidateService.toSelectAction(
-                        factoryId, candidate.getIntentCode(), candidate.getIntentName(),
-                        candidate.getDescription(), candidate.getConfidence()));
-            }
-        }
-        // C1: if filtering left ZERO data candidates (all incompatible with this domain), fall
-        // back to factory-aware defaults so the user still gets actionable options (never empty).
-        if (actions.isEmpty()) {
-            for (IntentExecuteResponse.SuggestedAction d : buildDefaultSuggestions(factoryId)) {
-                String code = d.getActionCode();
-                if ("REPHRASE".equals(code) || "SHOW_INTENTS".equals(code)) continue;
-                actions.add(d);
-            }
-        }
-        actions.add(IntentExecuteResponse.SuggestedAction.builder()
-                .actionCode("REPHRASE").actionName("重新描述").build());
-        actions.add(IntentExecuteResponse.SuggestedAction.builder()
-                .actionCode("SHOW_INTENTS").actionName("查看所有可用操作")
-                .endpoint("/api/mobile/" + factoryId + "/ai-intents").build());
-        return actions;
+        return clarificationCandidateService.clarify(matchResult, factoryId, userId, userRole, mode);
     }
 
     /**
@@ -2723,20 +2140,6 @@ public class IntentExecutionOrchestrator {
      *
      * <p>缓存与对话记忆刻意不在这里补: 对话记忆会把还原后的真名写进历史, 带历史的模型调用尚未接入脱敏。
      */
-    private IntentExecuteResponse finishSkillBranchResponse(String factoryId, IntentExecuteRequest request,
-                                                            AIIntentConfig intent, Long userId,
-                                                            IntentExecuteResponse response) {
-        IntentExecuteResponse finished = response;
-        if ("NEED_MORE_INFO".equals(finished.getStatus())) {
-            finished = enrichWithClarificationQuestions(finished, request, intent, factoryId, userId);
-        }
-        boolean priceMasked = applyCallerPriceView(finished, userId);
-        applyResultFormatting(finished, userId);
-        applyFormattedTextFallback(factoryId, finished, priceMasked);
-        applyAiModeStamp(finished, intent, intent.getToolName());
-        return finished;
-    }
-
     private void applyResultFormatting(IntentExecuteResponse response, Long userId) {
         String status = response.getStatus();
         boolean isSuccessStatus = "SUCCESS".equals(status) || "COMPLETED".equals(status);
@@ -2749,28 +2152,9 @@ public class IntentExecutionOrchestrator {
         }
     }
 
-    /** 客户可见文本内部泄漏消毒 (Sheet 7/22 V7): LLM 意图分类/rerank 的推理
-     * 文本 ("在提供的可用意图列表中, 只有 PRODUCT_XXX…") 偶发被当回答返回。
-     * 同时含意图元讨论词与 CODE 形状 token 的消息不可能是合法业务答案。 */
-    private static final java.util.regex.Pattern INTERNAL_CODE_TOKEN =
-            java.util.regex.Pattern.compile("[A-Z]{2,}_[A-Z0-9_]{2,}");
-
+    /** 客户可见文本内部泄漏消毒: 与流式入口同一个实现 ({@link IntentTurnSharedSteps#sanitizeInternalReasoningLeak})。 */
     private void sanitizeInternalReasoningLeak(IntentExecuteResponse response) {
-        String msg = response.getMessage();
-        if (msg == null) {
-            return;
-        }
-        boolean metaTalk = msg.contains("意图列表") || msg.contains("可用意图")
-                || msg.contains("候选意图") || msg.contains("intent_code")
-                || msg.contains("该意图覆盖");
-        if (metaTalk && INTERNAL_CODE_TOKEN.matcher(msg).find()) {
-            log.warn("[sanitize] internal intent reasoning leaked to customer text, replaced. head={}",
-                    msg.substring(0, Math.min(80, msg.length())));
-            String safe = "这个问题我还没有把握直接回答。请换一种问法，"
-                    + "或说明想看的指标（如营收/销量/毛利）和时间范围，我再帮您查。";
-            response.setMessage(safe);
-            response.setFormattedText(safe);
-        }
+        IntentTurnSharedSteps.sanitizeInternalReasoningLeak(response);
     }
 
     /** 价格 / 财务可见性的唯一判定 (与 HTTP 响应层同一个); 没装配时不让模型看结果数据。 */
@@ -2786,82 +2170,11 @@ public class IntentExecutionOrchestrator {
      * @return true = 数据已按这个人遮过 (或本来就没有数据); false = 判定组件没装配, 后面不许把数据交给模型
      */
     private boolean applyCallerPriceView(IntentExecuteResponse response, Long userId) {
-        if (response == null || response.getResultData() == null) {
-            return true;
-        }
-        if (priceView == null) {
-            log.warn("价格可见性组件未装配: 结果数据不交给摘要模型 (fail closed)");
-            return false;
-        }
-        response.setResultData(priceView.maskedViewFor(response.getResultData(), userId));
-        return true;
+        return IntentTurnSharedSteps.applyCallerPriceView(priceView, response, userId);
     }
 
     private void applyFormattedTextFallback(String factoryId, IntentExecuteResponse response, boolean priceMasked) {
-        sanitizeInternalReasoningLeak(response);
-        String currentFT = response.getFormattedText();
-        String msg = response.getMessage();
-        boolean ftMissing = currentFT == null;
-        boolean ftGeneric = currentFT != null && GENERIC_SHORT_REPLIES.contains(currentFT.trim());
-        boolean ftShort = currentFT != null && currentFT.length() < 15;
-        if ((ftMissing || ftGeneric || ftShort) && msg != null && msg.length() >= 20
-                && msg.length() > (currentFT != null ? currentFT.length() : 0)) {
-            response.setFormattedText(msg);
-        } else if (ftMissing && msg != null && msg.length() >= 5) {
-            response.setFormattedText(msg);
-        }
-        // Ultimate fallback
-        if (response.getFormattedText() == null && response.getMessage() != null && !response.getMessage().isEmpty()) {
-            response.setFormattedText(response.getMessage());
-        }
-
-        // 反向兜底 (2026-07-23 工厂 AI 复盘): message 是占位符/空 而 formattedText
-        // 有实质答案时, 用 formattedText 覆盖 message。此前只有 formattedText←message
-        // 单向, 导致 PROCESSING_BATCH_LIST 等查询 message="操作已完成。" 掩盖了
-        // formattedText 里 "查询到 487 个生产批次…" 的真答案 (Sheet 行15 工厂版)。
-        String finalMsg = response.getMessage();
-        String finalFT = response.getFormattedText();
-        boolean msgMissing = finalMsg == null || finalMsg.isBlank();
-        boolean msgGeneric = finalMsg != null && GENERIC_SHORT_REPLIES.contains(finalMsg.trim());
-        if ((msgMissing || msgGeneric) && finalFT != null && finalFT.length() >= 20
-                && !GENERIC_SHORT_REPLIES.contains(finalFT.trim())) {
-            response.setMessage(finalFT);
-        }
-
-        // Sprint 9 P0.2 (2026-05-22) — Terminal LLM-summarize gate for Workdesk / Skill orchestration
-        // outputs. Detects underscore-prefixed metadata leaks (_toolCount / _executionOrder),
-        // raw JSON dumps (5989-char sales-owner case), and bare templates ("包含 N 项数据指标").
-        // Pipes through DashScopeClient.chatFast() for Chinese natural-language summary.
-        // Opt-out via cretas.ai.workdesk-summarizer.enabled=false.
-        if (workdeskOutputSummarizer != null && priceMasked) {
-            try {
-                workdeskOutputSummarizer.apply(response, factoryId);
-            } catch (Exception e) {
-                log.warn("WorkdeskOutputSummarizer 应用失败 (non-blocking): {}", e.getMessage());
-            }
-        }
-    }
-
-    private void processResponseCaching(String factoryId, IntentExecuteRequest request,
-                                         IntentMatchResult matchResult, IntentExecuteResponse response) {
-        try {
-            if (request.getContext() != null) {
-                Object cacheHit = request.getContext().get("__cacheHit");
-                if (Boolean.TRUE.equals(cacheHit)) {
-                    response.setFromCache(true);
-                    Object hitType = request.getContext().get("__cacheHitType");
-                    response.setCacheHitType(hitType != null ? hitType.toString() : "SEMANTIC");
-                    request.getContext().remove("__cacheHit");
-                    request.getContext().remove("__cacheHitType");
-                    return;
-                }
-            }
-            if ("COMPLETED".equals(response.getStatus()) && request.getUserInput() != null) {
-                semanticCacheService.cacheResult(factoryId, request.getUserInput(), matchResult, response);
-            }
-        } catch (Exception e) {
-            log.warn("处理响应缓存失败: {}", e.getMessage());
-        }
+        IntentTurnSharedSteps.applyTextFallback(response, workdeskOutputSummarizer, factoryId, priceMasked);
     }
 
     // ==================== 对话记忆 ====================
@@ -2903,8 +2216,12 @@ public class IntentExecutionOrchestrator {
             String userInput = request.getUserInput();
             String assistantMessage = response.getMessage() != null ? response.getMessage() : "执行完成";
             conversationMemoryService.addMessage(sessionId, ConversationMessage.user(userInput));
-            conversationMemoryService.addMessage(sessionId, ConversationMessage.assistant(assistantMessage));
-            {}
+            ConversationMessage assistant = intentResult != null && intentResult.getBestMatch() != null
+                    ? ConversationMessage.assistant(assistantMessage, intentResult.getBestMatch().getIntentCode())
+                    : ConversationMessage.assistant(assistantMessage);
+            Map<String, Object> readMetadata = readTurnMemoryMetadata(request, response, intentResult);
+            if (!readMetadata.isEmpty()) assistant.setMetadata(readMetadata);
+            conversationMemoryService.addMessage(sessionId, assistant);
             // Extract entities from response data
             extractAndUpdateEntitySlots(sessionId, response, intentResult);
             if (intentResult != null && intentResult.getBestMatch() != null) {
@@ -2913,6 +2230,64 @@ public class IntentExecutionOrchestrator {
         } catch (Exception e) {
             log.warn("Failed to update conversation memory: sessionId={}, error={}", sessionId, e.getMessage());
         }
+    }
+
+    /**
+     * INTENT-DISTILL D1: 成功的只读查询把「本次实际执行的参数与来源」(readQuery) 和服务端分页元数据挂在助手消息上,
+     * 与 SSE 入口写进同一份会话记忆 —— 下一轮续句沿用、「下一页」翻页都只从这里取。
+     */
+    private Map<String, Object> readTurnMemoryMetadata(IntentExecuteRequest request, IntentExecuteResponse response,
+                                                       IntentMatchResult intentResult) {
+        if (response == null
+                || !("SUCCESS".equals(response.getStatus()) || "COMPLETED".equals(response.getStatus()))) {
+            return Map.of();
+        }
+        Map<String, Object> readQuery = response.getMetadata() != null
+                && response.getMetadata().get(ReadTurnParameters.METADATA_KEY) instanceof Map<?, ?> rq ? new LinkedHashMap<>() : null;
+        if (readQuery != null) {
+            ((Map<?, ?>) response.getMetadata().get(ReadTurnParameters.METADATA_KEY))
+                    .forEach((k, v) -> { if (k != null) readQuery.put(String.valueOf(k), v); });
+        }
+        AIIntentConfig intent = intentResult != null ? intentResult.getBestMatch() : null;
+        // readQuery 优先; 工具没给 readQuery 时按这一轮的意图与绑定工具 (两入口一份, PR-3: 原流式那一份就这样记翻页)
+        String intentCode = readQuery != null && readQuery.get("intentCode") instanceof String code ? code
+                : intent != null ? intent.getIntentCode() : null;
+        String toolName = readQuery != null && readQuery.get("toolName") instanceof String tool ? tool
+                : intent != null ? intent.getToolName() : null;
+        if (intentCode == null || toolName == null || toolName.isBlank()) {
+            return Map.of();
+        }
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        if (readQuery != null) metadata.put(ReadTurnParameters.METADATA_KEY, readQuery);
+        Optional<ToolExecutor> executor = toolRegistry.getExecutor(toolName);
+        if (executor.isPresent() && executor.get().getAccessMode() == ToolExecutor.AccessMode.READ
+                && !(writeGuardService != null && writeGuardService.isWriteTool(executor.get()))
+                && !(intent != null && writeGuardService != null && writeGuardService.isWriteIntent(intent))) {
+            Map<String, Object> pagination = ReadPaginationSupport.buildMetadata(request, intentCode, toolName,
+                    executor.get(), response.getResultData(), readQuery);
+            if (pagination != null) metadata.put(ReadPaginationSupport.METADATA_KEY, pagination);
+        }
+        return metadata;
+    }
+
+    /**
+     * 普通入口的「下一页 / 上一页」: 与 SSE 同一份翻页规划 ({@link ReadPaginationSupport}), 以前这里落到
+     * PaginationNextTool, 只回一句「正在加载」而没有数据。目标意图照常过意图级权限, 工具级权限在派发里再判。
+     *
+     * @return null = 不是翻页意图, 照原路径执行
+     */
+    private IntentExecuteResponse executePaginationReplay(String factoryId, IntentExecuteRequest request,
+                                                          AIIntentConfig intent, Long userId, String userRole) {
+        if (intent == null || !ReadPaginationSupport.isPaginationIntent(intent.getIntentCode())) return null;
+        ReadPaginationSupport.Plan plan = ReadPaginationSupport.plan(
+                ReadPaginationSupport.isPreviousIntent(intent.getIntentCode()), conversationMemoryService,
+                toolRegistry, writeGuardService, code -> getIntentByCodeWithPlatformFallback(factoryId, code),
+                factoryId, userId, request);
+        if (plan.refused()) return plan.refusal();
+        IntentExecuteResponse denied = checkIntentPermission(plan.intent(), factoryId, userId, userRole);
+        if (denied != null) return denied;
+        return toolDispatchService.executeWithTool(plan.tool(), factoryId, plan.replay(), plan.intent(),
+                userId, userRole, plan.match());
     }
 
     @SuppressWarnings("unchecked")
@@ -3222,21 +2597,4 @@ public class IntentExecutionOrchestrator {
         } catch (Exception e) { return null; }
     }
 
-    private IntentMatchResult deserializeIntentResult(String json) {
-        if (json == null || json.isEmpty()) return null;
-        try { return objectMapper.readValue(json, IntentMatchResult.class); }
-        catch (JsonProcessingException e) { return null; }
-    }
-
-    private void logBranchStats() {
-        long total = branchToolDirect.get() + branchSkill.get() + branchDynamic.get() + branchNoMatch.get();
-        if (total > 0 && total % 50 == 0) {
-            log.info("[Branch:Stats] total={}, ToolDirect={}%, Skill={}%, Dynamic={}%, NoMatch={}%",
-                    total,
-                    branchToolDirect.get() * 100 / total,
-                    branchSkill.get() * 100 / total,
-                    branchDynamic.get() * 100 / total,
-                    branchNoMatch.get() * 100 / total);
-        }
-    }
 }

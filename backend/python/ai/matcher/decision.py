@@ -1,6 +1,10 @@
 """第②层: 读概率决策 (decision-model 模式)。
 
-两次快调用, 都走 SLOT.DECISION (qwen3.7-flash 链头):
+2026-11-12: 配了加拿大出口(LLM_EGRESS_PROXY)+ OpenAI key 时, 细选先走 OpenAI Decisions
+(gpt-6-luna, 原生全选项概率, `call_decision_choice`), 失败再回落下面第 2 步的读 logprobs 链;
+没配时与原来完全一样, 只走阿里云 qwen 读 logprobs 链。粗选仍是 SLOT.DECISION 的短 JSON 生成。
+
+两次快调用, 都走 SLOT.DECISION (qwen3.8-flash 链头; 2026-11-18 起不再用 qwen3.7-flash):
   1. 粗选: 全目录 (代码｜名称) -> 最多 8 个候选 (短 JSON 生成; 目录是静态前缀, 吃隐式缓存)
   2. 细选: 候选 (粗选 + 向量补足, 最多 20 个) 编成字母 A-T, 前缀续写「答案：」,
      max_tokens=1, 读首 token 的 top_logprobs -> 每个候选一个概率
@@ -14,15 +18,44 @@ Chooser)。粗选 system 提示至今逐字相同; 之后线上加了最近对�
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import math
 import random
+import re
 from enum import Enum
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+
+# ===== 第 1 层: 业务域 (意图蒸馏第③步 PR-4, 方案第 2 节) =====
+# 先判这句话属于哪个 (或哪几个) 业务域, 再只把这些域的意图交给粗选 / 合并理解提示词。规则与兜底在 ai/intent_domain.py;
+# 这里是决策层用的入口: 表读不了 ⇒ 不收窄 (宁可放宽), 不让识别因为业务域失败。
+def domain_scope(query: str, visible: List[Dict[str, Any]], catalog_version: Optional[str],
+                 contextual: bool = False):
+    from ai import intent_domain
+    try:
+        table = intent_domain.get_table()
+    except intent_domain.IntentDomainTableError as ex:
+        logger.warning("intent domain table unavailable, not narrowing: %s", ex)
+        table = None
+    return intent_domain.scope(query, visible, table, catalog_version, contextual=contextual)
+
+
+def intent_domain_of(code: Optional[str]) -> Dict[str, Optional[str]]:
+    """决策层输出的业务域: 选中意图的主域 / 次域; 表外意图 (工厂自建) 两个都是 None。"""
+    from ai import intent_domain
+    if not code:
+        return {"domain": None, "secondaryDomain": None}
+    try:
+        table = intent_domain.get_table()
+    except intent_domain.IntentDomainTableError:
+        return {"domain": None, "secondaryDomain": None}
+    return {"domain": table.domain_of(code), "secondaryDomain": table.secondary_of(code)}
+
 
 LETTERS = "ABCDEFGHIJKLMNOPQRST"
 
@@ -38,6 +71,53 @@ SPECIAL_OPTIONS = [
      "description": "上面有两个以上的功能都说得通，或者缺了关键信息必须先问用户"},
 ]
 _SPECIAL_KEYS = {"NONE": NONE_KEY, "CLARIFY": CLARIFY_KEY}
+# 第三批 (INTENT-DISTILL-20261111, 2026-11-14): Luna 判断题「这一轮是否必须先问」的概率, 和 Choice 分布放在同一个
+# dict 里交给 orchestrator (不是选项, 不进按钮); 没问 / 没拿到就不出现这个键, orchestrator 照旧按 v1 规则。
+ASK_KEY = "__ASK__"
+NON_INTENT_KEYS = frozenset({NONE_KEY, CLARIFY_KEY, ASK_KEY})
+# 判断题说明 (保守档): 按史浩禾 300 题答案重校 (INTENT-DISTILL-20261111, 2026-11-19; 此前只按他前 39 题校, #1711 v3)。
+# Steve 11-14 定: Steve 的答案是主金标 (激进档用), 史浩禾的是第二意见; 保守档 = 史浩禾口径 = 多问。
+# 与 Steve 有争议的题 (两人答案不一致) 在金标里单列 status=disputed, 保守档仍按史浩禾的答案计分, 激进档不计分。
+# 金标与逐题读数: tests/fixtures/ask_policy/ (gold300.json / s300_readings.json), 守门测试 test_ai_ask_policy_gold300.py。
+# 规则里的例句都是改写过的, 没有照抄 300 题原话; 开发只用奇数题号, 偶数题号留作验证, 读数见该测试文件头。
+# 改这里要重跑那份校准 (重新读判断题概率, 更新 s300_readings.json 的规则哈希), 否则 gold300 测试会红。
+ASK_PREDICATE_NAME = "needs_clarification"
+ASK_PREDICATE_RULES = (
+    "判断食品厂业务系统这一轮是否必须先问用户一句才能办理（true=必须先问；false=可以直接办，或续接上一轮，或明确取消）。"
+    "必须先问的情形："
+    "①只有“弄一下/处理一下/整一下/搞一下/做一下”这类含糊动词，说不出要查看还是新建、修改、审批、提交；"
+    "②用“这批/这个/那个/这家/这款/这张/那张/上次那单”指一个具体对象，而这句话和上文都没有说出是哪一个（批次号、编号、名称、哪一次、哪一款配方或产品）；"
+    "③只说“最近的数据”“看看情况”，没说看什么：范围太宽，必须先问；"
+    "④写操作（收货入库、盘盈、开票、审批、批准、退货、放行、建检查或单据）动作说得出，但要办哪一张、哪一批、多少数量、什么原因里有任何一项没给全；审批类没给单号也算没给全；"
+    "⑤查询和录入/修改两种读法都说得通；"
+    "⑥系统正在追问某个字段，这句话没有回答它，也没有换成别的事；"
+    "⑦要看的范围系统算不了（比如按车间算利润），或者要算、要看的是某一次具体事件（某次召回、某次停线、某次投诉）却没说是哪一次，或者要导出、打印却没说是哪一份；"
+    "⑧要改一个已有的设置（如排班、计划）却没说改成什么；"
+    "⑨想反映使用问题、提意见，却没说是哪个功能哪里不好用。"
+    "不用问，直接办："
+    "只读查询，对象已经说清（给了编号或名称，或者是“今天/昨晚/本周/全部/各工序/某条产线/某个客户”这种具体范围），缺的只是条数、排序这类有默认值的条件（没说时间按最近7天）；"
+    "上文能对上的续句、接着上一轮继续、翻页、换成另一个对象、纠正和明确的取消；"
+    "问自己的信息、问怎么用、闲聊；"
+    "说的是某台设备或某个报警现在什么情况，由系统先查再告诉用户。"
+)
+
+# 激进档 (少问, 默认档; Steve 2026-11-14: 金标以 Steve 自答 300 题为主): 能给合理默认就不问; 写操作动作与对象说得出
+# 就交确认卡 (确认卡本身就是确认); 只有缺了无法默认的关键信息才问。保守档仍用上面的 ASK_PREDICATE_RULES。
+# 档位与门槛见 ai/ask_policy.py; 读数见 Documents/Cretas意图蒸馏-20261111/steve300-calibrate-20261114.md。
+ASK_PREDICATE_RULES_AGGRESSIVE = (
+    "判断食品厂业务系统这一轮是否必须先问用户一句才能办理。只有下面几种情形是 true，其余一律 false："
+    "①查看类的话用“这批/这个/这家/这款/那个/上次那单”指一个具体对象，却没有给编号、名字，也没有原料或产品名，上文也对不上——不知道查哪一个，必须先问（如“这批发到哪了”“这家报价多少”“看看这批检验结果”）。“这批+原料或产品名”（如“看下这批白砂糖”）不用问，列出这种东西的批次即可；"
+    "②只有“弄一下/处理一下/搞一下/整一下/关一下”这类含糊动词，说不出要查看还是新建、修改、审批，上文也没有正在办的事；"
+    "③查看和录入/修改两种读法都说得通（如“录下草莓酸奶下周要多少”）；"
+    "④只有半句（如“快过期的”“上个月的”），上文没有能接上的事；"
+    "⑤要导出、打印某份单据，却没说是哪一份或什么范围（如“把单子打出来”）。"
+    "下面这些都是 false，不要因为细节没给全就问：只读查询说得出要看什么，没说的时间、范围、条数按默认办（最近7天、全部、同名的都列出），结果里写明默认；写操作（登记、录入、新建、审批、放行、冻结、入库、发货、退货、赔付、调整）说得出要做什么——缺的数量、批次、日期、人员由系统先出一张确认单让用户补全、核对，确认单本身就是确认，不另外先问；上文正在办一件事，这句是回答追问、改条件、纠正、换对象、翻页、接着办；问怎么用、反映问题、闲聊、取消。"
+)
+
+
+def ask_predicate_text(query: str, role: Optional[str], history: Optional[List[Dict[str, Any]]] = None) -> str:
+    """判断题正文: 与粗选 / 合并理解同形 (身份行 + 最近对话/任务状态 + 用户说), 不带候选。"""
+    return f"{role_line(role)}\n{history_block(history)}用户说：{query}"
 INSTR = "用户这句话应该交给下面哪个系统功能来处理？"
 STRICT_SYSTEM = "你是业务系统的请求分类器。只输出一个大写选项字母，不要换行、不要空格、不要任何其他字符。"
 REQUEST_PURPOSE_RULES = (
@@ -107,11 +187,80 @@ MAX_TURN_CHARS = 200
 _SPEAKER = {"user": "用户", "assistant": "系统"}
 
 
+# ===== 任务状态 (INTENT-DISTILL-20261111 第二批) =====
+# 字段白名单写死, 与 Java TaskStateSummary.TOP_KEYS / TASK_KEYS 一致; 白名单外的字段一律丢掉, 不进提示词。
+TASK_STATE_TOP_KEYS = frozenset({"tasks"})
+TASK_STATE_TASK_KEYS = frozenset({"level", "intentCode", "params"})
+TASK_STATE_ROLE = "task_state"
+MAX_TASK_STATE_TASKS = 4
+MAX_TASK_STATE_PARAMS = 8
+MAX_TASK_STATE_VALUE_CHARS = 40
+_TASK_INTENT = re.compile(r"^[A-Z][A-Z0-9_]{1,79}$")
+_TASK_PARAM_KEY = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,39}$")
+
+
+def sanitize_task_state(state: Any) -> List[Dict[str, Any]]:
+    """按白名单重建任务列表; 结构不对的整层丢掉。返回 [] = 不带任务状态。"""
+    if not isinstance(state, dict):
+        return []
+    tasks = state.get("tasks")
+    if not isinstance(tasks, list):
+        return []
+    out: List[Dict[str, Any]] = []
+    for task in tasks[:MAX_TASK_STATE_TASKS]:
+        if not isinstance(task, dict):
+            continue
+        level, code, params = task.get("level"), task.get("intentCode"), task.get("params")
+        if not isinstance(level, int) or isinstance(level, bool) or level < 0:
+            continue
+        if not isinstance(code, str) or not _TASK_INTENT.match(code):
+            continue
+        clean: Dict[str, Any] = {}
+        for k, v in (params.items() if isinstance(params, dict) else []):
+            if len(clean) >= MAX_TASK_STATE_PARAMS:
+                break
+            if not isinstance(k, str) or not _TASK_PARAM_KEY.match(k):
+                continue
+            if isinstance(v, bool):
+                clean[k] = "是" if v else "否"
+            elif isinstance(v, (int, float, str)):
+                clean[k] = " ".join(str(v).split())[:MAX_TASK_STATE_VALUE_CHARS]
+        out.append({"level": level, "intentCode": code, "params": clean})
+    return out
+
+
+def task_state_text(state: Any) -> str:
+    """清洗后的任务状态 -> 提示词片段 (只有意图码、参数键值、层级); 没有任务时空串。"""
+    tasks = sanitize_task_state(state)
+    if not tasks:
+        return ""
+    lines = []
+    for t in sorted(tasks, key=lambda x: x["level"]):
+        where = "正在做" if t["level"] == 0 else f"被打断挂起（第{t['level']}层）"
+        filled = "，".join(f"{k}={v}" for k, v in t["params"].items()) or "无"
+        lines.append(f"{where}：{t['intentCode']}，已填 {filled}")
+    return "任务状态（服务端记录，只用来判断这句话是不是在接着做某件事）：\n" + "\n".join(lines) + "\n"
+
+
+def with_task_state(history: Optional[List[Dict[str, Any]]], state: Any) -> List[Dict[str, Any]]:
+    """把任务状态作为一条特殊记录接在最近对话后面: 所有提示词都经 history_block, 不用改各处签名。"""
+    turns = list(history or [])
+    text = task_state_text(state)
+    if text:
+        turns.append({"role": TASK_STATE_ROLE, "content": text})
+    return turns
+
+
 def history_block(history: Optional[List[Dict[str, Any]]]) -> str:
     """最近对话 -> 提示词片段; 没有可用的轮次时返回空串 (提示词与不带上下文时逐字相同)。"""
     lines: List[str] = []
+    state_text = ""
     for turn in history or []:
         if not isinstance(turn, dict):
+            continue
+        if turn.get("role") == TASK_STATE_ROLE:
+            # 已在 with_task_state 里按白名单渲染过; 不占最近对话的轮数
+            state_text = str(turn.get("content") or "")
             continue
         who = _SPEAKER.get(str(turn.get("role") or ""))
         text = " ".join(str(turn.get("content") or "").split())[:MAX_TURN_CHARS]
@@ -119,8 +268,8 @@ def history_block(history: Optional[List[Dict[str, Any]]]) -> str:
             lines.append(f"{who}：{text}")
     lines = lines[-MAX_HISTORY_TURNS:]
     if not lines:
-        return ""
-    return "最近对话（只用来理解下面这句话指的是什么）：\n" + "\n".join(lines) + "\n"
+        return state_text
+    return "最近对话（只用来理解下面这句话指的是什么）：\n" + "\n".join(lines) + "\n" + state_text
 
 
 def build_shortlist_messages(query: str, role: Optional[str], visible: List[Dict[str, Any]],
@@ -221,6 +370,127 @@ def build_purpose_messages(query: str, role: Optional[str],
             {"role":"user", "content":f"{role_line(role)}\n{history_block(history)}用户说：{query}"}]
 
 
+# ===== 合并理解 (INTENT-DISTILL E, 2026-11-11) =====
+# 「请求目的 / 候选粗选 / 对话动作 / 参数理解 / 是否要先问」原来是 2-3 次分开的生成调用
+# (目的 ‖ 粗选, 之后再选), 合成一次结构化输出。⛔ 输出只是候选: 权限过滤、读写判定、
+# 参数落地校验仍在 Java 侧照旧执行; 这里给出的参数只带原话证据, 不替 Java 绑定。
+DIALOGUE_ACTS = ("NEW_TASK", "CHANGE_PARAM", "PAGE", "CANCEL", "NEED_CLARIFY")
+PARAM_SOURCES = ("explicit_turn", "confirmed", "default")
+UNDERSTAND_RULES = (
+    "对话动作：NEW_TASK=开始新任务或换了目标；CHANGE_PARAM=沿用上一轮任务，只改条件/口径/对象，"
+    "或回答系统正在追问的字段；PAGE=对上一轮结果翻页；CANCEL=放弃当前任务（算了/不查了/先别弄）；"
+    "NEED_CLARIFY=必须先问用户才能办。"
+    "需要先问的情形：只有含糊动词（弄/处理/整/搞/安排），说不出是查看还是新建、修改、审批，"
+    "而这个对象既有查询功能又有改数据的功能；两个以上含义不同的功能都说得通且上文排除不了；"
+    "用「这个/那批/这单」指代对象但上文对不上；系统正在追问某个字段，这句话却没有给出它；"
+    "说法命中易混口径且没有限定词能分开。"
+    "不需要问的情形：功能确定，缺的只是有默认值的条件（时间范围、条数、排序、页码），直接办；"
+    "上文能对上的续句，按上一轮任务续接：CHANGE_PARAM 和 PAGE 的 target 就是上一轮在办的那个功能，"
+    "翻页、改页码、改每页条数由系统换算，不需要目录里有翻页功能，也不要因此去问。"
+    "动词决定读写方向：查询类与新建/修改/删除/确认类差一两个字意图就完全不同，不要替用户补出没说的操作意愿。"
+)
+
+
+def build_understand_messages(query: str, role: Optional[str], visible: List[Dict[str, Any]],
+                              size: int = 8, history: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, str]]:
+    """一次调用的提示词。目录放 system 最前面 (与粗选同一份静态前缀, 吃隐式缓存), 规则随后。"""
+    catalog = "\n".join(
+        _catalog_line(r) for r in sorted(visible, key=lambda r: str(r.get("intent_code")))
+    )
+    system = (
+        "你是食品加工厂业务系统的对话理解器。下面是全部意图目录（代码｜名称）：\n" + catalog + "\n\n"
+        + REQUEST_PURPOSE_RULES
+        + "purpose：CURRENT=当前请求业务事实或办理操作（礼貌、委婉、间接的真实请求也算；已确定要办但缺参数也算）；"
+          "INFORMATION_ONLY=只咨询教程、讨论未触发的条件/建议/愿望、否定或汇报已完成的事；"
+          "UNRESOLVED=无法判断当前是否要办理或指代不明。"
+        + UNDERSTAND_RULES
+        + "只输出一个 JSON 对象，字段："
+          '"purpose"；"dialogue_act"（' + "/".join(DIALOGUE_ACTS) + '）；'
+          f'"candidates"（目录里的代码，最多 {size} 个，按可能性从高到低，都不像就给空数组）；'
+          '"target"（最应该交给的代码，CANCEL 或拿不准时给 null）；'
+          '"confidence"（0 到 1，你对 target 就是用户要的功能有多大把握）；'
+          '"alternatives"（除 target 外同样说得通、含义不同的代码，没有就给空数组）；'
+          '"clarify_probability"（0 到 1，这一轮必须先问用户才能办的可能性）；'
+          '"clarify_reason"（一句话，不需要问就给空串）；'
+          '"parameters"（数组，每项 {"name":条件名,"value":值,"source":"explicit_turn|confirmed|default",'
+          '"evidence":本轮原话里对应的原文片段，source 不是 explicit_turn 时给空串}；'
+          "explicit_turn=这句话明确说了，confirmed=沿用上文已确认的值，default=用户没说、按默认值；"
+          "只列这句话或上文真的涉及的条件，不要编造）。"
+    )
+    return [{"role": "system", "content": system},
+            {"role": "user", "content": f"{role_line(role)}\n{history_block(history)}用户说：{query}"}]
+
+
+@dataclass
+class Understanding:
+    purpose: "RequestPurpose"
+    act: str
+    candidates: List[str]
+    target: Optional[str]
+    confidence: float
+    alternatives: List[str]
+    clarify_probability: float
+    clarify_reason: str
+    parameters: List[Dict[str, str]]
+
+
+def _unit(v: Any) -> Optional[float]:
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(float(v)):
+        return None
+    return float(v) if 0.0 <= float(v) <= 1.0 else None
+
+
+def parse_understanding(raw: str, visible_codes: set, size: int = 8) -> Optional[Understanding]:
+    """严格解析: 字段缺失 / 类型不对 / 概率越界 -> None (调用方按「拿不到」处理, 不猜)。
+
+    目录外的代码直接丢掉 (不让模型凭空造一个意图码); 证据不在原话里的参数由 Java 落地校验处理,
+    这里只做形状检查。
+    """
+    txt = (raw or "").strip().strip("`")
+    if txt[:4].lower() == "json":
+        txt = txt[4:]
+    try:
+        obj = json.loads(txt.strip())
+    except Exception:  # noqa: BLE001
+        return None
+    if not isinstance(obj, dict):
+        return None
+    try:
+        purpose = RequestPurpose(obj.get("purpose"))
+    except (ValueError, TypeError):
+        return None
+    act = obj.get("dialogue_act")
+    conf, p_clarify = _unit(obj.get("confidence")), _unit(obj.get("clarify_probability"))
+    cands, alts, params = obj.get("candidates"), obj.get("alternatives", []), obj.get("parameters", [])
+    if act not in DIALOGUE_ACTS or conf is None or p_clarify is None:
+        return None
+    if not isinstance(cands, list) or not isinstance(alts, list) or not isinstance(params, list):
+        return None
+    target = obj.get("target")
+    target = str(target) if target not in (None, "") else None
+    if target is not None and target not in visible_codes:
+        target = None
+    out: List[str] = []
+    for c in ([target] if target else []) + [str(x) for x in cands]:
+        if c in visible_codes and c not in out:
+            out.append(c)
+    clean_params: List[Dict[str, str]] = []
+    for p in params:
+        if not isinstance(p, dict) or not p.get("name"):
+            continue
+        src = p.get("source") if p.get("source") in PARAM_SOURCES else None
+        if src is None:
+            continue
+        clean_params.append({"name": str(p["name"])[:40], "value": str(p.get("value", ""))[:80], "source": src,
+                             "evidence": str(p.get("evidence") or "")[:80]})
+    return Understanding(
+        purpose=purpose, act=act, candidates=out[:size], target=target, confidence=conf,
+        alternatives=[str(a) for a in alts if str(a) in visible_codes and str(a) != target][:size],
+        clarify_probability=p_clarify, clarify_reason=str(obj.get("clarify_reason") or "")[:120],
+        parameters=clean_params[:12],
+    )
+
+
 class DecisionMatcher:
     def __init__(self, timeout_s: float = 6.0, k: int = 20, shortlist_size: int = 8):
         self.timeout_s = timeout_s
@@ -237,6 +507,52 @@ class DecisionMatcher:
             return await call_chain(SLOT.DECISION, payload, timeout=self.timeout_s,
                                     total_timeout=self.timeout_s, body_validator=body_validator,
                                     content_validator=content_validator)
+
+    async def _choose_native(self, messages: List[Dict[str, Any]], letters: str,
+                             opts: List[Dict[str, Any]]) -> Optional[Dict[str, float]]:
+        """Decisions API 的原生选项概率 {字母: 概率}; 任何失败 -> None (由调用方回落读 logprobs 链)。"""
+        from common.llm_metrics import llm_caller_context  # type: ignore
+        from common.llm_redactor import utterance_egress  # type: ignore
+        from common.llm_router import call_decision_choice, decision_choice_enabled  # type: ignore
+
+        if not decision_choice_enabled():
+            return None  # 没有加拿大出口 / 没有 key: 就是线上原来的阿里云 qwen 读概率链, 不白等一跳
+
+        # 选项说明与 E 线评测同形 (意图码：完整说明); 单次上限留出一半预算给回落链 (Luna 实测中位 0.37s)
+        choices = [(L, f"{r['intent_code']}：{intent_text(r)}") for L, r in zip(letters, opts)]
+        from ai import legacy_exit_metrics as exit_metrics  # 只计数 (INTENT-DISTILL-20261111)
+
+        exit_metrics.record_luna_request()
+        try:
+            with llm_caller_context("ai_decision"), utterance_egress():
+                dist = await call_decision_choice(messages, choices, name="intent",
+                                                  timeout=min(3.0, self.timeout_s / 2))
+        except Exception as ex:  # noqa: BLE001
+            logger.warning("decision native choice unavailable, falling back to logprobs: %s", str(ex)[:300])
+            exit_metrics.set_luna_failure_reason(exit_metrics.classify_exception(ex))
+            return None
+        if dist is None:
+            exit_metrics.set_luna_failure_reason("no_probs")
+        return dist
+
+    async def ask_probability(self, query: str, role: Optional[str],
+                              history: Optional[List[Dict[str, Any]]] = None,
+                              rules: Optional[str] = None) -> Optional[float]:
+        """Luna 判断题: 这一轮必须先问的概率。没启用 / 失败 / 形状不对 -> None (⛔ 不编; 调用方按 v1 规则)。"""
+        from common.llm_metrics import llm_caller_context  # type: ignore
+        from common.llm_redactor import utterance_egress  # type: ignore
+        from common.llm_router import call_decision_predicate, decision_choice_enabled  # type: ignore
+
+        if not decision_choice_enabled():
+            return None
+        try:
+            with llm_caller_context("ai_decision"), utterance_egress():
+                return await call_decision_predicate(rules or ASK_PREDICATE_RULES,
+                                                     ask_predicate_text(query, role, history),
+                                                     name=ASK_PREDICATE_NAME, timeout=min(3.0, self.timeout_s / 2))
+        except Exception as ex:  # noqa: BLE001
+            logger.warning("decision ask predicate unavailable: %s", str(ex)[:300])
+            return None
 
     async def request_purpose(self, query: str, role: Optional[str],
                               history: Optional[List[Dict[str, Any]]] = None) -> Optional[RequestPurpose]:
@@ -257,6 +573,24 @@ class DecisionMatcher:
             logger.warning("request purpose unavailable: %s",str(ex)[:200])
             return None
 
+    async def understand(self, query: str, role: Optional[str], visible: List[Dict[str, Any]],
+                         history: Optional[List[Dict[str, Any]]] = None) -> Optional[Understanding]:
+        """一次结构化调用代替「目的 + 粗选」两次; 拿不到合法输出 -> None (调用方回落旧的分开调用)。"""
+        codes = {str(r.get("intent_code")) for r in visible}
+
+        def valid(content: str) -> Optional[str]:
+            return None if parse_understanding(content, codes, self.shortlist_size) is not None else "bad_understanding_json"
+
+        payload = {"messages": build_understand_messages(query, role, visible, self.shortlist_size, history),
+                   "max_tokens": 600, "response_format": {"type": "json_object"}}
+        try:
+            body = await self._call(payload, content_validator=valid)
+        except Exception as ex:  # noqa: BLE001
+            logger.warning("decision understand failed: %s", str(ex)[:300])
+            return None
+        content = ((body.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+        return parse_understanding(content, codes, self.shortlist_size)
+
     async def shortlist(self, query: str, role: Optional[str], visible: List[Dict[str, Any]],
                         history: Optional[List[Dict[str, Any]]] = None) -> Optional[List[str]]:
         codes = {str(r.get("intent_code")) for r in visible}
@@ -274,38 +608,22 @@ class DecisionMatcher:
         content = ((body.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
         return parse_shortlist(content, codes, self.shortlist_size)
 
-    async def choose(self, query: str, role: Optional[str], options: List[Dict[str, Any]],
-                     history: Optional[List[Dict[str, Any]]] = None,
-                     special_options: bool = False) -> Optional[Dict[str, float]]:
-        """返回 {intent_code: 概率}; 整条链都拿不到概率 -> None。
-
-        special_options=True 时追加「以上都不是 / 需要先问清楚」两个选项, 它们的概率以
-        NONE_KEY / CLARIFY_KEY 返回; 真实候选的概率**不重新归一化** —— 模型放在这两个出口上的
-        把握会把真实候选的置信度拉低, 让「拿不准」自然落到按钮澄清。
-        """
+    def _choice_setup(self, query: str, options: List[Dict[str, Any]], special_options: bool):
+        """固定打乱后的选项表 (出口固定排最后) 与特殊选项个数; 选项为空 -> None。Luna / qwen / 阿里云共用。"""
         if not options:
             return None
         n_special = len(SPECIAL_OPTIONS) if special_options else 0
         opts = options[: self.k - n_special]
-        if len(opts) == 1 and not n_special:
-            return {str(opts[0]["intent_code"]): 1.0}
         opts = opts[:]
         random.Random(query).shuffle(opts)  # 固定打乱, 消除「爱选第一个」(与评测一致)
         if n_special:
             opts = opts + SPECIAL_OPTIONS  # 出口固定排在最后
+        return opts, n_special
+
+    @staticmethod
+    def _by_code(probs: Dict[str, float], opts: List[Dict[str, Any]], n_special: int) -> Dict[str, float]:
+        """{字母: 概率} -> {意图码 / NONE_KEY / CLARIFY_KEY: 概率}; 没给到的选项记 0 (⛔ 不归一化)。"""
         n = len(opts)
-
-        def has_probs(body: Dict[str, Any]) -> Optional[str]:
-            return None if letter_probs(body, n) else "no_option_letter_in_top_logprobs"
-
-        payload = {"messages": build_choice_messages(query, role, opts, history), "max_tokens": 1,
-                   "logprobs": True, "top_logprobs": 5}
-        try:
-            body = await self._call(payload, body_validator=has_probs)
-        except Exception as ex:  # noqa: BLE001
-            logger.warning("decision choose failed: %s", str(ex)[:300])
-            return None
-        probs = letter_probs(body, n) or {}
         out: Dict[str, float] = {}
         for i, (L, r) in enumerate(zip(LETTERS, opts)):
             code = str(r["intent_code"])
@@ -314,7 +632,96 @@ class DecisionMatcher:
             out[code] = probs.get(L, 0.0)
         return out
 
+    async def choose_luna(self, query: str, role: Optional[str], options: List[Dict[str, Any]],
+                          history: Optional[List[Dict[str, Any]]] = None,
+                          special_options: bool = False, ask: bool = False,
+                          ask_rules: Optional[str] = None) -> Optional[Dict[str, float]]:
+        """只问 Luna (OpenAI Decisions)。没启用 / 失败 -> None; 失败原因留在
+        ``legacy_exit_metrics.get_luna_failure_reason()`` (没启用时为 None), 由调用方决定下一跳。
+
+        ``ask=True`` 时与 Choice 并行再问一道判断题 (``ask_probability``), 拿到就以 ``ASK_KEY`` 放进返回的 dict;
+        判断题失败不影响 Choice (没有这个键 = orchestrator 照旧按 v1 规则)。"""
+        from ai import legacy_exit_metrics as exit_metrics  # 只计数 (INTENT-DISTILL-20261111)
+
+        exit_metrics.set_luna_failure_reason(None)
+        setup = self._choice_setup(query, options, special_options)
+        if setup is None:
+            return None
+        opts, n_special = setup
+        messages = build_choice_messages(query, role, opts, history)
+        ask_task = asyncio.ensure_future(self.ask_probability(query, role, history, ask_rules)) if ask else None
+        probs = await self._choose_native(messages, LETTERS[:len(opts)], opts)
+        if probs is None:
+            if ask_task is not None:
+                ask_task.cancel()
+            return None
+        exit_metrics.record_luna_outcome(None, None)  # 只有问了 Luna 且拿到概率才会走到这里
+        out = self._by_code(probs, opts, n_special)
+        if ask_task is not None:
+            p_ask = await ask_task
+            if p_ask is not None:
+                out[ASK_KEY] = p_ask
+        return out
+
+    async def choose_qwen(self, query: str, role: Optional[str], options: List[Dict[str, Any]],
+                          history: Optional[List[Dict[str, Any]]] = None,
+                          special_options: bool = False) -> Dict[str, float]:
+        """阿里云 qwen 读首 token logprobs (DECISION 链)。拿不到 -> 抛异常 (调用方计原因、走下一跳)。"""
+        setup = self._choice_setup(query, options, special_options)
+        if setup is None:
+            raise ValueError("no options")
+        opts, n_special = setup
+        n = len(opts)
+
+        def has_probs(body: Dict[str, Any]) -> Optional[str]:
+            return None if letter_probs(body, n) else "no_option_letter_in_top_logprobs"
+
+        payload = {"messages": build_choice_messages(query, role, opts, history), "max_tokens": 1,
+                   "logprobs": True, "top_logprobs": 5}
+        body = await self._call(payload, body_validator=has_probs)
+        return self._by_code(letter_probs(body, n) or {}, opts, n_special)
+
+    async def choose(self, query: str, role: Optional[str], options: List[Dict[str, Any]],
+                     history: Optional[List[Dict[str, Any]]] = None,
+                     special_options: bool = False) -> Optional[Dict[str, float]]:
+        """返回 {intent_code: 概率}; 整条链都拿不到概率 -> None。
+
+        special_options=True 时追加「以上都不是 / 需要先问清楚」两个选项, 它们的概率以
+        NONE_KEY / CLARIFY_KEY 返回; 真实候选的概率**不重新归一化** —— 模型放在这两个出口上的
+        把握会把真实候选的置信度拉低, 让「拿不准」自然落到按钮澄清。
+
+        这是 ``AI_DECISION_FALLBACK=legacy`` (与合并理解路径) 用的旧链: Luna → qwen 读 logprobs。
+        组合退路 (缺省) 由 orchestrator 用 ``choose_luna`` + ``ai.matcher.fallback_combo`` 自己串。
+        """
+        if not options:
+            return None
+        if len(options[: self.k]) == 1 and not special_options:
+            return {str(options[0]["intent_code"]): 1.0}
+        # 2026-11-12 (LLM-PROVIDER-SWITCH): 有出口时先问 OpenAI Decisions(gpt-6-luna) —— 原生全选项概率,
+        # 一次调用; E 线同一套考题实测意图执行对 73.8%, 读 logprobs 的千问 64.7%。没出口 / 拿不到就走下面的
+        # 阿里云 qwen 读 logprobs 链, 都拿不到 -> None。概率**不重新归一化**(与原契约一致)。
+        from ai import legacy_exit_metrics as exit_metrics  # 只计数 (INTENT-DISTILL-20261111)
+
+        out = await self.choose_luna(query, role, options, history, special_options)
+        if out is not None:
+            return out
+        luna_reason = exit_metrics.get_luna_failure_reason()  # None = 没问 Luna
+        try:
+            out = await self.choose_qwen(query, role, options, history, special_options)
+        except Exception as ex:  # noqa: BLE001
+            logger.warning("decision choose failed: %s", str(ex)[:300])
+            if luna_reason is not None:
+                exit_metrics.record_luna_outcome(luna_reason, "failed_" + exit_metrics.classify_exception(ex))
+            return None
+        if luna_reason is not None:
+            exit_metrics.record_luna_outcome(luna_reason, "ok" if any(out.values()) else "no_probs")
+        return out
+
 
 __all__ = ["DecisionMatcher", "Decision", "letter_probs", "parse_shortlist", "build_choice_messages",
-           "NONE_KEY", "CLARIFY_KEY", "SPECIAL_OPTIONS",
-           "build_shortlist_messages", "intent_text", "role_line", "ROLE_LABELS", "history_block"]
+           "NONE_KEY", "CLARIFY_KEY", "ASK_KEY", "NON_INTENT_KEYS", "SPECIAL_OPTIONS", "ASK_PREDICATE_RULES",
+           "ASK_PREDICATE_RULES_AGGRESSIVE",
+           "ask_predicate_text",
+           "build_shortlist_messages", "intent_text", "role_line", "ROLE_LABELS", "history_block",
+           "sanitize_task_state", "task_state_text", "with_task_state", "TASK_STATE_TOP_KEYS",
+           "TASK_STATE_TASK_KEYS", "TASK_STATE_ROLE"]

@@ -263,10 +263,13 @@ class SecondaryPlanStartAndSettleContractTest {
         var settings = Mockito.mock(com.cretas.aims.repository.FactorySettingsRepository.class);
         when(settings.findSkipProcessReportingDefaultByFactoryId(F)).thenReturn(false);
         ReflectionTestUtils.setField(service, "factorySettingsRepository", settings);
+        ReflectionTestUtils.setField(service, "disciplinePolicy",
+                com.cretas.aims.service.discipline.DisciplineFixtures.policy(java.util.Map.of(
+                        com.cretas.aims.service.canvas.ThresholdKeys.PRODUCTION_COMPLETION_REQUIRE_SETTLEMENT, "0")));
         when(planRepository.findById(PLAN)).thenAnswer(inv -> Optional.of(plan));
         when(batchRepository.findByFactoryIdAndProductionPlanId(F, PLAN)).thenReturn(List.of());
 
-        service.completeProduction(F, PLAN, new BigDecimal("0.5"), null);
+        service.completeProduction(F, PLAN, new BigDecimal("0.5"), null, null);
 
         verify(feed).closeHold(eq(F), eq(plan), any());
         assertThat(plan.getStatus()).isEqualTo(ProductionPlanStatus.COMPLETED);

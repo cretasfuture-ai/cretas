@@ -82,6 +82,10 @@ import com.cretas.aims.exception.BusinessException;
 @RequireModule("production_plan")
 @RowScopeSupported
 public class ProductionPlanController {
+    /** 联产计划的产品是内部原料锚点, 对外名字走 ScheduleProductNames (显示原料名)。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.RawMaterialTypeRepository rawMaterialTypeRepository;
+
 
     /** 开工请求体 (可省略): 工厂开了「缺料时拦开工」(S4-08) 时, 用它带强制开工原因。 */
     public static class StartProductionRequest {
@@ -105,8 +109,13 @@ public class ProductionPlanController {
     private final SalesOrderRepository salesOrderRepository;
     private final PriceMaskResolver priceMaskResolver;
     private final ProductionTransitLedgerRepository transitLedgerRepository;
+
+    /** 纪律排查 A11: 入库弹窗预先显示本厂多收规则。required=false 兼容控制器单测; 缺失时按默认硬拦回答。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.discipline.FactoryDisciplinePolicy disciplinePolicy;
     private final ProductionSummaryService productionSummaryService;
     private final CustomerSuppliedSettlementCoverageGuard customerSuppliedSettlementCoverageGuard;
+    private final com.cretas.aims.service.scheduling.CancelledPlanScheduleCascade cancelledPlanScheduleCascade;
 
     @Autowired
     private BusinessRowScope businessRowScope;
@@ -364,10 +373,29 @@ public class ProductionPlanController {
     public ApiResponse<PageResponse<ProductionPlanDTO>> getProductionPlanList(
             @Parameter(description = "工厂ID", required = true, example = "F001")
             @PathVariable @NotBlank String factoryId,
-            @Valid PageRequest pageRequest) {
+            @Valid PageRequest pageRequest,
+            @Parameter(description = "产品 (productTypeId)") @RequestParam(required = false) String productTypeId,
+            @Parameter(description = "计划单位") @RequestParam(required = false) String plannedUnit,
+            @Parameter(description = "批量单号 (生产批次号, 模糊)") @RequestParam(required = false) String batchNumber) {
 
-        PageResponse<ProductionPlanDTO> response = productionPlanService.getProductionPlanList(factoryId, pageRequest);
+        PageResponse<ProductionPlanDTO> response = productionPlanService.getProductionPlanList(factoryId, pageRequest,
+                com.cretas.aims.dto.production.ProductionPlanListFilter.of(productTypeId, plannedUnit, batchNumber));
         return ApiResponse.success(response);
+    }
+
+    /**
+     * 生产计划四态计数 (待开工 / 进行中 / 已完成 / 已取消, 草稿单列): 受关键词与产品 / 单位 / 批量单号约束, 不受 status 约束。
+     */
+    @GetMapping("/status-counts")
+    @Operation(summary = "生产计划四态计数")
+    public ApiResponse<java.util.Map<String, Long>> getProductionPlanStatusCounts(
+            @PathVariable @NotBlank String factoryId,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) String productTypeId,
+            @RequestParam(required = false) String plannedUnit,
+            @RequestParam(required = false) String batchNumber) {
+        return ApiResponse.success(productionPlanService.getProductionPlanStatusCounts(factoryId, keyword,
+                com.cretas.aims.dto.production.ProductionPlanListFilter.of(productTypeId, plannedUnit, batchNumber)));
     }
 
     /**
@@ -475,7 +503,7 @@ public class ProductionPlanController {
             @Parameter(description = "计划ID", required = true, example = "PP-2025-001")
             @PathVariable @NotNull String planId,
             @RequestHeader("Authorization") String authorization,
-            @Parameter(description = "请求体: {actualQuantity: 500}", required = true)
+            @Parameter(description = "请求体: {actualQuantity: 500, overPlanReason: \"超产原因(超计划时必填)\"}", required = true)
             @RequestBody Map<String, Object> body) {
 
         Object rawQty = body.get("actualQuantity");
@@ -488,8 +516,10 @@ public class ProductionPlanController {
         Long userId = extractUserId(authorization);
         log.info("完成生产: factoryId={}, planId={}, actualQuantity={}, userId={}",
                 factoryId, planId, actualQuantity, userId);
+        Object rawReason = body.get("overPlanReason");
+        String overPlanReason = rawReason != null ? rawReason.toString() : null;
         ProductionPlanDTO plan = productionPlanService.completeProduction(
-                factoryId, planId, actualQuantity, userId);
+                factoryId, planId, actualQuantity, userId, overPlanReason);
         return ApiResponse.success("生产已完成", plan);
     }
 
@@ -856,6 +886,26 @@ public class ProductionPlanController {
         return ApiResponse.success(productionSummaryService.computeSummary(factoryId, planId, maskPrice));
     }
 
+    /**
+     * 本厂仓库多收规则 (纪律排查 A11, 工厂配置; 防呆 Rule 1: 入库弹窗打开即显示边界)。
+     * 只读, 权限与入库确认相同; 判定仍以入库确认接口为准。
+     */
+    @RequirePermission({"warehouse:write", "warehouse:read_write", "production:read_write", "scheduling:read_write"})
+    @RequireModule("production_plan")
+    @GetMapping("/discipline/over-receive-rule")
+    @Operation(summary = "本厂仓库入库多收规则 (BLOCK / WITHIN_RATE / ALWAYS_WITH_REASON)")
+    public ApiResponse<Map<String, Object>> getOverReceiveRule(@PathVariable @NotBlank String factoryId) {
+        com.cretas.aims.service.discipline.FactoryDisciplinePolicy.OverReceiveRule rule = disciplinePolicy != null
+                ? disciplinePolicy.overReceive(factoryId)
+                : new com.cretas.aims.service.discipline.FactoryDisciplinePolicy.OverReceiveRule(
+                        com.cretas.aims.service.discipline.FactoryDisciplinePolicy.OverReceiveMode.BLOCK, null,
+                        BigDecimal.ZERO);
+        Map<String, Object> body = new java.util.LinkedHashMap<>();
+        body.put("mode", rule.mode().name());
+        body.put("rate", rule.rate());
+        return ApiResponse.success(body);
+    }
+
     @RequirePermission({"warehouse:write", "warehouse:read_write", "production:read_write", "scheduling:read_write"})
     @RequireModule("production_plan")
     @PostMapping("/{planId}/warehouse-receipt")
@@ -879,7 +929,7 @@ public class ProductionPlanController {
     @RequireModule("production_plan")
     @PostMapping("/{planId}/cancel")
     @Operation(summary = "取消生产计划")
-    public ApiResponse<Void> cancelProductionPlan(
+    public ApiResponse<com.cretas.aims.service.scheduling.CancelledPlanScheduleCascade.Outcome> cancelProductionPlan(
             @Parameter(description = "工厂ID", required = true, example = "F001")
             @PathVariable @NotBlank String factoryId,
             @Parameter(description = "计划ID", required = true, example = "PP-2025-001")
@@ -892,7 +942,10 @@ public class ProductionPlanController {
         log.info("取消生产计划: factoryId={}, planId={}, userId={}, reason={}",
                 factoryId, planId, userId, reason);
         productionPlanService.cancelProductionPlan(factoryId, planId, reason, userId);
-        return ApiResponse.success("生产计划已取消", null);
+        // 名下排程的级联在取消成功后由 CancelledPlanScheduleCascadeAspect 做; 这里现数结果说给用户
+        // (没开工的一并取消了几条, 已开工保留未动的几条)
+        var schedules = cancelledPlanScheduleCascade.summarize(factoryId, planId);
+        return ApiResponse.success(schedules.describe("生产计划已取消"), schedules);
     }
 
     /**
@@ -1296,7 +1349,7 @@ public class ProductionPlanController {
             card.put("planId", p.getId());
             card.put("planNumber", p.getPlanNumber());
             card.put("customerName", p.getSourceCustomerName());
-            card.put("productName", p.getProductType() != null ? p.getProductType().getName() : "");
+            card.put("productName", p.getProductType() != null ? com.cretas.aims.service.scheduling.daily.ScheduleProductNames.displayName(rawMaterialTypeRepository, p.getFactoryId(), p.getProductType()) : "");
             card.put("processName", p.getProcessName());
             card.put("plannedQty", p.getPlannedQuantity());
             card.put("reportedQty", p.getActualQuantity() != null ? p.getActualQuantity() : BigDecimal.ZERO);

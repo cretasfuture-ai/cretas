@@ -26,8 +26,14 @@
 -->
 <template>
   <div class="warehouse-keeper-workdesk">
+    <DigitalEmployeeFrame :enabled="digitalEmployee" role="inventory" :busy="loading || employeeNavigationPending" :error="errorMessage" :factory-id="factoryId" :factory-name="authStore.factoryName" :paths="employeePaths" :can-write="employeeCanWrite" :wholesale-mode="wholesaleMode">
+    <DigitalEmployeeConversation :scope-key="`${factoryId}:${actorId}:${authStore.currentRole || ''}:${employeeNavigationPending}`" v-if="digitalEmployee" v-model="userInput" :busy="loading || employeeNavigationPending" :error="errorMessage" :response="formattedText" :result-title="resultTitle" :response-status="responseStatus" :clarification-choices="employeeIntent.clarificationQuestions.value" employee-name="库存数字专员" scope-label="待收货、入库与库存记录" :quick-questions="['有哪些采购到货还等着接收？', '查询库存情况']" @send="handleEmployeeQuestion" @retry="sendQuery(false)" @reset="resetDigitalConversation">
+      <template #action>
+        <UButton v-if="employeePaths.includes('/warehouse/materials')" to="/warehouse/materials" icon="i-lucide-package-check">{{ employeeCanWrite ? '到入库任务办理' : '查看入库任务' }}</UButton>
+      </template>
+    </DigitalEmployeeConversation>
     <!-- Header -->
-    <div class="workdesk-header">
+    <div v-if="!digitalEmployee" class="workdesk-header">
       <div class="header-title">
  <span class="emoji"></span>
         <span class="title-text">仓管员工作台</span>
@@ -41,7 +47,7 @@
     </div>
 
     <!-- AI Chat 输入区 -->
-    <el-card class="chat-card" shadow="never">
+    <el-card v-if="!digitalEmployee" class="chat-card" shadow="never">
       <template #header>
         <div class="card-header">
  <span> 与 AI 对话</span>
@@ -67,16 +73,16 @@
     </el-card>
 
     <!-- 加载中提示 -->
-    <el-card v-if="loading" class="loading-card" shadow="never">
+    <el-card v-if="loading && !digitalEmployee" class="loading-card" shadow="never">
       <div class="loading-content">
         <el-icon class="is-loading"><Loading /></el-icon>
-        <span>AI 正在聚合今日待收清单 + 临期建议, 预计 3-5 秒...</span>
+        <span>{{ digitalEmployee ? "正在核对当前企业的业务记录，请稍候…" : "AI 正在聚合今日待收清单 + 临期建议, 预计 3-5 秒..." }}</span>
       </div>
     </el-card>
 
     <!-- 错误显示 -->
     <el-alert
-      v-if="errorMessage"
+      v-if="errorMessage && !digitalEmployee"
       :title="errorMessage"
       type="error"
       show-icon
@@ -124,7 +130,7 @@
     </el-card>
 
     <!-- AI 输出 -->
-    <el-card v-if="formattedText" class="result-card" shadow="never">
+    <el-card v-if="formattedText && !digitalEmployee" class="result-card" shadow="never">
       <template #header>
         <div class="card-header">
  <span> {{ resultTitle }}</span>
@@ -148,6 +154,7 @@
             size="small"
             type="primary"
             :disabled="selectedRows.length === 0"
+            v-if="showNativeActions"
             @click="generateScanTask">
  一键扫码 ({{ selectedRows.length }})
           </el-button>
@@ -203,13 +210,14 @@
         </el-table-column>
         <el-table-column label="操作" width="180" fixed="right">
           <template #default="{ row }">
-            <el-button size="small" @click="openReceiveDialog(row)">
+            <el-button v-if="showNativeActions" size="small" @click="openReceiveDialog(row)">
               快速收货
             </el-button>
             <el-button
               size="small"
               type="primary"
               data-testid="confirm-receive-btn"
+              v-if="showNativeActions"
               @click="openConfirmReceiveDialog(row)">
               确认收货
             </el-button>
@@ -501,11 +509,20 @@
         </template>
       </el-result>
     </el-dialog>
+    </DigitalEmployeeFrame>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, reactive } from 'vue';
+import DigitalEmployeeFrame from '@/components/workdesk/DigitalEmployeeFrame.vue';
+import DigitalEmployeeConversation from '@/components/workdesk/DigitalEmployeeConversation.vue';
+import { useWorkdeskIntent } from '@/composables/useWorkdeskIntent';
+import { useWorkdeskRequest, isWorkdeskScopeChanged, WorkdeskScopeChangedError } from '@/composables/useWorkdeskRequest';
+const props = withDefaults(defineProps<{ digitalEmployee?: boolean; employeePaths?: readonly string[]; employeeNavigationPending?: boolean; employeeCanWrite?: boolean; wholesaleMode?: boolean }>(), {
+  digitalEmployee: false, employeePaths: () => [], employeeNavigationPending: false, employeeCanWrite: false, wholesaleMode: false,
+});
+const showNativeActions = computed(() => !props.employeeNavigationPending && !props.wholesaleMode && (!props.digitalEmployee || props.employeeCanWrite));
+import { nextTick, ref, computed, watch, reactive } from 'vue';
 import { ElMessage } from 'element-plus';
 import { Refresh, Loading } from '@element-plus/icons-vue';
 import request from '@/api/request';
@@ -622,11 +639,41 @@ interface RestaurantPnl {
 }
 const restaurantPnl = ref<RestaurantPnl | null>(null);
 
-const factoryId = computed(() => authStore.factoryId || 'F006');
+const factoryId = computed(() => authStore.factoryId || '');
+const responseStatus = ref('');
+function handleEmployeeQuestion(question: string) {
+  userInput.value = question;
+  void sendQuery(false);
+}
+const employeeIntent = useWorkdeskIntent(() => ({ factoryId: factoryId.value, actorId: String(authStore.user?.id || ''), role: authStore.currentRole || '' }));
+const actorId = computed(() => String(authStore.user?.id || ''));
+const scopedRequests = useWorkdeskRequest(() => ({ factoryId: factoryId.value, actorId: actorId.value, contextKey: `${authStore.currentRole || ''}:${props.employeeNavigationPending}:${props.employeeCanWrite}:${props.wholesaleMode}` }));
+function scopedPost<T>(url: string, body?: unknown) {
+  if (props.employeeNavigationPending) return Promise.reject(new WorkdeskScopeChangedError());
+  return scopedRequests.run(() => request.post<T>(url, body));
+}
+function scopedGet<T>(url: string, config?: Parameters<typeof request.get>[1]) {
+  if (props.employeeNavigationPending) return Promise.reject(new WorkdeskScopeChangedError());
+  return scopedRequests.run(() => request.get<T>(url, config));
+}
+
+function resetDigitalConversation() {
+  employeeIntent.reset();
+  formattedText.value = '';
+  errorMessage.value = '';
+  responseStatus.value = '';
+  userInput.value = '';
+}
+
+async function callReadIntent(input: string, intentCode?: string, parameters?: Record<string, unknown>, _preview = false, context?: Record<string, unknown>): Promise<ExecuteResponse> {
+  if (props.employeeNavigationPending) throw new WorkdeskScopeChangedError();
+  return scopedRequests.run(() => employeeIntent.execute(input, context, { intentCode, parameters }));
+}
 
 async function callIntentExecute(input: string, intentCode?: string,
     parameters?: Record<string, unknown>, preview = false,
     context?: Record<string, unknown>): Promise<ExecuteResponse> {
+  if (!factoryId.value) throw new Error('账号未绑定企业，请重新登录');
   const body: Record<string, unknown> = { userInput: input };
   if (intentCode) body.intentCode = intentCode;
   if (parameters) body.parameters = parameters;
@@ -638,7 +685,7 @@ async function callIntentExecute(input: string, intentCode?: string,
   // MATERIAL_TODAY_RECEIVING_QUERY. context.month gives downstream Tool the period
   // bound it needs to produce real P&L output.
   if (context) body.context = context;
-  const res = await request.post<ExecuteResponse>(
+  const res = await scopedPost<ExecuteResponse>(
     `/${factoryId.value}/ai-intents/execute`, body);
   return (res as { data: ExecuteResponse }).data;
 }
@@ -710,14 +757,16 @@ function looksLikeRestaurantEconomicsQuery(input: string): boolean {
 
 async function triggerTodayQuery() {
   userInput.value = '今天要收什么货?';
-  await sendQuery(true);
+  await sendQuery(!props.wholesaleMode);
 }
 
 async function sendQuery(autoTrigger = false) {
-  if (!userInput.value.trim()) return;
+  if (props.employeeNavigationPending) return;
+  const isCurrentOperation = scopedRequests.capture();
+  if (loading.value || !userInput.value.trim()) return;
   loading.value = true;
   errorMessage.value = '';
-  if (autoTrigger) {
+  if (autoTrigger || props.digitalEmployee) {
     formattedText.value = '';
     receivingRows.value = [];
     disposalRecommendations.value = [];
@@ -742,8 +791,9 @@ async function sendQuery(autoTrigger = false) {
       })();
       context = { month };
     }
-    const response = await callIntentExecute(userInput.value, intentCode,
+    const response = await callReadIntent(userInput.value, intentCode,
         undefined, false, context);
+    responseStatus.value = response.status || '';
     // 🔴 后端的 WRITE_CONFIRM_REQUIRED / NEED_MORE_INFO / PERMISSION_DENIED 等回执
     //    不是答案。判据见 utils/intentResponseStatus.ts。
     const nonAnswerLabel = intentNonAnswerLabel(response.status);
@@ -769,6 +819,7 @@ async function sendQuery(autoTrigger = false) {
       ]);
     }
   } catch (err: unknown) {
+    if (isWorkdeskScopeChanged(err)) return;
     const msg = extractErrorMessage(err);
     errorMessage.value = `查询失败: ${msg}`;
     ElMessage({
@@ -778,6 +829,7 @@ async function sendQuery(autoTrigger = false) {
       showClose: true,
     });
   } finally {
+    if (!isCurrentOperation()) return;
     loading.value = false;
   }
 }
@@ -831,7 +883,7 @@ function extractReceivingRows(resultData: Record<string, unknown>) {
 
 async function loadDisposalRecommendations() {
   try {
-    const response = await callIntentExecute(
+    const response = await callReadIntent(
       '临期物料建议', 'MATERIAL_DISPOSAL_RECOMMENDATION');
     const resultData = (response.resultData || {}) as Record<string, unknown>;
     const dataLayer = (resultData['data'] as Record<string, unknown>) || resultData;
@@ -839,14 +891,15 @@ async function loadDisposalRecommendations() {
     if (Array.isArray(recs)) {
       disposalRecommendations.value = recs;
     }
-  } catch (err) {
+  } catch (err: unknown) {
+    if (isWorkdeskScopeChanged(err)) return;
     console.warn('Disposal recommendations failed:', err);
   }
 }
 
 async function loadQcInspecting() {
   try {
-    const response = await callIntentExecute(
+    const response = await callReadIntent(
       '今日待质检批次', 'RECEIVE_QUALITY_CHECK_TODAY');
     const resultData = (response.resultData || {}) as Record<string, unknown>;
     const dataLayer = (resultData['data'] as Record<string, unknown>) || resultData;
@@ -854,7 +907,8 @@ async function loadQcInspecting() {
     if (Array.isArray(rows)) {
       qcInspecting.value = rows;
     }
-  } catch (err) {
+  } catch (err: unknown) {
+    if (isWorkdeskScopeChanged(err)) return;
     console.warn('QC inspecting failed:', err);
   }
 }
@@ -928,6 +982,7 @@ const canPreviewReceive = computed(() => {
 });
 
 function openReceiveDialog(row: ReceivingRow) {
+  if (!showNativeActions.value) return;
   receiveDialog.visible = true;
   receiveDialog.row = row;
   // 默认填 pendingQuantity (仓管员最常见场景: 全收)
@@ -946,6 +1001,8 @@ function resetReceiveDialog() {
 }
 
 async function previewReceive() {
+  if (!showNativeActions.value) return;
+  const isCurrentOperation = scopedRequests.capture();
   if (!receiveDialog.row || receiveDialog.form.receivedQty == null) {
     ElMessage.warning('请填写实收数量');
     return;
@@ -962,7 +1019,8 @@ async function previewReceive() {
     receiveDialog.preview = previewData;
     receiveDialog.canSubmit = previewData.canDo === true
         && previewData.status === 'PREVIEW';
-  } catch (err) {
+  } catch (err: unknown) {
+    if (isWorkdeskScopeChanged(err)) return;
     ElMessage({
       message: `预览失败: ${extractErrorMessage(err)}`,
       type: 'error',
@@ -970,11 +1028,14 @@ async function previewReceive() {
       showClose: true,
     });
   } finally {
+    if (!isCurrentOperation()) return;
     receiveDialog.previewing = false;
   }
 }
 
 async function executeReceive() {
+  if (!showNativeActions.value) return;
+  const isCurrentOperation = scopedRequests.capture();
   if (!receiveDialog.canSubmit) {
     ElMessage.warning('请先点击 [预览边界] 验证可提交');
     return;
@@ -992,7 +1053,8 @@ async function executeReceive() {
     receiveDialog.visible = false;
     // 刷新今日清单
     await triggerTodayQuery();
-  } catch (err) {
+  } catch (err: unknown) {
+    if (isWorkdeskScopeChanged(err)) return;
     ElMessage({
       message: `提交失败: ${extractErrorMessage(err)}`,
       type: 'error',
@@ -1000,6 +1062,7 @@ async function executeReceive() {
       showClose: true,
     });
   } finally {
+    if (!isCurrentOperation()) return;
     receiveDialog.submitting = false;
   }
 }
@@ -1012,6 +1075,7 @@ const scanTaskDialog = reactive<{ visible: boolean; task: ScanTask | null }>({
 });
 
 async function generateScanTask() {
+  if (!showNativeActions.value) return;
   if (selectedRows.value.length === 0) {
     ElMessage.warning('请先选中要扫码的 PO 行');
     return;
@@ -1029,7 +1093,8 @@ async function generateScanTask() {
     } else {
       ElMessage.info(response.message || '未生成任务');
     }
-  } catch (err) {
+  } catch (err: unknown) {
+    if (isWorkdeskScopeChanged(err)) return;
     ElMessage({
       message: `生成扫码任务失败: ${extractErrorMessage(err)}`,
       type: 'error',
@@ -1098,6 +1163,7 @@ const canPreviewConfirm = computed(() => {
 });
 
 function openConfirmReceiveDialog(row: ReceivingRow) {
+  if (!showNativeActions.value) return;
   confirmReceiveDialog.visible = true;
   confirmReceiveDialog.row = row;
   confirmReceiveDialog.form.receivedQty = row.pendingQuantity;  // default 全收
@@ -1119,6 +1185,8 @@ function resetConfirmReceiveDialog() {
 }
 
 async function previewConfirmReceive() {
+  if (!showNativeActions.value) return;
+  const isCurrentOperation = scopedRequests.capture();
   if (!confirmReceiveDialog.row || confirmReceiveDialog.form.receivedQty == null) {
     ElMessage.warning('请填写实收数量');
     return;
@@ -1138,7 +1206,8 @@ async function previewConfirmReceive() {
     confirmReceiveDialog.preview = previewData;
     confirmReceiveDialog.canSubmit = previewData.canDo === true
         && previewData.status === 'PREVIEW';
-  } catch (err) {
+  } catch (err: unknown) {
+    if (isWorkdeskScopeChanged(err)) return;
     ElMessage({
       message: `预览失败: ${extractErrorMessage(err)}`,
       type: 'error',
@@ -1146,11 +1215,14 @@ async function previewConfirmReceive() {
       showClose: true,
     });
   } finally {
+    if (!isCurrentOperation()) return;
     confirmReceiveDialog.previewing = false;
   }
 }
 
 async function executeConfirmReceive() {
+  if (!showNativeActions.value) return;
+  const isCurrentOperation = scopedRequests.capture();
   if (!confirmReceiveDialog.canSubmit) {
     ElMessage.warning('请先点击 [预览边界] 验证可提交');
     return;
@@ -1174,7 +1246,8 @@ async function executeConfirmReceive() {
     confirmReceiveDialog.visible = false;
     // 刷新今日清单
     await triggerTodayQuery();
-  } catch (err) {
+  } catch (err: unknown) {
+    if (isWorkdeskScopeChanged(err)) return;
     ElMessage({
       message: `提交失败: ${extractErrorMessage(err)}`,
       type: 'error',
@@ -1182,14 +1255,40 @@ async function executeConfirmReceive() {
       showClose: true,
     });
   } finally {
+    if (!isCurrentOperation()) return;
     confirmReceiveDialog.submitting = false;
   }
 }
 
 // Auto-trigger on mount
-onMounted(() => {
+let initialQueryStarted = false;
+let initializationGeneration = 0;
+let previousIdentity = '';
+watch([() => props.employeeNavigationPending, factoryId, actorId, () => authStore.currentRole, () => props.wholesaleMode, () => props.employeeCanWrite], ([pending, id, actor, role]) => {
+  const generation = ++initializationGeneration;
+  const identity = `${id}:${actor}:${role || ''}:${pending}:${props.wholesaleMode}:${props.employeeCanWrite}`;
+  if (identity !== previousIdentity) {
+    previousIdentity = identity;
+    initialQueryStarted = false;
+    resetDigitalConversation(); loading.value = false; lastQueryTime.value = ''; resultTitle.value = DEFAULT_RESULT_TITLE;
+    receivingRows.value = []; disposalRecommendations.value = []; qcInspecting.value = []; selectedRows.value = []; restaurantPnl.value = null;
+    receiveDialog.visible = false; resetReceiveDialog();
+    scanTaskDialog.visible = false; scanTaskDialog.task = null;
+    confirmReceiveDialog.visible = false; resetConfirmReceiveDialog();
+  }
+  if (pending || !id || !actor || initialQueryStarted) return;
+  void nextTick(() => {
+    if (generation !== initializationGeneration || props.employeeNavigationPending || initialQueryStarted) return;
+  initialQueryStarted = true;
   void triggerTodayQuery();
-});
+  });
+}, { immediate: true, flush: 'sync' });
+watch(showNativeActions, (allowed) => {
+  if (allowed) return;
+  receiveDialog.previewing = false; receiveDialog.submitting = false; confirmReceiveDialog.previewing = false; confirmReceiveDialog.submitting = false; scanTaskDialog.task = null;
+  receiveDialog.visible = false; receiveDialog.preview = null; receiveDialog.canSubmit = false; receiveDialog.row = null; confirmReceiveDialog.visible = false; confirmReceiveDialog.preview = null; confirmReceiveDialog.canSubmit = false; confirmReceiveDialog.row = null; scanTaskDialog.visible = false;
+}, { flush: 'sync' });
+
 </script>
 
 <style scoped>
@@ -1315,7 +1414,7 @@ onMounted(() => {
   background: #f0f9ff;
   padding: 8px 12px;
   border-radius: 4px;
-  border-left: 3px solid #409eff;
+  border-left: 3px solid var(--cs-primary);
 }
 
 .form-hint {

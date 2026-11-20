@@ -170,9 +170,11 @@ describe('TREND family', () => {
     expect(result).not.toBeNull();
     expect(result!.tier).toBe(1);
     expect(result!.source).toBe('rules');
-    expect(result!.finding).toMatch(/上升|增长|涨/);
-    // Should contain growth rate
-    expect(result!.finding).toMatch(/\d+(\.\d+)?%/);
+    // 现算：后半段均值 150 比前半段 110 高 36.4%（不是首尾比较的模板话）
+    expect(result!.finding).toContain('后半段比前半段高36.4%');
+    // 有权限：合计和峰值写出金额
+    expect(result!.finding).toContain('区间合计¥520');
+    expect(result!.finding).toContain('2026-04最高');
   });
 
   it('monotonically falling ≥4 points → 下降 direction + 跌幅', () => {
@@ -181,8 +183,8 @@ describe('TREND family', () => {
       financePerms,
     );
     expect(result).not.toBeNull();
-    expect(result!.finding).toMatch(/下降|减少|跌/);
-    expect(result!.finding).toMatch(/\d+(\.\d+)?%/);
+    // 前半段 190、后半段 140：低 26.3%
+    expect(result!.finding).toContain('后半段比前半段低26.3%');
   });
 
   it('flat trend → 平稳 wording', () => {
@@ -191,11 +193,13 @@ describe('TREND family', () => {
       financePerms,
     );
     expect(result).not.toBeNull();
-    expect(result!.finding).toMatch(/平稳|稳定/);
+    expect(result!.finding).toContain('前后半段基本持平');
+    expect(result!.finding).not.toMatch(/后半段比前半段[高低]/);
   });
 
-  it('< 4 points → null (data insufficient)', () => {
-    expect(buildChartInsight(makeTrend([100, 120, 140]), financePerms)).toBeNull();
+  it('< 3 points → null (data insufficient); 3 points is enough for a daily chart', () => {
+    expect(buildChartInsight(makeTrend([100, 120, 140]), financePerms)).not.toBeNull();
+    expect(buildChartInsight(makeTrend([100, 120]), financePerms)).toBeNull();
     expect(buildChartInsight(makeTrend([100]), financePerms)).toBeNull();
     expect(buildChartInsight(makeTrend([]), financePerms)).toBeNull();
   });
@@ -327,7 +331,7 @@ describe('PROPORTION family (U2 — PIE)', () => {
     expect(result!.finding).toMatch(/\d+(\.\d+)?%/);
   });
 
-  it('PROPORTION finding format: "X 占 N%, 前二占 M%"', () => {
+  it('PROPORTION finding: 最大项占比 + 金额 + 其次两项占比（现算）', () => {
     const result = buildProportionInsight(
       makePie([
         { name: '堂食', value: 600_000 },
@@ -338,12 +342,8 @@ describe('PROPORTION family (U2 — PIE)', () => {
     );
     expect(result).not.toBeNull();
     // Must mention top share and front-2 share
-    expect(result!.finding).toMatch(/占/);
-    expect(result!.finding).toMatch(/前二占/);
-    // Both percentages present
-    const pctMatches = result!.finding.match(/\d+(\.\d+)?%/g);
-    expect(pctMatches).not.toBeNull();
-    expect(pctMatches!.length).toBeGreaterThanOrEqual(2);
+    expect(result!.finding).toBe('堂食占60.0%（¥60万），是最大一项；其次外卖30.0%、自取10.0%。');
+    expect(result!.suggestion).toBe('堂食每降1%，合计约降0.60%，先从堂食查起。');
   });
 
   it('PIE <2 slices → null (data insufficient)', () => {
@@ -402,20 +402,20 @@ describe('PROPORTION family (U2 — PIE)', () => {
     expect(buildChartInsight(chart, financePerms)).not.toBeNull();
   });
 
-  it('PROPORTION: no absolute ¥ in finding (always % only)', () => {
+  it('PROPORTION: 无财务权限 → 不出金额也不出占比；有权限才出金额（阴阳对照）', () => {
     const ABS_YUAN_RE = /¥[\d,.]+万?亿?|[\d,.]+万?亿?元/;
-    for (const perms of [financePerms, noFinancePerms]) {
-      const result = buildProportionInsight(
-        makePie([
-          { name: '堂食', value: 600_000 },
-          { name: '外卖', value: 400_000 },
-        ]),
-        perms,
-      );
-      expect(result).not.toBeNull();
-      const allText = [result!.finding, result!.implication ?? '', result!.suggestion ?? ''].join(' ');
-      expect(allText).not.toMatch(ABS_YUAN_RE);
-    }
+    const pie = () => makePie([
+      { name: '堂食', value: 600_000 },
+      { name: '外卖', value: 400_000 },
+    ]);
+    const hidden = buildProportionInsight(pie(), noFinancePerms)!;
+    const hiddenText = [hidden.finding, hidden.implication ?? '', hidden.suggestion ?? ''].join(' ');
+    expect(hiddenText).not.toMatch(ABS_YUAN_RE);
+    expect(hiddenText).not.toMatch(/\d+(\.\d+)?%/);
+    expect(hidden.finding).toContain('堂食是最大一项');
+    const shown = buildProportionInsight(pie(), financePerms)!;
+    expect(shown.finding).toMatch(ABS_YUAN_RE);
+    expect(shown.finding).toContain('60.0%');
   });
 
   it('PROPORTION: no causal-prescriptive verbs', () => {
@@ -634,7 +634,7 @@ describe('KPI family (U2 — 🔴 finance ¥ guard)', () => {
 // ---------------------------------------------------------------------------
 
 describe('showAbsolute dead code removed — RANKING output consistent', () => {
-  it('RANKING finance user: finding uses ratio + % (no absolute ¥ was ever output)', () => {
+  it('RANKING finance user: finding has the amount + 倍数 + 占比 (computed)', () => {
     const ABS_YUAN_RE = /¥[\d,.]+万?亿?|[\d,.]+万?亿?元/;
     const result = buildChartInsight(
       makeRanking([
@@ -644,14 +644,11 @@ describe('showAbsolute dead code removed — RANKING output consistent', () => {
       financePerms,
     );
     expect(result).not.toBeNull();
-    // Both finance and non-finance should have identical structure (ratio/%)
-    expect(result!.finding).toMatch(/\d+(\.\d+)?倍/);
-    expect(result!.finding).toMatch(/\d+(\.\d+)?%/);
-    // No absolute ¥
-    expect(result!.finding).not.toMatch(ABS_YUAN_RE);
+    expect(result!.finding).toBe('大融城店最高，¥120万，是平均的1.5倍，占合计75.0%；最低是万象城店，¥40万。');
+    expect(ABS_YUAN_RE.test(result!.finding)).toBe(true);
   });
 
-  it('RANKING non-finance user: same finding structure as finance user (showAbsolute gone)', () => {
+  it('RANKING non-finance user: no amount and no share, ordering only', () => {
     const resultFin = buildChartInsight(
       makeRanking([{ label: 'A', value: 300 }, { label: 'B', value: 100 }], 'revenue'),
       financePerms,
@@ -662,8 +659,10 @@ describe('showAbsolute dead code removed — RANKING output consistent', () => {
     );
     expect(resultFin).not.toBeNull();
     expect(resultNoFin).not.toBeNull();
-    // Both produce same ratio/% output (showAbsolute was dead code — both branches were identical)
-    expect(resultFin!.finding).toBe(resultNoFin!.finding);
+    expect(resultFin!.finding).toContain('¥300');
+    expect(resultNoFin!.finding).not.toMatch(/¥|元/);
+    expect(resultNoFin!.finding).not.toMatch(/\d+(\.\d+)?%/);
+    expect(resultNoFin!.finding).toContain('A最高');
   });
 });
 

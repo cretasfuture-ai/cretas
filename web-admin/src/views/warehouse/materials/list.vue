@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ListEmptyExplain from '@/components/common/ListEmptyExplain.vue';
 import { ref, reactive, computed, onMounted, watch } from 'vue';
 import { displayUnit } from '@/utils/unitPricing';
 import { useRoute, useRouter } from 'vue-router';
@@ -11,6 +12,7 @@ import CanvasAwareWrapper from '@/components/canvas/CanvasAwareWrapper.vue';
 import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
 import { Search, Refresh } from '@element-plus/icons-vue';
 import { formatDateTimeCell, fmtQty, formatAmount } from '@/utils/tableFormatters';
+import { batchStatusDisplay, formatDateTimeMinute, isDepletedAvailableBatch } from './batchDisplay';
 import { enumLabel, MATERIAL_BATCH_STATUS_LABELS } from '@/utils/enumDisplay';
 import type { FormInstance } from 'element-plus';
 import type { TableRow } from '@/types/api';
@@ -20,6 +22,8 @@ import type { ReceivingLifecycleCounts, ReceivingTaskFilter } from './warehouseI
 import { autoTotalWeightKg, autoWeightSkippedHint } from './autoWeight';
 import { toDateString } from '@/utils/dateFormat';
 import { groupBatchesBySourceDocument, type DocumentBatchGroup } from './groupBySourceDocument';
+import { getSourceIndividual } from '@/api/sourceIndividual';
+import { UNLINK_REASON_MAX_LENGTH, unlinkSourceIndividualPath, validateUnlinkReason } from './sourceIndividualUnlink';
 
 const router = useRouter();
 const route = useRoute();
@@ -48,14 +52,33 @@ const receivingFilter = computed<ReceivingTaskFilter>(() =>
 const currentRecordCount = computed(() => activeInboundTab.value === 'BATCHES'
   ? `${pagination.value.total} 个批次`
   : `${receivingCounts.value[receivingFilter.value]} 项任务`);
+// 默认落点：没有待处理任务、但已有入库批次时，直接打开「已入库批次」，避免用户一进来看到空表。
+// 只在用户没有点过标签、URL 没指定 view 时自动切换一次。
+const inboundTabTouched = ref(false);
+const receivingCountsLoaded = ref(false);
 function handleReceivingCounts(counts: ReceivingLifecycleCounts): void {
   receivingCounts.value = counts;
+  receivingCountsLoaded.value = true;
 }
+function handleInboundTabChange(): void {
+  inboundTabTouched.value = true;
+}
+watch(
+  [() => receivingCounts.value.ALL, () => pagination.value.total, receivingCountsLoaded],
+  ([taskTotal, batchTotal, loaded]) => {
+    if (inboundTabTouched.value || !loaded) return;
+    if (activeInboundTab.value === 'ALL' && taskTotal === 0 && batchTotal > 0) {
+      activeInboundTab.value = 'BATCHES';
+      inboundTabTouched.value = true;
+    }
+  },
+);
 
 watch(
   () => route.query.view,
   (view) => {
     const normalized = String(view || '').toUpperCase();
+    if (normalized) inboundTabTouched.value = true;
     if (normalized === 'BATCHES' || normalized === 'INVENTORY') activeInboundTab.value = 'BATCHES';
     else if (normalized === 'RECEIVING' || normalized === 'TASKS') activeInboundTab.value = 'ALL';
   },
@@ -295,6 +318,10 @@ function getStatusText(status: string) {
   return enumLabel(status?.toUpperCase(), MATERIAL_BATCH_STATUS_LABELS);
 }
 
+function batchTagType(row: TableRow | null): string {
+  return isDepletedAvailableBatch(row) ? 'info' : getStatusType(String(row?.status ?? ''));
+}
+
 // ==================== View Dialog ====================
 const viewDialogVisible = ref(false);
 const viewRecord = ref<TableRow | null>(null);
@@ -310,6 +337,11 @@ const formDialogTitle = ref('入库登记');
 const formRef = ref<FormInstance>();
 const formSaving = ref(false);
 const editingId = ref<string | null>(null);
+/** 正在编辑的批次挂着的来源个体 (#1844 L-d); null = 没挂。 */
+const editingSourceIndividualId = ref<string | null>(null);
+/** 该个体的档案编号; 读不到时为 null, 界面如实说读不到, ⛔ 不拿 id 冒充编号。 */
+const editingSourceIndividualCode = ref<string | null>(null);
+const unlinkingSourceIndividual = ref(false);
 
 const formData = reactive({
   batchNumber: '',
@@ -462,6 +494,8 @@ watch(() => formData.receiptQuantity, () => { autoCalcWeightAndValue(); });
 
 function handleCreate() {
   editingId.value = null;
+  editingSourceIndividualId.value = null;
+  editingSourceIndividualCode.value = null;
   formDialogTitle.value = '入库登记';
   w02HintShown = false;
   weightHintShown = false;
@@ -492,7 +526,63 @@ function handleEdit(row: TableRow) {
     factoryNumber: row.factoryNumber || '',
     originPlace: row.originPlace || '',
   });
+  editingSourceIndividualId.value = row.sourceIndividualId ? String(row.sourceIndividualId) : null;
+  editingSourceIndividualCode.value = null;
+  if (editingSourceIndividualId.value) {
+    const linkedId = editingSourceIndividualId.value;
+    getSourceIndividual(factoryId.value, linkedId)
+      .then((res) => {
+        if (res.success && editingSourceIndividualId.value === linkedId) {
+          editingSourceIndividualCode.value = res.data?.individualCode ?? null;
+        }
+      })
+      .catch(() => { /* 编号读不到就显示「读不到」, 不影响解除 */ });
+  }
   formDialogVisible.value = true;
+}
+
+/**
+ * 解除批次的来源个体挂载 (#1844 L-d)。原因必填, 后端写操作日志;
+ * ⛔ 不走编辑提交体 (那里 sourceIndividualId 空白会 400, null 是「不改」)。
+ */
+async function handleUnlinkSourceIndividual() {
+  const batchId = editingId.value;
+  if (!batchId || !editingSourceIndividualId.value) return;
+  let reason: string;
+  try {
+    const result = await ElMessageBox.prompt(
+      '解除后，这批原料在溯源里不再追到该个体。请填写原因（会记入操作日志）。',
+      '解除来源个体挂载',
+      {
+        confirmButtonText: '解除挂载',
+        cancelButtonText: '取消',
+        inputType: 'textarea',
+        inputPlaceholder: `例如：挂错了个体（最多 ${UNLINK_REASON_MAX_LENGTH} 字）`,
+        inputValidator: validateUnlinkReason,
+      },
+    );
+    reason = String(result.value ?? '').trim();
+  } catch {
+    return; // 用户取消
+  }
+  unlinkingSourceIndividual.value = true;
+  try {
+    const res = await post(unlinkSourceIndividualPath(factoryId.value, batchId), { reason });
+    if (res.success) {
+      ElMessage.success('已解除来源个体挂载，已记录原因');
+      editingSourceIndividualId.value = null;
+      editingSourceIndividualCode.value = null;
+      loadData();
+    } else {
+      // ⛔ 不吞后端文案: 409「没挂个体」/ 403「无权」各有含义。
+      ElMessage({ message: res.message || '解除失败', type: 'error', duration: 0, showClose: true });
+    }
+  } catch (error) {
+    console.error('解除来源个体挂载失败:', error);
+    ElMessage({ message: '解除失败，请重试', type: 'error', duration: 0, showClose: true });
+  } finally {
+    unlinkingSourceIndividual.value = false;
+  }
 }
 
 /**
@@ -770,7 +860,7 @@ async function handleGenerateLabel(row: TableRow) {
         </div>
       </template>
 
-      <el-tabs v-model="activeInboundTab" class="inbound-status-tabs">
+      <el-tabs v-model="activeInboundTab" class="inbound-status-tabs" @tab-change="handleInboundTabChange">
         <el-tab-pane :label="`全部任务 ${receivingCounts.ALL}`" name="ALL" />
         <el-tab-pane :label="`待收货 ${receivingCounts.WAITING_RECEIVE}`" name="WAITING_RECEIVE" />
         <el-tab-pane :label="`收货中 ${receivingCounts.RECEIVING}`" name="RECEIVING" />
@@ -836,7 +926,7 @@ async function handleGenerateLabel(row: TableRow) {
                 </el-table-column>
                 <el-table-column label="状态" width="100" align="center">
                   <template #default="{ row: b }">
-                    <el-tag :type="getStatusType(b.status)" size="small">{{ getStatusText(b.status) }}</el-tag>
+                    <el-tag :type="batchTagType(b)" size="small">{{ batchStatusDisplay(b, getStatusText).text }}</el-tag>
                   </template>
                 </el-table-column>
                 <el-table-column prop="expiryDate" label="过期日期" width="120" />
@@ -913,7 +1003,7 @@ async function handleGenerateLabel(row: TableRow) {
                 </el-table-column>
                 <el-table-column label="状态" width="100" align="center">
                   <template #default="{ row: b }">
-                    <el-tag :type="getStatusType(b.status)" size="small">{{ getStatusText(b.status) }}</el-tag>
+                    <el-tag :type="batchTagType(b)" size="small">{{ batchStatusDisplay(b, getStatusText).text }}</el-tag>
                   </template>
                 </el-table-column>
                 <el-table-column prop="createdAt" label="入库时间" width="180" :formatter="formatDateTimeCell" />
@@ -966,7 +1056,8 @@ async function handleGenerateLabel(row: TableRow) {
         </el-table>
       </template>
 
-      <el-table v-if="viewMode === 'detail'" :data="tableData" v-loading="loading" empty-text="暂无数据" stripe border style="width: 100%">
+      <el-table v-if="viewMode === 'detail'" :data="tableData" v-loading="loading" stripe border style="width: 100%">
+        <template #empty><ListEmptyExplain empty-title="还没有入库批次" empty-hint="采购到货验收或生产完工入库后，批次会出现在这里；也可点「入库」手动登记。" /></template>
         <el-table-column prop="batchNumber" label="批次号" width="160" />
         <el-table-column label="原料类型" min-width="150" show-overflow-tooltip>
           <template #default="{ row }">{{ row.materialTypeName || row.materialName || '-' }}</template>
@@ -988,8 +1079,8 @@ async function handleGenerateLabel(row: TableRow) {
         </el-table-column>
         <el-table-column prop="status" label="状态" width="100" align="center">
           <template #default="{ row }">
-            <el-tag :type="getStatusType(row.status)" size="small">
-              {{ getStatusText(row.status) }}
+            <el-tag :type="batchTagType(row)" size="small">
+              {{ batchStatusDisplay(row, getStatusText).text }}
             </el-tag>
           </template>
         </el-table-column>
@@ -1055,10 +1146,10 @@ async function handleGenerateLabel(row: TableRow) {
           <span v-else>-</span>
         </el-descriptions-item>
         <el-descriptions-item label="状态">
-          <el-tag :type="getStatusType(String(viewRecord.status || ''))">{{ getStatusText(String(viewRecord.status || '')) }}</el-tag>
+          <el-tag :type="batchTagType(viewRecord)">{{ batchStatusDisplay(viewRecord, getStatusText).text }}</el-tag>
         </el-descriptions-item>
         <el-descriptions-item label="过期日期">{{ viewRecord.expiryDate || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="入库时间">{{ viewRecord.createdAt || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="入库时间">{{ formatDateTimeMinute(viewRecord.createdAt) }}</el-descriptions-item>
         <el-descriptions-item label="备注">{{ viewRecord.notes || '-' }}</el-descriptions-item>
         <el-descriptions-item label="合同号">{{ viewRecord.contractNumber || '-' }}</el-descriptions-item>
         <el-descriptions-item label="供应商批次号">{{ viewRecord.supplierBatchNumber || '-' }}</el-descriptions-item>
@@ -1220,6 +1311,28 @@ async function handleGenerateLabel(row: TableRow) {
         <el-form-item label="产地">
           <el-input v-model="formData.originPlace" placeholder="原料产地（如：山东寿光，可选）" />
         </el-form-item>
+        <!--
+          #1844 L-d: 挂错了个体要有一条能走的路。解除走独立端点(原因必填、写操作日志),
+          ⛔ 不放进编辑提交体 —— 那里 sourceIndividualId 空白会 400, null 是「不改」。
+        -->
+        <el-form-item v-if="editingId && editingSourceIndividualId" label="来源个体">
+          <div class="source-individual-link" data-testid="batch-source-individual">
+            <span v-if="editingSourceIndividualCode">档案 {{ editingSourceIndividualCode }}</span>
+            <span v-else class="text-secondary">已挂个体（档案编号未读到）</span>
+            <el-button
+              v-if="canWrite"
+              type="danger"
+              link
+              size="small"
+              :loading="unlinkingSourceIndividual"
+              data-testid="batch-source-individual-unlink"
+              @click="handleUnlinkSourceIndividual"
+            >
+              解除挂载
+            </el-button>
+          </div>
+          <div class="field-hint">挂错了个体可在这里解除，需填写原因并记入操作日志。</div>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="formDialogVisible = false">取消</el-button>
@@ -1311,14 +1424,14 @@ async function handleGenerateLabel(row: TableRow) {
 
 .field-hint {
   font-size: 12px;
-  color: var(--text-color-secondary, #909399);
+  color: var(--text-color-secondary, var(--cs-muted));
   line-height: 1.4;
   margin-top: 4px;
 }
 
 .text-secondary {
   font-size: 12px;
-  color: var(--text-color-secondary, #909399);
+  color: var(--text-color-secondary, var(--cs-muted));
 }
 
 /* 账实字段只读时的说明块 —— 必须同时说清"为什么不能改"和"那去哪改" (防呆: 无 dead-end)。 */
@@ -1326,20 +1439,20 @@ async function handleGenerateLabel(row: TableRow) {
   margin-bottom: 16px;
   padding: 10px 12px;
   border-radius: 4px;
-  background: var(--el-color-warning-light-9, #fdf6ec);
+  background: var(--el-color-warning-light-9, var(--cs-warning-soft));
   border: 1px solid var(--el-color-warning-light-7, #f5dab1);
 
   .locked-hint__title {
     font-size: 13px;
     font-weight: 600;
-    color: var(--el-color-warning, #e6a23c);
+    color: var(--el-color-warning, var(--cs-warning));
     margin-bottom: 4px;
   }
 
   .locked-hint__body {
     font-size: 12px;
     line-height: 1.6;
-    color: var(--text-color-secondary, #909399);
+    color: var(--text-color-secondary, var(--cs-muted));
   }
 
   /* 入库日期那条例外说明: 与上面"去盘点"那条出口分开, 免得被读成同一条路。 */
@@ -1357,7 +1470,7 @@ async function handleGenerateLabel(row: TableRow) {
 
   :deep(.el-card__header) {
     padding: 16px 20px;
-    border-bottom: 1px solid var(--border-color-lighter, #ebeef5);
+    border-bottom: 1px solid var(--border-color-lighter, var(--cs-border));
   }
 
   :deep(.el-card__body) {
@@ -1381,12 +1494,12 @@ async function handleGenerateLabel(row: TableRow) {
     .page-title {
       font-size: 16px;
       font-weight: 600;
-      color: var(--text-color-primary, #303133);
+      color: var(--text-color-primary, var(--cs-text));
     }
 
     .data-count {
       font-size: 13px;
-      color: var(--text-color-secondary, #909399);
+      color: var(--text-color-secondary, var(--cs-muted));
     }
   }
 }
@@ -1408,11 +1521,11 @@ async function handleGenerateLabel(row: TableRow) {
   align-items: center;
   margin-bottom: 12px;
   font-size: 13px;
-  color: var(--text-color-secondary, #909399);
+  color: var(--text-color-secondary, var(--cs-muted));
 }
 
 .summary-warning {
-  color: var(--el-color-warning, #e6a23c);
+  color: var(--el-color-warning, var(--cs-warning));
 }
 
 .nested-batch-table {
@@ -1436,7 +1549,7 @@ async function handleGenerateLabel(row: TableRow) {
   display: flex;
   justify-content: flex-end;
   padding-top: 16px;
-  border-top: 1px solid var(--border-color-lighter, #ebeef5);
+  border-top: 1px solid var(--border-color-lighter, var(--cs-border));
   margin-top: 16px;
 }
 </style>

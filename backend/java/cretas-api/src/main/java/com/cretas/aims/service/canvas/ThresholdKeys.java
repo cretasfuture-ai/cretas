@@ -63,6 +63,55 @@ public final class ThresholdKeys {
     /** 信用额度接近预警比 (used / limit). Hard-coded default = 0.80. */
     public static final String CREDIT_WARNING_RATIO = "credit.warning_ratio";
 
+    /**
+     * 超信用额度检查模式 (2026-11-10 Steve 裁定, 工厂纪律 A17)。字符串, 取值 OFF / WARN / BLOCK。
+     * OFF (默认) = 整个检查不做; WARN = 只提示并留痕不拦; BLOCK = 拦截, 持「信用特批」权限者填原因可放行。
+     * 挡得住下单 ⇒ 登记为闸门类 key (见 {@link #GATING_KEYS})。
+     */
+    public static final String CREDIT_CHECK_MODE = "credit.check.mode";
+
+    // ==================== 可配置的权限默认角色 (2026-11-10 Steve 裁定, 工厂纪律 B7 / B9 / A17) ====================
+    // 「谁能做这件事」不写死岗位: 值是逗号分隔的角色码, 存工厂阈值 (没有 per-factory 行就跟随全局默认)。
+    // 厂长 (factory_super_admin) 恒有权限, 不受这里的值影响。读到旧值 = 放行 / 拦住用户动作 ⇒ 登记为闸门类 key。
+
+    /** 原料类型维护 (新建/改/删/别名/合并) 的岗位 → 默认 warehouse_manager */
+    public static final String INVENTORY_PERMISSION_MATERIAL_TYPE_MAINTAIN = "inventory.permission.material_type_maintain";
+    /** 报损审批 (通过/驳回/看待审) 的岗位 → 默认只有厂长 (空) */
+    public static final String INVENTORY_PERMISSION_WASTAGE_APPROVE = "inventory.permission.wastage_approve";
+    /** 报废审批 (通过/驳回) 的岗位 → 默认 finance_manager (改动前写死的名单), 厂长恒有 */
+    public static final String INVENTORY_PERMISSION_DISPOSAL_APPROVE = "inventory.permission.disposal_approve";
+    /** 付款执行 (出纳点已付款, 「我的待办」按它聚合付款待办) 的岗位 → 默认 cashier, 厂长恒有 */
+    public static final String FINANCE_PERMISSION_PAYMENT_DISBURSE = "finance.permission.payment_disburse";
+    /** 信用特批 (超信用额度被拦截时放行) 的岗位 → 默认只有厂长 (空) */
+    public static final String CREDIT_PERMISSION_OVERRIDE = "credit.permission.override";
+    /**
+     * 解除已有消耗原料批次的来源个体挂载 (#1968 M-2) 的岗位 → 默认 warehouse_manager, 厂长恒有。
+     * 权限码 PermissionService.SOURCE_INDIVIDUAL_UNLINK_CONSUMED_PERMISSION。
+     */
+    public static final String INVENTORY_PERMISSION_SOURCE_INDIVIDUAL_UNLINK_CONSUMED =
+            "inventory.permission.source_individual_unlink_consumed";
+
+    // ==================== 通知接收人 (2026-11-10 Steve 裁定, 工厂纪律 B12) ====================
+    // 每类通知发给谁由工厂配置: 值是逗号分隔的角色码; 没配 / 配的角色全都没有人 ⇒ 默认发给厂长, 不丢。
+    // 归类沿用现有分类 (PRODUCTION / INVENTORY), 不新增分类, 以免前端那份平行 TS 联合类型要跟着改。
+
+    /** 新调度计划已创建 → 默认 dispatcher,factory_super_admin */
+    public static final String PRODUCTION_NOTIFY_SCHEDULE_CREATED = "production.notify.schedule_created";
+    /** 调度计划已确认 → 默认 workshop_supervisor */
+    public static final String PRODUCTION_NOTIFY_SCHEDULE_CONFIRMED = "production.notify.schedule_confirmed";
+    /** 调度计划延期预警 → 默认 dispatcher,factory_super_admin,workshop_supervisor */
+    public static final String PRODUCTION_NOTIFY_SCHEDULE_DELAYED = "production.notify.schedule_delayed";
+    /** 紧急插单 → 默认 dispatcher,factory_super_admin,workshop_supervisor */
+    public static final String PRODUCTION_NOTIFY_URGENT_INSERT = "production.notify.urgent_insert";
+    /** 生产进度严重落后预警 (效率检测) → 默认 dispatcher,workshop_supervisor */
+    public static final String PRODUCTION_NOTIFY_EFFICIENCY_WARNING = "production.notify.efficiency_warning";
+    /** AI 排产结果通知 (原来是全厂广播) → 默认 dispatcher,factory_super_admin */
+    public static final String PRODUCTION_NOTIFY_AI_SCHEDULING = "production.notify.ai_scheduling";
+    /** 低库存双向报警 → 默认 warehouse_manager,procurement_manager */
+    public static final String INVENTORY_NOTIFY_LOW_STOCK = "inventory.notify.low_stock";
+    /** 动态质检表有项目不合格但不判整张不合格 (交质量经理决定) → 默认 quality_manager (2026-11-11) */
+    public static final String QUALITY_NOTIFY_INSPECTION_REVIEW = "quality.notify.inspection_review";
+
     // ==================== BOM (BOM) ====================
 
     /** BOM 递归展开最大深度. Hard-coded default = 10. */
@@ -72,6 +121,13 @@ public final class ThresholdKeys {
 
     /** 生产建议默认 lead time (天). Hard-coded default = 7. */
     public static final String SHORTAGE_DEFAULT_PRODUCTION_LEAD_DAYS = "shortage.production_lead_days";
+
+    /**
+     * 缺料实例缺口补到 0 之后怎么收尾 (2026-11-11 Steve 裁定: 做成工厂开关)。字符串, MANUAL (默认) / AUTO。
+     * MANUAL = 停在「缺口已解决」, 由生产主管手工关闭 (= 原行为); AUTO = 系统直接关闭并留痕。认不出 = MANUAL。
+     * 读到旧值不挡任何用户动作 (只是晚一点自动关) ⇒ 故意不登记为闸门类 key。
+     */
+    public static final String SHORTAGE_CASE_CLOSE_MODE = "shortage.case.close_mode";
 
     // ==================== AI 复杂度路由 (AI) ====================
 
@@ -182,6 +238,16 @@ public final class ThresholdKeys {
      */
     public static final String SALES_DELIVERY_OVER_SHIP_RATE = "sales.delivery.over_ship_rate";
 
+    /**
+     * 销售单财务批准后能不能取消 (2026-11-11 Steve 裁定: 做成工厂开关, 默认关)。整数, 1 = 开; 其它 (含 0、写错) = 关
+     * (= 原行为: 只能驳回 / 退款)。开了以后有 {@link #SALES_PERMISSION_CANCEL_APPROVED_ORDER} 权限的人可带原因取消,
+     * 并连带取消自动生成的生产计划和未开工排程。挡得住 / 放得过一个用户动作 ⇒ 闸门类。
+     */
+    public static final String SALES_ORDER_CANCEL_AFTER_APPROVAL = "sales.order.cancel_after_approval";
+
+    /** 「取消已批准销售单」的岗位名单 (逗号分隔岗位码) → 默认只有厂长 (空)。 */
+    public static final String SALES_PERMISSION_CANCEL_APPROVED_ORDER = "sales.permission.cancel_approved_order";
+
     // ==================== 财务分析 (FINANCE) ====================
 
     /** 账龄 90+ 天占比红色预警阈值 (%). Hard-coded default = 20. */
@@ -208,6 +274,83 @@ public final class ThresholdKeys {
     public static final String EFFICIENCY_MIN = "efficiency.individual.min";
     /** 个人效率上限. Hard-coded default = 2.0. */
     public static final String EFFICIENCY_MAX = "efficiency.individual.max";
+
+    // ==================== 工厂纪律口径 (2026-11-10 Steve: 是否拦、怎么拦由工厂配置) ====================
+    // 全局默认行见 V20261111_81__factory_discipline_configs.sql; 解析与「认不出按最严」见
+    // com.cretas.aims.service.discipline.FactoryDisciplinePolicy (唯一读取处)。
+
+    /** A3 批次放行规则: QC_ONLY (默认) | QC_OR_MANUAL。认不出 = QC_ONLY。 */
+    public static final String QUALITY_BATCH_RELEASE_MODE = "quality.batch_release.mode";
+    /** A3 手动放行允许的角色代码, 逗号分隔; 空 = 不另限角色。 */
+    public static final String QUALITY_BATCH_RELEASE_MANUAL_ROLES = "quality.batch_release.manual_roles";
+    /** A3 手动放行是否必须填原因: 1 (默认) / 0。 */
+    public static final String QUALITY_BATCH_RELEASE_REQUIRE_REASON = "quality.batch_release.require_reason";
+    /** A7 完工必须先结单: 1 (默认) / 0。 */
+    public static final String PRODUCTION_COMPLETION_REQUIRE_SETTLEMENT = "production.completion.require_settlement";
+    /** A11 仓库多收: BLOCK (默认) | WITHIN_RATE | ALWAYS_WITH_REASON。认不出 = BLOCK。 */
+    public static final String PRODUCTION_RECEIPT_OVER_RECEIVE_MODE = "production.receipt.over_receive_mode";
+    /** A11 WITHIN_RATE 模式下的多收比例 (小数). Default = 0.05。 */
+    public static final String PRODUCTION_RECEIPT_OVER_RECEIVE_RATE = "production.receipt.over_receive_rate";
+    /** A13 解冻开始最多往前补登的分钟数. Default = 480; 0 = 不允许补登。 */
+    public static final String PRODUCTION_THAW_BACKFILL_MAX_MINUTES = "production.time_limit.thaw_backfill_max_minutes";
+    /**
+     * 工序时限超时是否拦领用 (PROTO-Q41, Steve 2026-11-18 拍板: 工厂开关, 默认只警告)。整数, 1 = 开; 其它 (含 0、写错) = 关。
+     * 关 (默认) = 超时 / 未登记开始解冻只警告: 照常投料, 超时写一条待处置留痕供复盘, 响应里带警告。
+     * 开 = 原行为: 409 拦住, 质检复检放行或判不合格后才能领。挡得住一个现场动作 (投料) ⇒ 闸门类。
+     */
+    public static final String PRODUCTION_TIME_LIMIT_BLOCK_ON_EXCEED = "production.time_limit.block_on_exceed";
+    /** A14 补录窗口天数. Default = 2 (T-2)。 */
+    public static final String PRODUCTION_BACKDATE_MAX_DAYS = "production.backdate.max_days";
+
+    /**
+     * 插单是否一律走审批 (1551-11, Steve 2026-11-11 拍板: 工厂开关, 默认关)。整数, 1 = 开; 其它 (含 0、写错) = 关。
+     * 关 (默认) = 原行为: 只有预览判定需要审批 (影响高/严重) 的插单走强制插单审批, 其余直接排入。
+     * 开 = 本厂有启用的强制插单 (FORCE_INSERT) 审批画布时, 所有插单 (含低影响的普通插单) 都先进审批, 批准后才排入;
+     * 没有启用画布时开了也不生效 (没人来批)。挡得住一个用户动作 (直接排入) ⇒ 闸门类。
+     */
+    public static final String PRODUCTION_URGENT_INSERT_ALWAYS_APPROVAL = "production.urgent_insert.always_approval";
+
+    /**
+     * 客供料收货能不能超收 (A15, Steve 2026-11-11 拍板: 单独做成工厂开关, 默认关)。整数, 1 = 开; 其它 (含 0、写错) = 关。
+     * 关 (默认) = 原行为: 客供料实收不能超过剩余待收, 多 1 克也拦。
+     * 开 = 与采购收货同一个超收上限 (OverReceiveLimit: 工厂设置 purchaseOverReceiveRate > 全局属性 > 不限制)。
+     * 挡得住一个现场动作 (多收) ⇒ 闸门类。
+     */
+    public static final String INVENTORY_CUSTOMER_SUPPLIED_ALLOW_OVER_RECEIVE =
+            "inventory.customer_supplied.allow_over_receive";
+
+    /**
+     * 「袋」「盒」等包装单位的计划换线时怎么核对目标线产能 (2026-11-11 Steve 裁定: 做成工厂开关)。
+     * NONE (默认) = 产线产能只认 件 / kg / 批, 包装单位计划判「产能未验证」只能同线顺延 (= 原行为);
+     * NET_CONTENT = 按产品净含量把包装单位折成 kg 再核对 kg 产能 (净含量没填 / 不是质量单位 ⇒ 仍未验证, 不猜);
+     * FACTORY_UNIT = 产线产能可以按工厂自己的包装单位配置 (如 袋/小时), 计划单位与之等价才核对。认不出 = NONE。
+     */
+    public static final String PRODUCTION_CAPACITY_PACKAGE_UNIT_MODE = "production.capacity.package_unit_mode";
+
+    /**
+     * 动态质检表里哪些项不合格才判整张 FAIL (2026-11-11 Steve 裁定: 做成工厂开关, 默认 B)。字符串:
+     * ANY_ITEM = 任一项不合格整张 FAIL (原行为); MINOR_FOR_REVIEW (默认) = 关键 / 主要项不合格整张 FAIL,
+     * 只有次要项不合格时判「条件合格」并标出这些项, 交质量经理决定; CRITICAL_ONLY = 只有关键项不合格才整张 FAIL,
+     * 主要 / 次要项交质量经理决定。认不出 = ANY_ITEM (最严)。没标严重程度的项按关键项算。
+     * 读到旧值 = 该 FAIL 的判成条件合格 (或反过来) ⇒ 登记为闸门类 key。
+     */
+    public static final String QUALITY_INSPECTION_FAIL_SCOPE = "quality.inspection.fail_scope";
+
+    /**
+     * AI 助手「先问口径」档位 (INTENT-DISTILL-20261111, Steve 2026-11-14 拍板: 按工厂选)。字符串:
+     * CONSERVATIVE 保守 = 多问 (史浩禾口径); AGGRESSIVE 激进 = 少问 (Steve 300 题口径, 默认)。
+     * 认不出 / 取不到 = AGGRESSIVE 并计数 (IntentAskPolicyResolver)。只改识别层先问还是先办, 写操作照旧逐笔确认
+     * ⇒ 不挡也不放行任何写动作, 不是闸门类。
+     */
+    public static final String AI_INTENT_ASK_POLICY = "ai.intent.ask_policy";
+
+    /**
+     * 迁移 P5 数据疑点「单位明显不符」上限 (kg, 小数): 整合 / 称重报工的投入或良品换成 kg 后 ≥ 它 ⇒ 标「像是把克当成了千克」。
+     * 默认 5000; 大厂单笔真有 5 吨以上的按厂调大。只标疑点不挡动作 ⇒ 不是闸门类。
+     */
+    public static final String PRODUCTION_DATA_SUSPECT_MAX_WEIGHT_KG = "production.data_suspect.max_weight_kg";
+    /** 迁移 P5 数据疑点下限 (kg, 小数): 整合 / 称重报工投入 &lt; 它 ⇒ 标「像是把吨当成了千克」。默认 0.1。不是闸门类。 */
+    public static final String PRODUCTION_DATA_SUSPECT_MIN_INPUT_KG = "production.data_suspect.min_input_kg";
 
     // ==================== 闸门类阈值登记 (GATING) ====================
 
@@ -250,13 +393,115 @@ public final class ThresholdKeys {
      *       <b>全仓没有任何调用点</b>（2026-08-29 实测：除本文件外 0 处引用）。
      *       等它真被接上执行链的那天再登记；现在登记只会让人以为它生效了。</li>
      *   <li>所有 {@code *.red} / {@code *.yellow} —— 按定义就是染色，不挡动作</li>
+     *   <li>{@link #PRODUCTION_DATA_SUSPECT_MAX_WEIGHT_KG} / {@link #PRODUCTION_DATA_SUSPECT_MIN_INPUT_KG}
+     *       —— 只给报工标「数据疑点」, 不挡报工</li>
      * </ul>
      *
      * @since 2026-08-29
      */
     public static final java.util.Set<String> GATING_KEYS = java.util.Set.of(
-            SALES_DELIVERY_OVER_SHIP_RATE
+            SALES_DELIVERY_OVER_SHIP_RATE,
+            // 纪律口径 (2026-11-10): 每一个都会挡住或放行一个现场动作
+            QUALITY_BATCH_RELEASE_MODE,
+            QUALITY_BATCH_RELEASE_MANUAL_ROLES,
+            QUALITY_BATCH_RELEASE_REQUIRE_REASON,
+            PRODUCTION_COMPLETION_REQUIRE_SETTLEMENT,
+            PRODUCTION_RECEIPT_OVER_RECEIVE_MODE,
+            PRODUCTION_RECEIPT_OVER_RECEIVE_RATE,
+            PRODUCTION_THAW_BACKFILL_MAX_MINUTES,
+            PRODUCTION_TIME_LIMIT_BLOCK_ON_EXCEED,
+            PRODUCTION_BACKDATE_MAX_DAYS,
+            PRODUCTION_CAPACITY_PACKAGE_UNIT_MODE,
+            QUALITY_INSPECTION_FAIL_SCOPE,
+            CREDIT_CHECK_MODE,
+            INVENTORY_PERMISSION_MATERIAL_TYPE_MAINTAIN,
+            INVENTORY_PERMISSION_WASTAGE_APPROVE,
+            INVENTORY_PERMISSION_DISPOSAL_APPROVE,
+            FINANCE_PERMISSION_PAYMENT_DISBURSE,
+            CREDIT_PERMISSION_OVERRIDE,
+            SALES_ORDER_CANCEL_AFTER_APPROVAL,
+            SALES_PERMISSION_CANCEL_APPROVED_ORDER,
+            INVENTORY_PERMISSION_SOURCE_INDIVIDUAL_UNLINK_CONSUMED,
+            PRODUCTION_URGENT_INSERT_ALWAYS_APPROVAL,
+            INVENTORY_CUSTOMER_SUPPLIED_ALLOW_OVER_RECEIVE
     );
+
+    /** 值是「逗号分隔岗位码」的 key (权限岗位名单 + 通知接收人)。保存时按 FactoryUserRole 校验, 打错字不再静默失效。 */
+    public static final java.util.Set<String> ROLE_LIST_KEYS = java.util.Set.of(
+            INVENTORY_PERMISSION_MATERIAL_TYPE_MAINTAIN,
+            INVENTORY_PERMISSION_WASTAGE_APPROVE,
+            INVENTORY_PERMISSION_DISPOSAL_APPROVE,
+            FINANCE_PERMISSION_PAYMENT_DISBURSE,
+            CREDIT_PERMISSION_OVERRIDE,
+            SALES_PERMISSION_CANCEL_APPROVED_ORDER,
+            INVENTORY_PERMISSION_SOURCE_INDIVIDUAL_UNLINK_CONSUMED,
+            PRODUCTION_NOTIFY_SCHEDULE_CREATED,
+            PRODUCTION_NOTIFY_SCHEDULE_CONFIRMED,
+            PRODUCTION_NOTIFY_SCHEDULE_DELAYED,
+            PRODUCTION_NOTIFY_URGENT_INSERT,
+            PRODUCTION_NOTIFY_EFFICIENCY_WARNING,
+            PRODUCTION_NOTIFY_AI_SCHEDULING,
+            INVENTORY_NOTIFY_LOW_STOCK,
+            QUALITY_NOTIFY_INSPECTION_REVIEW);
+
+    /**
+     * 保存阈值前的按 key 校验: 岗位名单里每一项必须是真实存在的岗位码 (空串 = 只有厂长, 合法);
+     * {@link #CREDIT_CHECK_MODE} 只能是 OFF / WARN / BLOCK。返回错误说明, 合法返回 null。
+     * 其它 key 不管。
+     */
+    public static String validateSemantics(String thresholdKey, String value) {
+        if (thresholdKey == null || value == null) {
+            return null;
+        }
+        if (PRODUCTION_TIME_LIMIT_BLOCK_ON_EXCEED.equals(thresholdKey)) {
+            String v = value.trim();
+            return v.equals("0") || v.equals("1") ? null : "工序超时拦截只能填 0 (只警告) 或 1 (拦截)";
+        }
+        if (CREDIT_CHECK_MODE.equals(thresholdKey)) {
+            String v = value.trim().toUpperCase();
+            return (v.equals("OFF") || v.equals("WARN") || v.equals("BLOCK"))
+                    ? null : "超信用额度检查模式只能是 OFF / WARN / BLOCK";
+        }
+        String enumError = validateEnumValue(thresholdKey, value);
+        if (enumError != null) {
+            return enumError;
+        }
+        if (ROLE_LIST_KEYS.contains(thresholdKey)) {
+            for (String code : value.split(",")) {
+                String c = code.trim();
+                if (c.isEmpty()) {
+                    continue;
+                }
+                boolean known = false;
+                for (com.cretas.aims.entity.enums.FactoryUserRole r : com.cretas.aims.entity.enums.FactoryUserRole.values()) {
+                    if (r.name().equals(c)) {
+                        known = true;
+                        break;
+                    }
+                }
+                if (!known) {
+                    return "岗位码不存在: " + c + " (请填 factory_super_admin、warehouse_manager 这类英文岗位码, 逗号分隔)";
+                }
+            }
+        }
+        return null;
+    }
+
+    /** 取值是固定几个代码的开关类 key → 允许的值 (保存时校验, 打错字不再静默按默认)。 */
+    private static final java.util.Map<String, java.util.List<String>> ENUM_VALUES = java.util.Map.of(
+            SHORTAGE_CASE_CLOSE_MODE, java.util.List.of("MANUAL", "AUTO"),
+            PRODUCTION_CAPACITY_PACKAGE_UNIT_MODE, java.util.List.of("NONE", "NET_CONTENT", "FACTORY_UNIT"),
+            QUALITY_INSPECTION_FAIL_SCOPE, java.util.List.of("ANY_ITEM", "MINOR_FOR_REVIEW", "CRITICAL_ONLY"),
+            PRODUCTION_RECEIPT_OVER_RECEIVE_MODE, java.util.List.of("BLOCK", "WITHIN_RATE", "ALWAYS_WITH_REASON"));
+
+    private static String validateEnumValue(String thresholdKey, String value) {
+        java.util.List<String> allowed = ENUM_VALUES.get(thresholdKey);
+        if (allowed == null) {
+            return null;
+        }
+        String v = value.trim().toUpperCase(java.util.Locale.ROOT);
+        return allowed.contains(v) ? null : thresholdKey + " 只能是 " + String.join(" / ", allowed);
+    }
 
     /**
      * 这个 key 是不是闸门类（读到旧值会挡住用户动作）。

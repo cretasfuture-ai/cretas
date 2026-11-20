@@ -165,26 +165,15 @@ public class LowStockDualAlertService {
                 factoryId, materialTypeId, materialName, currentStock, minStock, gap);
 
         try {
-            // 1. 仓储主管
-            List<?> whNotifs = notificationService.sendToRole(
-                    factoryId, FactoryUserRole.warehouse_manager,
+            // 默认仓储主管 + 采购主管, 工厂可配置 (找不到人时改发厂长, 不再静默丢掉)
+            List<?> notifs = notificationService.sendByPolicy(
+                    factoryId, com.cretas.aims.service.canvas.ThresholdKeys.INVENTORY_NOTIFY_LOW_STOCK,
+                    List.of(FactoryUserRole.warehouse_manager, FactoryUserRole.procurement_manager),
                     title, content,
                     NotificationType.WARNING, SOURCE, materialTypeId);
-            log.debug("warehouse_manager 通知已发: count={}", whNotifs != null ? whNotifs.size() : 0);
+            log.debug("低库存通知已发: count={}", notifs != null ? notifs.size() : 0);
         } catch (Exception e) {
-            log.error("低库存报警 warehouse_manager 发送失败: factoryId={} materialTypeId={}",
-                    factoryId, materialTypeId, e);
-        }
-
-        try {
-            // 2. 采购主管
-            List<?> procNotifs = notificationService.sendToRole(
-                    factoryId, FactoryUserRole.procurement_manager,
-                    title, content,
-                    NotificationType.WARNING, SOURCE, materialTypeId);
-            log.debug("procurement_manager 通知已发: count={}", procNotifs != null ? procNotifs.size() : 0);
-        } catch (Exception e) {
-            log.error("低库存报警 procurement_manager 发送失败: factoryId={} materialTypeId={}",
+            log.error("低库存报警发送失败: factoryId={} materialTypeId={}",
                     factoryId, materialTypeId, e);
         }
     }

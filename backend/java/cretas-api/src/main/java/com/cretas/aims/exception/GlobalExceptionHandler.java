@@ -497,12 +497,62 @@ public class GlobalExceptionHandler {
     @ResponseStatus(HttpStatus.CONFLICT)
     public ApiResponse<?> handleOptimisticLockException(Exception e) {
         log.warn("乐观锁冲突: {}", e.getMessage());
+        if (isLineScheduleConflict(e)) {
+            return ApiResponse.errorWithCode(
+                    409,
+                    "OPTIMISTIC_LOCK_CONFLICT",
+                    LINE_SCHEDULE_CONFLICT_MESSAGE,
+                    "请刷新排程，看过别人的修改后再改",
+                    "warning");
+        }
         return ApiResponse.errorWithCode(
                 409,
                 "OPTIMISTIC_LOCK_CONFLICT",
                 "数据已被其他用户修改，请刷新后重试",
                 "请刷新页面查看最新数据后再编辑",
                 "warning");
+    }
+
+    /** 产线排程 (line_schedules, @Version) 被别人先改了: 给用户看得懂的一句。 */
+    public static final String LINE_SCHEDULE_CONFLICT_MESSAGE = "排程已被别人修改，请刷新后再改";
+
+    /**
+     * JDBC 批量写 (生产 hibernate.jdbc.batch_size=100 + batch_versioned_data=true) 下 Hibernate 抛的是不带实体名的
+     * {@link org.hibernate.StaleStateException}, 只在消息里带执行的 SQL:
+     * {@code "Batch update returned unexpected row count ...; statement executed: update line_schedules set ... where id=? and version=?"}。
+     * 表名取实体的 {@code @Table}, 不另写一份; 表名后必须紧跟 {@code set}, 前缀相同的别的表 (如 line_schedules_xxx) 不算。
+     */
+    private static final java.util.regex.Pattern LINE_SCHEDULE_BATCH_UPDATE = java.util.regex.Pattern.compile(
+            "statement executed:\\s*update\\s+\"?"
+                    + java.util.regex.Pattern.quote(com.cretas.aims.entity.LineSchedule.class
+                            .getAnnotation(jakarta.persistence.Table.class).name())
+                    + "\"?\\s+set\\s",
+            java.util.regex.Pattern.CASE_INSENSITIVE);
+
+    /**
+     * 冲突的是不是排程行: 看异常带的实体名 / 实体、原因链上 Hibernate 的 StaleObjectStateException,
+     * 以及批量写路径上不带实体名的 StaleStateException (按它执行的 UPDATE 语句的表名认)。
+     */
+    public static boolean isLineScheduleConflict(Throwable e) {
+        String lineSchedule = com.cretas.aims.entity.LineSchedule.class.getName();
+        for (Throwable t = e; t != null; t = t.getCause() == t ? null : t.getCause()) {
+            if (t instanceof ObjectOptimisticLockingFailureException ex
+                    && lineSchedule.equals(ex.getPersistentClassName())) {
+                return true;
+            }
+            if (t instanceof OptimisticLockException ex
+                    && ex.getEntity() instanceof com.cretas.aims.entity.LineSchedule) {
+                return true;
+            }
+            if (t instanceof org.hibernate.StaleObjectStateException ex && lineSchedule.equals(ex.getEntityName())) {
+                return true;
+            }
+            if (t instanceof org.hibernate.StaleStateException ex && !(t instanceof org.hibernate.StaleObjectStateException)
+                    && ex.getMessage() != null && LINE_SCHEDULE_BATCH_UPDATE.matcher(ex.getMessage()).find()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -557,6 +607,53 @@ public class GlobalExceptionHandler {
      *   - PUT   → "更新失败: 关联资源已失效" + "请刷新页面后重新选择"
      *   - DELETE/其他 → 保留原 "无法删除" wording (已经准确)
      */
+    /** 唯一约束冲突的用户可见文案; 不含任何数据库列名。 */
+    record UniqueConflictText(String message, String actionHint, String hintTarget) {}
+
+    private static final java.util.Map<String, String> UNIQUE_COLUMN_LABELS = java.util.Map.of(
+            "code", "编码",
+            "name", "名称",
+            "phone", "手机号",
+            "username", "用户名",
+            "batch_number", "批次号",
+            "employee_code", "工号");
+
+    /**
+     * 把 PG 报的唯一约束列 (如 "factory_id, code") 翻成用户语言。租户列 factory_id 不属于用户可改字段, 先剔除;
+     * 认得的业务列给出具体提示, 不认得的给通用提示, 原始列名永远不外露 (调用方已写日志)。
+     */
+    /** 只有这条约束对应的表单 (SKU) 支持「编码留空自动生成」; 其它表的 code 不一定能留空。 */
+    static final String PRODUCT_CODE_UNIQUE_CONSTRAINT = "uk_product_types_factory_code";
+
+    static UniqueConflictText describeUniqueConflict(String columns) {
+        return describeUniqueConflict(columns, null);
+    }
+
+    static UniqueConflictText describeUniqueConflict(String columns, String constraintName) {
+        String field = null;
+        for (String c : columns.split(",")) {
+            String col = c.trim().toLowerCase();
+            if (!col.equals("factory_id") && !col.isEmpty()) {
+                field = col;
+                break;
+            }
+        }
+        String label = field == null ? null : UNIQUE_COLUMN_LABELS.get(field);
+        if ("code".equals(field)) {
+            if (PRODUCT_CODE_UNIQUE_CONSTRAINT.equalsIgnoreCase(constraintName)) {
+                return new UniqueConflictText("编码已存在，请换一个编码或留空自动生成",
+                        "请换一个编码，或留空由系统自动生成", "code");
+            }
+            return new UniqueConflictText("编码已存在，请换一个编码", "请换一个编码", "code");
+        }
+        if (label != null) {
+            return new UniqueConflictText("数据已存在，请勿重复提交",
+                    "请检查「" + label + "」是否已存在，或返回列表查看已存在记录", field);
+        }
+        return new UniqueConflictText("数据已存在，请勿重复提交",
+                "请检查表单中的唯一字段是否已存在,或返回列表查看已存在记录", null);
+    }
+
     @ExceptionHandler(DataIntegrityViolationException.class)
     @ResponseStatus(HttpStatus.CONFLICT)
     public ApiResponse<?> handleDataIntegrityViolationException(
@@ -613,9 +710,16 @@ public class GlobalExceptionHandler {
             java.util.regex.Matcher uvm = java.util.regex.Pattern
                 .compile("Key \\(([^)]+)\\)=\\(").matcher(raw);
             if (uvm.find()) {
+                // 约束列名 (factory_id, code) 是内部字段名, 只进日志, 不进用户提示。
                 String col = uvm.group(1);
-                actionHint = "请检查表单中字段「" + col + "」是否已存在,或返回列表查看已存在记录";
-                hintTarget = col;
+                log.warn("[{}] 唯一约束冲突列: {}", traceId, col);
+                java.util.regex.Matcher constraint = java.util.regex.Pattern
+                    .compile("unique constraint \"([^\"]+)\"").matcher(raw);
+                UniqueConflictText text = describeUniqueConflict(col,
+                        constraint.find() ? constraint.group(1) : null);
+                message = text.message();
+                actionHint = text.actionHint();
+                hintTarget = text.hintTarget();
             } else {
                 actionHint = "请检查表单中的唯一字段是否已存在,或返回列表查看已存在记录";
             }

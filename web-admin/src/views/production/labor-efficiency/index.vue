@@ -12,7 +12,8 @@ import { ref, computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { ElMessage } from 'element-plus';
-import { Search } from '@element-plus/icons-vue';
+import type { CsTableColumn as TableColumn } from '@/types/csTable';
+import { badgeColor } from '@/utils/csBadge';
 import { get } from '@/api/request';
 import {
   getLaborEfficiencyCompare,
@@ -57,13 +58,35 @@ function defaultDateRange(): [string, string] {
 }
 
 const [defaultStart, defaultEnd] = defaultDateRange();
-const dateRange = ref<[string, string]>([defaultStart, defaultEnd]);
+const startDate = ref(defaultStart);
+const endDate = ref(defaultEnd);
+const dateRange = computed<[string, string]>(() => [startDate.value, endDate.value]);
 const selectedProductTypeId = ref<string | null>(null);
 
 // ============================================================================
 // 数据
 // ============================================================================
 
+const columns: TableColumn<LaborEfficiencyCompareDTO>[] = [
+  { accessorKey: 'batchNumber', header: '批次号' },
+  { accessorKey: 'productName', header: '产品' },
+  { id: 'quotedKg', header: '报价人工/kg' },
+  { id: 'actualKg', header: '实际人工/kg' },
+  { id: 'quotedBox', header: '报价人工/箱' },
+  { id: 'actualBox', header: '实际人工/箱' },
+  { id: 'variance', header: '偏差率' },
+  { id: 'status', header: '状态' },
+  { id: 'steps', header: '工序' },
+];
+const stepColumns: TableColumn<LaborVarianceItemDTO>[] = [
+  { accessorKey: 'processName', header: '工序' },
+  { id: 'workMinutes', header: '工时' },
+  { id: 'workers', header: '人数' },
+  { id: 'laborCost', header: '工序人工成本' },
+  { id: 'perBox', header: '每箱人工成本' },
+  { id: 'rate', header: '达成率' },
+  { id: 'alert', header: '达成状态' },
+];
 const compareRows = ref<LaborEfficiencyCompareDTO[]>([]);
 const loading = ref(false);
 
@@ -119,7 +142,7 @@ function fmtMin(minutes: number | null | undefined): string {
   return m > 0 ? `${h}h${m}m` : `${h}h`;
 }
 
-function varianceStatusType(status: string): string {
+function varianceStatusType(status: string): 'success' | 'warning' | 'danger' | 'info' {
   switch (status) {
     case 'OK':
     case 'NORMAL': return 'success';
@@ -178,255 +201,99 @@ onMounted(async () => {
 
 <template>
   <div class="labor-efficiency-page">
-    <div class="page-header">
-      <h2 class="title">人效对比分析</h2>
-      <el-button
-        type="primary"
-        plain
-        size="small"
-        style="margin-left: auto"
-        @click="router.push({ name: 'LaborEfficiencyDashboard' })"
-      >
-        查看达成率看板 →
-      </el-button>
+    <div class="cs-page-head">
+      <h2>人效对比分析</h2>
+      <UButton size="sm" variant="outline" @click="router.push({ name: 'LaborEfficiencyDashboard' })">查看达成率看板 →</UButton>
     </div>
 
-    <el-alert
-      type="info"
-      :closable="false"
+    <UAlert
+      color="info"
+      variant="subtle"
+      icon="i-lucide-info"
       title="成本字段对非财务角色不可见（显示 —）。对比实际 vs 报价人工成本，识别超支批次。"
-      style="margin-bottom: 16px"
+      class="mb"
     />
 
     <!-- 查询条件 -->
-    <el-card shadow="never" class="filter-card">
-      <el-form inline>
-        <el-form-item label="日期范围">
-          <el-date-picker
-            v-model="dateRange"
-            type="daterange"
-            range-separator="至"
-            start-placeholder="开始日期"
-            end-placeholder="结束日期"
-            value-format="YYYY-MM-DD"
-            style="width: 260px"
-          />
-        </el-form-item>
-        <el-form-item label="产品">
-          <el-select
-            v-model="selectedProductTypeId"
-            clearable
-            placeholder="全部产品"
-            style="width: 200px"
-          >
-            <el-option
-              v-for="pt in productTypes"
-              :key="pt.id"
-              :label="pt.name"
-              :value="pt.id"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item>
-          <el-button type="primary" :icon="Search" :loading="loading" @click="loadData">
-            查询
-          </el-button>
-        </el-form-item>
-      </el-form>
-    </el-card>
+    <section class="cs-card mb">
+      <div class="cs-card-head filter">
+        <UFormField label="开始日期" orientation="horizontal">
+          <UInput v-model="startDate" type="date" class="w-40" />
+        </UFormField>
+        <UFormField label="结束日期" orientation="horizontal">
+          <UInput v-model="endDate" type="date" class="w-40" />
+        </UFormField>
+        <UFormField label="产品" orientation="horizontal">
+          <USelectMenu v-model="selectedProductTypeId" :items="productTypes" value-key="id" label-key="name" placeholder="全部产品" clear class="w-52" />
+        </UFormField>
+        <UButton icon="i-lucide-search" :loading="loading" @click="loadData">查询</UButton>
+      </div>
 
-    <!-- 对比表 -->
-    <el-card shadow="never" v-loading="loading" class="data-card">
-      <el-table
-        :data="compareRows"
-        stripe
-        empty-text="暂无数据 — 请调整日期范围后重新查询"
-        row-key="batchNumber"
-      >
-        <el-table-column prop="batchNumber" label="批次号" min-width="160" />
-        <el-table-column prop="productName" label="产品" min-width="160" />
-
-        <!-- 报价成本 -->
-        <el-table-column label="报价人工/kg" align="right" min-width="130">
-          <template #default="{ row }">{{ fmt(row.quotedLaborCostPerKg) }}</template>
-        </el-table-column>
-        <el-table-column label="实际人工/kg" align="right" min-width="130">
-          <template #default="{ row }">{{ fmt(row.actualLaborCostPerKg) }}</template>
-        </el-table-column>
-
-        <!-- 报价/实际 per 箱 -->
-        <el-table-column label="报价人工/箱" align="right" min-width="130">
-          <template #default="{ row }">{{ fmt(row.quotedLaborCostPerBox) }}</template>
-        </el-table-column>
-        <el-table-column label="实际人工/箱" align="right" min-width="130">
-          <template #default="{ row }">{{ fmt(row.actualLaborCostPerBox) }}</template>
-        </el-table-column>
-
-        <!-- 偏差率 + 状态 (Rule 5: 无报价时引导配置) -->
-        <el-table-column align="right" min-width="150">
-          <template #header>
-            <span>偏差率</span>
-            <el-tooltip
-              content="偏差率需先在「研发样品管理」为该批次配置预估人工成本"
-              placement="top"
-            >
-              <el-button
-                link
-                type="primary"
-                size="small"
-                style="margin-left:4px;font-size:11px"
-                @click="router.push('/rd/samples')"
-              >
-                去配置
-              </el-button>
-            </el-tooltip>
-          </template>
-          <template #default="{ row }">
-            <span v-if="row.varianceRate != null" :class="varianceRateClass(row.varianceRate, row.varianceStatus)">
-              {{ fmtPct(row.varianceRate) }}
-            </span>
-            <!-- Rule 5: dead-end → 导航 -->
-            <el-button
-              v-else
-              link
-              type="info"
-              size="small"
-              @click="router.push('/rd/samples')"
-            >
-              未设标准 →
-            </el-button>
-          </template>
-        </el-table-column>
-        <el-table-column label="状态" align="center" min-width="100">
-          <template #default="{ row }">
-            <el-tag :type="varianceStatusType(row.varianceStatus)" size="small">
-              {{ varianceStatusLabel(row.varianceStatus) }}
-            </el-tag>
-          </template>
-        </el-table-column>
-
-        <!-- 展开工序明细 -->
-        <el-table-column label="工序" align="center" min-width="80">
-          <template #default="{ row }">
-            <el-button
-              v-if="row.stepDetails && row.stepDetails.length > 0"
-              link
-              size="small"
-              @click="toggleExpand(row)"
-            >
-              {{ expandedRows.has(row.batchNumber) ? '收起' : `${row.stepDetails.length} 道` }}
-            </el-button>
-            <span v-else class="text-muted">—</span>
-          </template>
-        </el-table-column>
-      </el-table>
+      <!-- 对比表 -->
+      <UTable :data="compareRows" :columns="columns" :loading="loading" class="cs-table">
+        <template #empty>暂无数据 — 请调整日期范围后重新查询</template>
+        <template #quotedKg-cell="{ row }"><span class="num">{{ fmt(row.original.quotedLaborCostPerKg) }}</span></template>
+        <template #actualKg-cell="{ row }"><span class="num">{{ fmt(row.original.actualLaborCostPerKg) }}</span></template>
+        <template #quotedBox-cell="{ row }"><span class="num">{{ fmt(row.original.quotedLaborCostPerBox) }}</span></template>
+        <template #actualBox-cell="{ row }"><span class="num">{{ fmt(row.original.actualLaborCostPerBox) }}</span></template>
+        <template #variance-header>
+          <span>偏差率</span>
+          <span title="偏差率需先在「研发样品管理」为该批次配置预估人工成本">
+            <UButton size="xs" variant="link" @click="router.push('/rd/samples')">去配置</UButton>
+          </span>
+        </template>
+        <template #variance-cell="{ row }">
+          <span v-if="row.original.varianceRate != null" class="num" :class="varianceRateClass(row.original.varianceRate, row.original.varianceStatus)">
+            {{ fmtPct(row.original.varianceRate) }}
+          </span>
+          <!-- Rule 5: dead-end → 导航 -->
+          <UButton v-else size="xs" variant="link" color="neutral" @click="router.push('/rd/samples')">未设标准 →</UButton>
+        </template>
+        <template #status-cell="{ row }">
+          <UBadge :color="badgeColor(varianceStatusType(row.original.varianceStatus))" variant="soft">{{ varianceStatusLabel(row.original.varianceStatus) }}</UBadge>
+        </template>
+        <template #steps-cell="{ row }">
+          <UButton v-if="row.original.stepDetails && row.original.stepDetails.length > 0" size="xs" variant="link" color="neutral" @click="toggleExpand(row.original)">
+            {{ expandedRows.has(row.original.batchNumber) ? '收起' : `${row.original.stepDetails.length} 道` }}
+          </UButton>
+          <span v-else class="text-muted">—</span>
+        </template>
+      </UTable>
 
       <!-- 展开区域: 工序级明细 -->
       <template v-for="row in compareRows" :key="row.batchNumber + '-steps'">
         <div v-if="expandedRows.has(row.batchNumber)" class="step-detail-block">
-          <div class="step-detail-header">
-            工序明细 — {{ row.productName }}（{{ row.batchNumber }}）
-          </div>
-          <el-table
-            :data="row.stepDetails"
-            size="small"
-            border
-            style="margin: 8px 0 16px"
-          >
-            <el-table-column prop="processName" label="工序" min-width="140" />
-            <el-table-column label="工时" align="right" min-width="90">
-              <template #default="{ row: step }">
-                {{ fmtMin((step as LaborVarianceItemDTO).totalWorkMinutes) }}
-              </template>
-            </el-table-column>
-            <el-table-column label="人数" align="right" min-width="80">
-              <template #default="{ row: step }">
-                {{ (step as LaborVarianceItemDTO).totalWorkers ?? '—' }}
-              </template>
-            </el-table-column>
-            <el-table-column label="工序人工成本" align="right" min-width="130">
-              <template #default="{ row: step }">
-                {{ fmt((step as LaborVarianceItemDTO).laborCost) }}
-              </template>
-            </el-table-column>
-            <el-table-column label="每箱人工成本" align="right" min-width="130">
-              <template #default="{ row: step }">
-                {{ fmt((step as LaborVarianceItemDTO).laborCostPerBox) }}
-              </template>
-            </el-table-column>
-            <el-table-column label="达成率" align="right" min-width="100">
-              <template #default="{ row: step }">
-                <span
-                  v-if="(step as LaborVarianceItemDTO).achievementRate != null"
-                  :class="
-                    (step as LaborVarianceItemDTO).achievementAlert === 'BELOW_ALERT'
-                      ? 'text-warning'
-                      : (step as LaborVarianceItemDTO).achievementAlert === 'ABOVE_ALERT'
-                        ? 'text-critical'
-                        : 'text-normal'
-                  "
-                >
-                  {{ ((step as LaborVarianceItemDTO).achievementRate as number).toFixed(1) }}%
-                </span>
-                <span v-else class="text-muted">未设标准</span>
-              </template>
-            </el-table-column>
-            <el-table-column label="达成状态" align="center" min-width="100">
-              <template #default="{ row: step }">
-                {{ achievementAlertLabel((step as LaborVarianceItemDTO).achievementAlert) }}
-              </template>
-            </el-table-column>
-          </el-table>
+          <div class="step-detail-header">工序明细 — {{ row.productName }}（{{ row.batchNumber }}）</div>
+          <UTable :data="row.stepDetails" :columns="stepColumns" class="cs-table step-table">
+            <template #workMinutes-cell="{ row: step }"><span class="num">{{ fmtMin(step.original.totalWorkMinutes) }}</span></template>
+            <template #workers-cell="{ row: step }"><span class="num">{{ step.original.totalWorkers ?? '—' }}</span></template>
+            <template #laborCost-cell="{ row: step }"><span class="num">{{ fmt(step.original.laborCost) }}</span></template>
+            <template #perBox-cell="{ row: step }"><span class="num">{{ fmt(step.original.laborCostPerBox) }}</span></template>
+            <template #rate-cell="{ row: step }">
+              <span
+                v-if="step.original.achievementRate != null"
+                class="num"
+                :class="step.original.achievementAlert === 'BELOW_ALERT' ? 'text-warning' : step.original.achievementAlert === 'ABOVE_ALERT' ? 'text-critical' : 'text-normal'"
+              >{{ (step.original.achievementRate as number).toFixed(1) }}%</span>
+              <span v-else class="text-muted">未设标准</span>
+            </template>
+            <template #alert-cell="{ row: step }">{{ achievementAlertLabel(step.original.achievementAlert) }}</template>
+          </UTable>
         </div>
       </template>
-    </el-card>
+    </section>
   </div>
 </template>
 
 <style scoped>
-.labor-efficiency-page {
-  padding: 20px;
-}
-.page-header {
-  display: flex;
-  align-items: center;
-  margin-bottom: 16px;
-}
-.page-header .title {
-  font-size: 20px;
-  font-weight: 600;
-  margin: 0;
-  color: #303133;
-}
-.filter-card {
-  margin-bottom: 16px;
-}
-.data-card {
-  margin-bottom: 16px;
-}
-.step-detail-block {
-  padding: 0 16px;
-  background: #f9f9f9;
-  border-top: 1px solid #ebeef5;
-}
-.step-detail-header {
-  padding: 8px 0 4px;
-  font-size: 13px;
-  font-weight: 600;
-  color: #606266;
-}
-.text-critical {
-  color: #f56c6c;
-  font-weight: 600;
-}
-.text-warning {
-  color: #e6a23c;
-  font-weight: 600;
-}
-.text-normal {
-  color: #67c23a;
-}
-.text-muted {
-  color: #c0c4cc;
-}
+.labor-efficiency-page { padding: var(--cs-space-4); }
+.mb { margin-bottom: var(--cs-space-3); }
+.filter { gap: var(--cs-space-4); }
+.step-detail-block { padding: 0 var(--cs-space-4) var(--cs-space-3); background: var(--cs-surface-subtle); border-top: 1px solid var(--cs-border); }
+.step-detail-header { padding: var(--cs-space-2) 0 var(--cs-space-1); font-size: 13px; font-weight: 600; color: var(--cs-muted); }
+.step-table { background: var(--cs-surface); }
+.text-critical { color: var(--cs-danger); font-weight: 600; }
+.text-warning { color: var(--cs-warning); font-weight: 600; }
+.text-normal { color: var(--cs-success); }
+.text-muted { color: var(--cs-muted); }
 </style>

@@ -55,6 +55,15 @@ public interface SalesPriceAdjustmentService {
     SalesPriceAdjustmentRecordDTO approvePriceAdjustment(String factoryId, String recordId, Long approverId);
 
     /**
+     * 同上, 带本人审批原因 (纪律排查 B11): 审批人就是改价人时, 只有工厂开了「允许本人审批」且原因非空才放行,
+     * 改价记录上标 {@code selfApproved} 并保存原因。
+     */
+    default SalesPriceAdjustmentRecordDTO approvePriceAdjustment(String factoryId, String recordId, Long approverId,
+                                                                 String selfApprovalReason) {
+        return approvePriceAdjustment(factoryId, recordId, approverId);
+    }
+
+    /**
      * 驳回改价 — PENDING → REJECTED, 丢弃改价不应用.
      *
      * <p>🔒 4 眼原则: 审批人不能与改价提交人相同 (403).

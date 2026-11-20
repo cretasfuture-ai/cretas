@@ -34,6 +34,7 @@ public class CostDeviationCaseWriter {
     private final ShortageCaseEventRepository eventRepository;
     private final CostDeviationCaseDetailRepository detailRepository;
     private final UserRepository userRepository;
+    private final CostDeviationOwnerResolver ownerResolver;
 
     /** UNKNOWN 不进这里: 算不出既不开实例, 也不改已开实例的读数。 */
     @Transactional
@@ -50,7 +51,10 @@ public class CostDeviationCaseWriter {
             create(factoryId, r, trigger);
             return Applied.CREATED;
         }
-        if (r.fingerprint().equals(open.getInputFingerprint())) return Applied.UNCHANGED;
+        if (r.fingerprint().equals(open.getInputFingerprint())) {
+            backfillEstimatedAmount(open, r);
+            return Applied.UNCHANGED;
+        }
 
         CostDeviationCaseDetail d = detailRepository.findById(open.getId())
                 .orElseThrow(() -> new IllegalStateException("成本异常实例缺读数: " + open.getId()));
@@ -73,6 +77,22 @@ public class CostDeviationCaseWriter {
         return within ? Applied.BELOW_THRESHOLD : Applied.REFRESHED;
     }
 
+    /**
+     * 物料平衡的差异金额是按单价快照估的, 不进指纹 (LSM-COSTBI 第 11 项)。报工事实没变时,
+     * 已开着的实例只补上 / 更新估价和摘要, 不记「读数变化」事件, 也不改阶段。
+     */
+    private void backfillEstimatedAmount(ShortageCase open, Reading r) {
+        if (r.sourceType() != ShortageCase.SourceType.MATERIAL_BALANCE) return;
+        detailRepository.findById(open.getId()).ifPresent(d -> {
+            // 新读数定不了价 (如单价快照被删、单位契约改了) ⇒ 清掉旧估价并换上说明原因的摘要, 不留过期金额
+            if (r.amount() == null ? d.getAmountVariance() == null
+                    : d.getAmountVariance() != null && d.getAmountVariance().compareTo(r.amount()) == 0) return;
+            d.setAmountVariance(r.amount());
+            d.setSummary(r.summary());
+            detailRepository.save(d);
+        });
+    }
+
     private void create(String factoryId, Reading r, String trigger) {
         LocalDateTime now = LocalDateTime.now();
         ShortageCase c = new ShortageCase();
@@ -80,8 +100,9 @@ public class CostDeviationCaseWriter {
         c.setSourceType(r.sourceType());
         c.setSourceId(r.planId());
         c.setStage(ShortageCase.Stage.DETECTED);
-        c.setOwnerRole(r.sourceType() == ShortageCase.SourceType.COST_VARIANCE
-                ? ROLE_FINANCE : ShortageCaseService.ROLE_PRODUCTION);
+        CostDeviationOwnerResolver.Owner owner = ownerResolver.resolve(factoryId, r.sourceType());
+        c.setOwnerRole(owner.role());
+        c.setOwnerUserId(owner.userId());
         c.setGapLineCount(r.deviatedCount());
         c.setInputFingerprint(r.fingerprint());
         c.setLastRefreshedAt(now);
@@ -101,6 +122,9 @@ public class CostDeviationCaseWriter {
         d.setSummary(r.summary());
         detailRepository.save(d);
         event(saved, ShortageCaseEvent.EventType.CREATED, saved.getStage(), trigger, r.summary(), null);
+        event(saved, ShortageCaseEvent.EventType.NOTE, saved.getStage(), "OWNER_ASSIGNED_BY_CONFIG",
+                "按工厂配置派给 " + (owner.userId() != null ? "指定负责人 (用户 " + owner.userId() + ")" : "岗位 " + owner.role())
+                        + " [" + owner.source() + "]", null);
     }
 
     @Transactional

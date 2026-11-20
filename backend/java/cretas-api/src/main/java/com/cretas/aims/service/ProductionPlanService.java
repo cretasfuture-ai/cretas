@@ -167,6 +167,17 @@ public interface ProductionPlanService {
      * 获取生产计划列表（分页）
       */
     PageResponse<ProductionPlanDTO> getProductionPlanList(String factoryId, PageRequest pageRequest);
+
+    /** 同上, 补产品 / 单位 / 批量单号筛选 (三项可选)。 */
+    PageResponse<ProductionPlanDTO> getProductionPlanList(String factoryId, PageRequest pageRequest,
+            com.cretas.aims.dto.production.ProductionPlanListFilter filter);
+
+    /**
+     * 四态计数 (受同一组筛选约束, 但不受 status 约束): pending 待开工 (PLANNED/PENDING)、inProgress 进行中
+     * (IN_PROGRESS/PAUSED/PENDING_APPROVAL)、completed、cancelled; draft (PREPARED 草稿) 单列, total = 全部。
+     */
+    java.util.Map<String, Long> getProductionPlanStatusCounts(String factoryId, String keyword,
+            com.cretas.aims.dto.production.ProductionPlanListFilter filter);
      /**
      * 按状态获取生产计划
       */
@@ -214,9 +225,11 @@ public interface ProductionPlanService {
      *
      * @param completedBy 点「完成生产」的那个人；确实拿不到时传 {@code null}，
      *                    ⛔ 不要传 0L 或任何写死的 id
+     * @param overPlanReason 实际产量超过计划产量时的超产原因 (纪律排查 A7: 直接完工也要原因)；
+     *                       不超产时可为 {@code null}。同样做成必填参数而不是重载。
      */
     ProductionPlanDTO completeProduction(String factoryId, String planId,
-                                         BigDecimal actualQuantity, Long completedBy);
+                                         BigDecimal actualQuantity, Long completedBy, String overPlanReason);
 
     ProductionSettlementResponse settleProduction(String factoryId, String planId,
                                                   ProductionSettlementRequest request, Long settledBy);
@@ -263,6 +276,14 @@ public interface ProductionPlanService {
      * 取消生产计划并记录当前操作人。
      */
     void cancelProductionPlan(String factoryId, String planId, String reason, Long operatorId);
+
+    /**
+     * 随销售单取消而取消它自动生成的计划: 计划的行范围 (创建人) 校验改为「这张计划确实属于该销售单」。
+     * 调用方必须已经按操作人的数据范围校验过销售单本身 —— 单子在范围内, 它名下系统生成的计划就不再按
+     * 「计划是谁创建的」二次拦 (否则数据范围为「本人」的取消人, 对别人创建 / 系统创建的计划永远 403, 整单回滚)。
+     * 计划不属于 {@code viaSalesOrderId} 时仍按普通取消校验行范围; 其余闸 (已开工 / 锁定 / 撤回审批中) 不变。
+     */
+    void cancelProductionPlan(String factoryId, String planId, String reason, Long operatorId, String viaSalesOrderId);
 
     /**
      * @deprecated 计划级 PRODUCTION_REVERSAL 审批流已废弃（结构性死路：workflow 引擎从不回调

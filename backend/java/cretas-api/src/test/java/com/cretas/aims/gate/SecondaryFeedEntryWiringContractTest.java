@@ -196,12 +196,16 @@ class SecondaryFeedEntryWiringContractTest {
     void reversalRestoresBothSides() {
         ReversalFixture fixture = reversal();
 
+        java.util.Map<String, BigDecimal> givenBack = new java.util.TreeMap<>();
         ReflectionTestUtils.invokeMethod(fixture.service(), "reverseSettlementSemiStocking",
-                F, stockedSettlement(501L), 999L, 7L);
+                F, stockedSettlement(501L), 999L, 7L, givenBack);
 
         // 成本一起退: reverseClerkOutput 带着当时划走的金额
         verify(fixture.wip()).reverseClerkOutput(F, "CLK-SEMI-1", new BigDecimal("30"), new BigDecimal("600"), 7L);
         assertThat(fixture.batch().getUsedQuantity()).isEqualByComparingTo("60000");
+        // C1: 还回量按批次记下 (③.65 据此判断要不要退回原料仓), 与已用量的变化相等
+        assertThat(givenBack).as("记下的还回量").containsOnlyKeys("MB-W");
+        assertThat(givenBack.get("MB-W")).isEqualByComparingTo("30000");
     }
 
     @Test
@@ -210,7 +214,7 @@ class SecondaryFeedEntryWiringContractTest {
         ReversalFixture fixture = reversal();
 
         ReflectionTestUtils.invokeMethod(fixture.service(), "reverseSettlementSemiStocking",
-                F, stockedSettlement(501L), 501L, 7L);
+                F, stockedSettlement(501L), 501L, 7L, new java.util.TreeMap<String, BigDecimal>());
 
         verify(fixture.wip()).reverseClerkOutput(F, "CLK-SEMI-1", new BigDecimal("30"), new BigDecimal("600"), 7L);
         assertThat(fixture.batch().getUsedQuantity()).isEqualByComparingTo("90000");
@@ -223,7 +227,8 @@ class SecondaryFeedEntryWiringContractTest {
         ProductionSettlement old = new ProductionSettlement();
         old.setActualSemiFinishedQuantity(new BigDecimal("30"));
 
-        ReflectionTestUtils.invokeMethod(fixture.service(), "reverseSettlementSemiStocking", F, old, 999L, 7L);
+        ReflectionTestUtils.invokeMethod(fixture.service(), "reverseSettlementSemiStocking", F, old, 999L, 7L,
+                new java.util.TreeMap<String, BigDecimal>());
 
         verify(fixture.wip(), never()).reverseClerkOutput(any(), any(), any(), any(), any());
         assertThat(fixture.batch().getUsedQuantity()).isEqualByComparingTo("90000");
@@ -245,6 +250,9 @@ class SecondaryFeedEntryWiringContractTest {
                 Map.of(ProductionPlanRepository.class, planRepo,
                         com.cretas.aims.repository.ProductionBatchRepository.class, batchRepo));
         ReflectionTestUtils.setField(orchestrator, "secondaryPlanFeedService", feed);
+        // 纪律排查 A7: 「批次完工把计划结束」只发生在不要求先结单的工厂 (要求结单时由结单结束计划)
+        ReflectionTestUtils.setField(orchestrator, "disciplinePolicy", com.cretas.aims.service.discipline.DisciplineFixtures.policy(java.util.Map.of(
+                com.cretas.aims.service.canvas.ThresholdKeys.PRODUCTION_COMPLETION_REQUIRE_SETTLEMENT, "0")));
         var batch = new com.cretas.aims.entity.ProductionBatch();
         batch.setFactoryId(F);
         batch.setProductionPlanId("P1");

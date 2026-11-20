@@ -34,9 +34,8 @@ vi.mock('@/store/modules/permission', () => ({
 vi.mock('@/api/factoryWarehouse', () => ({
   listWarehouses: vi.fn().mockResolvedValue({ success: true, data: [] }),
 }));
-// `@/api/bom` 的 bomSeasoningApi.getByProduct 内部调 `./request` 的 get() —— 走的是
-// 下面同一个 mock, ⛔ 不额外桩 @/api/bom 本身: 这样才顺带验证了它拼出的 URL 是对的
-// (由 harness.get 按路径分发, 见下方 mockImplementation)。
+// 2026-11-10 起配比随领料单详情一起到 (items[].dosagePerKgG), 弹窗不再查生产计划 / BOM
+// (仓管两跳都 403); 「不再请求」由 auxDosageFromRequisitionDetail.mount.spec.ts 钉。
 vi.mock('@/api/request', () => ({
   get: (...args: unknown[]) => harness.get(...args),
   post: (...args: unknown[]) => harness.post(...args),
@@ -136,8 +135,10 @@ const REQUISITION_DETAIL = {
     { id: 'RAW-1', materialName: '牛前腿肉', materialTypeId: 'RMT_BEEF_FRONT', materialCategory: 'RAW', unit: 'kg', requiredQty: null, pickedQty: null },
     { id: 'RAW-2', materialName: '牛后腿肉', materialTypeId: 'RMT_BEEF_BACK', materialCategory: 'RAW', unit: 'kg', requiredQty: null, pickedQty: null },
     { id: 'RAW-3', materialName: '肥膘', materialTypeId: 'RMT_FAT', materialCategory: 'RAW', unit: 'kg', requiredQty: null, pickedQty: null },
-    { id: 'AUX-1', materialName: '洋葱泥', materialTypeId: 'RMT_29e73042', materialCategory: 'AUXILIARY', unit: 'kg', requiredQty: null, pickedQty: null },
+    // dosagePerKgG: 后端详情按 BOM 调料表现算带出 (洋葱泥 83.8 g/kg, INJECTION 段计入调料)
+    { id: 'AUX-1', materialName: '洋葱泥', materialTypeId: 'RMT_29e73042', materialCategory: 'AUXILIARY', unit: 'kg', requiredQty: null, pickedQty: null, dosagePerKgG: 83.8 },
   ],
+  auxiliaryAutoCalc: 'AVAILABLE',
 };
 
 const RAW_ONLY_DETAIL = {
@@ -152,43 +153,11 @@ const RAW_ONLY_DETAIL = {
   ],
 };
 
-/** 按 URL 分发桩响应 —— 顺带验证 loadAuxRatios 真的拼出了预期的两跳请求。 */
+/** 按 URL 分发桩响应 —— 配比只在领料单详情里 (不再有生产计划 / BOM 两跳)。 */
 function installGetRouter(detail: typeof REQUISITION_DETAIL | typeof RAW_ONLY_DETAIL) {
   harness.get.mockImplementation(async (url: string) => {
     if (url === `/F006/material-requisitions/${detail.id}`) {
       return { success: true, data: detail };
-    }
-    if (url === '/F006/production-plans/PP-1') {
-      return { success: true, data: { productTypeId: 'PT-SHOUROUBING' } };
-    }
-    if (url === '/F006/bom/recipes/by-product/PT-SHOUROUBING/seasoning') {
-      return {
-        success: true,
-        data: {
-          bomRecipeId: 'BOM-1',
-          productTypeId: 'PT-SHOUROUBING',
-          productName: '熟肉饼',
-          status: 'ACTIVE',
-          injectionConfigs: [],
-          seasoningItems: [
-            {
-              workProcessId: 'WP-1',
-              materialTypeId: 'RMT_29e73042',
-              unit: 'kg',
-              section: 'INJECTION',
-              seq: 1,
-              name: '洋葱泥',
-              dosagePerKgG: 83.8,
-              priceSource1: null,
-              priceSource2: null,
-              countInSeasoning: true,
-            },
-          ],
-        },
-      };
-    }
-    if (url === '/F006/production-plans/PP-2') {
-      return { success: true, data: { productTypeId: null } };
     }
     // 列表页 onMounted 会打 GET /F006/material-requisitions —— 兜个底, 不让它炸。
     return { success: true, data: { content: [], totalElements: 0 } };
@@ -215,7 +184,7 @@ describe('确认领料 — 辅料按 RAW 实际合计自动实时计算 (owner 2
 
     await vm.openConfirmDialog({ id: 'MR-1' });
     await flushPromises();
-    await flushPromises(); // loadAuxRatios 里有两跳 await, 多 flush 一次确保都落地
+    await flushPromises();
 
     // 输入 RAW 三行为 1kg, 每次改动都模拟真实用户触发 @change
     for (const id of ['RAW-1', 'RAW-2', 'RAW-3']) {
@@ -307,7 +276,7 @@ describe('确认领料 — 辅料按 RAW 实际合计自动实时计算 (owner 2
 
     // 刚打开对话框, RAW 还没填 —— 合计为 0
     const aux = rawRow(vm, 'AUX-1');
-    expect(aux.autoLocked, '没有命中比例数据 —— 说明 loadAuxRatios 没接上, 后面的断言都无意义').toBe(true);
+    expect(aux.autoLocked, '没有命中比例数据 —— 说明详情里的 dosagePerKgG 没接上, 后面的断言都无意义').toBe(true);
     expect(aux.pickedInput).toBeNull();
 
     // 显式把三味原料都填 0 (「这次不领」) —— 合计仍是 0, 辅料依旧是 null 不是 0

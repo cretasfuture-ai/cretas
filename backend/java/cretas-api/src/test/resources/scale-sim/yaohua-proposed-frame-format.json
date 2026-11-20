@@ -1,0 +1,12 @@
+{
+  "frameType": "ASCII_FIXED",
+  "encoding": "US-ASCII",
+  "startMarker": "=",
+  "endMarker": "\r\n",
+  "fields": [
+    {"name": "sign", "start": 1, "length": 1, "type": "CHAR"},
+    {"name": "weight", "start": 2, "length": 8, "type": "DECIMAL", "decimalPlaces": 0},
+    {"name": "unit", "start": 11, "length": 2, "type": "STRING"},
+    {"name": "stable", "start": 14, "length": 1, "type": "ENUM", "mapping": {"S": true, "M": false}}
+  ]
+}

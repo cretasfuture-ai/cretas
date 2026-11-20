@@ -461,4 +461,30 @@ class ProductionPlanStartValidationTest {
         recipe.setOverallYieldRate(overallYieldRate);
         return recipe;
     }
+
+    @Test
+    @DisplayName("1551-11: 待审批的强制插单不能先开工 (批准那一刻才排入并顺延)")
+    void startProduction_forceInsertPendingApproval_isRefused() {
+        ProductionPlan plan = pendingPlan(new BigDecimal("100"));
+        plan.markAsForceInsert(1L, "客户急单", true);
+        when(productionPlanRepository.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.startProduction(FACTORY_ID, PLAN_ID));
+
+        assertEquals("PLAN_PENDING_APPROVAL", ex.getErrorCode());
+        assertEquals(ProductionPlanStatus.PENDING, plan.getStatus());
+    }
+
+    @Test
+    @DisplayName("1551-11 阴性对照: 已批准的强制插单照常开工")
+    void startProduction_forceInsertApproved_starts() {
+        ProductionPlan plan = pendingPlan(new BigDecimal("100"));
+        plan.markAsForceInsert(1L, "客户急单", true);
+        plan.approve(9L, "生产经理", "同意");
+        when(productionPlanRepository.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
+
+        assertDoesNotThrow(() -> service.startProduction(FACTORY_ID, PLAN_ID));
+        assertEquals(ProductionPlanStatus.IN_PROGRESS, plan.getStatus());
+    }
 }

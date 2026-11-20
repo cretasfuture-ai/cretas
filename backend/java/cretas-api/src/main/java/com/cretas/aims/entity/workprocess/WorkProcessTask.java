@@ -128,6 +128,33 @@ public class WorkProcessTask extends BaseEntity {
     @Column(name = "notes", length = 500)
     private String notes;
 
+    /** 委外工序: 这道工序由委外厂加工 (由 OutsourceService 在委外单下达时写入, ⛔ 不在别处改)。 */
+    @Column(name = "is_outsourced", nullable = false)
+    @Builder.Default
+    private Boolean isOutsourced = Boolean.FALSE;
+
+    /** 承接这道工序的委外任务行 (outsource_order_lines.id)。 */
+    @Column(name = "outsource_line_id", length = 64)
+    private String outsourceLineId;
+
+    /** 委外厂 (suppliers.id)。 */
+    @Column(name = "outsourcer_supplier_id", length = 191)
+    private String outsourcerSupplierId;
+
+    /** 委外加工费单价 (含税)。 */
+    @Column(name = "outsource_unit_fee", precision = 14, scale = 4)
+    private BigDecimal outsourceUnitFee;
+
+    /**
+     * 委外加工费<b>快照</b>: 下达 / 收货 / 退货 / 结单时写入当时的有效加工费 (毛额 + 已批准冲减)。
+     * ⚠️ 退货冲减调整之后在财务模块里批准时<b>不回写</b>这一列, 所以它可能比委外单详情多 (#1723 复审 低1)。
+     * 保留理由: 目前没有任何读者 (Java / 前端 / Python 均未读), 工单详情的委外工序与销售订单加工费都实时按
+     * {@code OutsourceService.effectiveFee} 算。⛔ 报表 / 成本要用加工费请调实时口径, 不要读这一列;
+     * 真要读它, 先在应付调整批准处补回写。
+     */
+    @Column(name = "outsource_fee_amount", precision = 14, scale = 2)
+    private BigDecimal outsourceFeeAmount;
+
     public enum Status {
         PENDING,
         IN_PROGRESS,

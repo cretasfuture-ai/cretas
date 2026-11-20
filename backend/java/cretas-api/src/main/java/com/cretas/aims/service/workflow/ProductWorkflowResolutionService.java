@@ -31,6 +31,21 @@ public interface ProductWorkflowResolutionService {
     Optional<WorkflowProcessPath> resolveProcessPath(String factoryId, String finishedGoodProductTypeId);
 
     /**
+     * 二次加工建计划前的预检: 目标成品当前已启用的 Workflow 里, 有没有工序的投入端口接这种半成品 (按 SKU 对)。
+     *
+     * <p>口径与开工时 {@code SecondaryPlanFeedService.assertAcceptedBy} 一致 (都按 INPUT 端口的 skuId 比),
+     * 只是提前到建计划这一步。三态, 不退化成 false:
+     * <ul>
+     *   <li>{@code Optional.empty()} — 目标成品没有可解析的已启用 Workflow (旧式线性链没有端口可比), 不能判断, 调用方放行,
+     *       开工时的闸仍然生效;</li>
+     *   <li>{@code Optional.of(true)} — 有工序接这份半成品;</li>
+     *   <li>{@code Optional.of(false)} — 有已启用 Workflow 但没有工序接这份半成品。</li>
+     * </ul>
+     * 已启用 Workflow 的节点 JSON 解析失败 ⇒ 409 WORKFLOW_PROCESS_PATH_INVALID, 不当作「接不住」也不放行。
+     */
+    Optional<Boolean> activeWorkflowAcceptsInput(String factoryId, String targetProductTypeId, String inputSkuId);
+
+    /**
      * 写路径守卫: 断言 ownerProductTypeId 当前 enabled activation 指向的 workflow 终端覆盖 targets,
      * 否则抛 409 WORKFLOW_RESOLUTION_NOT_COVERED。用于建计划/转批次防绕过 + 防 activation 窗口期漂移。
      */

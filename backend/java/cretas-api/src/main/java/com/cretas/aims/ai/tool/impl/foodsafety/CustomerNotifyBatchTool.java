@@ -195,6 +195,11 @@ public class CustomerNotifyBatchTool extends AbstractBusinessTool {
             collected++;
         }
         result.put("sampleCustomerNames", sampleNames);
+        // 改前值 (确认前状态核对): 召回状态或要通知的客户数在预览之后变了就不按旧预览群发
+        Map<String, Object> currentValues = new LinkedHashMap<>();
+        currentValues.put("召回状态", String.valueOf(event.getStatus()));
+        currentValues.put("涉及客户数", affectedCustomerIds.size());
+        result.put("currentValues", currentValues);
 
         // 短信草稿
         String factoryDisplay = factoryId; // 简化: 未来可查 Factory 拿 displayName

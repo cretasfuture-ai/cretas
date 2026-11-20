@@ -67,6 +67,9 @@ public class MaterialBatchLabelScanResponse {
     @Schema(description = "数量单位 (quantity_unit), e.g. \"kg\" / \"箱\"")
     private String quantityUnit;
 
+    @Schema(description = "库存归属 COMPANY_OWNED / CUSTOMER_OWNED (客户来料). 缺值传 null")
+    private String ownership;
+
     // ──────── 时间信息 ────────
 
     @Schema(description = "入库 / 批次创建时间")

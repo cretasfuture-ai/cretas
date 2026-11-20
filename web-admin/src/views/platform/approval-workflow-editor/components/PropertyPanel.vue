@@ -664,11 +664,11 @@ h4 { margin: 0 0 12px; font-size: 14px; color: #303133; }
   font-weight: 600;
 }
 .advanced-toggle:hover {
-  border-color: #409eff;
+  border-color: var(--cs-primary);
   background: #eef6ff;
 }
 .advanced-toggle:focus-visible {
-  outline: 2px solid #409eff;
+  outline: 2px solid var(--cs-primary);
   outline-offset: 2px;
 }
 .advanced-section {

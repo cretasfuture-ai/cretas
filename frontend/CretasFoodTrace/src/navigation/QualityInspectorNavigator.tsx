@@ -1,7 +1,8 @@
 /**
  * 现场质检员导航器
  *
- * 质检员只负责标签拍照上传和查看处理记录；人工审核、分析报表和通用质检管理不在该角色中暴露。
+ * 质检员负责批次质检、标签拍照上传和查看处理记录；不良品处置 / 批次召回按 quality 模块权限出现 (B14)。
+ * 人工审核、分析报表不在该角色中暴露。
  */
 
 import React from 'react';
@@ -24,10 +25,19 @@ import QIScanScreen from '../screens/quality-inspector/QIScanScreen';
 import QIRecordsScreen from '../screens/quality-inspector/QIRecordsScreen';
 import QIRecordDetailScreen from '../screens/quality-inspector/QIRecordDetailScreen';
 import QIResultScreen from '../screens/quality-inspector/QIResultScreen';
+import QIDispositionScreen from '../screens/quality-inspector/QIDispositionScreen';
+import QIDispositionExecuteScreen from '../screens/quality-inspector/QIDispositionExecuteScreen';
+import QIRecallScreen from '../screens/quality-inspector/QIRecallScreen';
+import QIRecallCreateScreen from '../screens/quality-inspector/QIRecallCreateScreen';
+import QIRecallDetailScreen from '../screens/quality-inspector/QIRecallDetailScreen';
+import QITimeoutScreen from '../screens/quality-inspector/QITimeoutScreen';
+import QITimeoutDecisionScreen from '../screens/quality-inspector/QITimeoutDecisionScreen';
 import { QI_COLORS, QualityInspectorStackParamList } from '../types/qualityInspector';
 // 一线 AI 助手 (Line B 2026-10-05): 复用 FA 端 AIChatScreen, 熔断开关关掉时连路由都不注册
 import AIChatScreen from '../screens/factory-admin/ai-analysis/AIChatScreen';
 import { useFrontlineAIEntryEnabled } from '../hooks/useFrontlineAIEntry';
+import { useMyTodoEntry } from '../hooks/useMyTodos';
+import { todoTabScreen } from './todoTab';
 
 const Tab = createBottomTabNavigator();
 const RootStack = createNativeStackNavigator();
@@ -47,6 +57,15 @@ function HomeStack() {
     <HomeStackNavigator.Navigator screenLayout={screenErrorBoundary} screenOptions={stackScreenOptions}>
       <HomeStackNavigator.Screen name="QIHome" component={QIHomeScreen} options={{ title: '质检拍照' }} />
       <HomeStackNavigator.Screen name="QIInspectList" component={QIInspectListScreen} options={{ title: '待检批次' }} />
+      {/* 纪律排查 B14 App 端: 首页入口按 quality 模块权限出现; 页面内写/审批按钮再各按后端权限判 */}
+      <HomeStackNavigator.Screen name="QIDisposition" component={QIDispositionScreen} options={{ title: '不良品处置' }} />
+      <HomeStackNavigator.Screen name="QIDispositionExecute" component={QIDispositionExecuteScreen} options={{ title: '处置批次' }} />
+      <HomeStackNavigator.Screen name="QIRecall" component={QIRecallScreen} options={{ title: '批次召回' }} />
+      <HomeStackNavigator.Screen name="QIRecallCreate" component={QIRecallCreateScreen} options={{ title: '发起召回' }} />
+      <HomeStackNavigator.Screen name="QIRecallDetail" component={QIRecallDetailScreen} options={{ title: '召回详情' }} />
+      {/* 食品 DAG 缺口 14: 超时处置 (网页同名页签搬到 App, 质检员不登网页) */}
+      <HomeStackNavigator.Screen name="QITimeout" component={QITimeoutScreen} options={{ title: '超时处置' }} />
+      <HomeStackNavigator.Screen name="QITimeoutDecision" component={QITimeoutDecisionScreen} options={{ title: '处置超时的料' }} />
     </HomeStackNavigator.Navigator>
   );
 }
@@ -136,6 +155,7 @@ export default function QualityInspectorNavigator() {
 }
 
 function QualityInspectorTabNavigator() {
+  const todoEntry = useMyTodoEntry();
   const insets = useSafeAreaInsets();
   const bottomInset = Math.max(insets.bottom, 6);
 
@@ -183,6 +203,7 @@ function QualityInspectorTabNavigator() {
         component={RecordsStack}
         options={{ tabBarLabel: '拍检记录', tabBarButtonTestID: 'qi-tab-records' }}
       />
+      {todoTabScreen(Tab, todoEntry, 'qi-tab-oa-todo')}
       <Tab.Screen
         name="QIProfileTab"
         component={ProfileStack}

@@ -335,7 +335,13 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
                 .allowMultipleUpstreamSources(resolveAllowMultipleUpstreamSources(
                         instanceNodesJson, task.getWorkflowNodeId(), upstreamInputCount > 1))
                 .allowFinishedGoodsSource(allowFinishedGoodsSource)
-                .customFieldSchema(workProcess != null ? workProcess.getCustomFieldSchema() : null)
+                // 产品标准: 本计划锁定的那一版画布里该工序节点配的参数覆盖同名字段的标准; 没配 = 原 schema(旧行为)
+                .customFieldSchema(workProcess != null
+                        ? com.cretas.aims.entity.workprocess.ProcessParamStandards.overlay(
+                                workProcess.getCustomFieldSchema(),
+                                com.cretas.aims.entity.workprocess.ProcessParamStandards.paramsOf(
+                                        instanceNodesJson, task.getWorkflowNodeId(), task.getWorkProcessId()))
+                        : null)
                 .ccpCheckpoints(ccpMonitoringService == null ? java.util.List.of()
                         : ccpMonitoringService.checkpointsForStep(factoryId, task.getWorkProcessId()))
                 .inputs(inputs.stream()

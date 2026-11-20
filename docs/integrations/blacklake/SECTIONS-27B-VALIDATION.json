@@ -1,0 +1,184 @@
+{
+  "task_id": "BLACKLAKE-READONLY-20261103",
+  "slice_base_sha": "29fde108334e58f70a76aa6badcbe6da0debd3c6",
+  "backend": {
+    "command": "python -m blacklake.test_local",
+    "passed": 263,
+    "skipped": 0,
+    "exit_code": 0,
+    "evidence": "pytest-sections-final.log/xml"
+  },
+  "frontend": {
+    "passed": 18,
+    "typecheck_exit": 0,
+    "build_exit": 0,
+    "mode": "blacklake"
+  },
+  "live": {
+    "authorityStatus": 200,
+    "realAuthority": true,
+    "eligible": 16,
+    "blocked": 93,
+    "sections": 7,
+    "sectionFollowups": 7,
+    "model": "qwen3.8:27b",
+    "aiSourceRecordsSent": 0,
+    "maxUnitCostResidual": 7.105427357601002e-15,
+    "snapshotAt": "2026-11-03T09:21:49.302723+00:00",
+    "replayedSnapshot": true,
+    "cached27bAttached": true,
+    "crossFactoryDenied": true,
+    "sectionAiStates": {
+      "coverage": {
+        "status": "complete",
+        "sectionRepresentativeFacts": 11,
+        "reviewedSectionFacts": 11
+      },
+      "material": {
+        "status": "complete",
+        "sectionRepresentativeFacts": 5,
+        "reviewedSectionFacts": 5
+      },
+      "labor": {
+        "status": "complete",
+        "sectionRepresentativeFacts": 4,
+        "reviewedSectionFacts": 4
+      },
+      "finished": {
+        "status": "complete",
+        "sectionRepresentativeFacts": 5,
+        "reviewedSectionFacts": 5
+      },
+      "product_cost": {
+        "status": "complete",
+        "sectionRepresentativeFacts": 4,
+        "reviewedSectionFacts": 4
+      },
+      "production": {
+        "status": "complete",
+        "sectionRepresentativeFacts": 3,
+        "reviewedSectionFacts": 3
+      },
+      "inventory": {
+        "status": "complete",
+        "sectionRepresentativeFacts": 5,
+        "reviewedSectionFacts": 5
+      }
+    }
+  },
+  "snapshot": {
+    "records": 1879,
+    "source_digest": "ee9d927d8c9754d0c67d6c66f232e7ba885c319fffec00fcbaa6331b3269be70",
+    "target_digest": "ee9d927d8c9754d0c67d6c66f232e7ba885c319fffec00fcbaa6331b3269be70",
+    "scope_and_content_verified": true
+  },
+  "artifact": {
+    "buildCommit": "66e90e4b66bea5bea2bcd3b0a87d6089c60652d5",
+    "backendTree": "8b4f47cb40229f7233d6dbdbc00e14cf5491886c",
+    "jarSha256": "4b7f92316199ea762eca949535e67fcfa37fceb3b0372a2881b089e610870ee5",
+    "retainedReleaseReceiptVerified": true,
+    "buildIsMainAncestor": true,
+    "installedJarHashMatches": true,
+    "releaseReceipt": "cretas-1793715027-5639.json",
+    "releaseReceiptSha256": "24e4a35ef0f1f374ca82d237ce1b616258a2442d22ac1cec63f1b6039413585a",
+    "note": "Existing release receipt predates this task; this task did not deploy production"
+  },
+  "browser": {
+    "success": true,
+    "sectionAnswers": [
+      {
+        "sectionId": "finished",
+        "aiStatus": "complete",
+        "reviewed": 5,
+        "representatives": 5
+      },
+      {
+        "sectionId": "product_cost",
+        "aiStatus": "complete",
+        "reviewed": 4,
+        "representatives": 4
+      },
+      {
+        "sectionId": "labor",
+        "aiStatus": "complete",
+        "reviewed": 4,
+        "representatives": 4
+      },
+      {
+        "sectionId": "material",
+        "aiStatus": "complete",
+        "reviewed": 5,
+        "representatives": 5
+      },
+      {
+        "sectionId": "production",
+        "aiStatus": "complete",
+        "reviewed": 3,
+        "representatives": 3
+      },
+      {
+        "sectionId": "inventory",
+        "aiStatus": "complete",
+        "reviewed": 5,
+        "representatives": 5
+      },
+      {
+        "sectionId": "coverage",
+        "aiStatus": "complete",
+        "reviewed": 11,
+        "representatives": 11
+      }
+    ],
+    "eligibleRows": 16,
+    "mobileOverflow": false,
+    "pageErrors": [],
+    "blockedMutations": []
+  },
+  "test_java": {
+    "port": 11210,
+    "shared_11010_modified": false,
+    "isolated_factory_rows": 1,
+    "isolated_user_rows": 1,
+    "flyway": "20261103.180",
+    "failed_migrations": 0,
+    "hibernate_ddl_mode": "validate"
+  },
+  "generic_saved_cost_upload": {
+    "upload": 102,
+    "status": 200,
+    "capability": "summary_only",
+    "eligibleRows": 3,
+    "real_full_authority": true
+  },
+  "risk_review": "two findings fixed; no remaining code blocker on second read",
+  "source_business_writes": 0,
+  "production_deployed": false,
+  "merged": false,
+  "limitations": [
+    "Snapshot replay, not fresh Blacklake collection",
+    "Identifiable direct cost only; currency, input completeness and lot genealogy still need business confirmation",
+    "Section followup is evidence explanation and bounded 27B checks, not unrestricted generative business chat",
+    "Dedicated test authority lane; shared legacy Java is unchanged"
+  ],
+  "verified_files": {
+    "backend/python/blacklake/smartbi_acceptance.py": "e9c3334b050a1ae768fcc276d64a733ed6b669147dad461627dd268670b9a7c0",
+    "backend/python/blacklake/smartbi_api.py": "f2e6bc9642b58d0573b7ad7d7a33d41985fcec8c53806873b2754fa1501a92c3",
+    "backend/python/blacklake/smartbi_app.py": "40e046368f471325b4d398e181ca441e137d47df2a4bbe350be383554919694a",
+    "backend/python/blacklake/smartbi_store.py": "561c1bb9364d085a5374348f23852c294ce63cfa954d9f43050ecf169ae0f1f0",
+    "backend/python/blacklake/test_local.py": "5a4e3065178f24805f774c41f7e597ea96eeab6da3553aff5d77142ba9015894",
+    "backend/python/smartbi_alerts_testenv.py": "d6431fe39020d3d4a1f31512d3fa500656d01bcf5046c801611a97f24593afe8",
+    "web-admin/scripts/blacklake-acceptance.mjs": "a13e184cc8dd8a0405462e20bd55a0a062b7d752e312d8f0487ae0bab196245b",
+    "web-admin/src/api/smartbi/blacklake.ts": "f3f81062337e0a05e5a338cf1fdfbcb928dd06db318de2beb8a6cd5cf3517950",
+    "web-admin/src/views/smart-bi/BlacklakeAnalysis.vue": "28d98d48be65c0a82a75ea4d8aefde891a47d703c7c49ca4de1cbfe535580711",
+    "web-admin/src/views/smart-bi/BlacklakeTestEntry.vue": "e9ec1ecdbf96fac1bcc45f1a2194a5d76537de248871cb81016ca03dc30c8e04",
+    "backend/python/blacklake/section_insights.py": "fe1e913059780cf32fd9f54700a50250749bef0c023c23ee11d8ae354152abbc",
+    "backend/python/blacklake/section_review.py": "24f4c2339c7a478420c60cff35319cf673d97ee31be0d081c57ef0aeecf17fb7",
+    "backend/python/blacklake/sections_acceptance.py": "fcec5add72ddf665a0bb072cd5454f89c60fa5f035e3c2e0297439307c234f91",
+    "backend/python/blacklake/snapshot_proof.py": "71c0bc80ea0e756556d9d774a77669603b5c0b15edc10c31108f59371cc5cb64",
+    "backend/python/blacklake/test_authority_wsl.py": "62d0b16aacd668adf063371302a928a1bb2e4b2afdcfa40e6798713c6d8dc125",
+    "backend/python/tests/test_blacklake_sections.py": "8fc9703a537fabf4594551146d39b311427691f847759cd6c95117e4efd7eba7",
+    "web-admin/scripts/blacklake-sections-acceptance.mjs": "8aeb50b467209b30c8911130896be5d2b9bc3f11c88d82413ca039b31154a8be",
+    "web-admin/src/components/smartbi/SectionInsight.vue": "49d571a3b22dae68fd899b142dc30fb888918bfc26d3480fdcc93d69d6d0143b",
+    "web-admin/src/components/smartbi/__tests__/SectionInsight.spec.ts": "5616e37f408675c716f2d66da6f2a76b42d7aef76bcbc610f5fbf67d228a3702"
+  }
+}

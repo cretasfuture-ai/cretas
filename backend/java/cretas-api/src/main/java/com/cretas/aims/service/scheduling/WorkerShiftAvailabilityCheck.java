@@ -14,6 +14,7 @@ import com.cretas.aims.repository.WorkerAssignmentRepository;
 import com.cretas.aims.repository.hr.AttendanceShiftRepository;
 import com.cretas.aims.repository.hr.EmployeeShiftAssignmentRepository;
 import com.cretas.aims.repository.hr.LeaveRequestRepository;
+import com.cretas.aims.service.PermissionService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -47,16 +48,19 @@ import java.util.Set;
 public class WorkerShiftAvailabilityCheck {
 
     private static final String UNVERIFIED = "人员未验证：无法确认人员排班数据";
+    /** 窗口内一条排班都没有: 没数据 ≠ 数据显示人不够; 不编人数、不当 0 处理, 只如实说没核对。 */
+    public static final String NO_SCHEDULE_DATA = "人员未核对：没有排班数据";
     private static final String INSUFFICIENT = "人员不足：已验证可用人员不足";
     private static final String AVAILABLE = "人员排班可用：已验证人数满足需求";
-    private static final Set<String> PRODUCTION_ROLES = Set.of(
-            "operator", "yield_operator", "workshop_supervisor", "team_leader", "group_leader");
+    /** 能算作「可派人手」的权限: 有报工权限即可 (按权限, 不按岗位名; 厂长亲自上线也算)。 */
+    public static final String REPORTING_PERMISSION = "work_report:read_write";
 
     private final EmployeeShiftAssignmentRepository shiftAssignments;
     private final AttendanceShiftRepository shifts;
     private final UserRepository users;
     private final LeaveRequestRepository leaveRequests;
     private final WorkerAssignmentRepository workerAssignments;
+    private final PermissionService permissions;
 
     @Transactional(readOnly = true)
     public Result check(String factoryId, LocalDateTime start, LocalDateTime end,
@@ -79,7 +83,7 @@ public class WorkerShiftAvailabilityCheck {
             return Result.unverified(required, UNVERIFIED);
         }
         if (assignments == null || assignments.isEmpty()) {
-            return Result.unverified(required, UNVERIFIED);
+            return Result.noScheduleData(required);
         }
 
         Map<Long, User> userById = new HashMap<>();
@@ -90,6 +94,19 @@ public class WorkerShiftAvailabilityCheck {
                     userById.put(user.getId(), user);
                 }
             }
+        }
+
+        // 谁具备报工权限: 一次算好。权限配置读不到 (仓库异常) = 人员未验证, 不能把异常抛成 500 也不能当没人
+        Set<Long> reporters = new java.util.HashSet<>();
+        try {
+            for (User user : userById.values()) {
+                if (permissions.hasPermission(user, REPORTING_PERMISSION)) {
+                    reporters.add(user.getId());
+                }
+            }
+        } catch (RuntimeException failure) {
+            log.warn("人员核验读取失败: factoryId={}, source=permission, type={}", factoryId, failure.getClass().getSimpleName());
+            return Result.unverified(required, UNVERIFIED);
         }
 
         Map<Long, Candidate> candidates = new HashMap<>();
@@ -113,7 +130,7 @@ public class WorkerShiftAvailabilityCheck {
                 continue;
             }
             Candidate candidate = candidates.computeIfAbsent(userId, ignored -> new Candidate(user));
-            if (!productionRole(user)) {
+            if (!reporters.contains(user.getId())) {
                 continue;
             }
             EmploymentEvidence employment = employmentEvidence(user, start, end);
@@ -180,7 +197,7 @@ public class WorkerShiftAvailabilityCheck {
         Set<Long> available = new LinkedHashSet<>();
         boolean unknownCandidate = unknownFact;
         for (Candidate candidate : candidates.values()) {
-            if (!productionRole(candidate.user)) {
+            if (!reporters.contains(candidate.user.getId())) {
                 continue;
             }
             EmploymentEvidence employment = employmentEvidence(candidate.user, start, end);
@@ -321,10 +338,6 @@ public class WorkerShiftAvailabilityCheck {
         return start.isBefore(end) && !end.isAfter(start.plusDays(7));
     }
 
-    private static boolean productionRole(User user) {
-        return user != null && PRODUCTION_ROLES.contains(user.getRoleCode());
-    }
-
     private static EmploymentEvidence employmentEvidence(User user, LocalDateTime start, LocalDateTime end) {
         if (user == null) {
             return EmploymentEvidence.UNKNOWN;
@@ -414,7 +427,12 @@ public class WorkerShiftAvailabilityCheck {
     }
 
     public record Result(boolean verified, int requiredWorkers, int availableWorkers,
-                         Set<Long> availableWorkerIds, String message) {
+                         Set<Long> availableWorkerIds, String message, boolean noScheduleData) {
+        public Result(boolean verified, int requiredWorkers, int availableWorkers,
+                      Set<Long> availableWorkerIds, String message) {
+            this(verified, requiredWorkers, availableWorkers, availableWorkerIds, message, false);
+        }
+
         public Result {
             Set<Long> safe = availableWorkerIds == null
                     ? Collections.emptySet()
@@ -426,6 +444,21 @@ public class WorkerShiftAvailabilityCheck {
 
         public boolean available() {
             return verified && availableWorkers >= requiredWorkers;
+        }
+
+        /** 窗口内没有任何排班记录: 未核对, 不是「人不够」。 */
+        public static Result noScheduleData(Integer required) {
+            int safeRequired = required == null ? 0 : Math.max(0, required);
+            return new Result(false, safeRequired, 0, Collections.emptySet(), NO_SCHEDULE_DATA, true);
+        }
+
+        /** 产线没配标准人数: 没有可比的数, 不是「人够」也不是「人不够」。 */
+        public static Result notConfigured() {
+            return new Result(true, 0, 0, Collections.emptySet(), "未配置标准人数，不核对人数");
+        }
+
+        public boolean isNotConfigured() {
+            return verified && requiredWorkers == 0;
         }
 
         public static Result unverified(Integer required, String message) {

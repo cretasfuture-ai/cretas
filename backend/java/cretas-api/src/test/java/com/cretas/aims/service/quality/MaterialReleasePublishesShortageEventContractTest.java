@@ -3,6 +3,7 @@ package com.cretas.aims.service.quality;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.QualityInspection;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
+import com.cretas.aims.event.MaterialBatchInspectionClosedEvent;
 import com.cretas.aims.event.MaterialBatchReleasedEvent;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.service.QualityDispositionRuleService.DispositionAction;
@@ -28,6 +29,8 @@ class MaterialReleasePublishesShortageEventContractTest {
     private final MaterialBatchRepository batches = mock(MaterialBatchRepository.class);
     private final ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
     private QualityDispositionInventoryService service;
+    private final com.cretas.aims.service.discipline.MaterialBatchReleaseGuard releaseGuard =
+            mock(com.cretas.aims.service.discipline.MaterialBatchReleaseGuard.class);
     private MaterialBatch batch;
     private QualityInspection inspection;
 
@@ -36,6 +39,11 @@ class MaterialReleasePublishesShortageEventContractTest {
         service = new QualityDispositionInventoryService();
         ReflectionTestUtils.setField(service, "materialBatchRepository", batches);
         ReflectionTestUtils.setField(service, "eventPublisher", publisher);
+        ReflectionTestUtils.setField(service, "qcReleaseRecordRepository",
+                mock(com.cretas.aims.repository.quality.QcReleaseRecordRepository.class));   // 没有质检放行记录
+        ReflectionTestUtils.setField(service, "processTimeLimitEventRepository",
+                org.mockito.Mockito.mock(com.cretas.aims.repository.foodsafety.ProcessTimeLimitEventRepository.class));
+        ReflectionTestUtils.setField(service, "materialBatchReleaseGuard", releaseGuard);
         batch = new MaterialBatch();
         batch.setId("MB-1");
         batch.setFactoryId("F1");
@@ -48,9 +56,26 @@ class MaterialReleasePublishesShortageEventContractTest {
         inspection.setMaterialBatchId("MB-1");
     }
 
+    /** 纪律排查 A3 (独立审查低 #4): 放行台账缺了 → 与其它出口一样直接拒绝, 在翻转之前拦, 状态不变、不落库、不发事件。 */
+    @Test
+    void missingReleaseLedgerFailsClosedBeforeTheFlip() {
+        ReflectionTestUtils.setField(service, "materialBatchReleaseGuard", null);
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                () -> service.applyDisposition(inspection, DispositionAction.RELEASE, true))
+                .isInstanceOf(IllegalStateException.class);
+        assertThat(batch.getStatus()).isEqualTo(MaterialBatchStatus.INSPECTING);
+        verify(batches, never()).save(any(MaterialBatch.class));
+        verify(publisher, never()).publishEvent(any(ApplicationEvent.class));
+    }
+
     @Test
     void releasingAnInspectingBatchPublishesTheEvent() {
-        service.applyDisposition(inspection, DispositionAction.RELEASE);
+        service.applyDisposition(inspection, DispositionAction.RELEASE, true);
+        // 纪律排查 A3: 质检处置放行写放行台账
+        verify(releaseGuard).recordIfRelease(org.mockito.ArgumentMatchers.eq("F1"), org.mockito.ArgumentMatchers.same(batch),
+                org.mockito.ArgumentMatchers.eq(MaterialBatchStatus.INSPECTING), org.mockito.ArgumentMatchers.eq(MaterialBatchStatus.AVAILABLE),
+                org.mockito.ArgumentMatchers.eq(com.cretas.aims.entity.material.MaterialBatchRelease.Channel.QC_DISPOSITION),
+                any(), any(), any(), any());
 
         ArgumentCaptor<ApplicationEvent> event = ArgumentCaptor.forClass(ApplicationEvent.class);
         verify(publisher).publishEvent(event.capture());
@@ -61,13 +86,25 @@ class MaterialReleasePublishesShortageEventContractTest {
         });
     }
 
+    /**
+     * 原名 scrapAndAlreadyAvailableDoNotPublish, 断言「什么都不发」。D-S411-04 审查 M1 之后性质改为: 报废 / 本来就可用
+     * 都<b>不发放行事件</b>; 质检中直接报废 = 「质检中」那部分不会再来了, 发一条 {@link MaterialBatchInspectionClosedEvent}
+     * 让缺料实例清掉质检中数量 (否则缺口被低估)。本来就可用的再放行一次: 两种事件都不发 (阴性对照)。
+     */
     @Test
-    void scrapAndAlreadyAvailableDoNotPublish() {
-        service.applyDisposition(inspection, DispositionAction.SCRAP);
+    void scrapAndAlreadyAvailableDoNotPublishARelease() {
+        service.applyDisposition(inspection, DispositionAction.SCRAP, true);
         batch.setStatus(MaterialBatchStatus.AVAILABLE);
-        service.applyDisposition(inspection, DispositionAction.RELEASE);
+        service.applyDisposition(inspection, DispositionAction.RELEASE, true);
 
-        verify(publisher, never()).publishEvent(any(ApplicationEvent.class));
+        ArgumentCaptor<ApplicationEvent> events = ArgumentCaptor.forClass(ApplicationEvent.class);
+        verify(publisher, atLeast(0)).publishEvent(events.capture());
         verify(publisher, never()).publishEvent(any(Object.class));
+        assertThat(events.getAllValues()).noneMatch(e -> e instanceof MaterialBatchReleasedEvent);
+        assertThat(events.getAllValues()).singleElement().isInstanceOfSatisfying(
+                MaterialBatchInspectionClosedEvent.class, e -> {
+                    assertThat(e.getMaterialBatchId()).isEqualTo("MB-1");
+                    assertThat(e.getNewStatus()).isEqualTo(MaterialBatchStatus.SCRAPPED);
+                });
     }
 }

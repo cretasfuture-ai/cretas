@@ -39,6 +39,60 @@ public interface PermissionService {
      */
     String SELF_WAGE_VIEW_PERMISSION = "hr:self_wage:view";
 
+    /** 原料类型维护 (新建/改/删)。默认仓储主管 + 厂长, 工厂可在阈值设置里改岗位名单 (ThresholdKeys.INVENTORY_PERMISSION_MATERIAL_TYPE_MAINTAIN)。 */
+    String MATERIAL_TYPE_MAINTAIN_PERMISSION = "material_type:maintain";
+
+    /** 报损审批 (通过/驳回/看待审列表)。默认只给厂长, 工厂可在阈值设置里加岗位 (ThresholdKeys.INVENTORY_PERMISSION_WASTAGE_APPROVE)。 */
+    String WASTAGE_APPROVE_PERMISSION = "wastage:approve";
+
+    /**
+     * 报废审批 (通过 / 驳回)。默认财务经理 + 厂长 (= 改动前写死的名单), 工厂可在阈值设置里改岗位名单
+     * (ThresholdKeys.INVENTORY_PERMISSION_DISPOSAL_APPROVE)。App 与后端共用这一份判断。
+     */
+    String DISPOSAL_APPROVE_PERMISSION = "disposal:approve";
+
+    /**
+     * 付款执行 (出纳点「已付款」)。默认出纳 + 厂长, 工厂可在阈值设置里改岗位名单
+     * (ThresholdKeys.FINANCE_PERMISSION_PAYMENT_DISBURSE)。目前用于「我的待办」按权限聚合付款待办;
+     * 付款接口本身的门槛 (finance:read_write) 不变。
+     */
+    String PAYMENT_DISBURSE_PERMISSION = "payment:disburse";
+
+    /**
+     * 解除<b>已有消耗</b>(已领用 / 已耗尽 / 生产占用 / 已报废) 原料批次的来源个体挂载 (#1968 M-2 口径 a)。
+     * 解除会让该批次及其下游从按个体的谱系/召回里消失, 所以比未消耗批次多一道门槛。
+     * 默认仓储主管 + 厂长 (端点本身要求 warehouse/inventory 写权限, 默认岗位必须能走到这个端点),
+     * 工厂可在阈值设置里改岗位名单
+     * (ThresholdKeys.INVENTORY_PERMISSION_SOURCE_INDIVIDUAL_UNLINK_CONSUMED)。
+     */
+    String SOURCE_INDIVIDUAL_UNLINK_CONSUMED_PERMISSION = "source_individual:unlink_consumed";
+
+    /**
+     * 只有角色码 + 工厂 (没有 User 对象) 的调用方用的<b>通用</b>权限判定: 与 {@link #hasPermission} 走同一条解析链
+     * (可配置岗位名单 / 模块权限 / 审批码), 只是不叠加个人覆盖。「我的待办」按角色聚合用。默认实现 false (测试替身用)。
+     */
+    default boolean roleHasPermission(String factoryId, String roleCode, String permissionCode) {
+        return false;
+    }
+
+    /** 信用特批 (超信用额度被拦截时放行下单)。默认只给厂长, 工厂可在阈值设置里加岗位 (ThresholdKeys.CREDIT_PERMISSION_OVERRIDE)。 */
+    String CREDIT_OVERRIDE_PERMISSION = "credit:override";
+
+    /**
+     * 取消财务已批准的销售单 (工厂开了 sales.order.cancel_after_approval 才用得上)。默认只给厂长,
+     * 工厂可在阈值设置里加岗位 (ThresholdKeys.SALES_PERMISSION_CANCEL_APPROVED_ORDER)。
+     */
+    String SALES_ORDER_CANCEL_APPROVED_PERMISSION = "sales_order:cancel_approved";
+
+    /**
+     * 只有角色码 + 工厂 (没有 User 对象) 的调用方用的判定, 与 {@link #hasPermission} 对上面三个权限码是<b>同一套</b>
+     * 逻辑 (厂长恒有; 其余按工厂阈值里配的岗位名单, 没配用默认名单), 不会给出不同结论。
+     * 其它权限码一律 false。默认实现 false (测试替身用)。
+     */
+    default boolean roleHasConfiguredPermission(String factoryId, String roleCode, String permissionCode) {
+        return false;
+    }
+
     /**
      * 检查用户是否拥有指定权限
      *
@@ -161,6 +215,15 @@ public interface PermissionService {
      * @return module → rw|r|w|-; 永不为 null
      */
     Map<String, String> resolveModuleLevels(User user);
+
+    /**
+     * 本厂审批权限一览 (纪律排查 B1–B3/B11/B15): 审批码 → 岗位 → {@code "<granted>|<source>"},
+     * granted = {@code Y}/{@code N}; source = {@code FACTORY} (本厂改过) / {@code PLATFORM} (平台默认) /
+     * {@code DEFAULT} (系统默认 = 原名单) / {@code ALWAYS} (超管恒有)。走与 {@link #hasPermission} 同一条解析链。
+     */
+    default Map<String, Map<String, String>> approvalGrants(String factoryId) {
+        return Map.of();
+    }
 
     /**
      * Canonical authorization snapshot. Known empty successful queries may use the existing

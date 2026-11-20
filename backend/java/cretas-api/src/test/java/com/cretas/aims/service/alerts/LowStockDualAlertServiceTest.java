@@ -56,8 +56,8 @@ class LowStockDualAlertServiceTest {
 
     @BeforeEach
     void defaultNotificationMock() {
-        lenient().when(notificationService.sendToRole(
-                anyString(), any(FactoryUserRole.class),
+        lenient().when(notificationService.sendByPolicy(
+                anyString(), anyString(), anyList(),
                 anyString(), anyString(),
                 any(NotificationType.class), anyString(), anyString()))
                 .thenReturn(List.of());
@@ -70,7 +70,7 @@ class LowStockDualAlertServiceTest {
     class CheckAndNotify {
 
         @Test
-        @DisplayName("库存低于安全库存 → 通知 warehouse_manager + procurement_manager")
+        @DisplayName("库存低于安全库存 → 按工厂配置发送, 默认接收角色 warehouse_manager + procurement_manager")
         void belowMinStock_sendsToWarehouseAndProcurement() {
             when(rawMaterialTypeRepository.findById(MAT_ID))
                     .thenReturn(Optional.of(mockMat("冻猪蹄", "kg")));
@@ -78,14 +78,14 @@ class LowStockDualAlertServiceTest {
             service.checkAndNotify(FACTORY, MAT_ID,
                     new BigDecimal("20"), new BigDecimal("50"), "kg");
 
-            ArgumentCaptor<FactoryUserRole> roleCaptor = ArgumentCaptor.forClass(FactoryUserRole.class);
-            verify(notificationService, times(2)).sendToRole(
-                    eq(FACTORY), roleCaptor.capture(),
+            ArgumentCaptor<List<FactoryUserRole>> roleCaptor = ArgumentCaptor.forClass(List.class);
+            verify(notificationService, times(1)).sendByPolicy(
+                    eq(FACTORY), eq(com.cretas.aims.service.canvas.ThresholdKeys.INVENTORY_NOTIFY_LOW_STOCK),
+                    roleCaptor.capture(),
                     contains("冻猪蹄"), anyString(),
                     eq(NotificationType.WARNING), eq("LOW_STOCK_ALERT"), eq(MAT_ID));
 
-            List<FactoryUserRole> roles = roleCaptor.getAllValues();
-            assertThat(roles).containsExactlyInAnyOrder(
+            assertThat(roleCaptor.getValue()).containsExactlyInAnyOrder(
                     FactoryUserRole.warehouse_manager,
                     FactoryUserRole.procurement_manager);
         }
@@ -100,8 +100,8 @@ class LowStockDualAlertServiceTest {
                     new BigDecimal("20"), new BigDecimal("50"), "kg");
 
             ArgumentCaptor<String> contentCaptor = ArgumentCaptor.forClass(String.class);
-            verify(notificationService, atLeastOnce()).sendToRole(
-                    anyString(), any(), anyString(), contentCaptor.capture(),
+            verify(notificationService, atLeastOnce()).sendByPolicy(
+                    anyString(), anyString(), anyList(), anyString(), contentCaptor.capture(),
                     any(), anyString(), anyString());
 
             String content = contentCaptor.getValue();
@@ -167,29 +167,23 @@ class LowStockDualAlertServiceTest {
 
             service.checkAndNotify(FACTORY, MAT_ID, null, new BigDecimal("50"), "kg");
 
-            verify(notificationService, times(2)).sendToRole(
-                    eq(FACTORY), any(FactoryUserRole.class), anyString(), anyString(),
+            verify(notificationService, times(1)).sendByPolicy(
+                    eq(FACTORY), anyString(), anyList(), anyString(), anyString(),
                     eq(NotificationType.WARNING), anyString(), eq(MAT_ID));
         }
 
         @Test
-        @DisplayName("warehouse_manager 通知失败 → 仍推 procurement_manager")
-        void warehouseFailure_procurementStillSent() {
+        @DisplayName("通知发送抛异常 → 不向外抛 (低库存检查不能被通知故障拖垮)")
+        void notificationFailure_isContained() {
             when(rawMaterialTypeRepository.findById(MAT_ID))
                     .thenReturn(Optional.of(mockMat("冻猪蹄", "kg")));
-            when(notificationService.sendToRole(
-                    eq(FACTORY), eq(FactoryUserRole.warehouse_manager),
+            when(notificationService.sendByPolicy(
+                    eq(FACTORY), anyString(), anyList(),
                     anyString(), anyString(), any(), anyString(), anyString()))
-                    .thenThrow(new RuntimeException("模拟仓库通知失败"));
+                    .thenThrow(new RuntimeException("模拟通知失败"));
 
-            // Should not throw; procurement path still executes
             service.checkAndNotify(FACTORY, MAT_ID,
                     new BigDecimal("10"), new BigDecimal("50"), "kg");
-
-            verify(notificationService).sendToRole(
-                    eq(FACTORY), eq(FactoryUserRole.procurement_manager),
-                    anyString(), anyString(),
-                    eq(NotificationType.WARNING), anyString(), eq(MAT_ID));
         }
     }
 
@@ -216,13 +210,13 @@ class LowStockDualAlertServiceTest {
             service.sweepFactory(FACTORY);
 
             // Only 2 notifications for MT-LOW (warehouse + procurement)
-            verify(notificationService, times(2)).sendToRole(
-                    eq(FACTORY), any(FactoryUserRole.class),
+            verify(notificationService, times(1)).sendByPolicy(
+                    eq(FACTORY), anyString(), anyList(),
                     contains("猪舌"), anyString(),
                     eq(NotificationType.WARNING), eq("LOW_STOCK_ALERT"), eq("MT-LOW"));
             // No notification for MT-OK
-            verify(notificationService, never()).sendToRole(
-                    eq(FACTORY), any(),
+            verify(notificationService, never()).sendByPolicy(
+                    eq(FACTORY), anyString(), anyList(),
                     contains("牛腱"), anyString(), any(), anyString(), any());
         }
 
@@ -249,8 +243,8 @@ class LowStockDualAlertServiceTest {
 
             service.sweepFactory(FACTORY);
 
-            verify(notificationService, times(2)).sendToRole(
-                    eq(FACTORY), any(FactoryUserRole.class),
+            verify(notificationService, times(1)).sendByPolicy(
+                    eq(FACTORY), anyString(), anyList(),
                     contains("掌中宝"), anyString(),
                     eq(NotificationType.WARNING), anyString(), eq("MT-NEW"));
         }

@@ -53,6 +53,9 @@ export interface CostStructureRow {
 }
 
 export interface CostStructureSummary {
+  /** 按批次数加权的平均出成率（后端算）；null = 没有任何带出成率的批次 */
+  avgYieldRate?: number | null;
+  yieldBatchCount?: number;
   totalMaterialCost: number | null;
   totalLaborCost: number | null;
   totalEquipmentCost: number | null;
@@ -77,7 +80,9 @@ export interface CostStructureResponse {
 /** One point on the yield trend */
 export interface YieldTrendPoint {
   statDate: string;
+  /** 出成率 = 良品 ÷ 实际产出 × 100，只算有出成率的批次 */
   avgYieldRate: number | null;
+  yieldBatchCount?: number;
   batchCount: number;
   totalActualQty: number | null;
   totalGoodQty: number | null;
@@ -112,6 +117,10 @@ export interface ProductCostItem {
   totalOtherCost: number | null;
   totalCost: number | null;
   costPerUnit: number | null;
+  /** 有成本的批次数；单位成本只基于这些批次 */
+  costedBatchCount?: number;
+  /** 有出成率（报了良品与实际产出）的批次数；出成率只基于这些批次 */
+  yieldBatchCount?: number;
 }
 
 export interface ProductCostCompareData {
@@ -125,6 +134,37 @@ export interface ProductCostCompareResponse {
 }
 
 // ── API functions ─────────────────────────────────────────────────────────────
+
+export interface ExternalProductionRow {
+  reportDate: string;
+  productCode: string;
+  productName: string;
+  processName: string;
+  unit: string;
+  goodQty: number;
+  defectQty: number;
+  defectRate: number | null;
+  reportCount: number;
+}
+
+export interface ExternalProductionData {
+  sourceSystem: 'blacklake';
+  sourceLabel: string;
+  snapshotCollectedAt: string;
+  stale: boolean;
+  yieldRate: null;
+  cost: null;
+  unavailableMessage: string;
+  rows: ExternalProductionRow[];
+}
+
+export function getExternalProduction(args: FactoryDateQuery, summaryOnly = false) {
+  const query = new URLSearchParams(_buildQuery(args));
+  if (summaryOnly) query.set('summaryOnly', 'true');
+  return pythonFetch<{ success: boolean; data: ExternalProductionData | null; message: string }>(
+    `/api/smartbi/factory/external-production?${query}`,
+  );
+}
 
 /**
  * GET /api/smartbi/factory/cost-structure

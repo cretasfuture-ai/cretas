@@ -45,10 +45,16 @@ const getPlansBySalesOrderMock = vi.fn();
 const getBatchesForProductionPlansMock = vi.fn();
 const getSalesOrderDocumentTraceMock = vi.fn();
 const getHistoryMock = vi.fn();
+const getEvidencePackMock = vi.fn();
+const exportEvidencePackMock = vi.fn();
+const getRecallImpactMock = vi.fn();
 vi.mock('@/api/quality-disposition', () => ({ getDispositionHistory: (...args: unknown[]) => getHistoryMock(...args) }));
 vi.mock('@/api/traceability', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/api/traceability')>()),
   getFullTrace: (...args: unknown[]) => getFullTraceMock(...args),
+  getEvidencePack: (...args: unknown[]) => getEvidencePackMock(...args),
+  exportEvidencePack: (...args: unknown[]) => exportEvidencePackMock(...args),
+  getRecallImpact: (...args: unknown[]) => getRecallImpactMock(...args),
   getRecentTraceability: (...args: unknown[]) => getRecentTraceabilityMock(...args),
   findSalesOrdersForTrace: (...args: unknown[]) => findSalesOrdersForTraceMock(...args),
   getPlansBySalesOrder: (...args: unknown[]) => getPlansBySalesOrderMock(...args),
@@ -83,6 +89,16 @@ async function search(wrapper: VueWrapper, batchNumber: string) {
   await wrapper.find('form.query-bar').trigger('submit');
   await flushPromises();
   await nextTick();
+  await showListView(wrapper);
+}
+
+/** 追溯线默认是图; 本文件的断言针对分段列表, 查询后切到「列表」。图本身见 traceDagView.spec.ts。 */
+async function showListView(wrapper: VueWrapper) {
+  const radio = wrapper.find('[data-testid="trace-view-list"] input');
+  if (radio.exists()) {
+    await radio.setValue(true);
+    await nextTick();
+  }
 }
 
 beforeEach(() => {
@@ -99,6 +115,10 @@ beforeEach(() => {
   getSalesOrderDocumentTraceMock.mockReset();
   getDetailMock.mockReset();
   getHistoryMock.mockReset();
+  getEvidencePackMock.mockReset();
+  exportEvidencePackMock.mockReset();
+  getRecallImpactMock.mockReset();
+  getRecallImpactMock.mockRejectedValue(new Error('impact not stubbed'));
   getHistoryMock.mockResolvedValue([]);
   getRecentTraceabilityMock.mockResolvedValue({ success: true, data: { content: [], totalElements: 0, totalPages: 0, size: 20, number: 0 } });
   getSalesOrderDocumentTraceMock.mockResolvedValue({ success: true, data: { anchorType: 'SALES_ORDER', anchorId: 'SO-1', anchorNumber: 'SO-1', documents: [], missingLinks: [] } });
@@ -310,6 +330,20 @@ describe('溯源查询页 — 最近批次与销售单入口', () => {
 });
 
 describe('溯源查询页 — 溯源码卡', () => {
+  it('追溯线默认是图; 切到「列表」才出分段列表, 切回图又收起', async () => {
+    getFullTraceMock.mockImplementation(() => ok(sixCattleTrace()));
+    const wrapper = mountPage();
+    await wrapper.find('input[data-testid="batch-input"]').setValue('PB-2026-001');
+    await wrapper.find('form.query-bar').trigger('submit');
+    await flushPromises();
+    expect(wrapper.find('[data-testid="trace-dag"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="lineage-card"]').exists()).toBe(false);
+    await wrapper.find('[data-testid="trace-view-list"] input').setValue(true);
+    expect(wrapper.find('[data-testid="trace-dag"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="lineage-card"]').exists()).toBe(true);
+    await wrapper.find('[data-testid="trace-view-graph"] input').setValue(true);
+    expect(wrapper.find('[data-testid="trace-dag"]').exists()).toBe(true);
+  });
   it('③ traceCode: null ⇒ 「未打印标签」, ⛔ 不拿批次号顶到溯源码的位置', async () => {
     getFullTraceMock.mockImplementation(() => ok(noLabelTrace()));
     const wrapper = mountPage();
@@ -710,12 +744,14 @@ describe('溯源查询页 — 带参直开', () => {
       template: '<KeepAlive><TracePage v-if="visible" /></KeepAlive>',
     }, { global: { plugins: [ElementPlus] } });
     await flushPromises();
+    await showListView(parent as unknown as VueWrapper);
     expect(parent.find('[data-testid="quality-card"]').exists()).toBe(false);
     visible.value = false;
     await nextTick();
     visible.value = true;
     await flushPromises();
     expect(getFullTraceMock).toHaveBeenCalledTimes(2);
+    await showListView(parent as unknown as VueWrapper);
     expect(parent.get('[data-testid="quality-card"]').text()).toContain('李四');
     parent.unmount();
   });
@@ -771,5 +807,115 @@ describe('溯源查询页 — 带参直开', () => {
     await flushPromises();
     expect(getFullTraceMock).not.toHaveBeenCalled();
     expect(wrapper.find('[data-testid="trace-idle"]').exists()).toBe(true);
+  });
+});
+
+describe('溯源查询页 — 验厂证据包导出与召回箱数', () => {
+  async function loadBatch() {
+    const data = sixCattleTrace();
+    data.production.batchId = 8;
+    getFullTraceMock.mockResolvedValue({ success: true, data });
+    const wrapper = mountPage();
+    await search(wrapper, 'PB-2026-001');
+    return wrapper;
+  }
+  const urlApi = URL as unknown as { createObjectURL: unknown; revokeObjectURL: unknown };
+  beforeEach(() => {
+    urlApi.createObjectURL = vi.fn(() => 'blob:x');
+    urlApi.revokeObjectURL = vi.fn();
+  });
+
+  it('READY ⇒ 下载 ZIP 并提示成功', async () => {
+    getEvidencePackMock.mockResolvedValue({ rootBatchNumber: 'PB-2026-001', status: 'READY', missingEvidence: [] });
+    exportEvidencePackMock.mockResolvedValue(new Blob(['zip']));
+    const wrapper = await loadBatch();
+    await wrapper.get('[data-testid="export-evidence-pack"]').trigger('click');
+    await flushPromises();
+    expect(exportEvidencePackMock).toHaveBeenCalledWith('F006', 'PB-2026-001');
+    expect(wrapper.get('[data-testid="evidence-notice"]').text()).toContain('证据齐全');
+  });
+
+  it('阴性对照: GAPS ⇒ 逐项列出缺口、不下载、不显示成功', async () => {
+    getEvidencePackMock.mockResolvedValue({
+      rootBatchNumber: 'PB-2026-001', status: 'GAPS',
+      missingEvidence: [{ kind: 'NO_QC_RELEASE', batchNumber: 'PB-2026-001', detail: '没有质检放行记录' }],
+    });
+    const wrapper = await loadBatch();
+    await wrapper.get('[data-testid="export-evidence-pack"]').trigger('click');
+    await flushPromises();
+    expect(exportEvidencePackMock).not.toHaveBeenCalled();
+    const text = wrapper.get('[data-testid="evidence-notice"]').text();
+    expect(text).toContain('没有质检放行记录');
+    expect(text).toContain('证据不齐全');
+    expect(text).not.toContain('证据齐全，');
+  });
+
+  it('阴性对照: 接口失败 ⇒ 显示失败原话，不显示成功', async () => {
+    getEvidencePackMock.mockRejectedValue(new Error('服务暂不可用'));
+    const wrapper = await loadBatch();
+    await wrapper.get('[data-testid="export-evidence-pack"]').trigger('click');
+    await flushPromises();
+    const text = wrapper.get('[data-testid="evidence-notice"]').text();
+    expect(text).toContain('服务暂不可用');
+    expect(text).not.toContain('已下载');
+  });
+
+  it('箱数已折算 ⇒ 显示 N 箱', async () => {
+    getRecallImpactMock.mockResolvedValue({
+      rootType: 'PRODUCTION_BATCH', rootId: '8',
+      boxExposure: {
+        stock: { complete: true, totalBoxQuantity: '12', knownSourceCount: 1, unknownSourceCount: 0 },
+        shipped: { complete: true, totalBoxQuantity: '30', knownSourceCount: 2, unknownSourceCount: 0 },
+        gaps: [],
+      },
+    });
+    const wrapper = await loadBatch();
+    expect(wrapper.get('[data-testid="recall-box-stock"]').text()).toContain('12 箱');
+    expect(wrapper.get('[data-testid="recall-box-shipped"]').text()).toContain('30 箱');
+  });
+
+  it('阴性对照: 无箱规 ⇒ 「无法折算」并写原因，⛔ 不显示 0 箱', async () => {
+    getRecallImpactMock.mockResolvedValue({
+      rootType: 'PRODUCTION_BATCH', rootId: '8',
+      boxExposure: {
+        stock: { complete: false, totalBoxQuantity: null, knownBoxSubtotal: null, knownSourceCount: 0, unknownSourceCount: 1 },
+        shipped: { complete: false, totalBoxQuantity: null, knownSourceCount: 0, unknownSourceCount: 1 },
+        gaps: [{ code: 'PACKAGING_SNAPSHOT_MISSING', message: '成品批次 fg-1 没有包装快照' }],
+      },
+    });
+    const wrapper = await loadBatch();
+    const card = wrapper.get('[data-testid="recall-box-card"]').text();
+    expect(card).toContain('无法折算');
+    expect(card).toContain('没有包装快照');
+    expect(card).not.toMatch(/(^|[^\d])0 箱/);
+  });
+
+  it('B8 追溯范围内没有成品批次 ⇒ 说缺的是成品入库批次, 不让人去补箱规; 阴性对照: 有别的缺口时仍是原话', async () => {
+    const unknownTotals = { complete: false, totalBoxQuantity: null, knownBoxSubtotal: null, knownSourceCount: 0, unknownSourceCount: 1 };
+    getRecallImpactMock.mockResolvedValue({
+      rootType: 'PRODUCTION_BATCH', rootId: '8',
+      boxExposure: {
+        stock: unknownTotals, shipped: unknownTotals,
+        gaps: [
+          { code: 'FINISHED_BATCH_SCOPE_EMPTY', message: '追溯范围没有可核验的成品批次, 箱数保持未知' },
+        ],
+      },
+    });
+    const wrapper = await loadBatch();
+    const stock = wrapper.get('[data-testid="recall-box-stock"]').text();
+    expect(stock).toContain('没有成品入库批次');
+    expect(stock).not.toContain('缺少箱规');
+    getRecallImpactMock.mockResolvedValue({
+      rootType: 'PRODUCTION_BATCH', rootId: '8',
+      boxExposure: { stock: unknownTotals, shipped: unknownTotals, gaps: [{ code: 'BOX_PACKAGING_SNAPSHOT_UNKNOWN', message: 'x' }] },
+    });
+    const other = await loadBatch();
+    expect(other.get('[data-testid="recall-box-stock"]').text()).toContain('缺少箱规或发货扣减数据');
+  });
+
+  it('阴性对照: 影响面接口失败 ⇒ 显示取不到，不显示箱数', async () => {
+    const wrapper = await loadBatch();
+    expect(wrapper.get('[data-testid="recall-box-error"]').text()).toContain('暂时取不到');
+    expect(wrapper.find('[data-testid="recall-box-stock"]').exists()).toBe(false);
   });
 });
