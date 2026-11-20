@@ -11,10 +11,13 @@ const { createScenarioResult, assertScenarioResult } = require('./result-schema'
 const { sanitizeValue } = require('./sanitizer');
 const { pathnameOf } = require('./url-utils');
 const { runParallelSuites } = require('./parallel-run');
+const { isFactoryAnalysisUrl } = require('../config/factory-analysis-scope');
+const questionSet = require('../scenarios/factory-analysis-question-set-readonly');
 
 const SCENARIOS = [
   require('../scenarios/platform-factory-access-readonly'),
   require('../scenarios/smartbi-factory-analysis-readonly'),
+  questionSet,
   require('../scenarios/lsm-production-analytics-readonly').dataAnalysis,
   require('../scenarios/lsm-production-analytics-readonly').cost,
   require('../scenarios/smartbi-catalog-matrix-readonly'),
@@ -96,6 +99,12 @@ function describeHarness() {
   };
 }
 
+function reportExitCode(report) {
+  if (!report.safetyPassed) return 1;
+  if (report.scenarios.some(({ questionSet: set }) => set?.attempted > 0 && set.answered === 0)) return 2;
+  return report.scenarios.some(scenario => scenario.result !== 'PASS') ? 1 : 0;
+}
+
 function resolveScenarios(requested) {
   if (!requested || requested.length === 0) {
     return SCENARIOS.filter((scenario) => scenario.defaultEnabled !== false);
@@ -120,7 +129,16 @@ async function runSuiteWithPage(page, options = {}) {
   const selectedScenarios = resolveScenarios(options.scenarios);
 
   // The guard is installed before any target-origin navigation or login.
-  const mutationGuard = await installMutationGuard(context, { scenarioRef });
+  const mutationGuard = await installMutationGuard(context, {
+    scenarioRef,
+    allowMutationShape(classification, method, url, body) {
+      if (scenarioRef.value !== questionSet.id) return true;
+      return classification.entry?.id === 'smartbi-factory-analysis' && method === 'POST'
+        && new URL(url).origin === new URL(baseUrl).origin && isFactoryAnalysisUrl(url, expectedFactoryId)
+        && typeof scenarioRef.factoryAnalysisQuestion === 'string'
+        && body.source === 'business' && body.question === scenarioRef.factoryAnalysisQuestion;
+    },
+  });
   // Opt out of optional UI telemetry at its source. Its POST remains a guarded
   // mutation, and older deployed applications that ignore this marker still fail.
   await context.addInitScript(() => {
@@ -141,6 +159,7 @@ async function runSuiteWithPage(page, options = {}) {
   try {
     try {
       for (const scenario of selectedScenarios) scenario.validateFactory?.(expectedFactoryId);
+      if (selectedScenarios.includes(questionSet)) questionSet.validateQuestions(options.factoryAnalysisQuestions);
       scenarioRef.value = 'clean-session';
       await establishCleanSession(page, baseUrl);
       scenarioRef.value = 'ui-login';
@@ -171,6 +190,8 @@ async function runSuiteWithPage(page, options = {}) {
         factoryAnalysisSubjectId: options.factoryAnalysisSubjectId,
         factoryAnalysisUploadedJoint: options.factoryAnalysisUploadedJoint,
         factoryAnalysisLifecycle: options.factoryAnalysisLifecycle,
+        factoryAnalysisQuestions: options.factoryAnalysisQuestions,
+        factoryAnalysisQuestionTimeoutMs: options.factoryAnalysisQuestionTimeoutMs,
         factoryCatalogFamilies: options.factoryCatalogFamilies,
         factoryCatalogCandidateIds: options.factoryCatalogCandidateIds,
         factoryCatalogSubjectId: options.factoryCatalogSubjectId,
@@ -263,6 +284,7 @@ async function runSuiteWithPage(page, options = {}) {
       results.push(assertScenarioResult(failure));
     }
     report.actorProof = actorProof;
+    report.exitCode = reportExitCode(report);
     const safeReport = sanitizeValue(report);
     const files = await writeEvidence(safeReport, evidenceDir, { productionReadonly: true, page });
     return { ...safeReport, evidence: files };
@@ -274,4 +296,4 @@ async function runSuiteWithPage(page, options = {}) {
   }
 }
 
-module.exports = { SCENARIOS, describeHarness, resolveScenarios, runSuiteWithPage };
+module.exports = { SCENARIOS, describeHarness, resolveScenarios, reportExitCode, runSuiteWithPage };

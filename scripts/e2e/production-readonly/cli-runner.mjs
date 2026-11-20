@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 
 import path from 'node:path';
+import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const { describeHarness, resolveScenarios, runSuiteWithPage } = require('./core/run-suite.js');
+const questionSet = require('./scenarios/factory-analysis-question-set-readonly');
 
 function parseArgs(argv) {
   const options = { scenarios: [] };
@@ -16,6 +18,10 @@ function parseArgs(argv) {
     else if (arg === '--scenario') options.scenarios.push(...String(argv[++index] || '').split(',').filter(Boolean));
     else if (arg === '--base-url') options.baseUrl = argv[++index];
     else if (arg === '--evidence-dir') options.evidenceDir = argv[++index];
+    else if (arg === '--questions-file') {
+      options.questionsFile = argv[++index];
+      if (!options.questionsFile || options.questionsFile.startsWith('--')) throw new Error('--questions-file requires a path');
+    }
     else throw new Error(`Unknown argument: ${arg}`);
   }
   return options;
@@ -41,8 +47,18 @@ async function main() {
   const baseUrl = args.baseUrl || process.env.E2E_ADMIN_URL || 'http://localhost:5173';
   const productionReadonly = args.productionReadonly || isProductionLike(baseUrl);
   const scenarios = resolveScenarios(args.scenarios);
+  const questionsFile = args.questionsFile || process.env.E2E_FACTORY_ANALYSIS_QUESTIONS_FILE;
+  const questionSetSelected = scenarios.includes(questionSet);
+  let factoryAnalysisQuestions;
+  if (questionSetSelected && (questionsFile || !args.dryRun)) {
+    if (!questionsFile) throw new Error('Set --questions-file or E2E_FACTORY_ANALYSIS_QUESTIONS_FILE');
+    const content = await readFile(questionsFile, 'utf8');
+    factoryAnalysisQuestions = questionSet.parseQuestionFile(content, /\.md$/iu.test(questionsFile));
+  }
   if (args.dryRun) {
-    console.log(JSON.stringify({ ...describeHarness(), baseUrl, productionReadonly, selectedScenarios: args.scenarios }, null, 2));
+    console.log(JSON.stringify({ ...describeHarness(), baseUrl, productionReadonly, selectedScenarios: args.scenarios,
+      ...(factoryAnalysisQuestions ? { questionCount: factoryAnalysisQuestions.length } : {}),
+    }, null, 2));
     return;
   }
 
@@ -71,6 +87,7 @@ async function main() {
       password,
       expectedUsername: isLiushanmen ? username : process.env.E2E_EXPECTED_USERNAME || 'f006_admin',
       expectedFactoryId,
+      factoryAnalysisQuestions,
       expectedRole: process.env.E2E_EXPECTED_ROLE || null,
       factoryAccessFactoryId: process.env.E2E_FACTORY_ACCESS_TARGET || null,
       factoryAccessCases: process.env.E2E_FACTORY_ACCESS_CASES ? JSON.parse(process.env.E2E_FACTORY_ACCESS_CASES) : null,
@@ -84,10 +101,9 @@ async function main() {
       scenarios: report.scenarios.map(({ scenario, result }) => ({ scenario, result })),
       blockedMutationAttempts: report.blockedMutationAttempts.length,
       actualBusinessWrites: report.actualBusinessWrites,
+      exitCode: report.exitCode,
     }, null, 2));
-    if (!report.safetyPassed || report.scenarios.some((scenario) => scenario.result !== 'PASS')) {
-      process.exitCode = 1;
-    }
+    process.exitCode = report.exitCode;
   } finally {
     await context.close();
     await browser.close();

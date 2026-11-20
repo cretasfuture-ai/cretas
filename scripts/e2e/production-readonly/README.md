@@ -65,6 +65,7 @@ evidenceDir       absolute path under a gitignored evidence directory
 scenarios         array of scenario IDs
 factoryAccessCases required by platform-factory-access-readonly: 2-4 exact {factoryId, username, protectedRole} cases; at least two factories and both protection states
 factoryAnalysisSubjectId optional exact product ID from the authorized clarification response; unknown IDs fail closed
+factoryAnalysisQuestions required for factory-analysis-question-set-readonly: array of 1–20 question strings
 dryRun            true loads/describes only; no navigation or login
 ```
 
@@ -156,6 +157,33 @@ node --env-file=.env.test scripts/e2e/production-readonly/cli-runner.mjs --heade
 数据分析和成本场景分别保留截图、页面状态、控制台错误与 HTTP 4xx/5xx 计数。
 通过须有实时登录响应证明租户，并满足 `actualBusinessWrites == 0` 且无被阻断的写入尝试。
 工厂问数只允许 `F006` 和 `LIUSHANMEN`。
+
+#### 逐题验证工厂问数
+
+单独选择 `factory-analysis-question-set-readonly`，从仓库根目录运行以下命令。
+题目文件支持 UTF-8 JSON 字符串数组，也可直接使用六膳门 Markdown 题表的「问题」列。
+题目须有 1–20 道，每题 1–200 个字符。`--questions-file` 优先于
+`E2E_FACTORY_ANALYSIS_QUESTIONS_FILE`。Dry run 会验证传入的文件并打印题数。
+
+```powershell
+$questions = 'docs/smartbi/liushanmen-blacklake/questions.md'
+node scripts/e2e/production-readonly/cli-runner.mjs --dry-run --production-readonly --scenario factory-analysis-question-set-readonly --questions-file "$questions"
+
+$env:E2E_FACTORY_ID = 'LIUSHANMEN'
+$env:E2E_FACTORY_ANALYSIS_QUESTIONS_FILE = $questions
+node --env-file=.env.test scripts/e2e/production-readonly/cli-runner.mjs --headed --base-url http://localhost:5173 --scenario factory-analysis-question-set-readonly
+```
+
+生产验收使用上方的 MCP filename 入口。安全注入 `scenarios: ["factory-analysis-question-set-readonly"]`、
+`expectedFactoryId: "LIUSHANMEN"` 和解析后的 `factoryAnalysisQuestions` 数组，再按原有方式注入登录选项。
+场景在一次实时 UI 登录后，逐题打开独立的业务数据分析页面并提交。工厂问数页面会去掉题面首尾空白。
+该场景只放行当前登录租户的白名单 `factory-analysis` 查询 POST。出现确认卡或被拦的请求时立即停止本批。
+
+每题在 `report.json` 的 `pageEvidence` 中记录题面、脱敏后的完整 `factoryAnalysisAnswer`、
+响应来源标识、`cites_blacklake`、HTTP 状态、耗时和截图路径。`cites_blacklake` 依据已选图表或返回事实的结构化来源，
+单凭候选目录中有黑湖或回答中提到黑湖不会算作引用。HTTP 错误、超时、澄清和未完成回答记为 `failed`，后续题照常执行。
+CLI 全部通过退出 `0`，有回答但本批失败退出 `1`，全部题均未取得完成回答退出 `2`。安全失败优先退出 `1`。
+MCP 返回相同的 `exitCode`。使用这些结果与黑湖标准答案逐题对账。
 
 ## Validation
 
