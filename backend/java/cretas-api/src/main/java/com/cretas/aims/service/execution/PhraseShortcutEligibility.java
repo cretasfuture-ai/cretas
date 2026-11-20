@@ -1,7 +1,12 @@
 package com.cretas.aims.service.execution;
 
 import com.cretas.aims.config.IntentKnowledgeBase;
+import com.cretas.aims.util.DateRangeUtils;
 
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
+import java.time.format.ResolverStyle;
 import java.util.regex.Pattern;
 
 /**
@@ -44,6 +49,13 @@ public final class PhraseShortcutEligibility {
     // 只放行损耗异常约定的滚动窗口，且写法由 TimeNormalizationRules 完整识别。
     private static final Pattern LOSS_ANOMALY_PERIOD = Pattern.compile(
             "^(?:最近|近)\\s*(?:一\\s*个月|30\\s*天)的?");
+
+    private static final String LOSS_ANOMALY_FULL_DATE = "(?:\\d{4}-\\d{2}-\\d{2}|\\d{4}年\\d{1,2}月\\d{1,2}日)";
+    private static final Pattern EXPLICIT_LOSS_ANOMALY_QUERY = Pattern.compile(
+            "^\\h*(?:从\\h*)?(" + LOSS_ANOMALY_FULL_DATE + ")\\h*(?:至|到|~|～)\\h*(" + LOSS_ANOMALY_FULL_DATE + ")"
+                    + "\\h*[,，]?\\h*(?:(?:有没有|有哪些|哪些)损耗异常|损耗异常(?:的批次)?)\\h*[?？]?\\h*$");
+    private static final DateTimeFormatter CHINESE_DATE =
+            DateTimeFormatter.ofPattern("uuuu年M月d日").withResolverStyle(ResolverStyle.STRICT);
 
     /** 不改变查询范围的语气 / 礼貌 / 指代当下的词。⛔ 不含时间段 (本月 / 上个月)、不含任何名词。 */
     private static final Pattern FILLER = Pattern.compile(
@@ -94,6 +106,9 @@ public final class PhraseShortcutEligibility {
             return true;
         }
         boolean lossAnomaly = "REPORT_BATCH_YIELD_RANK".equals(intentCode) && phrase.contains("损耗异常");
+        if (lossAnomaly && explicitLossAnomalyWindow(input) != null) {
+            return true;
+        }
         String rest = lossAnomaly
                 ? withoutPhrase(normalizeLossAnomaly(input), normalizeLossAnomaly(phrase))
                 : residual(input, phrase);
@@ -103,6 +118,28 @@ public final class PhraseShortcutEligibility {
             rest = DATE_RANGE.matcher(rest).replaceAll("");
         }
         return rest.length() <= MAX_RESIDUAL_CHARS;
+    }
+
+    /** 单一损耗异常问句的显式区间。放行与派发共用此判定，避免短语命中后丢掉日期。 */
+    static DateRangeUtils.DateRange explicitLossAnomalyWindow(String input) {
+        if (input == null) {
+            return null;
+        }
+        var match = EXPLICIT_LOSS_ANOMALY_QUERY.matcher(input);
+        if (!match.matches()) {
+            return null;
+        }
+        try {
+            LocalDate start = parseLossAnomalyDate(match.group(1));
+            LocalDate end = parseLossAnomalyDate(match.group(2));
+            return start.isAfter(end) ? null : DateRangeUtils.range(start, end);
+        } catch (DateTimeParseException e) {
+            return null;
+        }
+    }
+
+    private static LocalDate parseLossAnomalyDate(String date) {
+        return LocalDate.parse(date, date.contains("年") ? CHINESE_DATE : DateTimeFormatter.ISO_LOCAL_DATE);
     }
 
     /** 条件由工具自己从原话解析的意图, 命中即放行。只放这一个, 其它意图仍按残留字数判。 */

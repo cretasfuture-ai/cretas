@@ -692,6 +692,62 @@ class DateFilterChatEntryContractTest {
     }
 
     @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {
+            "2026-11-16 至 2026-11-20 有没有损耗异常？",
+            "2026年11月16日至2026年11月20日有哪些损耗异常？"
+    })
+    void explicitLossAnomalyDatesReachTheEmptyWindowQuery(String sentence) throws Exception {
+        LocalDate start = LocalDate.of(2026, 11, 16);
+        LocalDate end = LocalDate.of(2026, 11, 20);
+        ProductionReportRepository reports = mock(ProductionReportRepository.class);
+        AIIntentService recognizer = mock(AIIntentService.class);
+        // 今天在区间外，避免 endDate 丢失后默认取今天仍能通过。
+        configureSseIntent(recognizer, "REPORT_BATCH_YIELD_RANK", lossAnomalyTool(reports, end.plusDays(4)));
+        var anomaly = recognitionTool(recognizer, "REPORT_ANOMALY", "report_anomaly");
+        when(recognizer.recognizeIntentWithConfidence(eq(sentence), eq(F), eq(3), eq(1L), eq(ROLE),
+                isNull(), eq("READ"), any(), eq(List.of()))).thenReturn(anomaly);
+        IntentExecuteResponse response = executeSse(recognizer, initializedKnowledge(), sentence, true);
+
+        assertThat(response.getStatus()).as(response.getMessage()).isEqualTo("SUCCESS");
+        assertThat(response.getIntentCode()).as(sentence).isEqualTo("REPORT_BATCH_YIELD_RANK");
+        assertThat(response.getMetadata()).containsEntry("toolName", "report_batch_yield_rank");
+        verify(recognizer, never()).recognizeIntentWithConfidence(
+                anyString(), anyString(), anyInt(), any(), anyString(), any(), any(), any(), any());
+        verify(reports).findYieldReportsForBalance(eq(F), eq(start), eq(end), eq(""), any(), any());
+        var result = mapper.valueToTree(response.getResultData());
+        var data = result.path("data");
+        assertThat(data.path("view").asText()).isEqualTo("loss_anomaly");
+        assertThat(data.path("period").path("startDate").asText()).isEqualTo(start.toString());
+        assertThat(data.path("period").path("endDate").asText()).isEqualTo(end.toString());
+        assertThat(result.path("appliedTimeRange").path("from").asText()).isEqualTo(start.toString());
+        assertThat(result.path("appliedTimeRange").path("to").asText()).isEqualTo(end.toString());
+        assertThat(data.path("windowWidened").asBoolean()).isFalse();
+        assertThat(data.path("reportCountInWindow").asInt(-1)).isZero();
+        assertThat(data.path("noReportsInWindow").asBoolean()).isTrue();
+        assertThat(response.getMessage()).contains(start + " 至 " + end, "没有任何报工记录", "没法判断")
+                .doesNotContain("没有损耗异常的批次工序");
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {
+            "2026-11-16 至 2026-11-20 有没有异常？",
+            "2026-11-16 至 2026-11-20 有没有损耗异常，顺便列出质检不合格",
+            "2026年11月16日至2026年11月20日有哪些损耗异常？再查库存",
+            "2026-11-20 至 2026-11-16 有没有损耗异常？",
+            "2026年11月31日至2026年12月1日有哪些损耗异常？"
+    })
+    void explicitDatesDoNotShortcutOtherCompoundOrInvalidQuestions(String sentence) throws Exception {
+        ProductionReportRepository reports = mock(ProductionReportRepository.class);
+        AIIntentService recognizer = configureLossAnomalySse(reports);
+
+        runSse(recognizer, sentence);
+
+        verify(recognizer).recognizeIntentWithConfidence(eq(sentence), eq(F), eq(3), any(), eq(ROLE),
+                any(), any(), any(), eq(List.of()));
+        verifyNoInteractions(reports);
+    }
+
+    @ParameterizedTest(name = "{0}")
     @CsvSource({
             // 原始基线的 Java 识别按告警列表处理这两条通用问法。
             "最近有没有异常, ALERT_LIST, alert_list",
@@ -832,6 +888,10 @@ class DateFilterChatEntryContractTest {
     }
 
     private ReportBatchYieldRankTool lossAnomalyTool(ProductionReportRepository reports) {
+        return lossAnomalyTool(reports, LOSS_TODAY);
+    }
+
+    private ReportBatchYieldRankTool lossAnomalyTool(ProductionReportRepository reports, LocalDate today) {
         ProcessSecretAggregateExclusions exclusions = mock(ProcessSecretAggregateExclusions.class);
         when(exclusions.forCurrentCaller(eq(F), anyString())).thenReturn(ProcessSecretAggregateExclusions.Scope.EMPTY);
         MaterialBalanceThresholdProvider thresholds = mock(MaterialBalanceThresholdProvider.class);
@@ -839,7 +899,7 @@ class DateFilterChatEntryContractTest {
         ReportBatchYieldRankTool tool = withMapper(new ReportBatchYieldRankTool() {
             @Override
             protected LocalDate today() {
-                return LOSS_TODAY;
+                return today;
             }
         });
         ReflectionTestUtils.setField(tool, "batchRepository", mock(ProductionBatchRepository.class));
@@ -850,7 +910,7 @@ class DateFilterChatEntryContractTest {
                 new TimeNormalizationRules() {
                     @Override
                     public NormalizationResult extractAndReplace(String text, LocalDateTime now) {
-                        return super.extractAndReplace(text, LOSS_TODAY.atTime(12, 0));
+                        return super.extractAndReplace(text, today.atTime(12, 0));
                     }
                 }, new ColloquialMappings(), null, null, mapper, null, null));
 
@@ -906,10 +966,16 @@ class DateFilterChatEntryContractTest {
 
     private IntentExecuteResponse executeSse(AIIntentService recognizer, IntentKnowledgeBase knowledge, String sentence)
             throws Exception {
+        return executeSse(recognizer, knowledge, sentence, false);
+    }
+
+    private IntentExecuteResponse executeSse(AIIntentService recognizer, IntentKnowledgeBase knowledge,
+                                             String sentence, boolean ordinaryRead) throws Exception {
         SemanticCacheService cache = mock(SemanticCacheService.class);
         when(cache.queryCache(F, sentence)).thenReturn(SemanticCacheHit.miss(0L));
         SseStreamingService sse = spy(new SseStreamingService(recognizer, cache, knowledge,
-                mock(AnalysisRouterService.class), mapper, registry, dispatch, mock(DynamicToolSelectionService.class),
+                mock(AnalysisRouterService.class), mapper.copy().findAndRegisterModules(), registry, dispatch,
+                mock(DynamicToolSelectionService.class),
                 mock(DashScopeClient.class), mock(DashScopeConfig.class)));
         BusinessTypeGate businessType = mock(BusinessTypeGate.class);
         when(businessType.resolveDomain(F)).thenReturn("FACTORY");
@@ -919,9 +985,17 @@ class DateFilterChatEntryContractTest {
         IntentPermissionGate permissions = mock(IntentPermissionGate.class);
         when(permissions.check(any(), any(), anyString())).thenReturn(IntentPermissionGate.PermissionCheck.allowed());
         ReflectionTestUtils.setField(sse, "intentPermissionGate", permissions);
-        doNothing().when(sse).sendSseEvent(any(), anyString(), any());
-        SseEmitter emitter = mock(SseEmitter.class);
         try {
+            if (ordinaryRead) {
+                var steps = OrdinaryEntryPipeline.attachTurnSteps(sse);
+                try (var actor = AuthenticatedActor.trustedAsyncScope(
+                        new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, 1L, F, ROLE))) {
+                    return new StreamTurnCollector(sse, steps).collect(F,
+                            IntentExecuteRequest.builder().mode("READ").userInput(sentence).build(), 1L, ROLE);
+                }
+            }
+            doNothing().when(sse).sendSseEvent(any(), anyString(), any());
+            SseEmitter emitter = mock(SseEmitter.class);
             sse.executeStreamAsync(emitter, F, IntentExecuteRequest.builder().userInput(sentence).build(),
                     1L, ROLE, new F006BossQuestionClient.Cancellation());
             var event = ArgumentCaptor.forClass(Object.class);
