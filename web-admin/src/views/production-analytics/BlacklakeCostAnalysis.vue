@@ -130,9 +130,14 @@ onBeforeUnmount(() => {
           </p>
         </el-card>
         <el-card shadow="never">
-          <div class="metric-label" title="按工单实际产出量加权，同单位内计算">平均单位成本</div>
+          <div class="metric-label">平均单位成本</div>
+          <p v-if="data.summary.unitCosts.length" class="basis">黑湖单价按同单位的实际产出量加权</p>
           <div v-for="item in data.summary.unitCosts" :key="item.unit" class="unit-cost">
             <strong>{{ money(item.cost, 4) }}</strong> / {{ item.unit }}
+            <div v-if="item.workOrderCount" class="basis">
+              {{ item.workOrderCount }} 单<template v-if="item.zeroUnitCostOrders"> · 黑湖单价为 0 {{ item.zeroUnitCostOrders }} 单</template>
+              <template v-if="item.zeroMaterialCostOrders"> · 黑湖材料成本为 0 {{ item.zeroMaterialCostOrders }} 单</template>
+            </div>
           </div>
           <strong v-if="!data.summary.unitCosts.length">—</strong>
           <p v-if="data.summary.unitCostMissingOrders" class="basis">
@@ -153,6 +158,9 @@ onBeforeUnmount(() => {
         工单 {{ data.summary.workOrderCount }} 单 · 领料投入 {{ quantities(data.summary.inputByUnit) }}
         · 领料金额 {{ money(data.summary.issuedMaterialCost) }} · 出成率 {{ fmtPercent(data.summary.yieldRate) }}
         （{{ data.summary.yieldComparableOrders }} / {{ data.summary.workOrderCount }} 单重量单位可比且有有效数据）
+      </p>
+      <p v-if="data.summary.priceMissingCount !== null" class="basis">
+        材料成本按工单成本日期汇总。领料金额按明细计价，包括期间内领料（含未纳入成本汇总或未关联工单的记录）及所选工单的跨期领料。
       </p>
 
       <el-card v-if="data.daily.length" shadow="never">
@@ -187,7 +195,12 @@ onBeforeUnmount(() => {
             <template #default="{ row }">{{ quantities(row.inputByUnit) }}</template>
           </el-table-column>
           <el-table-column label="出成率" align="right" min-width="112">
-            <template #default="{ row }">{{ fmtPercent(row.yieldRate) }}</template>
+            <template #default="{ row }">
+              {{ fmtPercent(row.yieldRate) }}
+              <div class="basis" title="可比工单的实际产出重量合计 ÷ 对应工单领料重量合计">
+                {{ row.yieldComparableOrders }} / {{ row.workOrderCount }} 单可比
+              </div>
+            </template>
           </el-table-column>
         </el-table>
       </el-card>
@@ -222,7 +235,6 @@ onBeforeUnmount(() => {
 
       <el-card shadow="never">
         <template #header><h3>生产领料投入</h3></template>
-        <p class="basis">包括所选期间的领料和所选工单关联的跨日领料。</p>
         <el-table :data="issues" row-key="lineId" max-height="460" stripe empty-text="所选期间及相关工单暂无生产领料">
           <el-table-column prop="issueDate" label="领料日" width="112" />
           <el-table-column label="工单号" min-width="140">

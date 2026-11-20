@@ -244,8 +244,7 @@ def _reported_unit_cost(order) -> Decimal | None:
 
 
 def _cost_metrics(entries: list, issues: list, *, issue_snapshot_available: bool) -> dict:
-    unit_totals = defaultdict(Decimal)
-    unit_quantities = defaultdict(Decimal)
+    orders_by_unit = defaultdict(list)
     missing_unit_costs = 0
     for order, *_ in entries:
         unit, qty, cost = order["output_unit"], order["output_qty"], _reported_unit_cost(order)
@@ -255,8 +254,7 @@ def _cost_metrics(entries: list, issues: list, *, issue_snapshot_available: bool
             # Unit cost is per source unit. Keep kg and g separate here so a
             # weighted price never combines unlike denominators.
             unit = unit.upper() if unit.isascii() else unit
-            unit_quantities[unit] += qty
-            unit_totals[unit] += qty * cost
+            orders_by_unit[unit].append((qty, cost, order["material_cost"]))
     comparable = [(output, used) for _, output, used, _ in entries if used is not None]
     return {
         "materialCost": _sum_present(order["material_cost"] for order, *_ in entries),
@@ -265,8 +263,16 @@ def _cost_metrics(entries: list, issues: list, *, issue_snapshot_available: bool
         "laborCostMissingOrders": sum(order["labor_cost"] is None for order, *_ in entries),
         "totalCost": _sum_present(order["total_cost"] for order, *_ in entries),
         "costMissingOrders": sum(order["total_cost"] is None for order, *_ in entries),
-        "unitCosts": [{"unit": unit, "cost": unit_totals[unit] / unit_quantities[unit]}
-                      for unit in sorted(unit_totals)],
+        "unitCosts": [
+            {
+                "unit": unit,
+                "cost": sum(qty * cost for qty, cost, _ in orders) / sum(qty for qty, *_ in orders),
+                "workOrderCount": len(orders),
+                "zeroUnitCostOrders": sum(cost == 0 for _, cost, _ in orders),
+                "zeroMaterialCostOrders": sum(material == 0 for _, _, material in orders),
+            }
+            for unit, orders in sorted(orders_by_unit.items())
+        ],
         "unitCostMissingOrders": missing_unit_costs,
         "inputByUnit": _quantities(issues),
         "issuedMaterialCost": _sum_present(row["issue_cost"] for row in issues),

@@ -370,7 +370,10 @@ async def test_nightly_external_cost_reaches_http_including_decimal_yield_price_
         assert summary["materialCost"] == Decimal("200.024691356")
         assert summary["laborCost"] == Decimal("18.20")
         assert summary["issuedMaterialCost"] == Decimal("31.43125")
-        assert summary["unitCosts"] == [{"unit": "KG", "cost": Decimal("13.2257")}]
+        assert summary["unitCosts"] == [{
+            "unit": "KG", "cost": Decimal("13.2257"), "workOrderCount": 1,
+            "zeroUnitCostOrders": 0, "zeroMaterialCostOrders": 0,
+        }]
         assert summary["costMissingOrders"] == 0 and summary["unitCostMissingOrders"] == 1
         assert summary["materialCostMissingOrders"] == summary["laborCostMissingOrders"] == 0
         assert summary["priceMissingCount"] == summary["yieldComparableOrders"] == 1
@@ -460,13 +463,62 @@ async def test_external_cost_preserves_valid_zero_and_signed_material_credit(sto
     assert by_order["PLACEHOLDER-ZERO"]["unitCost"] is None
     assert by_order["CREDIT"]["unitCost"] == -16
     daily = {row["costDate"]: row for row in payload["daily"]}
-    assert daily[DAY]["unitCosts"] == [{"unit": "KG", "cost": 8}]
+    assert daily[DAY]["unitCosts"] == [{
+        "unit": "KG", "cost": 8, "workOrderCount": 2,
+        "zeroUnitCostOrders": 1, "zeroMaterialCostOrders": 1,
+    }]
     assert daily[DAY]["unitCostMissingOrders"] == 1
     assert daily[DAY]["hasMaterialCredit"] is False
     assert daily["2026-11-04"]["hasMaterialCredit"] is True
     assert daily["2026-11-04"]["materialCost"] == -152933
     assert daily["2026-11-04"]["totalCost"] == -140600
     assert daily["2026-11-05"]["hasMaterialCredit"] is False
+
+
+@pytest.mark.asyncio
+async def test_external_cost_explains_unit_samples_yield_and_issue_scope(stores, full_cost_access):
+    bronze, source, target = stores
+    await bronze.execute("INSERT INTO factory_external_integrations VALUES ($1, 'blacklake', 'ACTIVE')", FACTORY)
+    await _snapshot(bronze, FACTORY, COLLECTED, [
+        _work_order("BAG-A", product="BAG-A", unit="袋", qty="3830", unit_cost="0.181027",
+                    material="0", labor="693.33", total="693.33"),
+        _work_order("BAG-B", product="BAG-B", unit="袋", qty="207", unit_cost="0", material="0", total="0"),
+        _work_order("BAG-C", product="BAG-C", unit="袋", qty="107", unit_cost="0", material="0", total="0"),
+        _work_order("MASS-A", qty="4966.23", material="30"),
+        _work_order("MASS-B", qty="3622.257", material="40"),
+    ], dataset="project_cost")
+    await _snapshot(bronze, FACTORY, COLLECTED, [
+        _issue("bag", "BAG-A", day=DAY, unit="个", quantity="3333", price="1", amount="-10"),
+        _issue("mass-a", "MASS-A", day=DAY, unit="KG", quantity="4966.23", price="1", amount="-20"),
+        _issue("mass-b-early", "MASS-B", day="2026-11-17", unit="KG", quantity="1445", price="1", amount="-30"),
+        _issue("mass-b-current", "MASS-B", day=DAY, unit="KG", quantity="2177.257", price="1", amount="-40"),
+        _issue("other", "OUTSIDE-COST-SCOPE", day=DAY, price="1", amount="-50"),
+        _issue("unlinked", None, day=DAY, price="1", amount="-60"),
+        _issue("out-of-window", "OUTSIDE-COST-SCOPE", day="2026-11-17", price="1", amount="-70"),
+    ], dataset="production_issue")
+    assert (await sync_external_cost(source, target, FACTORY))["snapshots"] == 2
+    async with _client() as client:
+        response = await client.get(
+            COST_ROUTE, params={"startDate": DAY, "endDate": DAY}, headers=_headers(role="factory_super_admin"),
+        )
+    assert response.status_code == 200
+    payload = json.loads(response.text, parse_float=Decimal)["data"]
+    summary = payload["summary"]
+    per_bag = next(item for item in summary["unitCosts"] if item["unit"] == "袋")
+    assert per_bag == {
+        "unit": "袋", "cost": pytest.approx(Decimal("0.16731018581081")), "workOrderCount": 3,
+        "zeroUnitCostOrders": 2, "zeroMaterialCostOrders": 3,
+    }
+    mass_product = next(product for product in payload["products"] if product["productCode"] == CODE)
+    assert mass_product["yieldRate"] == 100
+    assert mass_product["yieldComparableOrders"] == mass_product["workOrderCount"] == 2
+    assert mass_product["inputByUnit"] == [{"unit": "kg", "quantity": Decimal("8588.487")}]
+    assert summary["materialCost"] == 70
+    assert summary["issuedMaterialCost"] == 210
+    assert payload["daily"][0]["issuedMaterialCost"] == 100
+    assert sorted(line["lineId"] for line in payload["materialIssues"]) == [
+        "bag", "mass-a", "mass-b-current", "mass-b-early", "other", "unlinked",
+    ]
 
 
 @pytest.mark.asyncio
