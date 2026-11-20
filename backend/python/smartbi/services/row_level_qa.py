@@ -144,7 +144,10 @@ def _col_profile(df: pd.DataFrame, col: str) -> str:
 def build_plan_prompt(question: str, df: pd.DataFrame) -> str:
     cols = "\n".join(f"- {c} ({_col_profile(df, c)})" for c in df.columns)
     hint = ""
-    if asks_week_on_non_week_table(question, df):
+    if WEEK_ROLLUP_COL in df.columns and _WEEK_ASK_RE.search(question or ""):
+        hint = (f"\n周汇总或排名使用「{WEEK_ROLLUP_COL}」分组。它是 ISO 周标签，"
+                "如有日期范围，先用原日期字段筛选，再按周聚合。\n")
+    elif asks_week_on_non_week_table(question, df):
         hint = ("\n注意: 数据表没有「周」列, 是按日表。不要 group_by 周 (字段不存在); "
                 "直接在日期行上排序/定位, 并在 note 写明「当前是按日表」。\n")
     return f"""数据表共 {len(df)} 行。全部字段:
@@ -180,8 +183,6 @@ def build_plan_prompt(question: str, df: pd.DataFrame) -> str:
 _WEEK_ASK_RE = re.compile(r"(哪一?周|每周|各周|按周|第[几一二三四五六七八九十\d]+周|周达成|周产量)")
 TOTAL_WORDS = ("一共", "总共", "合计", "总计", "共计", "总数", "加起来")
 _CODE_NAME_RE = re.compile(r"(编码|编号|代码|批号|单号|工号|货号|条码|(?<![A-Za-z])(?:id|ID|Id)(?![a-z]))")
-_GAP_ASK_WORDS = ("没按计划", "未按计划", "没完成", "未完成", "没达成", "未达成", "缺口",
-                  "缺几个", "差几个", "没做完", "没按期")
 
 
 def asks_total(question: str) -> bool:
@@ -190,6 +191,32 @@ def asks_total(question: str) -> bool:
 
 def is_code_column(name: str) -> bool:
     return bool(_CODE_NAME_RE.search(str(name)))
+
+
+def identifier_columns(columns: Sequence[str], field_meta: Optional[Sequence[dict]],
+                       df: Optional[pd.DataFrame] = None) -> set:
+    """编码/批号类标识列: 按字段角色判断 (字段定义里是维度、不是指标也不是时间), 没有角色信息的列才退回列名词表。
+
+    标识列的数值不是量: 不加千分位 (22002 不能写成 22,002), 不做求和/均值/首尾变化。
+    给了 df 时, 角色是维度的数值列还要求值都是 >=1000 的整数才算标识: 小整数 (如被误标成维度的计数列)
+    不会被格式化出千分位, 没有需要保护的东西, 也不该因此丢掉它的统计。
+    字段定义说是指标的列, 即使列名带「编号」也仍按列名挡 (旧上传把批号存成数值时角色是指标)。
+    """
+    roles = {str(f.get("original_name")): f for f in (field_meta or []) if f.get("original_name")}
+    out = set()
+    for c in columns:
+        f = roles.get(str(c))
+        if f is not None and f.get("is_dimension") and not f.get("is_measure") and not f.get("is_time"):
+            if df is not None and c in df.columns:
+                num = pd.to_numeric(df[c], errors="coerce").dropna()
+                if len(num) and (num != num.round()).any() | (num.abs().max() < 1000):
+                    # 数值列但不像标识 (带小数 / 都是小数): 不挡
+                    if not is_code_column(str(c)):
+                        continue
+            out.add(c)
+        elif is_code_column(str(c)):
+            out.add(c)
+    return out
 
 
 def asks_week_on_non_week_table(question: str, df: pd.DataFrame) -> bool:
@@ -229,6 +256,155 @@ def gap_column_name(pair: tuple) -> str:
     return f"缺口数({pair[0]}-{pair[1]})"
 
 
+WEEK_ROLLUP_COL = "周(按日期折算)"
+MONTH_SCOPE_COL = "月份(按日期折算)"
+_LOW_WORDS = ("最低", "最少", "最小", "最差", "最弱", "最短")
+_HIGH_WORDS = ("最高", "最多", "最大", "最好", "最强", "最长")
+_MONTH_PREFIX = r"(?:(?P<month>1[0-2]|[1-9])\s*月\s*[,，]?\s*)?"
+_DAY_VALUE_RE = re.compile(r"^(\d{4}[-/]\d{1,2}[-/]\d{1,2})(?=$|[T ])")
+_RANK_WORD = "|".join(_LOW_WORDS + _HIGH_WORDS)
+
+# 原始列头，来源为 test_weimei_retest_r4b.py 的 weekly_additive_flow 阳性。
+_WEEKLY_SUM_COLUMNS = frozenset({"良品产量kg"})
+
+# 原始比率列头 -> (分子原始列头, 分母原始列头)。带公式的键也逐字核对公式。
+_WEEKLY_RATIO_COLUMNS = {
+    # 味美上线修复，test_weimei_retest_r4.py 的 test_4_week_question_on_daily_table_is_rolled_up_by_the_program。
+    "计划品项达成率": ("已产出计划品项数", "原表计划品项数"),
+    # test_weimei_retest_r4b.py 的 r3_weekly_ratio 阳性。
+    "计划品项达成率(合格品项数/抽检品项数)": ("合格品项数", "抽检品项数"),
+    # test_weimei_retest_r4b.py 的 weekly_header_ratio 阳性。
+    "良品率(良品件数/生产件数)": ("良品件数", "生产件数"),
+    # REVIEW-1981R4 的完好件数对照，test_weimei_retest_r4b.py 的 weekly_ratio_registered_box_totals。
+    "完好率(完好件数/抽检件数)": ("完好件数", "抽检件数"),
+}
+
+
+def _date_column(df: pd.DataFrame, field_meta: Optional[Sequence[dict]] = None):
+    """仅在唯一日期字段的每一行都能定位到日期时，折算周/月。"""
+    roles = {f.get("original_name"): f for f in (field_meta or [])}
+    dates = []
+    for c in df.columns:
+        if not _has_date_role(df[c], roles.get(c)):
+            continue
+        s = df[c]
+        text = s.astype(str).str.strip().where(s.notna())
+        values = text.dropna()
+        if values.empty or not values.str.match(_DAY_VALUE_RE).all():
+            continue
+        # Validate timestamp suffixes while allowing legacy slash dates.
+        if not values.str.replace(_DAY_VALUE_RE, "2000-01-01", regex=True).str.fullmatch(_ISO_DATE_VALUE_RE).all():
+            continue
+        days = text.str.extract(_DAY_VALUE_RE, expand=False).str.replace("/", "-", regex=False)
+        d = pd.to_datetime(days, format="%Y-%m-%d", errors="coerce")
+        dates.append((c, d))
+    if len(dates) == 1:
+        col, parsed = dates[0]
+        if pd.api.types.is_datetime64_any_dtype(parsed.dtype) and parsed.notna().all():
+            return col, parsed
+    return None, None
+
+
+def _with_calendar_columns(
+    df: pd.DataFrame, question: str, field_meta: Optional[Sequence[dict]],
+) -> tuple[pd.DataFrame, bool]:
+    """Expose ISO weeks to the planner even when a natural month is ambiguous."""
+    _, dates = _date_column(df, field_meta)
+    if dates is None:
+        return df, False
+    cross_year = dates.dt.year.nunique() > 1
+    month = re.match(_MONTH_PREFIX, question.strip()).group("month")
+    add_week = asks_week_on_non_week_table(question, df)
+    add_month = (month and not cross_year and MONTH_SCOPE_COL not in df.columns
+                 and dates.dt.month.eq(int(month)).any())
+    if not (add_week or add_month):
+        return df, cross_year
+    out = df.copy()
+    if add_week:
+        iso = dates.dt.isocalendar()
+        out[WEEK_ROLLUP_COL] = iso["year"].astype(str) + "-W" + iso["week"].astype(str).str.zfill(2)
+    if add_month:
+        out[MONTH_SCOPE_COL] = dates.dt.month.astype("Int64")
+    return out, cross_year
+
+
+def _rule_month_filters(match: re.Match, df: pd.DataFrame) -> Optional[list]:
+    month = match.group("month")
+    if month is None:
+        return []
+    if MONTH_SCOPE_COL not in df.columns:
+        return None
+    return [{"col": MONTH_SCOPE_COL, "op": "==", "value": int(month)}]
+
+
+def _metric_base(column: str) -> str:
+    label = re.split(r"[（(]", column, maxsplit=1)[0].strip()
+    return re.sub(r"(?:kg|℃|[%％])$", "", label, flags=re.IGNORECASE).strip()
+
+
+def _valid_weekly_values(column: str, df: pd.DataFrame, roles: dict, *, counts_only: bool = False) -> bool:
+    if column not in df.columns:
+        return False
+    role = roles.get(column, {})
+    if role.get("is_time") or (role.get("is_dimension") and not role.get("is_measure")):
+        return False
+    values = _to_num(df[column].dropna())
+    if values.empty or not values.notna().all():
+        return False
+    return not counts_only or (len(values) == len(df) and (values.ge(0) & values.mod(1).eq(0)).all())
+
+
+def week_rollup_plan(question: str, df: pd.DataFrame, field_meta: Optional[Sequence[dict]]) -> Optional[dict]:
+    """Match a complete single-metric ranking or total question."""
+    if WEEK_ROLLUP_COL not in df.columns:
+        return None
+    match = re.fullmatch(
+        _MONTH_PREFIX + rf"(?:哪一?周\s*(?P<rank_metric>.+?)\s*(?P<rank>{_RANK_WORD})"
+        rf"|(?:每周|各周)\s*(?P<total_metric>.+?)\s*(?:合计|总计|总量))"
+        r"\s*(?:[?？]\s*是多少)?[?？。]?", question.strip(),
+    )
+    if not match:
+        return None
+    filters = _rule_month_filters(match, df)
+    if filters is None:
+        return None
+    requested = (match["rank_metric"] or match["total_metric"]).strip()
+    columns = [str(c) for c in df.columns]
+    named = [c for c in columns if requested in (_metric_base(c), c)]
+    if len(named) != 1:
+        return None
+    column = named[0]
+    roles = {f.get("original_name"): f for f in (field_meta or [])}
+    label = _metric_base(column)
+    pair = _WEEKLY_RATIO_COLUMNS.get(column)
+    if pair and match["rank"]:
+        if not all(_valid_weekly_values(c, df, roles, counts_only=True) for c in pair):
+            return None
+        num, den = pair
+        metric = {"name": label + "(按周加权)", "func": "ratio", "num": [num], "den": [den]}
+        how = f"按周加权 = Σ{num} / Σ{den}, 不是逐日比率的平均"
+    else:
+        if column not in _WEEKLY_SUM_COLUMNS or not _valid_weekly_values(column, df, roles):
+            return None
+        metric = {"name": label + "(按周合计)", "func": "sum", "col": column}
+        how = f"按周求和「{column}」"
+    scope = f"只统计 {match['month']} 月的日期 (跨月的周只算该月的天); " if filters else ""
+    return {
+        "intent": "compute", "filters": filters, "group_by": [WEEK_ROLLUP_COL], "metrics": [metric],
+        "sort_by": metric["name"] if match["rank"] else WEEK_ROLLUP_COL,
+        "descending": match["rank"] in _HIGH_WORDS, "limit": 10 if match["rank"] else MAX_RESULT_ROWS,
+        "note": f"这张表是按日表 (没有「周」列), 已由日期折算 ISO 周 (周一至周日) 后按周汇总: {how}; {scope}"
+                "回答须说明是按日表按周汇总的结果; 没有数据的周 (值为空) 不参与排名",
+    }
+
+
+_PLAN_QUESTION_RE = re.compile(
+    _MONTH_PREFIX + r"(?:"
+    r"(?P<quantity>哪(?:一)?天\s*计划\s*(?:产量|数量|产出)\s*(?:最高|最多|最大))"
+    r"|(?P<comparison>计划\s*(?:与|和|跟|对比|对照|vs)\s*实际\s*差(?:了)?多少)"
+    r"|(?P<gap>哪些产品\s*(?:没按计划完成|未按计划完成)|计划缺口(?:是多少|有多少)?)"
+    r")\s*[?？。]?", re.IGNORECASE,
+)
 _PLAN_QTY_WORDS = ("产量", "数量", "kg", "公斤", "重量")
 
 
@@ -239,26 +415,50 @@ def rule_based_plan(question: str, df: pd.DataFrame) -> Optional[tuple]:
        没有就拒答; 不拿「实产良品」顶替。
     2. 问「没按计划完成/缺口」: 有 计划数+已产出数 成对列 -> 缺口 = 计划−已产出 逐行现算。
     """
-    q = question or ""
+    match = _PLAN_QUESTION_RE.fullmatch(question.strip())
+    if not match:
+        return None
+    scope = _rule_month_filters(match, df)
+    if scope is None:
+        return None
     cols = [str(c) for c in df.columns]
-    if re.search(r"计划\s*(产量|数量|产出)", q):
+    if match["quantity"]:
         has_qty = any("计划" in c and any(w in c for w in _PLAN_QTY_WORDS) and "外" not in c for c in cols)
         if not has_qty:
             pair = _plan_count_columns(cols)
             if not pair:
                 return ("refuse", "计划产量")
             return ("plan", {
-                "intent": "compute", "sort_by": pair[0], "descending": True, "limit": 1,
+                "intent": "compute", "filters": scope, "sort_by": pair[0], "descending": True, "limit": 1,
                 "note": f"原表计划没有数量列 (只有「{pair[0]}」), 按计划品项数回答, 不是计划产量; "
                         "不得拿实产良品顶替计划产量",
             })
-    if any(w in q for w in _GAP_ASK_WORDS):
+    if match["comparison"]:
+        pair = _plan_count_columns(cols)
+        if pair and all("品项" in c for c in pair):
+            gap = gap_column_name(pair)
+            metrics = [
+                {"name": "计划品项数合计", "func": "sum", "col": pair[0]},
+                {"name": "已产出品项数合计", "func": "sum", "col": pair[1]},
+            ]
+            if gap in cols:
+                metrics.append({"name": "缺口合计(计划-产出)", "func": "sum", "col": gap})
+            metrics.append({"name": "品项达成率(按合计加权)", "func": "ratio", "num": [pair[1]], "den": [pair[0]]})
+            outside = [c for c in cols if "计划外" in c and "数" in c]
+            if len(outside) == 1:
+                metrics.append({"name": "计划外品项数合计", "func": "sum", "col": outside[0]})
+            return ("plan", {
+                "intent": "compute", "metrics": metrics, "filters": scope,
+                "note": f"原表计划没有数量, 按品项数回答: 达成率 = Σ{pair[1]} / Σ{pair[0]} (不是逐日达成率的平均); "
+                        "不得给逐日均值或自行推算天数",
+            })
+    if match["gap"]:
         pair = _plan_count_columns(cols)
         if pair:
             gap = gap_column_name(pair)
             return ("plan", {
                 "intent": "compute",
-                "filters": [{"col": gap, "op": ">", "value": 0}],
+                "filters": [*scope, {"col": gap, "op": ">", "value": 0}],
                 "sort_by": gap, "descending": True, "limit": 10,
                 "note": f"缺口 = {pair[0]} − {pair[1]} (逐行现算, 不是计划数本身); "
                         "本表每行是一个时间段的品项数, 不含具体产品名",
@@ -292,6 +492,8 @@ def _resolve_col(name: Any, columns: Sequence[str]) -> str:
     low = [c for c in columns if c.lower() == n.lower()]
     if len(low) == 1:
         return low[0]
+    if n in (WEEK_ROLLUP_COL, MONTH_SCOPE_COL):
+        raise PlanError(f"字段不存在: {n}")
     sub = [c for c in columns if n and (n in c or c in n)]
     if len(sub) == 1:
         return sub[0]
@@ -310,7 +512,7 @@ _FORMULA_RE = re.compile(r"[（(]\s*(.+)\s*[）)]\s*$")
 def derive_ratio_from_header(col: str, columns: Sequence[str]) -> Optional[tuple]:
     """列头自带公式 (如 出成率(良品/(良品+废品+次品))) 时, 解出 (分子列, 分母列)。
 
-    token 按「字段名以它开头」对应到实际列 (良品 -> 良品kg)。解不出返回 None。
+    允许唯一前缀匹配 (良品 -> 良品kg)。解不出返回 None。
     """
     m = _FORMULA_RE.search(col)
     if not m or "/" not in m.group(1):
@@ -324,7 +526,7 @@ def derive_ratio_from_header(col: str, columns: Sequence[str]) -> Optional[tuple
     def to_cols(toks: List[str]) -> Optional[List[str]]:
         out: List[str] = []
         for t in toks:
-            cands = [c for c in columns if c != col and (c == t or c.startswith(t))]
+            cands = [c for c in columns if c != col and c.startswith(t)]
             if len(cands) != 1:
                 return None
             out.append(cands[0])
@@ -409,12 +611,86 @@ class ExecResult:
     pct_cols: set = field(default_factory=set)
     code_cols: set = field(default_factory=set)
     totals: Dict[str, Any] = field(default_factory=dict)
+    total_columns: Dict[str, str] = field(default_factory=dict)
+    all_group_labels: Optional[list] = None
     asks_total: bool = False
+    hash_cols: set = field(default_factory=set)      # 整列带「#」转义前缀的编码列: 展示时去掉一个 #
 
 
-def _apply_filter(df: pd.DataFrame, f: dict) -> pd.Series:
+def strip_code_hash(s: str) -> str:
+    """去掉一个「#」转义前缀 (#21014C -> 21014C)。只对整列都带「#」的编码列调用 (见 hash_escaped_column)。"""
+    value = s.strip()
+    return value[1:] if len(value) > 1 and value.startswith("#") else s
+
+
+def hash_escaped_column(s: pd.Series, role: Optional[dict] = None) -> bool:
+    """兼容旧导入约定：明确命名的编码列，且所有非空值统一加了一个 #。"""
+    if not is_code_column(str(s.name)) or not pd.api.types.is_string_dtype(s.dtype):
+        return False
+    if role and (role.get("is_measure") or role.get("is_time")):
+        return False
+    v = s.dropna().astype(str).str.strip()
+    v = v[v != ""]
+    return len(v) > 0 and bool(v.str.fullmatch(r"#[^#\s].*").all())
+
+
+_MONTH_PREFIX_RE = re.compile(r"\d{4}-\d{2}(-\d{2})?")
+_ISO_DATE_VALUE_RE = re.compile(
+    r"\d{4}-\d{2}-\d{2}(?:[T ](?:[01]\d|2[0-3]):[0-5]\d"
+    r"(?::[0-5]\d(?:\.\d+)?)?(?:Z|[+-](?:[01]\d|2[0-3]):?[0-5]\d)?)?"
+)
+_DATE_NAME_RE = re.compile(r"日期|(?<![A-Za-z])date(?![A-Za-z])", re.IGNORECASE)
+
+
+def _has_date_role(s: pd.Series, role: Optional[dict]) -> bool:
+    name = str(s.name)
+    if is_code_column(name) or re.search(r"(?<![A-Za-z])sku(?![A-Za-z])", name, re.IGNORECASE):
+        return False
+    if role and role.get("is_time"):
+        return True
+    if role and (role.get("is_measure") or role.get("is_dimension")):
+        return False
+    return bool(_DATE_NAME_RE.search(name)) or pd.api.types.is_datetime64_any_dtype(s.dtype)
+
+
+def _valid_date_prefix(s: pd.Series, value: str) -> bool:
+    """仅对有效 ISO 日期值允许按月或按日匹配。"""
+    values = s.dropna().astype(str).str.strip()
+    if values.empty or not values.str.fullmatch(_ISO_DATE_VALUE_RE).all():
+        return False
+    dates = pd.to_datetime(values.str[:10], format="%Y-%m-%d", errors="coerce")
+    return dates.notna().all() and pd.notna(pd.to_datetime(value, errors="coerce"))
+
+
+class ValueNotFound(PlanError):
+    """等值筛选的取值在该列里根本没出现 (多半是规划器把「10月」写成 日期=='2026-10' 这类)。"""
+
+
+def _apply_filter(
+    df: pd.DataFrame, f: dict, strict_values: bool = True, *,
+    role: Optional[dict] = None, hash_escaped: bool = False,
+) -> pd.Series:
     col, op, val = f["col"], f["op"], f["value"]
     s = df[col]
+    if op in ("==", "!=") and isinstance(val, str) and (
+        pd.api.types.is_string_dtype(s.dtype) or pd.api.types.is_datetime64_any_dtype(s.dtype)
+    ):
+        sv0, v0 = s.astype(str).str.strip(), val.strip()
+        if (_MONTH_PREFIX_RE.fullmatch(v0) and _has_date_role(s, role)
+                and _valid_date_prefix(s, v0)):
+            matches = s.notna() & (sv0.str[:len(v0)] == v0)
+            if matches.any() or op == "!=" or not strict_values:
+                return matches if op == "==" else ~matches
+        if v0 and not (sv0 == v0).any():
+            if hash_escaped and not v0.startswith("#"):
+                m = sv0 == "#" + v0
+                if m.any():
+                    return m if op == "==" else ~m
+            if strict_values and op == "==" and s.notna().any():
+                uniq = list(dict.fromkeys(sv0[s.notna()].tolist()))
+                shown = " / ".join(u[:20] for u in uniq[:12])
+                raise ValueNotFound(
+                    f"字段「{col}」没有取值「{v0}」(现有取值: {shown}{' …' if len(uniq) > 12 else ''})")
     if op == "notnull":
         return s.notna() & (s.astype(str).str.strip() != "")
     if op == "contains":
@@ -429,7 +705,10 @@ def _apply_filter(df: pd.DataFrame, f: dict) -> pd.Series:
         return sv == v
     if op == "!=":
         return sv != v
-    # 字符串比较 (ISO 日期可按字典序)
+    # A date-only boundary applies to the entire calendar day of a real date field.
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", v) and _has_date_role(s, role) and _valid_date_prefix(s, v):
+        sv = sv.str[:10]
+    # 日期时间边界与其他字符串仍按原始值比较。
     return {">": sv > v, ">=": sv >= v, "<": sv < v, "<=": sv <= v}[op].where(s.notna(), False)
 
 
@@ -449,13 +728,13 @@ def _metric_value(sub: pd.DataFrame, m: dict):
     return float({"sum": n.sum, "mean": n.mean, "min": n.min, "max": n.max}[func]())
 
 
-def _fmt(v: Any, pct: bool = False, code: bool = False) -> str:
+def _fmt(v: Any, pct: bool = False, code: bool = False, strip_hash: bool = False) -> str:
     if v is None or (isinstance(v, float) and pd.isna(v)):
         return "(空)"
     if code:  # 编码/ID 类列: 原样, 不加千分位, 不带 .0
         if isinstance(v, float) and v == int(v):
             return str(int(v))
-        return str(v)
+        return strip_code_hash(str(v)) if strip_hash else str(v)
     if pct:
         return f"{v * 100:.2f}%"
     if isinstance(v, bool):
@@ -468,18 +747,26 @@ def _fmt(v: Any, pct: bool = False, code: bool = False) -> str:
     return s if len(s) <= 40 else s[:40] + "…"
 
 
-def execute_plan(df: pd.DataFrame, plan: dict, question: str = "") -> ExecResult:
-    res = _execute_plan(df, plan, question)
+def execute_plan(df: pd.DataFrame, plan: dict, question: str = "",
+                 field_meta: Optional[Sequence[dict]] = None, strict_values: bool = True) -> ExecResult:
+    roles = {f.get("original_name"): f for f in (field_meta or [])}
+    hash_cols = {c for c in df.columns if hash_escaped_column(df[c], roles.get(c))}
+    res = _execute_plan(df, plan, question, strict_values, roles, hash_cols)
     res.asks_total = asks_total(question)
-    res.code_cols = {c for c in res.columns if is_code_column(c)}
+    res.code_cols = set(identifier_columns(res.columns, field_meta, df))
+    res.hash_cols = res.code_cols & hash_cols
     if asks_week_on_non_week_table(question, df):
         res.notes.append(
             "当前数据源是按日表 (没有「周」列), 未按周汇总; 以下是按日结果, "
             "回答须明说「这张是按日表」, 不得把某一天说成某一周")
+    elif (_WEEK_ASK_RE.search(question or "") and WEEK_ROLLUP_COL in df.columns
+          and WEEK_ROLLUP_COL not in res.group_by):
+        res.notes.append("本结果未按 ISO 周汇总，回答不得把逐日数据或全表合计当作周结果")
     return res
 
 
-def _execute_plan(df: pd.DataFrame, plan: dict, question: str = "") -> ExecResult:
+def _execute_plan(df: pd.DataFrame, plan: dict, question: str, strict_values: bool,
+                  roles: dict, hash_cols: set) -> ExecResult:
     total = len(df)
     notes: List[str] = []
     if plan["note"]:
@@ -490,12 +777,17 @@ def _execute_plan(df: pd.DataFrame, plan: dict, question: str = "") -> ExecResul
                 f"「{m['reweighted_from']}」不能逐行取平均, 已按其列头公式用全部行加权计算 "
                 f"(Σ{'+'.join(m['num'])} / Σ{'+'.join(m['den'])})"
             )
-    work = df
+    matched_mask = pd.Series(True, index=df.index)
     fdesc: List[str] = []
     for f in plan["filters"]:
-        work = work[_apply_filter(work, f)]
+        col = f["col"]
+        # 校验各条件在原表中的取值，再求交集；空交集是有效的计算结果。
+        matched_mask &= _apply_filter(
+            df, f, strict_values, role=roles.get(col), hash_escaped=col in hash_cols,
+        )
         fdesc.append(f"{f['col']} {f['op']} {f['value']!r}" if f["op"] != "notnull"
                      else f"{f['col']} 非空")
+    work = df[matched_mask] if fdesc else df
     matched = len(work)
     gb, metrics = plan["group_by"], plan["metrics"]
     pct_cols: set = set()
@@ -514,12 +806,15 @@ def _execute_plan(df: pd.DataFrame, plan: dict, question: str = "") -> ExecResul
         # astype(object): 混合 int/float 列 .values 会整体升成 float (编码 22002 -> 22002.0 -> 22,002)
         res = ExecResult(cols, shown.astype(object).values.tolist(), total, matched, fdesc, notes,
                          group_by=gb, mode="grouped")
+        if asks_total(question):
+            res.all_group_labels = [label for group in gb for label in out[group].drop_duplicates()]
         res.notes.append(f"共 {len(out)} 个分组, 展示前 {len(shown)} 个")
         res.pct_cols = pct_cols
         for m in metrics:  # 一共/总共/合计: 全部分组的求和, 不是排名第一的那一项
             if m["func"] in ("sum", "count"):
                 t = out[m["name"]].sum(skipna=True)
                 res.totals[m["name"]] = int(t) if float(t) == int(t) else float(t)
+                res.total_columns[m["name"]] = m["col"] or ""
         res.notes.append(f"全部 {len(out)} 个分组共 {matched} 行")
         if plan["breakdown_by"] and len(out):
             top_key = out.iloc[0][gb].tolist()
@@ -579,6 +874,7 @@ def _execute_plan(df: pd.DataFrame, plan: dict, question: str = "") -> ExecResul
         if asks_total(question) and _to_num(work[sb]).notna().any():
             tot = float(_to_num(work[sb]).sum())
             res.totals[f"{sb}合计"] = int(tot) if tot == int(tot) else tot
+            res.total_columns[f"{sb}合计"] = sb
         return res
     shown = work[show_cols].head(MAX_RESULT_ROWS)
     res = ExecResult(show_cols, shown.values.tolist(), total, matched, fdesc, notes, mode="rows",
@@ -614,7 +910,7 @@ def render_block(question: str, res: ExecResult) -> str:
     for r in res.rows:
         body.append("| " + " | ".join(
             ("编码缺失" if (c in res.code_cols and (v is None or (isinstance(v, float) and pd.isna(v))))
-             else _fmt(v, pct=(c in pct), code=(c in res.code_cols)))
+             else _fmt(v, pct=(c in pct), code=(c in res.code_cols), strip_hash=(c in res.hash_cols)))
             for c, v in zip(res.columns, r)) + " |")
     lines = [
         f"## 全表精确计算结果 (权威: 服务端在该数据集全部 {res.total_rows} 行上计算)",
@@ -647,44 +943,138 @@ def render_block(question: str, res: ExecResult) -> str:
 # 回答校验: 「一共/总共」的总数必须是代码算的合计
 # ---------------------------------------------------------------------------
 
-_TOTAL_CLAUSE_WORDS = TOTAL_WORDS + ("全月", "整月", "全表")
 _CLAUSE_SPLIT_RE = re.compile(r"(?<=[，,；;。！？!?\n])")
-_CLAUSE_TAIL_RE = re.compile(r"[，,；;。！？!?\n]+$")
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[；;。！？!?])|(?<=\.)(?=\s|$)")
+_THOUSANDS_COMMA_RE = re.compile(r"(?<=\d),(?=\d)")
+_PROTECT = "\x01"
+_TOTAL_SCOPE_RE = re.compile(r"(?:全月|整月|全表)\s*(?:所有\s*)?|所有\s*")
+_TOTAL_VERB = r"(?:一共|总共|合计|总计|共计|共)"
+_CLAIM_NUMBER = r"(?P<number>[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)"
+_CLAIM_END = r"\s*[，,；;。.!！?？\n]?"
+_UNIT_RE = re.compile(r"[（(]([^()（）]+)[）)]$|((?i:kg)|公斤|吨|元|卷|箱|分钟|台|批|人|次|件|个)$")
+_LOCAL_TOTAL_MARKER_RE = re.compile(r"方面|其中|中的|这一类|的话")
+_RANK_ANSWER_RE = re.compile(rf"(?:{_RANK_WORD})\s*的是\s*[「“\"]?\s*$")
 
 
-def _total_texts(v: Any) -> List[str]:
-    f = float(v)
-    outs = {f"{f:,.2f}".rstrip("0").rstrip("."), f"{f:.2f}".rstrip("0").rstrip(".")}
-    if f == int(f):
-        outs |= {str(int(f)), f"{int(f):,}"}
-    return sorted(outs, key=len, reverse=True)
+def _group_total_topic(labels: Optional[list], answer: str) -> Optional[re.Pattern]:
+    text = answer.casefold()
+    names = {name for label in labels or [] if (name := str(label).strip()) and name.casefold() in text}
+    if not names:
+        return None
+    group = "(?:" + "|".join(re.escape(name) for name in sorted(names, key=len, reverse=True)) + ")"
+    return re.compile(rf"(?<![A-Za-z0-9_]){group}\s*[」”\"]?\s*[，,]$", re.IGNORECASE)
 
 
-def _has_number(text: str, v: Any) -> bool:
-    return any(re.search(r"(?<![\d.,])" + re.escape(t) + r"(?!\d|\.\d|,\d)", text) for t in _total_texts(v))
+def _all_groups_prefix(claim: str, labels: Optional[list]) -> int:
+    """An explicit enumeration qualifies only when it names every group exactly once."""
+    if not labels or len(labels) < 2 or any(not isinstance(label, str) for label in labels):
+        return 0
+    names = [label.strip() for label in labels]
+    if len(set(names)) != len(names) or any(not label or re.search(r"和|及|、", label) for label in names):
+        return 0
+    match = re.match(rf"(?P<groups>.+?)\s*(?={_TOTAL_VERB})", claim)
+    if match and sorted(re.split(r"\s*(?:和|及|、)\s*", match["groups"])) == sorted(names):
+        return match.end()
+    return 0
 
 
 def reconcile_answer_with_totals(answer: str, res: Optional[ExecResult]) -> tuple:
-    """问「一共/总共/合计」且已算出合计时, 最终回答里必须出现这个合计。
-
-    提示词里写了「总数以上面的合计为准」, 但小模型 (本地 qwen3:8b) 照样把最大那一组当总数:
-    味美 11-19 复测卷膜题答「全月一共 52 卷」(52 只是 FIL20-C 一个品类, 总数 133)。
-    回答里没有这个合计时: 把含「一共/总共/全月…」的那一小句换成代码结论; 找不到这样的句子就在末尾补一句更正。
-    返回 (新回答, 是否改了)。
-    """
+    """Correct explicit totals with a uniquely identified metric."""
     if res is None or not res.asks_total or not res.totals or not answer:
         return answer, False
-    if all(_has_number(answer, v) for v in res.totals.values()):
+    protected = _THOUSANDS_COMMA_RE.sub(_PROTECT, answer)
+    group_topic = _group_total_topic(res.all_group_labels, answer)
+    parts = []
+    for sentence in _SENTENCE_SPLIT_RE.split(protected):
+        local = False
+        for clause in _CLAUSE_SPLIT_RE.split(sentence):
+            if not clause:
+                continue
+            part = clause.replace(_PROTECT, ",")
+            parts.append((part, local))
+            topic = group_topic.search(part) if group_topic else None
+            local = local or bool(_LOCAL_TOTAL_MARKER_RE.search(part))
+            # 「最大的是 X」回答的是排名子问，同句后续仍可给出全表合计。
+            if topic and not _RANK_ANSWER_RE.search(part[:topic.start()]):
+                local = True
+    units = {}
+    for name, column in res.total_columns.items():
+        match = _UNIT_RE.search(column)
+        if match:
+            units[name] = (match[1] or match[2]).lower()
+
+    seen = set()
+    updated = []
+    for index, (part, is_local) in enumerate(parts):
+        if is_local:
+            updated.append(part)
+            continue
+        claim_start = len(part) - len(part.lstrip())
+        scope = _TOTAL_SCOPE_RE.match(part, claim_start)
+        if scope:
+            claim_start = scope.end()
+            if "所有" in scope[0] and len(res.group_by) == 1:
+                claim_start += _all_groups_prefix(part[claim_start:], res.all_group_labels)
+        elif index != 0 or not part[claim_start:].startswith("总计"):
+            updated.append(part)
+            continue
+
+        claim = part[claim_start:]
+        candidates = {}
+        for name, value in res.totals.items():
+            unit = units.get(name)
+            column = res.total_columns.get(name, "")
+            aliases = {name}
+            if unit:
+                aliases.add(_UNIT_RE.sub("", column))
+            if column in ("用量(卷)", "用量（卷）") and res.group_by == ["卷膜编码"]:
+                aliases.add("卷膜用量")
+            metric = "|".join(re.escape(alias) for alias in sorted(aliases - {""}, key=len, reverse=True))
+            suffix = rf"(?:\s*{re.escape(unit)})?" if unit else ""
+            named = rf"(?:{metric})\s*(?:{_TOTAL_VERB}\s*)?(?:[=:：为]|是)?\s*"
+            match = re.fullmatch(named + _CLAIM_NUMBER + suffix + _CLAIM_END, claim, re.IGNORECASE)
+            if match is None and unit and list(units.values()).count(unit) == 1:
+                unnamed = rf"{_TOTAL_VERB}\s*(?:(?:使用了|用了|用掉了|为|是)\s*)?"
+                match = re.fullmatch(unnamed + _CLAIM_NUMBER + rf"\s*{re.escape(unit)}" + _CLAIM_END,
+                                     claim, re.IGNORECASE)
+            if match:
+                candidates[name] = (match, value)
+        if len(candidates) == 1:
+            name, (match, value) = next(iter(candidates.items()))
+            left, right = match.span("number")
+            if not _LOCAL_TOTAL_MARKER_RE.search(part[:claim_start + left]):
+                seen.add(name)
+                expected = _fmt(value)
+                if float(match["number"].replace(",", "")) != float(expected.replace(",", "")):
+                    part = part[:claim_start + left] + expected + part[claim_start + right:]
+        updated.append(part)
+    out = "".join(updated)
+    # A requested total absent from the answer is supplied separately without editing an ambiguous claim.
+    missing = [f"全表 {name} = {_fmt(v)}" for name, v in res.totals.items() if name not in seen]
+    if missing:
+        out = out.rstrip() + "\n\n**更正（程序核对）**\n" + "。\n".join(missing) + "。"
+    return out, out != answer
+
+
+def strip_code_separators(answer: str, res: Optional[ExecResult]) -> tuple:
+    """回答里的编码/批号值被模型写成带千分位 (22,002) 时, 改回原样 (22002)。
+
+    只改结果表里标识列出现过的值, 不碰同样位数的普通数量。返回 (新回答, 是否改了)。
+    """
+    if res is None or not answer or not res.code_cols:
         return answer, False
-    stmt = "；".join(f"{k} = {_fmt(v)}" for k, v in res.totals.items())
-    sentence = f"全部合计 {stmt}（程序对全部 {res.matched_rows} 行求和）"
-    parts = _CLAUSE_SPLIT_RE.split(answer)
-    for i, part in enumerate(parts):
-        if any(w in part for w in _TOTAL_CLAUSE_WORDS):
-            tail = _CLAUSE_TAIL_RE.search(part)
-            parts[i] = sentence + (tail.group(0) if tail else "")
-            return "".join(parts), True
-    return answer.rstrip() + f"\n\n**更正（程序核对）**：{sentence}。", True
+    values = set()
+    for r in res.rows:
+        for c, v in zip(res.columns, r):
+            if c in res.code_cols and v is not None and not (isinstance(v, float) and pd.isna(v)):
+                t = _fmt(v, code=True, strip_hash=c in res.hash_cols)
+                if t.isdigit() and len(t) >= 4:
+                    values.add(t)
+    out = answer
+    for t in sorted(values, key=len, reverse=True):
+        grouped = f"{int(t):,}"
+        out = re.sub(r"(?<![\d.,])" + re.escape(grouped) + r"(?![\d]|,\d|\.\d)(?!\s*(?:kg|KG|公斤|吨|元|%|个|卷|箱|分钟|台|批|人|天|次|趟))", t, out)
+    return out, out != answer
 
 
 # ---------------------------------------------------------------------------
@@ -712,6 +1102,9 @@ async def answer_row_level(
     df: pd.DataFrame,
     field_names: Sequence[str],
     llm_call: LlmCall,
+    field_meta: Optional[Sequence[dict]] = None,
+    *,
+    upload_key: Optional[tuple[str, int]] = None,
 ) -> RowLevelOutcome:
     """对整份数据做行级计算; 返回拒答 / 已计算段落 / 未能计算 / 无需计算。
 
@@ -721,8 +1114,15 @@ async def answer_row_level(
         return RowLevelOutcome("none")
 
     df = with_gap_columns(df)
+    df, cross_year = _with_calendar_columns(df, question, field_meta)
 
-    rule = rule_based_plan(question, df)  # 确定性规则: 不经 LLM, 同一问题每次一致
+    rule = None
+    if not cross_year:
+        rule = rule_based_plan(question, df)
+        if rule is None:
+            week = week_rollup_plan(question, df, field_meta)
+            if week:
+                rule = ("plan", week)
     if rule and rule[0] == "refuse":
         return RowLevelOutcome("refuse", build_refusal(rule[1], field_names))
 
@@ -733,57 +1133,78 @@ async def answer_row_level(
     if rule and rule[0] == "plan":
         try:
             vplan = validate_plan(rule[1], df)
-            res = execute_plan(df, vplan, question)
+            res = execute_plan(df, vplan, question, field_meta)
         except PlanError as e:
             return RowLevelOutcome("uncomputed", UNCOMPUTED_NOTE.format(reason=str(e)), plan=rule[1])
         return RowLevelOutcome("computed", render_block(question, res), plan=vplan, result=res)
 
-    cache_key = (re.sub(r"\s+", "", question), tuple(str(c) for c in df.columns))
-    cached = _PLAN_CACHE.get(cache_key)
+    cache_key = None
+    if upload_key is not None:
+        schema = tuple((str(c), str(dtype)) for c, dtype in df.dtypes.items())
+        roles = tuple((f.get("original_name"), f.get("standard_name"), bool(f.get("is_time")),
+                       bool(f.get("is_dimension")), bool(f.get("is_measure"))) for f in (field_meta or []))
+        cache_key = (upload_key, question.strip(), schema, roles)
     prompt = build_plan_prompt(question, df)
-    raw = cached
-    if raw is None:
+    raw = _PLAN_CACHE.get(cache_key) if cache_key is not None else None
+    from_cache = raw is not None
+
+    async def _ask_planner(extra: str = "") -> Optional[str]:
         try:
-            raw = await llm_call(prompt, PLAN_SYSTEM)
+            return await llm_call(prompt + extra, PLAN_SYSTEM)
         except Exception as e:  # LLM 不可用: 如实标记未计算, 不退回样本猜
             logger.warning("[row-level-qa] planner call failed: %s", e)
+            return None
+
+    if raw is None:
+        raw = await _ask_planner()
+        if raw is None:
             return RowLevelOutcome("uncomputed", UNCOMPUTED_NOTE.format(reason="查询规划不可用"))
 
-    for attempt in (1, 2):
+    attempt = 1
+    while True:
         plan = parse_plan(raw)
         if plan is None:
             return RowLevelOutcome("uncomputed", UNCOMPUTED_NOTE.format(reason="查询规划无法解析"))
         intent = str(plan.get("intent") or "compute")
         if intent == "none":
-            _plan_cache_put(cache_key, raw)
             return RowLevelOutcome("none", plan=plan)
         if intent == "no_metric":
-            _plan_cache_put(cache_key, raw)
             return RowLevelOutcome("refuse", build_refusal(
                 str(plan.get("missing") or "被问的"), field_names), plan=plan)
         try:
             vplan = validate_plan(plan, df)
-            res = execute_plan(df, vplan, question)
+            # 严格模式: 筛选值在列里不存在就报错, 交回规划器重写; 重写后 (第二次) 仍然没有 -> 如实按 0 行回答。
+            # 缓存里取出的计划一律走严格模式。
+            res = execute_plan(df, vplan, question, field_meta, strict_values=(attempt == 1))
         except PlanError as e:
-            if attempt == 1 and cached is None:
-                # 字段对不上 (如在按日表上 group_by 周): 把错误和真实字段交回规划器重写一次,
+            if from_cache:
+                # 同上传的数据也可能变更：严格检查失败时，丢掉缓存并重新规划。
+                logger.info("[row-level-qa] cached plan invalid for this upload (%s), re-planning", e)
+                _PLAN_CACHE.pop(cache_key, None)
+                from_cache = False
+                raw = await _ask_planner()
+                if raw is None:
+                    return RowLevelOutcome("uncomputed", UNCOMPUTED_NOTE.format(reason="查询规划不可用"))
+                attempt = 1
+                continue
+            if attempt == 1:
+                # 字段/取值对不上 (如在按日表上 group_by 周): 把错误和真实字段交回规划器重写一次,
                 # 不让「行定位时好时坏」停在 uncomputed。
                 logger.info("[row-level-qa] plan invalid (%s), retrying once", e)
-                try:
-                    raw = await llm_call(
-                        prompt + f"\n\n上一次的计划无效: {e}。只能使用上面列出的字段, 请重新输出 JSON。",
-                        PLAN_SYSTEM)
-                except Exception as e2:
-                    logger.warning("[row-level-qa] planner retry failed: %s", e2)
+                raw = await _ask_planner(f"\n\n上一次的计划无效: {e}。只能使用上面列出的字段, 请重新输出 JSON。")
+                if raw is None:
                     return RowLevelOutcome("uncomputed", UNCOMPUTED_NOTE.format(reason=str(e)), plan=plan)
+                attempt = 2
                 continue
             return RowLevelOutcome("uncomputed", UNCOMPUTED_NOTE.format(reason=str(e)), plan=plan)
-        _plan_cache_put(cache_key, raw)  # 只缓存校验并执行成功的计划: 同一原话+同一表头, 规划稳定
+        if attempt == 1 and cache_key is not None:
+            # 只缓存「严格校验也通过」的计划: 取值确实存在于这份数据。第二次 (非严格) 才跑通的不缓存,
+            # 否则同一个零结果问题第二次会因命中缓存而与第一次不同。
+            _plan_cache_put(cache_key, raw)
         return RowLevelOutcome("computed", render_block(question, res), plan=vplan, result=res)
-    return RowLevelOutcome("uncomputed", UNCOMPUTED_NOTE.format(reason="查询规划无效"))
 
 
-# 规划结果按 (原话, 表头) 稳定: 同一问题两次问不会因 LLM 采样不同而一次拒答一次作答。
+# 只在相同租户、上传、表结构与原问题下复用已严格执行的计划。
 _PLAN_CACHE: Dict[tuple, str] = {}
 _PLAN_CACHE_MAX = 256
 

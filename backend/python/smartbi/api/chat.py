@@ -2312,6 +2312,17 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                                             _hb_text = (
                                                 f"⚡ 已读取 {_bundle['real_total_rows']:,} 行预聚合, 正在排名..."
                                             )
+                                    # 缓存包是按旧字段角色算的 (L1 内存 / L2 库里持久化): 角色变了就丢掉重算,
+                                    # 否则 批号 之类被改成维度的列仍按指标出 Top5 页脚 (味美 11-19 复测)。
+                                    from smartbi.services.upload_aggregate_cache import bundle_is_stale_for_field_meta
+                                    if _bundle is not None and bundle_is_stale_for_field_meta(_bundle, field_meta):
+                                        logger.warning(
+                                            f"[stream] agg bundle upload={upload_id} built on outdated field roles; recomputing"
+                                        )
+                                        _agg_cache.invalidate(upload_id)
+                                        _bundle = None
+                                        if _pool_ref is None:
+                                            _pool_ref = await _get_pg_pool_agg()
                                     if _bundle is None:
                                         # L1+L2 cold: compute can take 30-70s on a 200K-row upload.
                                         # Stream a status heartbeat every 10s to keep the FE SSE
@@ -2734,7 +2745,8 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
             insight_gen = InsightGenerator()
 
             # ── Build LEAN prompt: only data_summary + financial (skip KB, production, stat_digest) ──
-            data_summary = insight_gen._prepare_data_summary(df)
+            data_summary = insight_gen._prepare_data_summary(
+                df, field_meta=field_meta if 'field_meta' in locals() else None)
             financial_metrics = insight_gen._compute_financial_context(df)
 
             query = request.effective_query
@@ -3003,7 +3015,10 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                         return await insight_gen._call_llm(_p, _s, max_tokens=700)
 
                     _rl_out = await _rl_answer(
-                        request.effective_query, _rl_df, _rl_names(_rl_fm, _rl_df), _rl_llm
+                        request.effective_query, _rl_df, _rl_names(_rl_fm, _rl_df), _rl_llm,
+                        field_meta=_rl_fm,
+                        upload_key=(trusted_factory_id, _question_chart_upload_id)
+                        if _question_chart_upload_id is not None else None,
                     )
                     if _rl_out.kind == "refuse":
                         for i in range(0, len(_rl_out.text), 60):
@@ -3301,6 +3316,15 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                 # sees accurate Top-N even if sample-based chart builder misfires
                 # (e.g., label_field picks a column with nulls in first 50 rows).
                 if 'top5_by_dim' in locals() and top5_by_dim and 'primary_measure' in locals() and primary_measure:
+                    # 味美 11-19: primary_measure 只是第一个指标列时, Top5 页脚与问题无关 (固定「各周人数」)。
+                    try:
+                        from smartbi.services.question_chart import top5_chart_relevant
+                        if not top5_chart_relevant(query or "", list(measures) if 'measures' in locals() else [], primary_measure):
+                            logger.info(f"[chart-gate] Skipping Top-5 chart — measure {primary_measure!r} unrelated to question")
+                            top5_by_dim = {}
+                    except Exception as _t5_err:
+                        logger.warning(f"[chart] top5 relevance check failed (keep chart): {_t5_err}")
+                if 'top5_by_dim' in locals() and top5_by_dim and 'primary_measure' in locals() and primary_measure:
                     # Bug #346 fix (Apr 20 2026, Layer A4 extension): pick the
                     # first dim with at least 2 distinct labels. Single-store
                     # uploads (cardinality=1 on 门店名称) would otherwise render
@@ -3382,6 +3406,15 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                     _answer_corrected = True
             except Exception as _tot_err:
                 logger.warning(f"[row-level-qa] total reconcile failed (keep answer): {_tot_err}")
+
+            # 味美 11-19 复测: 产品编码被写成 22,002 / 260,403。编码/批号是标识不是数量, 回答里改回原样。
+            try:
+                from smartbi.services.row_level_qa import strip_code_separators
+                full_text, _code_fixed = strip_code_separators(full_text, _rl_result)
+                if _code_fixed:
+                    _answer_corrected = True
+            except Exception as _code_err:
+                logger.warning(f"[row-level-qa] code separator strip failed (keep answer): {_code_err}")
 
             if charts:
                 yield _sse_event("charts", charts)
@@ -4288,6 +4321,7 @@ def _build_charts_for_query(query: str, df, data: list, field_meta: Optional[lis
     # 页脚「数据驱动」按图里的数现算: 图的指标要跟问题相关 (问产量就画良品, 不是永远取前 3 个数值列)。
     # 对不上任何列时保持原来的默认选列。
     _asked_cols = []
+    _n_measures_before = len(numeric_cols)
     try:
         from smartbi.services.question_chart import relevant_measure_columns
         _asked_cols = relevant_measure_columns(query or "", numeric_cols)
@@ -4332,7 +4366,17 @@ def _build_charts_for_query(query: str, df, data: list, field_meta: Optional[lis
             if chart_entry:
                 charts.append(chart_entry)
 
-    if not charts and numeric_cols and label_field:
+    # 兜底的「数据概览」取前 3 个数值列, 与问题无关时页脚只会固定讲同一句 (味美日汇总: 不管问什么都是「各周人数」)。
+    # 有字段定义的上传, 问题点不出任何指标列、又不是概览类问法时, 不出这张图/页脚。
+    _skip_unrelated_overview = False
+    try:
+        from smartbi.services.question_chart import is_unrelated_to_measures
+        _skip_unrelated_overview = bool(field_meta) and is_unrelated_to_measures(
+            query or "", bool(_asked_cols), _n_measures_before)
+    except Exception as _ov_err:
+        logger.warning(f"[chart] overview relevance check failed (keep chart): {_ov_err}")
+
+    if not charts and numeric_cols and label_field and not _skip_unrelated_overview:
         y_cols = numeric_cols[:3]
         chart_result = builder.build("bar", chart_data, x_field=label_field, y_fields=y_cols, title="数据概览")
         chart_entry = _extract_echart_option(chart_result, "bar", "数据概览")
