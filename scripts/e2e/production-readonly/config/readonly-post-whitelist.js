@@ -2,7 +2,7 @@
 
 const { FACTORY_ANALYSIS_PATH } = require('./factory-analysis-scope');
 
-const { pathnameOf } = require('../core/url-utils');
+const { pathnameOf, splitUrl } = require('../core/url-utils');
 
 const AUTH_REQUESTS = [
   {
@@ -97,6 +97,23 @@ function factoryAnalysisBodyMatches(body) {
       && new Set([body.uploadId, body.inspectionUploadId, body.costUploadId]).size === 3);
   }
   return !keys.includes('uploadId') && !keys.includes('inspectionUploadId') && !keys.includes('costUploadId');
+}
+
+function chartInsightReadonlyPost(baseUrl, isActiveScenario, getResponseFactoryId) {
+  const origin = splitUrl(baseUrl).origin;
+  return {
+    id: 'smartbi-chart-insight',
+    method: 'POST',
+    // The Web Admin gateway strips /smartbi-api before forwarding to Python.
+    path: /^\/smartbi-api\/api\/smartbi\/chart-insight$/u,
+    bodyMatches(body, url) {
+      const factoryId = getResponseFactoryId();
+      return isActiveScenario() && splitUrl(url).origin === origin
+        && typeof factoryId === 'string' && factoryId.length > 0 && !/^LSMDEMO/iu.test(factoryId)
+        && isRecord(body) && Object.hasOwn(body, 'factory_id') && body.factory_id === factoryId;
+    },
+    rationale: 'Chart insights only: same-tenant derived cache/corpus upsert and tenant LLM quota usage. No business mutation.',
+  };
 }
 
 // Every entry must point to a server contract that is query-only. Do not add
@@ -419,7 +436,7 @@ const READONLY_POST_WHITELIST = [
 function matchesEntry(entry, method, url, body = null) {
   return entry.method === method.toUpperCase()
     && entry.path.test(pathnameOf(url))
-    && (!entry.bodyMatches || entry.bodyMatches(body));
+    && (!entry.bodyMatches || entry.bodyMatches(body, url));
 }
 
 function findAuthRequest(method, url) {
@@ -438,6 +455,7 @@ module.exports = {
   findReadonlyPost,
   proposalComparisonBodyMatches,
   workdeskIntentReadBodyMatches,
+  chartInsightReadonlyPost,
 };
 
 function proposalComparisonBodyMatches(body) {

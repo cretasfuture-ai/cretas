@@ -31,20 +31,20 @@ class _RecordingConn:
         return self._consent.get(args[0])
 
     async def execute(self, sql, *args):
-        if sql.lstrip().startswith("DELETE FROM smart_bi_distillation_samples"):
-            EXPIRY_CALLS.append((sql, args))       # held-row expiry sweep (its own tests below)
-            return "DELETE 0"
         self._sink.append((sql, args))
+        if sql.lstrip().startswith("DELETE FROM smart_bi_distillation_samples"):
+            return "DELETE 0"
         return "INSERT 0 1"
+
+    async def fetchrow(self, sql, *_args):
+        assert "FROM smart_bi_distillation_samples" in sql
+        return None  # chart insight cache miss
 
     async def __aenter__(self):
         return self
 
     async def __aexit__(self, *a):
         return False
-
-
-EXPIRY_CALLS: list = []
 
 
 class _RecordingPool:
@@ -640,97 +640,33 @@ async def test_upsert_conflict_on_real_postgres_keeps_the_first_factorys_row():
         await conn.close()
 
 
-# ---- second review, item 1: held rows expire, and no raw text survives a judgement ----
+async def test_chart_insight_request_upserts_own_derived_sample_without_delete(monkeypatch):
+    from unittest.mock import AsyncMock
 
-async def test_capture_runs_the_held_row_expiry_at_most_once_per_interval(monkeypatch):
-    """The re-judge only runs from corpus_judge; the capture path (which always runs) sweeps
-    held rows past the retention, at most once per interval, and a failing sweep never blocks."""
-    from smartbi.services import distillation_capture as dc
+    from starlette.requests import Request
 
-    _patch_lists(monkeypatch, {"F006": _lists()})
-    monkeypatch.setitem(dc._LAST_EXPIRY, "at", None)
-    EXPIRY_CALLS.clear()
-    sink: list = []
-    await _capture(_RecordingPool(sink, {}), factory_id="F006", input_text="今天产量多少")
-    await _capture(_RecordingPool(sink, {}), factory_id="F006", input_text="今天销量多少")
-    assert len(sink) == 2
-    assert len(EXPIRY_CALLS) == 1                                    # throttled
-    sql, args = EXPIRY_CALLS[0]
-    assert "metadata ? 'secrecy_recheck'" in sql and args == (7,)
-    monkeypatch.setitem(dc._LAST_EXPIRY, "at", dc._LAST_EXPIRY["at"] - dc.EXPIRY_INTERVAL_S - 1)
-    await _capture(_RecordingPool(sink, {}), factory_id="F006", input_text="今天入库多少")
-    assert len(EXPIRY_CALLS) == 2
-
-
-
-async def test_the_expiry_sweep_also_runs_on_captures_that_return_early(monkeypatch):
-    """Review round 3, item 3: a factory whose captures are all skipped (no factory, a restaurant
-    tenant, capture switched off) must still get its held rows expired."""
-    from smartbi.services import distillation_capture as dc
-
-    for case in ("disabled", "no_factory", "restaurant"):
-        monkeypatch.setitem(dc._LAST_EXPIRY, "at", None)
-        EXPIRY_CALLS.clear()
-        sink: list = []
-        with monkeypatch.context() as m:
-            if case == "disabled":
-                m.setenv("SMARTBI_DISTILL_CAPTURE", "0")
-                await _capture(_RecordingPool(sink, {}), factory_id="F006")
-            elif case == "no_factory":
-                await _capture(_RecordingPool(sink, {}), factory_id=None)
-            else:
-                await _capture(_RecordingPool(sink, {}), factory_id="MOCK_REST")
-        assert sink == [], case                                          # nothing captured ...
-        assert len(EXPIRY_CALLS) == 1, case                              # ... but the sweep ran
-    # a sweep that cannot get a connection never raises out of the capture
-    monkeypatch.setitem(dc._LAST_EXPIRY, "at", None)
-    await _capture(_ExplodingPool(), factory_id="F006")
-
-
-
-class _FirstAcquireHangsPool(_RecordingPool):
-    """The first acquire (the expiry sweep's) waits like an exhausted pool; later ones work."""
-
-    def __init__(self, sink):
-        super().__init__(sink, {})
-        self.calls = 0
-
-    def acquire(self):
-        self.calls += 1
-        if self.calls > 1:
-            return super().acquire()
-
-        class _Hang:
-            async def __aenter__(self):
-                import asyncio
-                await asyncio.sleep(30)
-
-            async def __aexit__(self, *a):
-                return False
-        return _Hang()
-
-
-async def test_a_busy_pool_never_holds_a_capture_up(monkeypatch, caplog):
-    """Review round 4, item 3: the hourly sweep is bounded by a short timeout; the capture still
-    happens promptly and the sweep is retried soon instead of an hour later."""
-    import time as _time
-
-    from smartbi.services import distillation_capture as dc
+    from smartbi.api import chart_insight as api
+    from smartbi.services.insights.chart_insight_service import ChartInsightService
 
     _patch_lists(monkeypatch, {"F006": _lists()})
-    monkeypatch.setitem(dc._LAST_EXPIRY, "at", None)
-    monkeypatch.setattr(dc, "EXPIRY_TIMEOUT_S", 0.2)
-    sink: list = []
-    start = _time.monotonic()
-    import logging as _logging
-    caplog.set_level(_logging.WARNING, logger="smartbi.services.distillation_capture")
-    await _capture(_FirstAcquireHangsPool(sink), factory_id="F006", input_text="今天产量多少")
-    # review round 5: a sweep that times out is a WARNING (a stuck expiry must be visible)
-    assert any(r.levelno == _logging.WARNING and "held-row expiry timed out" in r.getMessage() for r in caplog.records)
-    assert _time.monotonic() - start < 5                        # not the 30 s the pool would take
-    assert len(sink) == 1                                       # the capture itself went through
-    due_in = dc._LAST_EXPIRY["at"] + dc.EXPIRY_INTERVAL_S - _time.monotonic()
-    assert 0 < due_in <= dc.EXPIRY_RETRY_S                      # retried soon, not an hour later
+    monkeypatch.setenv("CHART_INSIGHT_DETERMINISTIC_FIRST", "1")
+    monkeypatch.setenv("SMARTBI_DISTILL_CAPTURE", "1")
+    statements = []
+    service = ChartInsightService(_RecordingPool(statements, {"F006": "private"}), budget_tracker=None)
+    monkeypatch.setattr(api, "_get_service", AsyncMock(return_value=service))
+    request = Request({"type": "http"})
+    request.state.factory_id = "F006"
+    request.state.role = "factory_super_admin"
+    result = await api.chart_insight(request, api.ChartInsightRequest(
+        factory_id="F006", chart_type="BAR", x_dim="product", y_metric="quantity",
+        data_pattern="ranking", series_values=[9, 3], series_labels=["产品甲", "产品乙"],
+    ))
+
+    assert result["success"] and result["data"]["finding"]
+    assert not any(sql.lstrip().upper().startswith("DELETE") for sql, _ in statements), statements
+    (sql, args), = statements
+    assert "INSERT INTO smart_bi_distillation_samples" in sql
+    assert (args[0], args[2]) == ("chart_insight", "F006")
 
 
 def test_python_hold_retention_equals_the_java_default():
@@ -759,7 +695,7 @@ class _OneConnPool:
         return _Ctx()
 
 
-async def test_held_rows_on_real_postgres_leave_no_raw_text_behind():
+async def test_held_rows_on_real_postgres_leave_no_raw_text_behind(monkeypatch, caplog):
     """Capture -> re-judge -> expiry on a real PostgreSQL: the rejected row keeps reason / list
     version / time only, the released row loses the raw copy and gains the desensitized stamp,
     the expired row is gone. Nowhere does the raw text survive."""
@@ -774,6 +710,7 @@ async def test_held_rows_on_real_postgres_leave_no_raw_text_behind():
             pytest.fail("SMARTBI_PG_DSN is required on CI")
         pytest.skip("no local PostgreSQL")
     asyncpg = pytest.importorskip("asyncpg")
+    from scripts import gold_etl_daily_refresh as nightly
     from smartbi.services.process_secret_names import rejudge_held_rows
 
     conn = await asyncpg.connect(dsn)
@@ -795,15 +732,62 @@ async def test_held_rows_on_real_postgres_leave_no_raw_text_behind():
             "        (3, 'F_A', '旧的', 'x', $3::jsonb, now() - interval '8 days')",
             held("秘制牛肉干销量"), held("RAW-CLEAN 普通牛肉干销量"), held("RAW-OLD 秘制牛肉干"))
         out = await rejudge_held_rows(_OneConnPool(conn), {"F_A": _lists(products=["秘制牛肉干"])})
-        assert out == {"released": 1, "rejected": 1, "expired": 1}
+        assert out == {"released": 1, "rejected": 1}
+        assert await conn.fetchval("SELECT metadata ? 'secrecy_recheck' FROM smart_bi_distillation_samples WHERE id=3")
+        await conn.execute(
+            "INSERT INTO smart_bi_distillation_samples (id, factory_id, input_text, teacher_output, metadata, created_at)"
+            " VALUES (4, 'F_B', 'x', 'x', $1::jsonb, now() - interval '9 days'),"
+            "        (5, 'F_B', 'x', 'x', $1::jsonb, now() - interval '10 days'),"
+            "        (6, 'F_B', 'x', 'x', $1::jsonb, now() - interval '6 days'),"
+            "        (7, 'F_B', 'x', 'x', '{\"secrecy_rejected\":true}', now() - interval '8 days'),"
+            "        (8, 'LSMDEMO', 'x', 'x', $1::jsonb, now() - interval '8 days'),"
+            "        (9, NULL, 'x', 'x', $1::jsonb, now() - interval '8 days')",
+            held("RAW-OTHER"))
+
+        from unittest.mock import AsyncMock, MagicMock
+
+        class _NightlyTarget(_OneConnPool):
+            async def close(self):
+                pass  # the test owns the connection
+
+        source = MagicMock()
+        source.close = AsyncMock()
+        discovery = source.acquire.return_value.__aenter__.return_value
+        discovery.transaction = MagicMock()
+        discovery.fetch = AsyncMock(return_value=[{
+            "has_production": True, "has_external_cost": False, "has_material_batches": False, "factory_id": "F_A",
+        }])
+        monkeypatch.setattr(nightly, "get_cretas_pool", AsyncMock(return_value=source))
+        monkeypatch.setattr(nightly, "get_pg_pool", AsyncMock(return_value=_NightlyTarget(conn)))
+        monkeypatch.setattr(nightly, "run_factory_etl_with_retry", AsyncMock(return_value={"errors": []}))
+        with caplog.at_level("INFO"):
+            assert await nightly.run_refresh(["F_A"]) == 0
+            assert await conn.fetchval("SELECT count(*) FROM smart_bi_distillation_samples WHERE id IN (4,5,9)") == 3
+            async with conn.transaction():
+                await conn.execute(
+                    "INSERT INTO smart_bi_distillation_samples"
+                    " (id, factory_id, input_text, teacher_output, metadata, created_at)"
+                    " VALUES (10, 'F_B', 'x', 'x', $1::jsonb, now() - interval '7 days')", held("RAW-BOUNDARY"),
+                )
+                assert await nightly.run_refresh(None) == 0
+        expiry_counts = [line for line in caplog.messages if line.startswith("Held corpus expiry factory=")]
+        assert expiry_counts == [
+            "Held corpus expiry factory=F_A deleted=1",
+            "Held corpus expiry factory=F_B deleted=2",
+            "Held corpus expiry factory=None deleted=1",
+        ]
         rows = {r["id"]: _json.loads(r["metadata"]) for r in
                 await conn.fetch("SELECT id, metadata FROM smart_bi_distillation_samples ORDER BY id")}
-        assert sorted(rows) == [1, 2]                                    # 3 expired with its raw copy
+        assert sorted(rows) == [1, 2, 6, 7, 8, 10]
+        assert "secrecy_recheck" in rows[6]
+        assert "secrecy_rejected" in rows[7]
+        assert "secrecy_recheck" in rows[8]
+        assert "secrecy_recheck" in rows[10]
         assert set(rows[1]["secrecy_rejected"]) == {"reason", "lists", "at"}
         assert "secrecy_recheck" not in rows[1] and "desensitized" not in rows[1]
         assert rows[2] == {"training_rule": "2026-11-03", "desensitized": True}
         dump = await conn.fetchval("SELECT string_agg(metadata::text || input_text || teacher_output, '|')"
-                                   " FROM smart_bi_distillation_samples")
+                                   " FROM smart_bi_distillation_samples WHERE id IN (1, 2)")
         for raw in ("秘制牛肉干", "RAW-CLEAN", "RAW-OLD", "RAW-OUT"):
             assert raw not in dump, raw
     finally:
@@ -845,10 +829,10 @@ async def test_the_expiry_delete_can_use_the_partial_index_on_real_postgres():
         await conn.execute("SET enable_seqscan = off")
         async with conn.transaction():
             plan = "\n".join(r[0] for r in await conn.fetch(
-                "EXPLAIN " + _EXPIRE_SQL.format(key=RECHECK_KEY), 7))
+                "EXPLAIN " + _EXPIRE_SQL.format(key=RECHECK_KEY), 7, "F_A"))
             assert "idx_distill_samples_secrecy_recheck_created" in plan, plan
             plan = "\n".join(r[0] for r in await conn.fetch(
-                "EXPLAIN " + _HELD_ROWS_SQL.format(key=RECHECK_KEY), 100))
+                "EXPLAIN " + _HELD_ROWS_SQL.format(key=RECHECK_KEY), 100, 7))
             assert "idx_distill_samples_secrecy_recheck_created" in plan, plan
     finally:
         await conn.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")

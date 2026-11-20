@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from dataclasses import dataclass, replace
 from typing import Any, Dict, FrozenSet, Iterable, List, Mapping, Optional, Tuple
@@ -63,6 +64,7 @@ from common.process_secret_terms import (  # noqa: F401
     secret_terms_from_policy_rows,
 )
 
+logger = logging.getLogger(__name__)
 _CACHE_SECONDS = 60.0
 
 
@@ -305,6 +307,7 @@ _HELD_ROWS_SQL = """
     SELECT id, factory_id, input_text, teacher_output, metadata
     FROM smart_bi_distillation_samples
     WHERE metadata ? '{key}'
+      AND created_at >= NOW() - make_interval(days => $2)
     ORDER BY id
     LIMIT $1
 """
@@ -330,21 +333,39 @@ _REJECT_SQL = """
 # (second review: the Python hold had no expiry). Same retention as the Java hold table
 # (cretas.training.secrecy-hold.max-age, P7D); test_process_secret_corpus_scripts pins both.
 HOLD_MAX_AGE_DAYS = 7
+_EXPIRED_FACTORIES_SQL = """
+    SELECT DISTINCT factory_id
+    FROM smart_bi_distillation_samples
+    WHERE metadata ? '{key}' AND created_at < NOW() - make_interval(days => $1)
+      AND ($2::text[] IS NULL OR factory_id = ANY($2))
+      AND (factory_id IS NULL OR NOT starts_with(upper(factory_id), $3))
+    ORDER BY factory_id
+"""
 _EXPIRE_SQL = """
     DELETE FROM smart_bi_distillation_samples
     WHERE metadata ? '{key}' AND created_at < NOW() - make_interval(days => $1)
+      AND factory_id IS NOT DISTINCT FROM $2
 """
 
 
-async def expire_held_rows(conn, max_age_days: int = HOLD_MAX_AGE_DAYS) -> int:
-    """Delete held rows older than the retention; returns how many."""
+async def expire_held_rows(
+    pool, factory_ids: Optional[list[str]], *, excluded_factory_prefix: str,
+) -> Dict[Optional[str], int]:
+    """Nightly retention, one DELETE and count per factory (including a legacy NULL bucket)."""
     from smartbi.services.training_consent import RECHECK_KEY
 
-    status = await conn.execute(_EXPIRE_SQL.format(key=RECHECK_KEY), max_age_days)
-    try:
-        return int(str(status).split()[-1])
-    except (ValueError, IndexError):
-        return 0
+    async with pool.acquire() as conn:
+        factories = await conn.fetch(
+            _EXPIRED_FACTORIES_SQL.format(key=RECHECK_KEY),
+            HOLD_MAX_AGE_DAYS, factory_ids, excluded_factory_prefix,
+        )
+        counts = {}
+        for row in factories:
+            factory_id = row["factory_id"]
+            status = await conn.execute(_EXPIRE_SQL.format(key=RECHECK_KEY), HOLD_MAX_AGE_DAYS, factory_id)
+            counts[factory_id] = int(status.removeprefix("DELETE "))
+            logger.info("Held corpus expiry factory=%s deleted=%d", factory_id, counts[factory_id])
+    return counts
 
 
 def held_raw_texts(row: Mapping[str, Any]) -> Tuple[Optional[str], Optional[str]]:
@@ -369,9 +390,9 @@ async def rejudge_held_rows(smartbi_pool, by_factory: Mapping[str, FactoryLists]
     flagged ``REJECTED_KEY`` and kept for manual review, and so are rows whose stored text is
     masked and that fail :func:`cannot_be_shared` whatever d says — never
     deleted (Q5); they stay out of every export / training read, and keep only
-    the reason, the list version and the time (no raw text). Held rows past the
-    retention are deleted first.
-    Returns ``{"released": n, "rejected": n, "expired": n}``."""
+    the reason, the list version and the time (no raw text). Expired rows stay on
+    hold until the nightly retention job removes them.
+    Returns ``{"released": n, "rejected": n}``."""
     from datetime import datetime, timezone
 
     from smartbi.services.training_consent import (
@@ -382,8 +403,7 @@ async def rejudge_held_rows(smartbi_pool, by_factory: Mapping[str, FactoryLists]
     )
 
     async with smartbi_pool.acquire() as conn:
-        expired = await expire_held_rows(conn)
-        rows = await conn.fetch(_HELD_ROWS_SQL.format(key=RECHECK_KEY), limit)
+        rows = await conn.fetch(_HELD_ROWS_SQL.format(key=RECHECK_KEY), limit, HOLD_MAX_AGE_DAYS)
     release, reject = [], []
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     for r in rows:
@@ -408,7 +428,7 @@ async def rejudge_held_rows(smartbi_pool, by_factory: Mapping[str, FactoryLists]
         for row_id, detail in reject:
             await conn.execute(_REJECT_SQL.format(key=RECHECK_KEY, rejected=REJECTED_KEY), row_id,
                                json.dumps(detail, ensure_ascii=False))
-    return {"released": len(release), "rejected": len(reject), "expired": expired}
+    return {"released": len(release), "rejected": len(reject)}
 
 
 def metadata_dict(raw: Any) -> Dict[str, Any]:

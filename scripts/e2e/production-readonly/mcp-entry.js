@@ -30,7 +30,7 @@ module.exports = { FACTORY_ANALYSIS_FACTORY_IDS, FACTORY_ANALYSIS_PATH, assertFa
 
 const { FACTORY_ANALYSIS_PATH } = require('./factory-analysis-scope');
 
-const { pathnameOf } = require('../core/url-utils');
+const { pathnameOf, splitUrl } = require('../core/url-utils');
 
 const AUTH_REQUESTS = [
   {
@@ -125,6 +125,23 @@ function factoryAnalysisBodyMatches(body) {
       && new Set([body.uploadId, body.inspectionUploadId, body.costUploadId]).size === 3);
   }
   return !keys.includes('uploadId') && !keys.includes('inspectionUploadId') && !keys.includes('costUploadId');
+}
+
+function chartInsightReadonlyPost(baseUrl, isActiveScenario, getResponseFactoryId) {
+  const origin = splitUrl(baseUrl).origin;
+  return {
+    id: 'smartbi-chart-insight',
+    method: 'POST',
+    // The Web Admin gateway strips /smartbi-api before forwarding to Python.
+    path: /^\/smartbi-api\/api\/smartbi\/chart-insight$/u,
+    bodyMatches(body, url) {
+      const factoryId = getResponseFactoryId();
+      return isActiveScenario() && splitUrl(url).origin === origin
+        && typeof factoryId === 'string' && factoryId.length > 0 && !/^LSMDEMO/iu.test(factoryId)
+        && isRecord(body) && Object.hasOwn(body, 'factory_id') && body.factory_id === factoryId;
+    },
+    rationale: 'Chart insights only: same-tenant derived cache/corpus upsert and tenant LLM quota usage. No business mutation.',
+  };
 }
 
 // Every entry must point to a server contract that is query-only. Do not add
@@ -447,7 +464,7 @@ const READONLY_POST_WHITELIST = [
 function matchesEntry(entry, method, url, body = null) {
   return entry.method === method.toUpperCase()
     && entry.path.test(pathnameOf(url))
-    && (!entry.bodyMatches || entry.bodyMatches(body));
+    && (!entry.bodyMatches || entry.bodyMatches(body, url));
 }
 
 function findAuthRequest(method, url) {
@@ -466,6 +483,7 @@ module.exports = {
   findReadonlyPost,
   proposalComparisonBodyMatches,
   workdeskIntentReadBodyMatches,
+  chartInsightReadonlyPost,
 };
 
 function proposalComparisonBodyMatches(body) {
@@ -1268,14 +1286,17 @@ const { sanitizeValue } = require('./sanitizer');
 const { pathnameOf } = require('./url-utils');
 const { runParallelSuites } = require('./parallel-run');
 const { isFactoryAnalysisUrl } = require('../config/factory-analysis-scope');
+const { READONLY_POST_WHITELIST, chartInsightReadonlyPost } = require('../config/readonly-post-whitelist');
 const questionSet = require('../scenarios/factory-analysis-question-set-readonly');
+const lsmAnalytics = require('../scenarios/lsm-production-analytics-readonly');
 
 const SCENARIOS = [
   require('../scenarios/platform-factory-access-readonly'),
   require('../scenarios/smartbi-factory-analysis-readonly'),
   questionSet,
-  require('../scenarios/lsm-production-analytics-readonly').dataAnalysis,
-  require('../scenarios/lsm-production-analytics-readonly').cost,
+  lsmAnalytics.dataAnalysis,
+  lsmAnalytics.cost,
+  lsmAnalytics.dashboard,
   require('../scenarios/smartbi-catalog-matrix-readonly'),
   require('../scenarios/smartbi-factory-readonly'),
   require('../scenarios/smartbi-guided-readonly'),
@@ -1383,10 +1404,17 @@ async function runSuiteWithPage(page, options = {}) {
   const evidenceDir = options.evidenceDir || `.playwright-mcp/production-readonly/${runId}`;
   const scenarioRef = { value: 'bootstrap' };
   const selectedScenarios = resolveScenarios(options.scenarios);
+  let loginEvidence;
+  const chartInsightEntry = chartInsightReadonlyPost(
+    baseUrl,
+    () => selectedScenarios.some(s => s.allowsChartInsight && s.id === scenarioRef.value),
+    () => loginEvidence?.responseFactoryId,
+  );
 
   // The guard is installed before any target-origin navigation or login.
   const mutationGuard = await installMutationGuard(context, {
     scenarioRef,
+    readonlyPostWhitelist: [...READONLY_POST_WHITELIST, chartInsightEntry],
     allowMutationShape(classification, method, url, body) {
       if (scenarioRef.value !== questionSet.id) return true;
       return classification.entry?.id === 'smartbi-factory-analysis' && method === 'POST'
@@ -1409,7 +1437,6 @@ async function runSuiteWithPage(page, options = {}) {
   const screenshot = createScreenshotWriter(page, evidenceDir, { sensitiveTexts: [expectedUsername] });
   const startedAt = Date.now();
   const startedAtIso = new Date(startedAt).toISOString();
-  let loginEvidence;
   const results = [];
 
   try {
@@ -1922,6 +1949,7 @@ async function performUiLogin(page, options) {
     status: response.status(),
     success: businessSuccess,
     responseBodyParsed: body !== null,
+    responseFactoryId: options.requireFactoryResponseProof ? login.factoryId : null,
     username: actualUsername,
     factoryId: actualFactoryId,
     factoryName: actualFactoryName,
@@ -3709,6 +3737,7 @@ const { runReadOnlyPageScenario } = require('./_shared');
 
 const HUB_PATH = '/production/analysis-query';
 const COST_PATH = '/production-analytics/cost';
+const DASHBOARD_PATH = '/smart-bi/dashboard';
 const LIMITATION = /^出成率与生产成本\s*·\s*黑湖数据不含投入量，无法计算$/u;
 
 function validateFactory(factoryId) {
@@ -3793,9 +3822,22 @@ async function inspectCost(page, _body, ctx) {
   };
 }
 
+async function inspectDashboard(page) {
+  const dashboard = page.getByRole('main', { name: '经营驾驶舱', exact: true });
+  const findings = dashboard.locator('.insight-card .insight-content:visible');
+  await findings.first().waitFor({ timeout: 20_000 }).catch(() => {});
+  const findingCount = (await visibleText(findings)).length;
+  return {
+    findingCount,
+    assessment: assessment(new URL(page.url()).pathname === DASHBOARD_PATH && findingCount > 0),
+  };
+}
+
 function scenario(id, path, inspect) {
   return {
     id, path, defaultEnabled: false, validateFactory, includeNonApiHttpErrors: true,
+    // This permits only the derived, same-tenant insight cache upsert and LLM quota use.
+    allowsChartInsight: true,
     async run(ctx) {
       validateFactory(ctx.expectedFactoryId);
       if (ctx.loginEvidence?.factoryId !== ctx.expectedFactoryId
@@ -3816,6 +3858,7 @@ function scenario(id, path, inspect) {
 module.exports = {
   dataAnalysis: scenario('lsm-production-data-analysis-readonly', `${HUB_PATH}?tab=data-analysis`, inspectDataAnalysis),
   cost: scenario('lsm-production-cost-readonly', COST_PATH, inspectCost),
+  dashboard: scenario('lsm-smartbi-dashboard-insight-readonly', DASHBOARD_PATH, inspectDashboard),
 };
 
 },

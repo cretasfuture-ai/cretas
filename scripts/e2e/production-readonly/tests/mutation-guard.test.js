@@ -3,6 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { installMutationGuard } = require('../core/mutation-guard');
+const { READONLY_POST_WHITELIST, chartInsightReadonlyPost } = require('../config/readonly-post-whitelist');
 
 class FakeContext {
   constructor() { this.listeners = new Map(); }
@@ -53,6 +54,51 @@ test('allows UI login and exact read-only query POSTs', async () => {
   assert.equal(guard.blockedMutationAttempts.length, 0);
   await guard.dispose();
 });
+
+const origin = 'https://admin.example';
+const chartInsightPath = '/smartbi-api/api/smartbi/chart-insight';
+const insightBody = { factory_id: 'LIUSHANMEN' };
+
+async function checkChartInsight(
+  { method = 'POST', url = origin + chartInsightPath, body = insightBody, provenFactory = 'LIUSHANMEN', active = true },
+  allowed,
+) {
+  const context = new FakeContext();
+  const entry = chartInsightReadonlyPost(origin, () => active, () => provenFactory);
+  const guard = await installMutationGuard(context, { readonlyPostWhitelist: [...READONLY_POST_WHITELIST, entry] });
+  const attempt = fakeRoute(method, url, body);
+  await context.handler(attempt.route);
+  assert.deepEqual(attempt.calls, [allowed ? 'continue' : 'abort:blockedbyclient']);
+  if (allowed) {
+    context.listeners.get('response')({ request: () => attempt.request, status: () => 200 });
+    assert.equal(guard.readonlyPostRequests[0].classificationId, 'smartbi-chart-insight');
+  } else {
+    assert.equal(guard.blockedMutationAttempts[0].blockedBeforeSend, true);
+  }
+  assert.equal(guard.actualBusinessWrites, 0);
+  await guard.dispose();
+}
+
+test('chart insight permits the exact POST for a scoped live login', async () => {
+  await checkChartInsight({}, true);
+});
+
+for (const [name, options] of Object.entries({
+  'other SmartBI POST': { url: origin + '/smartbi-api/api/smartbi/insight/feedback' },
+  'trailing-slash alias': { url: origin + chartInsightPath + '/' },
+  'alternate gateway path': { url: origin + '/api/smartbi/chart-insight' },
+  'wrong verb': { method: 'PUT' },
+  'another origin': { url: 'https://other.example' + chartInsightPath },
+  'different tenant': { body: { factory_id: 'F006' } },
+  'LSMDEMO tenant even with a matching proof': { body: { factory_id: 'LSMDEMO' }, provenFactory: 'LSMDEMO' },
+  'missing live proof': { provenFactory: null },
+  'missing wire factory_id': { body: { factoryId: 'LIUSHANMEN' } },
+  'outside the approved scenarios': { active: false },
+})) {
+  test(`chart insight blocks ${name} before send`, async () => {
+    await checkChartInsight(options, false);
+  });
+}
 
 test('allows only the exact indicator query body on the shared AI endpoint', async () => {
   const context = new FakeContext();
