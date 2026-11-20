@@ -57,8 +57,15 @@ MG_BASE = "${{ github.event.pull_request.base.sha || github.event.merge_group.ba
 MG_HEAD = "${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}"
 INFRA = ["scripts/ci/changed-paths.py"]  # + scripts/ci/trigger-paths/<name>.txt
 PATH_GUARD = "needs.changes.outputs.run != 'false'"
-STEP_FILTERED = {("java-gate-pr", "fast-contracts"), ("java-gate-pr", "postgres-reversal-concurrency"),
-                 ("rn-gate", "jest"), ("web-admin-gate", "vitest")}
+SKIPPED_CHANGES = "needs.changes.result != 'skipped'"
+FAILED_CHANGES = "needs.changes.result != 'success'"
+FULL_READY = "!contains(github.event.pull_request.labels.*.name, 'java-full-ready')"
+STEP_FILTERED = {
+    ("java-gate-pr", "fast-contracts"): ("always()", [PATH_GUARD, FULL_READY]),
+    ("java-gate-pr", "postgres-reversal-concurrency"): ("always()", [PATH_GUARD]),
+    ("rn-gate", "jest"): ("!cancelled()", [PATH_GUARD]),
+    ("web-admin-gate", "vitest"): ("!cancelled()", [PATH_GUARD]),
+}
 
 problems = []
 checks = 0
@@ -110,6 +117,13 @@ def concurrency_problems(name, doc):
     return []
 
 
+def if_terms(condition):
+    expression = str(condition).strip()
+    if expression.startswith("${{") and expression.endswith("}}"):
+        expression = expression[3:-2].strip()
+    return sorted(term.strip() for term in expression.split("&&"))
+
+
 def filtered_problems(name, doc, patterns_file_text=None):
     bad = []
     on = on_of(doc)
@@ -150,15 +164,17 @@ def filtered_problems(name, doc, patterns_file_text=None):
         if "changes" not in needs_of(job):
             bad.append("%s/%s: 没有 needs changes" % (name, jn))
         if (name, jn) in STEP_FILTERED:
-            if "needs.changes.outputs.run" in cond:
-                bad.append(f"{name}/{jn}: 路径过滤跳过整个作业，动态名称无法求值")
+            status_check, work_terms = STEP_FILTERED[name, jn]
+            if if_terms(cond) != sorted([status_check, SKIPPED_CHANGES]):
+                bad.append(f"{name}/{jn}: 作业条件必须仅排除被跳过的 changes，并保留取消判定")
             steps = job.get("steps") or []
             guard = steps[0] if steps else {}
-            if (guard.get("if") != "${{ needs.changes.result != 'success' }}"
+            if (job.get("continue-on-error", False) is not False
+                    or if_terms(guard.get("if")) != [FAILED_CHANGES]
                     or not str(guard.get("run", "")).rstrip().endswith("\nexit 1")
                     or guard.get("continue-on-error", False) is not False):
                 bad.append(f"{name}/{jn}: 首个步骤必须显式拒绝 changes 失败")
-            if len(steps) < 2 or any(PATH_GUARD not in str(step.get("if", "")) for step in steps[1:]):
+            if len(steps) < 2 or any(if_terms(step.get("if")) != sorted(work_terms) for step in steps[1:]):
                 bad.append(f"{name}/{jn}: 工作步骤缺少 fail-safe 路径过滤")
         elif PATH_GUARD not in cond:
             bad.append(f"{name}/{jn}: if 没用 fail-safe 判定 `{PATH_GUARD}` (实得 {cond!r})")
@@ -241,20 +257,26 @@ neg += bool(filtered_problems("fresh-db-progress", d))
 d = copy.deepcopy(docs["python-gate"])
 [s for s in d["jobs"]["changes"]["steps"] if s.get("id") == "filter"][0]["env"]["BASE_SHA"] =     "${{ github.event.pull_request.base.sha }}"
 neg += bool(filtered_problems("python-gate", d))
+for (name, job), (status_check, work_terms) in STEP_FILTERED.items():
+    d = copy.deepcopy(docs[name])
+    old_terms = [status_check, SKIPPED_CHANGES, *work_terms]
+    d["jobs"][job]["if"] = "${{ " + " && ".join(old_terms) + " }}"
+    neg += filtered_problems(name, d) == [f"{name}/{job}: 作业条件必须仅排除被跳过的 changes，并保留取消判定"]
 d = copy.deepcopy(docs["rn-gate"])
-d["jobs"]["jest"]["if"] = "${{ !cancelled() && needs.changes.result != 'skipped' && needs.changes.outputs.run != 'false' }}"
-neg += filtered_problems("rn-gate", d) == ["rn-gate/jest: 路径过滤跳过整个作业，动态名称无法求值"]
+d["jobs"]["jest"]["if"] = "${{ !cancelled() && needs.changes.result == 'success' }}"
+neg += filtered_problems("rn-gate", d) == ["rn-gate/jest: 作业条件必须仅排除被跳过的 changes，并保留取消判定"]
 d = copy.deepcopy(docs["web-admin-gate"])
 d["jobs"]["vitest"]["steps"][0]["continue-on-error"] = True
 neg += filtered_problems("web-admin-gate", d) == ["web-admin-gate/vitest: 首个步骤必须显式拒绝 changes 失败"]
 d = copy.deepcopy(docs["java-gate-pr"])
-d["jobs"]["fast-contracts"]["steps"][-1].pop("if")
+d["jobs"]["fast-contracts"]["steps"][-1]["if"] = "${{ " + PATH_GUARD + " || true }}"
 neg += filtered_problems("java-gate-pr", d) == ["java-gate-pr/fast-contracts: 工作步骤缺少 fail-safe 路径过滤"]
-print("READING: negative_controls_red=%d/10" % neg)
-if neg != 10:
-    problems.append("阴性对照只有 %d/10 判红 —— 判定函数恒真" % neg)
+expected_neg = 10 + len(STEP_FILTERED)
+print(f"READING: negative_controls_red={neg}/{expected_neg}")
+if neg != expected_neg:
+    problems.append(f"阴性对照只有 {neg}/{expected_neg} 判红")
 ok("阴性对照: 去 merge_group / 加回 paths / 拿掉 needs / if 用 == 'true' / group 只用 PR 号 / 删 changes / "
-   "filter 不接 merge_group sha / 作业级路径过滤 / 忽略 changes 失败 / 工作步骤缺路径过滤都会红")
+   "filter 不接 merge_group sha / 作业级路径过滤 / 跳过失败的 changes / 忽略失败 / 绕过步骤路径过滤都会红")
 
 # ── 4. changed-paths.py 单测 ────────────────────────────────────────────────────
 def run_cp(args, cwd, env_extra=None):
