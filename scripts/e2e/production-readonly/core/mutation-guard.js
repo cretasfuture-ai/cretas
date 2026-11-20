@@ -47,13 +47,14 @@ async function installMutationGuard(context, options = {}) {
       scenario: scenarioRef.value || 'unknown',
       at: new Date().toISOString(),
     };
-    if (classification.kind === 'auth') {
+    const allowed = options.allowMutationShape?.(classification, method, request.url(), requestBody) !== false;
+    if (classification.kind === 'auth' && allowed) {
       authRequests.push({ ...record, classificationId: classification.entry.id });
       allowedByRequest.set(request, classification.kind);
       await route.continue();
       return;
     }
-    if (classification.kind === 'readonly-post') {
+    if (classification.kind === 'readonly-post' && allowed) {
       readonlyPostRequests.push({ ...record, classificationId: classification.entry.id });
       allowedByRequest.set(request, classification.kind);
       await route.continue();
@@ -93,6 +94,12 @@ async function installMutationGuard(context, options = {}) {
     readonlyPostRequests,
     blockedMutationAttempts,
     actualBusinessWriteRequests,
+    recordBlockedConfirmation(url, confirmationType) {
+      blockedMutationAttempts.push({
+        method: 'UI', url: sanitizeUrl(url), scenario: scenarioRef.value || 'unknown',
+        at: new Date().toISOString(), confirmationType, safetyStatus: 'FAIL', blockedBeforeSend: true,
+      });
+    },
     get actualBusinessWrites() {
       return actualBusinessWriteRequests.length;
     },

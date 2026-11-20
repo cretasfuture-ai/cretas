@@ -71,7 +71,10 @@ function summarizePayload(value, depth = 0) {
 function sanitizeValue(value, key = '', depth = 0) {
   if (SENSITIVE_KEY_RE.test(key)) return '[REDACTED]';
   if (value == null || typeof value === 'boolean' || typeof value === 'number') return value;
-  if (typeof value === 'string') return redactText(value);
+  if (typeof value === 'string') {
+    const questionEvidence = key === 'factoryAnalysisAnswer' || key === 'factoryAnalysisQuestion';
+    return redactText(value, questionEvidence ? Infinity : undefined);
+  }
   if (depth > 5) return '[DEPTH_LIMIT]';
   if (Array.isArray(value)) return value.slice(0, 200).map((item) => sanitizeValue(item, '', depth + 1));
   if (typeof value === 'object') {
