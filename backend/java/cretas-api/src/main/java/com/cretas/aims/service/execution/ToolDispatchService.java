@@ -17,7 +17,10 @@ import com.cretas.aims.ai.tool.gateway.ToolExecutionGateway;
 import com.cretas.aims.ai.tool.gateway.ToolExecutionMode;
 import com.cretas.aims.ai.tool.gateway.ToolExecutionResult;
 import com.cretas.aims.ai.tool.gateway.ToolExecutionSource;
+import com.cretas.aims.ai.tool.TimeRangeFilter;
+import com.cretas.aims.ai.tool.impl.foodsafety.BatchTraceByCustomerDateTool;
 import com.cretas.aims.ai.tool.impl.material.MaterialExpiringAlertTool;
+import com.cretas.aims.config.IntentKnowledgeBase;
 import com.cretas.aims.config.TimeNormalizationRules;
 import com.cretas.aims.dev.faultinjection.ToolExecutionFaultInjector;
 import com.cretas.aims.dto.ai.IntentExecuteRequest;
@@ -661,6 +664,18 @@ public class ToolDispatchService {
                     : shortcutPreprocess(request, factoryId, userId);
             boolean expiryWindowBound = !boundConfirmation && tool instanceof MaterialExpiringAlertTool
                     && MaterialExpiringAlertTool.applyFutureExpiryWindow(params, request.getUserInput(), LocalDate.now());
+            // 追溯使用单日 date。通用预处理可能把「9 月 20 日」的前半段识别成整月。
+            String originalInput = request.getUserInput();
+            LocalDate traceDay = null;
+            if (!boundConfirmation && tool instanceof BatchTraceByCustomerDateTool
+                    && IntentKnowledgeBase.isCustomerDateTrace(originalInput)
+                    && PhraseShortcutEligibility.isUnconditionedSimple(originalInput,
+                            IntentKnowledgeBase.CUSTOMER_DATE_TRACE_PHRASE, intent.getIntentCode())) {
+                traceDay = BatchTraceByCustomerDateTool.dateInSingleTraceQuestion(originalInput);
+                if (traceDay != null) {
+                    params.put(TimeRangeFilter.SAID, traceDay + "~" + traceDay);
+                }
+            }
             if (!boundConfirmation && preprocessed != null) {
                 PreprocessedQuery pq = preprocessed;
                 Map<String, PreprocessedQuery.ResolvedReference> refs = pq.getResolvedReferences();
@@ -705,7 +720,7 @@ public class ToolDispatchService {
 
                 // 2.6. 从预处理结果中提取时间范围
                 // 用户原话里根本没说时间 (预处理按上下文补出的日期不算「你说的」): 不带时间参数, 也不出「不能按时间筛选」提示
-                if (!expiryWindowBound && pq.hasTimeRange()
+                if (traceDay == null && !expiryWindowBound && pq.hasTimeRange()
                         && com.cretas.aims.ai.tool.TimeRangeFilter.mentionsTime(request.getUserInput())) {
                     TimeNormalizationRules.TimeRange timeRange = pq.getPrimaryTimeRange();
                     if (timeRange != null && timeRange.isValid()) {

@@ -1,6 +1,7 @@
 package com.cretas.aims.ai.tool.impl.foodsafety;
 
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
+import com.cretas.aims.ai.tool.TimeRangeFilter;
 import com.cretas.aims.dto.traceability.TraceabilityDTO;
 import com.cretas.aims.entity.Customer;
 import com.cretas.aims.entity.ShipmentRecord;
@@ -105,6 +106,8 @@ public class BatchTraceByCustomerDateTool extends AbstractBusinessTool {
 
         schema.put("properties", properties);
         schema.put("required", List.of("date"));
+        schema.put(TimeRangeFilter.MODE, TimeRangeFilter.SINGLE_DAY);
+        schema.put(TimeRangeFilter.NOTICE, "出货追溯未按你说的时间查询，请确认客户和单个出货日期");
         // 日期齐了也要抽客户: 只认 required 时问句里的客户名到不了工具, 工具反问「哪个客户」(见 ToolParameterGroups)
         schema.put(com.cretas.aims.ai.tool.ToolParameterGroups.ANY_OF_KEY,
                 List.of(List.of("customerId", "customerName")));
@@ -198,6 +201,7 @@ public class BatchTraceByCustomerDateTool extends AbstractBusinessTool {
         List<ShipmentRecord> onDate = forProduct.stream()
                 .filter(s -> s.getShipmentDate() != null && s.getShipmentDate().equals(date))
                 .collect(Collectors.toList());
+        Map<String, String> appliedDay = Map.of("from", date.toString(), "to", date.toString());
 
         if (onDate.isEmpty()) {
             List<String> recentDates = forProduct.stream()
@@ -212,7 +216,9 @@ public class BatchTraceByCustomerDateTool extends AbstractBusinessTool {
             data.put("shipments", List.of());
             data.put("recentShipmentDates", recentDates);
             data.put("actionHint", "/sales/shipments?customerId=" + customerId + "&date=" + date);
-            return buildSimpleResult(emptyMessage(customerName, date, productName, recentDates), data);
+            Map<String, Object> result = buildSimpleResult(emptyMessage(customerName, date, productName, recentDates), data);
+            result.put(TimeRangeFilter.APPLIED, appliedDay);
+            return result;
         }
 
         List<Map<String, Object>> shipments = new ArrayList<>();
@@ -278,7 +284,9 @@ public class BatchTraceByCustomerDateTool extends AbstractBusinessTool {
         data.put("shipments", shipments);
         data.put("materialTrace", materialTrace);
         data.put("actionHint", "/sales/shipments?customerId=" + customerId + "&date=" + date);
-        return buildSimpleResult(message.toString(), data);
+        Map<String, Object> result = buildSimpleResult(message.toString(), data);
+        result.put(TimeRangeFilter.APPLIED, appliedDay);
+        return result;
     }
 
     // ── 客户解析 ──
@@ -371,8 +379,17 @@ public class BatchTraceByCustomerDateTool extends AbstractBusinessTool {
 
     // ── 日期 ──
 
-    private static final Pattern CN_MONTH_DAY = Pattern.compile("^(?:(\\d{4})\\s*年)?\\s*(\\d{1,2})\\s*月\\s*(\\d{1,2})\\s*[日号]?$");
+    private static final String CN_MONTH_DAY_TEXT =
+            "(?:(\\d{4})\\s*年)?\\s*(\\d{1,2})\\s*月\\s*(\\d{1,2})\\s*";
+    private static final Pattern CN_MONTH_DAY = Pattern.compile("^" + CN_MONTH_DAY_TEXT + "[日号]?$");
+    private static final Pattern CN_DATE_IN_QUESTION = Pattern.compile("(?<!\\d)" + CN_MONTH_DAY_TEXT + "[日号]");
     private static final Pattern SLASH = Pattern.compile("^(?:(\\d{4})[/.-])?(\\d{1,2})[/.-](\\d{1,2})$");
+
+    /** 调用方已确认原话只有一条客户日期追溯问句。年份沿用工具解析 date 的口径。 */
+    public static LocalDate dateInSingleTraceQuestion(String input) {
+        Matcher match = CN_DATE_IN_QUESTION.matcher(input);
+        return match.find() ? parseDate(match.group(), LocalDate.now(ZONE)) : null;
+    }
 
     /** 支持 ISO、yyyy/M/d、M月d日/号、M/d、M-d; 缺年份取今年, 若晚于今天则取上一年。解析不了返回 null。 */
     static LocalDate parseDate(String raw, LocalDate today) {

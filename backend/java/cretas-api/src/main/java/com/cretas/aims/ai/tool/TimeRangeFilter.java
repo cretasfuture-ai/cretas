@@ -16,11 +16,12 @@ import java.util.Map;
  *   <li>工具在 schema 里声明 startDate/endDate 属性 = 它按这两个参数过滤 (声明了就必须真的过滤);</li>
  *   <li>执行后: 声明了 → 结果记 {@link #APPLIED}; 没声明 → 结果记 {@link #NOT_APPLIED},
  *       回复开头明说「不能按时间筛选, 以下是全部时间的结果」, ⛔ 不静默。</li>
+ *   <li>单日工具必须回报实际筛过的日期，且与用户所说的日期一致，才视为已应用。</li>
  * </ul>
  */
 public final class TimeRangeFilter {
 
-    /** 参数标记: 这次的 startDate/endDate 来自用户原话 (值为 "from~to")。 */
+    /** 参数标记: 用户原话所指的日期范围 (值为 "from~to"，单日的起止相同)。 */
     public static final String SAID = "timeRangeFromSentence";
     /** 结果标记: 按这个时间范围查的 {from, to}。 */
     public static final String APPLIED = "appliedTimeRange";
@@ -31,6 +32,8 @@ public final class TimeRangeFilter {
      * 这样的工具收到句子里的时间时, 时间参数被拿掉, 回复说明不能按时间查 —— ⛔ 不把快照标成「上个月」。
      */
     public static final String MODE = "x-time-range";
+    /** MODE 值: 工具使用独立的单日参数，执行后显式回报实际应用的日期。 */
+    public static final String SINGLE_DAY = "single-day";
     /** schema 顶层: 不能按时间查时的说明 (替换通用措辞), 如「库存报表是当前时点的库存, 不能按过去的时间查」。 */
     public static final String NOTICE = "x-time-range-notice";
     /**
@@ -121,12 +124,17 @@ public final class TimeRangeFilter {
             return result;
         }
         String[] range = said.split("~", 2);
+        Map<String, String> requested = Map.of("from", range[0], "to", range[1]);
+        if (parametersSchema != null && SINGLE_DAY.equals(parametersSchema.get(MODE))
+                && range[0].equals(range[1]) && requested.equals(result.get(APPLIED))) {
+            return result;
+        }
         Map<String, Object> out = new LinkedHashMap<>(result);
         if (supported(parametersSchema)) {
             // 工具可能收敛或放宽了窗口。以工具回报的实际起止为准。
-            out.putIfAbsent(APPLIED, Map.of("from", range[0], "to", range[1]));
+            out.putIfAbsent(APPLIED, requested);
         } else {
-            Map<String, Object> notApplied = new LinkedHashMap<>(Map.of("from", range[0], "to", range[1]));
+            Map<String, Object> notApplied = new LinkedHashMap<>(requested);
             if (parametersSchema != null && parametersSchema.get(NOTICE) instanceof String custom) {
                 notApplied.put("notice", custom);
             }
