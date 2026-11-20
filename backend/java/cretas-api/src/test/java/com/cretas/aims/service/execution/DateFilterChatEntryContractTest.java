@@ -2,28 +2,34 @@ package com.cretas.aims.service.execution;
 
 import com.cretas.aims.ai.client.DashScopeClient;
 import com.cretas.aims.ai.client.F006BossQuestionClient;
+import com.cretas.aims.ai.tool.NegationTwinPolicy;
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.ToolRbacEnforcer;
 import com.cretas.aims.ai.tool.ToolRegistry;
 import com.cretas.aims.ai.tool.WriteGuardService;
+import com.cretas.aims.ai.tool.impl.alert.AlertListTool;
 import com.cretas.aims.ai.tool.impl.crm.OrderListTool;
 import com.cretas.aims.ai.tool.impl.crm.OrderQueryTool;
 import com.cretas.aims.ai.tool.impl.material.MaterialBatchQueryTool;
 import com.cretas.aims.ai.tool.impl.material.MaterialExpiringAlertTool;
 import com.cretas.aims.ai.tool.impl.purchase.PurchaseOrderListTool;
 import com.cretas.aims.ai.tool.impl.quality.QualityCheckQueryTool;
+import com.cretas.aims.ai.tool.impl.report.ReportAnomalyTool;
 import com.cretas.aims.ai.tool.impl.report.ReportBatchYieldRankTool;
 import com.cretas.aims.ai.tool.impl.shipment.ShipmentQueryTool;
 import com.cretas.aims.ai.tool.impl.workdesk.MaterialDisposalRecommendationTool;
 import com.cretas.aims.config.ColloquialMappings;
 import com.cretas.aims.config.DashScopeConfig;
+import com.cretas.aims.config.IntentCompositionConfig;
 import com.cretas.aims.config.IntentKnowledgeBase;
+import com.cretas.aims.config.IntentMatchingConfig;
 import com.cretas.aims.config.TimeNormalizationRules;
 import com.cretas.aims.dto.ai.IntentExecuteRequest;
 import com.cretas.aims.dto.ai.IntentExecuteResponse;
 import com.cretas.aims.dto.cache.SemanticCacheHit;
 import com.cretas.aims.dto.common.PageRequest;
 import com.cretas.aims.dto.common.PageResponse;
+import com.cretas.aims.dto.equipment.EquipmentAlertDTO;
 import com.cretas.aims.dto.intent.IntentMatchResult;
 import com.cretas.aims.dto.material.MaterialBatchDTO;
 import com.cretas.aims.dto.material.MaterialBatchListFilter;
@@ -37,24 +43,38 @@ import com.cretas.aims.entity.enums.SalesOrderStatus;
 import com.cretas.aims.entity.inventory.SalesDeliveryRecord;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.exception.ResourceNotFoundException;
+import com.cretas.aims.repository.IntentMatchRecordRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.inventory.SalesDeliveryRecordRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.service.AIIntentService;
+import com.cretas.aims.service.AIIntentDomainDefaultService;
 import com.cretas.aims.service.AnalysisRouterService;
+import com.cretas.aims.service.ComparisonQueryHandler;
+import com.cretas.aims.service.EquipmentAlertsService;
+import com.cretas.aims.service.ExpressionLearningService;
+import com.cretas.aims.service.IntentEmbeddingCacheService;
+import com.cretas.aims.service.KeywordEffectivenessService;
+import com.cretas.aims.service.LlmIntentFallbackClient;
+import com.cretas.aims.service.ReportService;
 import com.cretas.aims.service.ParameterExtractionLearningService;
 import com.cretas.aims.service.MaterialBatchService;
 import com.cretas.aims.service.QualityInspectionService;
 import com.cretas.aims.service.SemanticCacheService;
 import com.cretas.aims.service.ShipmentRecordService;
+import com.cretas.aims.service.SlotExtractor;
+import com.cretas.aims.service.TwoStageIntentClassifier;
 import com.cretas.aims.service.calibration.CorrectionAgentService;
 import com.cretas.aims.service.calibration.ExternalVerifierService;
 import com.cretas.aims.service.calibration.SelfCorrectionService;
 import com.cretas.aims.service.calibration.ToolCallRedundancyService;
 import com.cretas.aims.service.calibration.ToolResultValidatorService;
+import com.cretas.aims.service.impl.AIIntentServiceImpl;
 import com.cretas.aims.service.impl.QueryPreprocessorServiceImpl;
+import com.cretas.aims.service.intent.IntentConfigManagementService;
+import com.cretas.aims.service.intent.impl.IntentRecognitionPipelineServiceImpl;
 import com.cretas.aims.service.impl.ResultFormatterServiceImpl;
 import com.cretas.aims.service.inventory.PurchaseService;
 import com.cretas.aims.service.inventory.SalesService;
@@ -78,6 +98,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -91,6 +112,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockingDetails;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
@@ -519,24 +541,110 @@ class DateFilterChatEntryContractTest {
                 .doesNotContain("没有损耗异常的批次工序");
     }
 
-    @ParameterizedTest
+    @ParameterizedTest(name = "{0}")
     @CsvSource({
-            "最近有没有异常, REPORT_ANOMALY, report_anomaly",
-            "有什么异常, REPORT_ANOMALY, report_anomaly",
+            // 原始基线的 Java 识别按告警列表处理这两条通用问法。
+            "最近有没有异常, ALERT_LIST, alert_list",
+            "有什么异常, ALERT_LIST, alert_list",
             "最近有哪些质检不合格, QUALITY_CHECK_QUERY, quality_check_query"
     })
     void otherQueriesStillDispatchTheRecognizedTool(String sentence, String code, String toolName) throws Exception {
         ProductionReportRepository reports = mock(ProductionReportRepository.class);
-        AIIntentService recognizer = configureLossAnomalySse(reports);
-        var recognized = recognitionTool(recognizer, code, toolName);
-        ToolExecutor tool = registry.getExecutor(toolName).orElseThrow();
+        ReportService reportService = mock(ReportService.class);
+        when(reportService.getAnomalyReport(eq(F), any(), any())).thenReturn(Map.of("totalAnomalies", 1));
+        ReportAnomalyTool anomaly = spy(withMapper(new ReportAnomalyTool()));
+        ReflectionTestUtils.setField(anomaly, "reportService", reportService);
+        QualityInspectionService inspections = mock(QualityInspectionService.class);
+        when(inspections.getInspectionsFiltered(eq(F), any(), any(), any(), any(), any(), any(PageRequest.class)))
+                .thenReturn(PageResponse.of(List.of(), 1, 10, 0L));
+        QualityCheckQueryTool quality = spy(withMapper(new QualityCheckQueryTool()));
+        ReflectionTestUtils.setField(quality, "qualityInspectionService", inspections);
+        EquipmentAlertsService alerts = mock(EquipmentAlertsService.class);
+        EquipmentAlertDTO alertRecord = new EquipmentAlertDTO();
+        alertRecord.setId(28);
+        alertRecord.setMessage("测试设备告警");
+        when(alerts.getAlertList(eq(F), any(PageRequest.class), any(), any(), any()))
+                .thenReturn(PageResponse.of(List.of(alertRecord), 1, 10, 1L));
+        AlertListTool alert = spy(withMapper(new AlertListTool()));
+        ReflectionTestUtils.setField(alert, "equipmentAlertsService", alerts);
+        ReportBatchYieldRankTool yield = lossAnomalyTool(reports);
 
-        IntentExecuteResponse response = runSse(recognizer, sentence, recognized);
+        IntentKnowledgeBase knowledge = initializedKnowledge();
+        AIIntentService recognizer = ruleRecognizer(knowledge, anomaly, quality, alert, yield);
+        IntentExecuteResponse response = executeSse(recognizer, knowledge, sentence);
+        List<String> executedTools = List.of(anomaly, quality, alert).stream()
+                .filter(tool -> mockingDetails(tool).getInvocations().stream()
+                        .anyMatch(invocation -> invocation.getMethod().getName().equals("execute")))
+                .map(ToolExecutor::getToolName)
+                .toList();
+        System.out.printf("FIX-28-ROUTE-R2 query=%s status=%s intent=%s tools=%s message=%s%n",
+                sentence, response.getStatus(), response.getIntentCode(), executedTools, response.getMessage());
 
         assertThat(response.getStatus()).as(response.getMessage()).isEqualTo("SUCCESS");
         assertThat(response.getIntentCode()).isEqualTo(code);
-        verify(tool).execute(any(), any());
+        assertThat(executedTools).containsExactly(toolName);
+        var data = mapper.valueToTree(response.getResultData()).path("data");
+        assertThat(data.path("view").asText()).isNotEqualTo("loss_anomaly");
+        if ("ALERT_LIST".equals(code)) {
+            verify(alerts).getAlertList(eq(F), any(PageRequest.class), any(), any(), any());
+        } else {
+            verify(inspections).getInspectionsFiltered(eq(F), any(), eq("FAIL"), any(), any(), any(),
+                    any(PageRequest.class));
+            assertThat(response.getMessage()).contains("不合格");
+        }
         verifyNoInteractions(reports);
+    }
+
+    private AIIntentService ruleRecognizer(IntentKnowledgeBase knowledge, ToolExecutor... tools) throws Exception {
+        // 以仓库工厂目录作为共享配置。离线 Java 管线没有模型服务及持久化状态。
+        Map<String, ToolExecutor> toolBindings = new LinkedHashMap<>();
+        for (ToolExecutor tool : tools) {
+            toolBindings.put(tool.getToolName(), tool);
+            when(registry.getExecutor(tool.getToolName())).thenReturn(Optional.of(tool));
+        }
+        Map<String, AIIntentConfig> configs = new LinkedHashMap<>();
+        try (var catalog = getClass().getResourceAsStream("/ai/factory-intent-catalog.json")) {
+            for (var row : mapper.readTree(catalog).path("canonical_intents")) {
+                String toolName = row.path("tool_name").asText();
+                if (toolBindings.containsKey(toolName)) {
+                    String code = row.path("intent_code").asText();
+                    configs.put(code, AIIntentConfig.builder().intentCode(code)
+                            .intentName(row.path("intent_name").asText())
+                            .intentCategory(row.path("intent_category").asText())
+                            .description(row.path("description").asText())
+                            .businessType(row.path("business_type").asText())
+                            .isActive(row.path("is_active").asBoolean()).sensitivityLevel("LOW")
+                            .toolName(toolName).build());
+                }
+            }
+        }
+        IntentConfigManagementService config = mock(IntentConfigManagementService.class);
+        when(config.resolveBusinessDomain(F)).thenReturn("FACTORY");
+        when(config.getAllIntents(F)).thenReturn(List.copyOf(configs.values()));
+        when(config.getIntentByCode(eq(F), anyString()))
+                .thenAnswer(call -> Optional.ofNullable(configs.get(call.getArgument(1))));
+        when(config.getIntentConfigByCode(eq(F), anyString()))
+                .thenAnswer(call -> configs.get(call.getArgument(1)));
+        when(config.hasPermission(anyString(), eq(ROLE))).thenReturn(true);
+        when(config.hasPermission(eq(F), anyString(), eq(ROLE))).thenReturn(true);
+
+        IntentMatchingConfig matching = new IntentMatchingConfig();
+        matching.getSemanticFirst().setEnabled(false);
+        matching.getAutoLearn().setEnabled(false);
+        matching.getAutoLearn().getSampleCollection().setEnabled(false);
+        WriteGuardService writeGuard = new WriteGuardService();
+        IntentCompositionConfig composition = new IntentCompositionConfig();
+        composition.init();
+        var classifier = new TwoStageIntentClassifier(composition, new SlotExtractor(), new ComparisonQueryHandler(), null);
+        var pipeline = new IntentRecognitionPipelineServiceImpl(
+                null, mock(IntentMatchRecordRepository.class), mapper, mock(LlmIntentFallbackClient.class),
+                null, mock(KeywordEffectivenessService.class), null, null, null, mock(IntentEmbeddingCacheService.class),
+                mock(ExpressionLearningService.class), null, null, mock(AIIntentDomainDefaultService.class),
+                preprocessor, null, null, null, classifier, matching, null, knowledge, null, null,
+                config, new NegationTwinPolicy(writeGuard));
+        ReflectionTestUtils.setField(pipeline, "writeGuardService", writeGuard);
+        ReflectionTestUtils.setField(pipeline, "preprocessEnabled", true);
+        return new AIIntentServiceImpl(pipeline, config, null);
     }
 
     @Test
@@ -568,6 +676,12 @@ class DateFilterChatEntryContractTest {
     }
 
     private AIIntentService configureLossAnomalySse(ProductionReportRepository reports) {
+        AIIntentService recognizer = mock(AIIntentService.class);
+        configureSseIntent(recognizer, "REPORT_BATCH_YIELD_RANK", lossAnomalyTool(reports));
+        return recognizer;
+    }
+
+    private ReportBatchYieldRankTool lossAnomalyTool(ProductionReportRepository reports) {
         ProcessSecretAggregateExclusions exclusions = mock(ProcessSecretAggregateExclusions.class);
         when(exclusions.forCurrentCaller(eq(F), anyString())).thenReturn(ProcessSecretAggregateExclusions.Scope.EMPTY);
         MaterialBalanceThresholdProvider thresholds = mock(MaterialBalanceThresholdProvider.class);
@@ -590,9 +704,7 @@ class DateFilterChatEntryContractTest {
                     }
                 }, new ColloquialMappings(), null, null, mapper, null, null));
 
-        AIIntentService recognizer = mock(AIIntentService.class);
-        configureSseIntent(recognizer, "REPORT_BATCH_YIELD_RANK", tool);
-        return recognizer;
+        return tool;
     }
 
     @ParameterizedTest
@@ -633,8 +745,17 @@ class DateFilterChatEntryContractTest {
             throws Exception {
         when(recognizer.recognizeIntentWithConfidence(eq(sentence), eq(F), eq(3), any(), eq(ROLE),
                 any(), any(), any(), eq(List.of()))).thenReturn(recognition);
+        return executeSse(recognizer, initializedKnowledge(), sentence);
+    }
+
+    private static IntentKnowledgeBase initializedKnowledge() {
         IntentKnowledgeBase knowledge = new IntentKnowledgeBase();
         knowledge.initDefaults();
+        return knowledge;
+    }
+
+    private IntentExecuteResponse executeSse(AIIntentService recognizer, IntentKnowledgeBase knowledge, String sentence)
+            throws Exception {
         SemanticCacheService cache = mock(SemanticCacheService.class);
         when(cache.queryCache(F, sentence)).thenReturn(SemanticCacheHit.miss(0L));
         SseStreamingService sse = spy(new SseStreamingService(recognizer, cache, knowledge,
