@@ -94,7 +94,10 @@ async def test_review_8_corrects_every_global_total_and_keeps_interleaved_subtot
     assert done["answer"] == expected and done["answer_corrected"] is True
 
 
-@pytest.mark.parametrize("topic", ["A产品方面", "其中A产品", "A产品中的", "A产品这一类", "A产品的话"])
+@pytest.mark.parametrize("topic", [
+    "A产品方面", "其中A产品", "A产品中的", "A产品这一类", "A产品的话",
+    "其中，A产品", "A产品", "其中，部分记录",
+])
 async def test_r3_scoped_group_total_is_left_alone_across_the_comma(monkeypatch, topic):
     answer = f"{topic}，全月一共 52 卷。全月所有 A产品和 B产品一共 133 卷。"
     _, done, prompts, calls = await ask(
@@ -299,6 +302,54 @@ async def test_weekly_header_ratio_requires_two_additive_count_columns(monkeypat
     else:
         assert calls == []
         assert "| 2026-W41 | 25.00% |" in prompts[0]
+
+
+@pytest.mark.parametrize(("metric", "column"), [
+    ("数量等级", "数量等级"),
+    ("良品产量", "良品产量KG"),
+])
+async def test_weekly_sum_rejects_unlisted_column_names(monkeypatch, metric, column):
+    fields = [("日期", False, False, True), (column, True, False, False)]
+    rows = [{"日期": day, column: value}
+            for day, value in [("2026-10-01", 2), ("2026-10-02", 2), ("2026-10-05", 3)]]
+    candidates = [replace(TEMP_CAND[0], field_names=[f[0] for f in fields])]
+    _, _, _, calls = await ask(
+        monkeypatch, f"10月哪一周{metric}最高", {5398: (rows, fields)}, candidates=candidates,
+    )
+    assert len(calls) == 1 and row_level_qa.WEEK_ROLLUP_COL in calls[0]
+
+
+@pytest.mark.parametrize(("metric", "num", "den", "column"), [
+    ("完好率", "单箱完好件数", "单箱抽检件数", "完好率(单箱完好件数/单箱抽检件数)"),
+    ("良品率", "生产件数", "良品件数", "良品率(生产件数/良品件数)"),
+    ("计划品项达成率", "已完成计划品项数", "计划品项数", "计划品项达成率"),
+])
+async def test_weekly_ratio_rejects_unregistered_column_pairs(monkeypatch, metric, num, den, column):
+    rows = [{"日期": day, "抽检箱数": boxes, num: good, den: 10, column: good / 10}
+            for day, good, boxes in [("2026-10-01", 2, 100), ("2026-10-02", 9, 1), ("2026-10-05", 4, 1)]]
+    fields = [("日期", False, False, True)] + [(name, True, False, False) for name in rows[0] if name != "日期"]
+    candidates = [replace(TEMP_CAND[0], field_names=[f[0] for f in fields])]
+    _, _, _, calls = await ask(
+        monkeypatch, f"10月哪一周{metric}最高", {5398: (rows, fields)}, candidates=candidates,
+    )
+    assert len(calls) == 1 and row_level_qa.WEEK_ROLLUP_COL in calls[0]
+
+
+async def test_weekly_ratio_registered_box_totals_are_weighted(monkeypatch):
+    ratio = "完好率(完好件数/抽检件数)"
+    rows = [{"日期": day, "完好件数": good * boxes, "抽检件数": 10 * boxes, ratio: good / 10}
+            for day, good, boxes in [("2026-10-01", 2, 100), ("2026-10-02", 9, 1), ("2026-10-05", 4, 1)]]
+    fields = [("日期", False, False, True)] + [(name, True, False, False) for name in rows[0] if name != "日期"]
+    candidates = [replace(TEMP_CAND[0], field_names=[f[0] for f in fields])]
+    _, _, prompts, calls = await ask(
+        monkeypatch, "10月哪一周完好率最高", {5398: (rows, fields)}, candidates=candidates,
+    )
+    assert calls == []
+    block = prompts[0].split("## 全表精确计算结果")[1]
+    assert "Σ完好件数 / Σ抽检件数" in block
+    assert [line for line in block.splitlines() if line.startswith("| 2026-W")] == [
+        "| 2026-W41 | 40.00% |", "| 2026-W40 | 20.69% |",
+    ]
 
 
 @pytest.mark.parametrize("numerator_columns", [("合格品项数",), (), ("合格品项数A", "合格品项数B")],
