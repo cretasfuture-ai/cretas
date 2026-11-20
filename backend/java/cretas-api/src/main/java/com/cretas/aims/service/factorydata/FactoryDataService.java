@@ -43,8 +43,6 @@ import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
@@ -376,12 +374,13 @@ public class FactoryDataService {
             throw new BusinessException(409, "requestId 不是该厂一次进行中的导出 (先调用 startExport)")
                 .withHint("先调用 startExport 拿到回执编号, 再用同一个编号写出导出包");
         }
-        FactoryRow factory = requireFactory(factoryId);
         Set<Format> fmt = EnumSet.copyOf(formats);
-        MessageDigest whole = FactoryDataPackageWriter.sha256();
         CountingOut counted = new CountingOut(rawOut);
-        DigestOutputStream out = new DigestOutputStream(counted, whole);
+        var failures = new FactoryDataExportFailures();
         try {
+            FactoryRow factory = requireFactory(factoryId);
+            MessageDigest whole = FactoryDataPackageWriter.sha256();
+            DigestOutputStream out = new DigestOutputStream(counted, whole);
             Map<String, Object> manifest = new LinkedHashMap<>();
             manifest.put("format", "cretas-factory-export/2");
             manifest.put("redaction", Map.of("algorithm", "HMAC-SHA256", "mapping", "package-scoped",
@@ -395,26 +394,24 @@ public class FactoryDataService {
             fmt.add(Format.JSON);
             manifest.put("requestedFileFormats", requestedFormats.stream().map(Enum::name).toList());
             manifest.put("fileFormats", fmt.stream().map(Enum::name).toList());
-            FactoryDataPackageWriter writer = new FactoryDataPackageWriter(out);
-            List<Map<String, Object>> dbManifests = withSnapshot(Database.SMARTBI, smartbiNetworkTimeoutMs, smartbi -> {
+            FactoryDataPackageWriter writer = new FactoryDataPackageWriter(out, failures);
+            List<Map<String, Object>> dbManifests = withSnapshot(Database.SMARTBI, smartbiNetworkTimeoutMs, failures, smartbi -> {
                 var smartbiScope = FactoryDataScopeResolver.resolveVisible(smartbi, Database.SMARTBI, schema, factoryId);
                 rejectForeignHits(smartbi, smartbiScope);
                 var smartbiMetadata = captureExportMetadata(smartbi, smartbiScope, factoryId);
                 // Both preflights finish before the first ZIP entry. SMARTBI only
                 // receives heartbeat queries while CRETAS owns the writer.
-                var cretasManifest = withSnapshotHeartbeat(smartbi, failure ->
-                        withSnapshot(Database.CRETAS, 0, failure, cretas -> {
+                var cretasManifest = withSnapshotHeartbeat(smartbi, failures, () ->
+                        withSnapshot(Database.CRETAS, 0, failures, cretas -> {
                             var cretasScope = FactoryDataScopeResolver.resolveVisible(cretas, Database.CRETAS, schema, factoryId);
                             rejectForeignHits(cretas, cretasScope);
                             var cretasMetadata = captureExportMetadata(cretas, cretasScope, factoryId);
-                            return writer.withWriteFailureHandler(e -> {
-                                var writeFailure = databaseWriteFailure(Database.CRETAS, e);
-                                if (failure != null) failure.compareAndSet(null, writeFailure);
-                                return writeFailure;
-                            }, () -> exportDatabase(cretas, cretasScope, factoryId, fmt, writer, cretasMetadata));
+                            return exportDatabase(cretas, cretasScope, factoryId, fmt, writer, cretasMetadata, failures);
                         }));
-                return List.of(cretasManifest, exportDatabase(smartbi, smartbiScope, factoryId, fmt, writer, smartbiMetadata));
+                return List.of(cretasManifest,
+                        exportDatabase(smartbi, smartbiScope, factoryId, fmt, writer, smartbiMetadata, failures));
             });
+            failures.throwIfFailed();
             manifest.put("databases", dbManifests);
             manifest.put("attachments", exportAttachments(factoryId, mode, writer));
             writer.writeText("README.txt", readme(factoryId, factory.name(), mode, fmt));
@@ -439,14 +436,16 @@ public class FactoryDataService {
             summary.put("attachments", manifest.get("attachments"));
             ledger.finish(requestId, FactoryDataRequestLedger.Status.SUCCEEDED, toJson(summary),
                     HexFormat.of().formatHex(whole.digest()), counted.count, null);
-        } catch (IOException | RuntimeException e) {
+        } catch (IOException | RuntimeException | Error e) {
+            failures.record(e);
+            Throwable first = failures.first();
             try {
-                ledger.finish(requestId, FactoryDataRequestLedger.Status.FAILED, null, null, counted.count, e.toString());
+                ledger.finish(requestId, FactoryDataRequestLedger.Status.FAILED, null, null, counted.count, first.toString());
             } catch (RuntimeException ledgerFailure) {
-                if (ledgerFailure != e) e.addSuppressed(ledgerFailure);
+                failures.record(ledgerFailure);
             }
-            log.error("factory-data export failed requestId={} factoryId={}", requestId, factoryId, e);
-            throw e;
+            log.error("factory-data export failed requestId={} factoryId={}", requestId, factoryId, first);
+            failures.throwIfFailed();
         }
     }
 
@@ -472,101 +471,121 @@ public class FactoryDataService {
                 new ArrayList<>(scope.tables().values()), factoryId);
     }
 
-    private <T> T withSnapshotHeartbeat(Connection waiting, Function<AtomicReference<Throwable>, T> work)
-            throws SQLException {
+    private <T> T withSnapshotHeartbeat(Connection waiting, FactoryDataExportFailures failures, Supplier<T> work) {
+        String settings = "SMARTBI 库读取快照空闲阈值失败";
         long idleMillis;
-        try (PreparedStatement ps = waiting.prepareStatement(
-                "SELECT setting::bigint FROM pg_catalog.pg_settings WHERE name = 'idle_in_transaction_session_timeout'");
-             ResultSet rs = ps.executeQuery()) {
-            if (!rs.next()) throw new SQLException("无法读取快照事务空闲阈值");
-            idleMillis = rs.getLong(1);
-        }
-        if (idleMillis == 0) return work.apply(null);
-        long interval = Math.max(1, idleMillis / 3);
-        var failure = new AtomicReference<Throwable>();
-        T result = null;
-        // The executor closes and joins the last heartbeat before the caller
-        // uses the JDBC connection again or rolls back the read-only snapshot.
-        try (var executor = heartbeatExecutor.get()) {
-            executor.scheduleWithFixedDelay(() -> {
-                try (PreparedStatement ps = waiting.prepareStatement("SELECT 1")) {
-                    ps.setQueryTimeout(10);
-                    ps.executeQuery().close();
-                } catch (SQLException | RuntimeException e) {
-                    var heartbeatFailure = new SQLException("等待写出期间快照心跳失败", e);
-                    recordSnapshotFailure(failure, heartbeatFailure);
-                    throw new IllegalStateException(heartbeatFailure);
-                }
-            }, interval, interval, TimeUnit.MILLISECONDS);
-            try {
-                result = work.apply(failure);
-            } catch (RuntimeException | Error e) {
-                recordSnapshotFailure(failure, e);
+        PreparedStatement ps = failures.read(settings, () -> waiting.prepareStatement(
+                "SELECT setting::bigint FROM pg_catalog.pg_settings WHERE name = 'idle_in_transaction_session_timeout'"));
+        try (var statement = failures.cleanup(ps, settings)) {
+            ResultSet rs = failures.read(settings, ps::executeQuery);
+            try (var rows = failures.cleanup(rs, settings)) {
+                idleMillis = failures.read(settings, () -> {
+                    if (!rs.next()) throw new SQLException("缺少 idle_in_transaction_session_timeout");
+                    return rs.getLong(1);
+                });
             }
         }
-        if (failure.get() instanceof SQLException e) throw e;
-        if (failure.get() instanceof RuntimeException e) throw e;
-        if (failure.get() instanceof Error e) throw e;
+        if (idleMillis == 0) return work.get();
+        long interval = Math.max(1, idleMillis / 3);
+        var executor = failures.beforeCleanup(heartbeatExecutor::get);
+        T result;
+        // The executor closes and joins the last heartbeat before the caller
+        // uses the JDBC connection again or rolls back the read-only snapshot.
+        try (var shutdown = failures.cleanup(executor, "关闭快照心跳执行器失败")) {
+            result = failures.beforeCleanup(() -> {
+                executor.scheduleWithFixedDelay(() -> heartbeat(waiting, failures),
+                        interval, interval, TimeUnit.MILLISECONDS);
+                return work.get();
+            });
+        }
+        failures.throwIfSnapshotFailed();
         return result;
     }
 
-    private static void recordSnapshotFailure(AtomicReference<Throwable> failure, Throwable next) {
-        Throwable first = failure.compareAndExchange(null, next);
-        if (first != null && first != next) first.addSuppressed(next);
+    private static void heartbeat(Connection waiting, FactoryDataExportFailures failures) {
+        String operation = "SMARTBI 等待写出期间快照心跳失败";
+        PreparedStatement ps = heartbeatQuery(failures, operation, () -> waiting.prepareStatement("SELECT 1"));
+        try (var statement = failures.cleanup(ps, operation + "（关闭语句）")) {
+            ResultSet rs = heartbeatQuery(failures, operation, () -> {
+                ps.setQueryTimeout(10);
+                return ps.executeQuery();
+            });
+            failures.cleanup(rs, operation + "（关闭结果集）").close();
+        }
+        failures.throwIfSnapshotFailed();
+    }
+
+    private static <T> T heartbeatQuery(FactoryDataExportFailures failures, String operation,
+                                        FactoryDataExportFailures.Work<T, SQLException> work) {
+        try {
+            return work.run();
+        } catch (SQLException | RuntimeException e) {
+            throw failures.failure(operation, e);
+        } catch (Error e) {
+            failures.record(e);
+            throw e;
+        }
     }
 
     private Map<String, Object> exportDatabase(Connection conn, FactoryDataScope scope, String factoryId, Set<Format> formats,
                                                FactoryDataPackageWriter writer,
-                                               FactoryDataSchemaMetadata.Snapshot sourceMetadata) throws SQLException {
+                                               FactoryDataSchemaMetadata.Snapshot sourceMetadata,
+                                               FactoryDataExportFailures failures) {
         Database db = scope.database();
         String dir = db.name().toLowerCase();
         List<Map<String, Object>> tables = new ArrayList<>();
         List<Map<String, Object>> notExported = new ArrayList<>();
-        long rows = 0;
         Map<String, Object> m = new LinkedHashMap<>();
-        try (FactoryDataXlsxBook book = formats.contains(Format.XLSX)
-                ? new FactoryDataXlsxBook(writer.redactionKey()) : null) {
-            for (TableScope ts : scope.tables().values()) {
-                if (!ts.category().exported()) {
-                    notExported.add(Map.of("table", ts.table(), "category", ts.category().name(), "rows", ts.rows()));
-                    continue;
+        FactoryDataXlsxBook book = formats.contains(Format.XLSX) ? new FactoryDataXlsxBook(writer.redactionKey()) : null;
+        long rows;
+        try (var workbook = failures.cleanup(book, db + " 库工作簿关闭失败")) {
+            rows = failures.read(db + " 库读取失败", () -> {
+                long total = 0;
+                try {
+                    for (TableScope ts : scope.tables().values()) {
+                        if (!ts.category().exported()) {
+                            notExported.add(Map.of("table", ts.table(), "category", ts.category().name(), "rows", ts.rows()));
+                            continue;
+                        }
+                        Map<String, Object> t = new LinkedHashMap<>();
+                        t.put("table", ts.table());
+                        t.put("category", ts.category().name());
+                        t.put("rows", ts.rows());
+                        List<Map<String, Object>> files = new ArrayList<>();
+                        if (formats.contains(Format.CSV)) {
+                            FactoryDataPackageWriter.Entry e = writer.writeTable(conn, dir + "/csv", schema, ts, factoryId);
+                            requireRows(db, ts, e.rows());
+                            files.add(Map.of("path", e.path(), "sha256", e.sha256()));
+                        }
+                        if (formats.contains(Format.JSON)) {
+                            FactoryDataPackageWriter.Entry e = writer.writeTableJson(conn, dir + "/json", schema, ts, factoryId);
+                            requireRows(db, ts, e.rows());
+                            files.add(Map.of("path", e.path(), "sha256", e.sha256()));
+                        }
+                        if (book != null) requireRows(db, ts, writer.addToBook(conn, book, schema, ts, factoryId));
+                        t.put("files", files);
+                        tables.add(t);
+                        total += ts.rows();
+                    }
+                    if (book != null) {
+                        FactoryDataPackageWriter.Entry e = writer.writeBook(dir + "/" + dir + ".xlsx", book);
+                        Map<String, Object> x = new LinkedHashMap<>();
+                        x.put("path", e.path());
+                        x.put("sha256", e.sha256());
+                        x.put("sheets", book.sheets());
+                        x.put("truncatedCells", book.truncatedCells());
+                        x.put("limits", Map.of("rowsPerSheet", FactoryDataXlsxBook.MAX_DATA_ROWS,
+                                "sheetNameChars", FactoryDataXlsxBook.MAX_SHEET_NAME, "cellChars", FactoryDataXlsxBook.MAX_CELL_CHARS));
+                        m.put("xlsx", x);
+                    }
+                    m.put("sourceSchema", writeMetadata(writer, dir + "/metadata/schema.json", sourceMetadata.schema(), failures));
+                    m.put("migrationMetadata", writeMetadata(writer, dir + "/metadata/migrations.json",
+                            sourceMetadata.migrations(), failures));
+                } catch (IOException e) {
+                    throw failures.failure(db + " 库写出失败", e);
                 }
-                Map<String, Object> t = new LinkedHashMap<>();
-                t.put("table", ts.table());
-                t.put("category", ts.category().name());
-                t.put("rows", ts.rows());
-                List<Map<String, Object>> files = new ArrayList<>();
-                if (formats.contains(Format.CSV)) {
-                    FactoryDataPackageWriter.Entry e = writer.writeTable(conn, dir + "/csv", schema, ts, factoryId);
-                    requireRows(db, ts, e.rows());
-                    files.add(Map.of("path", e.path(), "sha256", e.sha256()));
-                }
-                if (formats.contains(Format.JSON)) {
-                    FactoryDataPackageWriter.Entry e = writer.writeTableJson(conn, dir + "/json", schema, ts, factoryId);
-                    requireRows(db, ts, e.rows());
-                    files.add(Map.of("path", e.path(), "sha256", e.sha256()));
-                }
-                if (book != null) requireRows(db, ts, writer.addToBook(conn, book, schema, ts, factoryId));
-                t.put("files", files);
-                tables.add(t);
-                rows += ts.rows();
-            }
-            if (book != null) {
-                FactoryDataPackageWriter.Entry e = writer.writeBook(dir + "/" + dir + ".xlsx", book);
-                Map<String, Object> x = new LinkedHashMap<>();
-                x.put("path", e.path());
-                x.put("sha256", e.sha256());
-                x.put("sheets", book.sheets());
-                x.put("truncatedCells", book.truncatedCells());
-                x.put("limits", Map.of("rowsPerSheet", FactoryDataXlsxBook.MAX_DATA_ROWS,
-                        "sheetNameChars", FactoryDataXlsxBook.MAX_SHEET_NAME, "cellChars", FactoryDataXlsxBook.MAX_CELL_CHARS));
-                m.put("xlsx", x);
-            }
-            m.put("sourceSchema", writeMetadata(writer, dir + "/metadata/schema.json", sourceMetadata.schema()));
-            m.put("migrationMetadata", writeMetadata(writer, dir + "/metadata/migrations.json",
-                    sourceMetadata.migrations()));
-        } catch (IOException e) {
-            throw databaseWriteFailure(db, e);
+                return total;
+            });
         }
         m.put("database", db.name());
         m.put("rows", rows);
@@ -581,17 +600,13 @@ public class FactoryDataService {
         return ordered;
     }
 
-    private static IllegalStateException databaseWriteFailure(Database db, IOException e) {
-        return new IllegalStateException(db + " 库写出失败: " + e.getMessage(), e);
-    }
-
     private Map<String, Object> writeMetadata(FactoryDataPackageWriter writer, String path,
-                                              Map<String, Object> metadata) {
+                                              Map<String, Object> metadata, FactoryDataExportFailures failures) {
         try {
             FactoryDataPackageWriter.Entry entry = writer.writeText(path, toJson(metadata));
             return Map.of("path", entry.path(), "sha256", entry.sha256(), "sourceTime", true);
         } catch (IOException e) {
-            throw new IllegalStateException("写出源结构元数据失败: " + path, e);
+            throw failures.failure("写出源结构元数据失败 " + path, e);
         }
     }
 
@@ -845,63 +860,49 @@ public class FactoryDataService {
 
     /** 在一个 REPEATABLE READ 只读事务里做完, 最后回滚 (什么都不写)。 */
     private <T> T withSnapshot(Database db, SnapshotWork<T> work) {
-        return withSnapshot(db, 0, work);
+        return withSnapshot(db, 0, new FactoryDataExportFailures(), work);
     }
 
-    @FunctionalInterface
-    private interface SnapshotRollback extends AutoCloseable {
-        @Override void close() throws SQLException;
-    }
-
-    private <T> T withSnapshot(Database db, int networkTimeoutMs, SnapshotWork<T> work) {
-        return withSnapshot(db, networkTimeoutMs, null, work);
-    }
-
-    private <T> T withSnapshot(Database db, int networkTimeoutMs, AtomicReference<Throwable> concurrentFailure,
+    private <T> T withSnapshot(Database db, int networkTimeoutMs, FactoryDataExportFailures failures,
                                SnapshotWork<T> work) {
-        try (Connection conn = dataSource(db).getConnection()) {
-            if (networkTimeoutMs > 0) {
-                int existingTimeout = conn.getNetworkTimeout();
-                if (existingTimeout == 0 || existingTimeout > networkTimeoutMs) {
-                    // Bound pgJDBC socket reads, including heartbeats and rollback.
-                    // The pool resets the connection timeout when the loan ends.
-                    conn.setNetworkTimeout(Runnable::run, networkTimeoutMs);
+        String read = db + " 库读取失败";
+        Connection conn = failures.read(read, () -> dataSource(db).getConnection());
+        try (var connection = failures.cleanup(conn, db + " 库快照连接关闭失败")) {
+            return failures.read(read, () -> {
+                if (networkTimeoutMs > 0) {
+                    int existingTimeout = conn.getNetworkTimeout();
+                    if (existingTimeout == 0 || existingTimeout > networkTimeoutMs) {
+                        // Bound pgJDBC socket reads, including heartbeats and rollback.
+                        // The pool resets the connection timeout when the loan ends.
+                        conn.setNetworkTimeout(Runnable::run, networkTimeoutMs);
+                    }
                 }
-            }
-            conn.setAutoCommit(false);
-            conn.setTransactionIsolation(Connection.TRANSACTION_REPEATABLE_READ);
-            conn.setReadOnly(true);
-            // Resource cleanup suppresses a rollback failure on the original error.
-            try (SnapshotRollback rollback = conn::rollback) {
-                try {
+                conn.setAutoCommit(false);
+                conn.setTransactionIsolation(Connection.TRANSACTION_REPEATABLE_READ);
+                conn.setReadOnly(true);
+                try (var rollback = failures.cleanup(conn::rollback, db + " 库快照回滚失败")) {
                     // 主库连接池设了 idle_in_transaction_session_timeout=30s: 导出边读边往 HTTP 客户端写,
                     // 客户端慢时这个只读事务会「空闲」超过 30 秒被服务器杀掉。本事务内放宽到 15 分钟。
-                    try (PreparedStatement ps = conn.prepareStatement("SET LOCAL idle_in_transaction_session_timeout = '15min'")) {
-                        ps.execute();
+                    PreparedStatement idle = failures.read(read, () -> conn.prepareStatement(
+                            "SET LOCAL idle_in_transaction_session_timeout = '15min'"));
+                    try (var statement = failures.cleanup(idle, db + " 库快照设置语句关闭失败")) {
+                        failures.read(read, idle::execute);
                     }
                     // Keep pg_get_* name resolution identical to the protected
                     // baseline while retaining a parameterized tenant schema.
-                    try (PreparedStatement ps = conn.prepareStatement(
-                            "SELECT set_config('search_path', quote_ident(?) || ', pg_catalog', true)")) {
-                        ps.setString(1, schema);
-                        ps.executeQuery().close();
+                    PreparedStatement path = failures.read(read, () -> conn.prepareStatement(
+                            "SELECT set_config('search_path', quote_ident(?) || ', pg_catalog', true)"));
+                    try (var statement = failures.cleanup(path, db + " 库快照设置语句关闭失败")) {
+                        ResultSet rs = failures.read(read, () -> {
+                            path.setString(1, schema);
+                            return path.executeQuery();
+                        });
+                        failures.cleanup(rs, db + " 库快照设置结果集关闭失败").close();
                     }
                     // SmartBI 行级安全的租户变量由 FactoryDataScopeResolver.resolveVisible 在本事务内设置
-                    return work.run(conn);
-                } catch (SQLException e) {
-                    if (concurrentFailure == null) throw e;
-                    var readFailure = new IllegalStateException(db + " 库读取失败: " + e.getMessage(), e);
-                    concurrentFailure.compareAndSet(null, readFailure);
-                    throw readFailure;
-                } catch (RuntimeException | Error e) {
-                    // Claim the primary failure before rollback. If the heartbeat failed first,
-                    // the caller adds this error once, with its rollback failure already attached.
-                    if (concurrentFailure != null) concurrentFailure.compareAndSet(null, e);
-                    throw e;
+                    return failures.read(read, () -> work.run(conn));
                 }
-            }
-        } catch (SQLException e) {
-            throw new IllegalStateException(db + " 库读取失败: " + e.getMessage(), e);
+            });
         }
     }
 
