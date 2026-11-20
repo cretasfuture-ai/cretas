@@ -567,7 +567,9 @@ class FactoryDataPackageRestorePostgresContractTest {
         }
     }
 
-    private enum ExportFault { HEARTBEAT_QUERY, CRETAS_READ, ZIP_WRITE, HEARTBEAT, STATEMENT_CLOSE, ROLLBACK }
+    private enum ExportFault {
+        HEARTBEAT_QUERY, CRETAS_METADATA_QUERY, CRETAS_READ, ZIP_WRITE, HEARTBEAT, STATEMENT_CLOSE, ROLLBACK
+    }
 
     @ParameterizedTest(name = "{0} before {1}")
     @CsvSource({
@@ -581,7 +583,8 @@ class FactoryDataPackageRestorePostgresContractTest {
             "ZIP_WRITE, STATEMENT_CLOSE",
             "ZIP_WRITE, ROLLBACK",
             // R3's other ordering: CRETAS writes while the failed heartbeat statement is closing.
-            "HEARTBEAT_QUERY, ZIP_WRITE"
+            "HEARTBEAT_QUERY, ZIP_WRITE",
+            "CRETAS_METADATA_QUERY, HEARTBEAT"
     })
     void exportRecordsFirstFaultBeforeCleanup(ExportFault first, ExportFault second) throws Exception {
         setUpSources();
@@ -594,8 +597,7 @@ class FactoryDataPackageRestorePostgresContractTest {
         }, (sql, statement) -> "SELECT 1".equals(sql) ? faults.heartbeatStatement(statement) : statement);
         DataSource cretas = interceptConnection(source, (method, args) -> {
             if ("rollback".equals(method)) faults.rollback();
-        }, (sql, statement) -> sql.startsWith("SELECT * FROM ") && faults.firstTable.compareAndSet(false, true)
-                ? faults.cretasTableStatement(statement) : statement);
+        }, faults::cretasStatement);
         FactoryDataService service = FactoryDataServiceFixture.create(cretas, waiting, Set.of(1L), sourceSchema,
                 () -> faults.executor);
         long request = service.startExport(OPERATOR, FACTORY);
@@ -626,8 +628,9 @@ class FactoryDataPackageRestorePostgresContractTest {
         private final HeartbeatCompletion executor = new HeartbeatCompletion();
         private final CountDownLatch heartbeatEntered = new CountDownLatch(1);
         private final CountDownLatch heartbeatClosing = new CountDownLatch(1);
-        private final CountDownLatch tableClosing = new CountDownLatch(1);
+        private final CountDownLatch statementClosing = new CountDownLatch(1);
         private final AtomicBoolean firstTable = new AtomicBoolean();
+        private final AtomicInteger searchPathStatements = new AtomicInteger();
 
         private ExportFaults(ExportFault first, ExportFault second) {
             this.first = first;
@@ -645,12 +648,12 @@ class FactoryDataPackageRestorePostgresContractTest {
                             heartbeatEntered.countDown();
                             if (first == ExportFault.HEARTBEAT_QUERY) throw primary;
                             if (second == ExportFault.HEARTBEAT) {
-                                awaitBarrier(tableClosing);
+                                awaitBarrier(statementClosing);
                                 throw secondary;
                             }
                         } else if ("close".equals(method.getName()) && first == ExportFault.HEARTBEAT_QUERY) {
                             heartbeatClosing.countDown();
-                            if (second == ExportFault.ZIP_WRITE) awaitBarrier(tableClosing);
+                            if (second == ExportFault.ZIP_WRITE) awaitBarrier(statementClosing);
                             real.close();
                             if (second == ExportFault.HEARTBEAT) throw secondary;
                             return null;
@@ -659,11 +662,17 @@ class FactoryDataPackageRestorePostgresContractTest {
                     });
         }
 
-        private PreparedStatement cretasTableStatement(PreparedStatement real) {
+        private PreparedStatement cretasStatement(String sql, PreparedStatement real) {
+            // The first search_path statement initializes the snapshot. The second belongs to metadata capture.
+            boolean metadata = first == ExportFault.CRETAS_METADATA_QUERY
+                    && sql.startsWith("SELECT set_config('search_path',")
+                    && searchPathStatements.incrementAndGet() == 2;
+            boolean firstTableRead = sql.startsWith("SELECT * FROM ") && firstTable.compareAndSet(false, true);
+            if (!metadata && !firstTableRead) return real;
             return (PreparedStatement) Proxy.newProxyInstance(PreparedStatement.class.getClassLoader(),
                     new Class<?>[]{PreparedStatement.class}, (proxy, method, args) -> {
                         if ("close".equals(method.getName())) {
-                            tableClosing.countDown();
+                            statementClosing.countDown();
                             if (second == ExportFault.HEARTBEAT && first != ExportFault.HEARTBEAT_QUERY) {
                                 awaitBarrier(executor.completed);
                             }
@@ -673,6 +682,10 @@ class FactoryDataPackageRestorePostgresContractTest {
                                 throw secondary;
                             }
                             return null;
+                        }
+                        if (metadata && "executeQuery".equals(method.getName())) {
+                            awaitBarrier(heartbeatEntered);
+                            throw primary;
                         }
                         Object result = invokeJdbc(real, method, args);
                         if (first == ExportFault.CRETAS_READ && "executeQuery".equals(method.getName())) {

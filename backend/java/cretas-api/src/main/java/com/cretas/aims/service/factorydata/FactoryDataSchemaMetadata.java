@@ -40,13 +40,27 @@ public final class FactoryDataSchemaMetadata {
      */
     public static Snapshot capture(Connection conn, Database database, String schema,
                                    List<TableScope> tables, String factoryId) throws SQLException {
+        return capture(conn, database, schema, tables, factoryId, null);
+    }
+
+    static Snapshot capture(Connection conn, Database database, String schema, List<TableScope> tables,
+                            String factoryId, FactoryDataExportFailures failures) throws SQLException {
         // The metadata queries use pg_get_* definitions.  Bind the schema and
         // pg_catalog explicitly so source descriptors do not depend on a
         // caller's mutable search_path.
         try (PreparedStatement ps = conn.prepareStatement(
                 "SELECT set_config('search_path', quote_ident(?) || ', pg_catalog', true)")) {
-            ps.setString(1, schema);
-            ps.executeQuery().close();
+            // Record a failed metadata query before statement cleanup can race the heartbeat.
+            FactoryDataExportFailures.Work<Void, SQLException> setSearchPath = () -> {
+                ps.setString(1, schema);
+                ps.executeQuery().close();
+                return null;
+            };
+            if (failures == null) {
+                setSearchPath.run();
+            } else {
+                failures.read(database + " 库读取失败", setSearchPath);
+            }
         }
         Set<String> names = tables.stream().map(TableScope::table).collect(Collectors.toCollection(TreeSet::new));
         Map<String, TableScope> exportedTables = tables.stream().filter(table -> table.category().exported())

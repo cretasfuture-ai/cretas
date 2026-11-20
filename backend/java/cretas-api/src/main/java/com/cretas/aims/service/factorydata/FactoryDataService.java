@@ -398,14 +398,14 @@ public class FactoryDataService {
             List<Map<String, Object>> dbManifests = withSnapshot(Database.SMARTBI, smartbiNetworkTimeoutMs, failures, smartbi -> {
                 var smartbiScope = FactoryDataScopeResolver.resolveVisible(smartbi, Database.SMARTBI, schema, factoryId);
                 rejectForeignHits(smartbi, smartbiScope);
-                var smartbiMetadata = captureExportMetadata(smartbi, smartbiScope, factoryId);
+                var smartbiMetadata = captureExportMetadata(smartbi, smartbiScope, factoryId, failures);
                 // Both preflights finish before the first ZIP entry. SMARTBI only
                 // receives heartbeat queries while CRETAS owns the writer.
                 var cretasManifest = withSnapshotHeartbeat(smartbi, failures, () ->
                         withSnapshot(Database.CRETAS, 0, failures, cretas -> {
                             var cretasScope = FactoryDataScopeResolver.resolveVisible(cretas, Database.CRETAS, schema, factoryId);
                             rejectForeignHits(cretas, cretasScope);
-                            var cretasMetadata = captureExportMetadata(cretas, cretasScope, factoryId);
+                            var cretasMetadata = captureExportMetadata(cretas, cretasScope, factoryId, failures);
                             return exportDatabase(cretas, cretasScope, factoryId, fmt, writer, cretasMetadata, failures);
                         }));
                 return List.of(cretasManifest,
@@ -466,9 +466,10 @@ public class FactoryDataService {
     }
 
     private FactoryDataSchemaMetadata.Snapshot captureExportMetadata(Connection conn, FactoryDataScope scope,
-                                                                     String factoryId) throws SQLException {
+                                                                     String factoryId,
+                                                                     FactoryDataExportFailures failures) throws SQLException {
         return FactoryDataSchemaMetadata.capture(conn, scope.database(), schema,
-                new ArrayList<>(scope.tables().values()), factoryId);
+                new ArrayList<>(scope.tables().values()), factoryId, failures);
     }
 
     private <T> T withSnapshotHeartbeat(Connection waiting, FactoryDataExportFailures failures, Supplier<T> work) {
