@@ -39,7 +39,7 @@ export function useExternalProduction(factoryId: Ref<string>, summaryOnly = fals
   let loadedFactory = '';
   onScopeDispose(() => { revision++; });
 
-  async function load(query: ProductionGoldDateQuery): Promise<'external' | 'native' | 'obsolete'> {
+  async function load(query: ProductionGoldDateQuery): Promise<'external' | 'native' | 'failed' | 'obsolete'> {
     const factory = factoryId.value;
     const requestRevision = ++revision;
     const current = () => revision === requestRevision && factoryId.value === factory;
@@ -52,7 +52,7 @@ export function useExternalProduction(factoryId: Ref<string>, summaryOnly = fals
       if (!result.success) {
         data.value = null;
         error.value = result.message || '黑湖生产数据读取失败，请重试';
-        return 'native';
+        return 'failed';
       }
       loadedFactory = factory;
       data.value = result.data;
@@ -65,7 +65,7 @@ export function useExternalProduction(factoryId: Ref<string>, summaryOnly = fals
       if ((cause as PythonServiceError)?.status !== 403) {
         error.value = '黑湖生产数据读取失败，请重试';
       }
-      return 'native';
+      return 'failed';
     }
   }
 
