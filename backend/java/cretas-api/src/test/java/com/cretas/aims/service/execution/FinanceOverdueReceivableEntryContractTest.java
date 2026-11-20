@@ -61,7 +61,6 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -150,11 +149,13 @@ class FinanceOverdueReceivableEntryContractTest {
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void workdeskOrdinaryOwedRankingKeepsMainBehavior(boolean hasCustomerBalance) throws Exception {
-        String text = runRealOverdueTool("哪个客户欠款最多？", hasCustomerBalance, List.of(
-                overdueDoc("AR-1", "C-1", "欠款样本", "100", 30)));
-        assertThat(text).doesNotContain("逾期客户明细");
+        List<ArApTransaction> invoices = hasCustomerBalance
+                ? List.of(overdueDoc("AR-1", "C-1", "欠款样本", "100", 30))
+                : List.of();
+        String text = runRealOverdueTool("哪个客户欠款最多？", hasCustomerBalance, invoices);
         if (hasCustomerBalance) {
-            assertThat(text).contains("合计 ¥100.00。\n建议先催", "客户应收余额口径",
+            assertThat(text).contains("合计 ¥100.00。", "逾期客户明细", "- 欠款样本：¥100.00",
+                    "建议先催", "客户应收余额口径",
                     "客户欠款共 1 家、合计 ¥216.00，欠款最多的是 客户余额样本。");
         } else {
             assertThat(text).isEqualTo("当前没有客户欠款（客户应收余额为 0）。");
@@ -203,11 +204,7 @@ class FinanceOverdueReceivableEntryContractTest {
         IntentExecuteResponse response = h.sendThroughFacade(IntentExecuteRequest.builder()
                 .userInput(question).sessionId("workdesk-overdue-customers").mode("READ").build());
 
-        if (hasCustomerBalance || QUESTION.equals(question)) {
-            verify(transactions).findOverdueReceivables(FACTORY, cutoff);
-        } else {
-            verify(transactions, never()).findOverdueReceivables(anyString(), any());
-        }
+        verify(transactions).findOverdueReceivables(FACTORY, cutoff);
         assertThat(response.getStatus()).isEqualTo("SUCCESS");
         assertThat(response.getIntentCode()).isEqualTo(AR_INTENT);
         return response.getFormattedText();
