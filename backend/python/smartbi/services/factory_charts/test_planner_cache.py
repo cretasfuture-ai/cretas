@@ -7,6 +7,8 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 
+from common.llm_router import LLMChainExhausted
+from smartbi.services.external_production import UNAVAILABLE_MESSAGE
 from . import blacklake_production, conversation, engine
 
 
@@ -113,7 +115,7 @@ async def test_cache_expires_at_600_seconds_and_evicts_least_recently_used(provi
 
 
 @pytest.mark.asyncio
-async def test_provider_failure_is_unavailable_and_never_cached(provider, monkeypatch):
+async def test_rule_plan_caches_mode_and_returns_independent_values(provider, monkeypatch):
     from common import llm_router
 
     success = llm_router.call_chain
@@ -121,16 +123,69 @@ async def test_provider_failure_is_unavailable_and_never_cached(provider, monkey
 
     async def fail(_slot, payload, **_kwargs):
         attempts.append(payload)
-        raise llm_router.LLMChainExhausted("chart", ["fixture: timeout"])
+        raise LLMChainExhausted("chart", ["fixture: timeout"])
+
+    monkeypatch.setattr(llm_router, "call_chain", fail)
+    selected, mode = await conversation.plan("看产量", CATALOG, factory_id="F001")
+    assert selected == ["quantity"] and mode == {
+        "mode": "rule", "reason": "按问题关键词从授权图表目录选择", "cache": "miss",
+    }
+    selected.clear()
+    mode["mode"] = "changed by caller"
+    monkeypatch.setattr(llm_router, "call_chain", success)
+    selected, mode = await conversation.plan("看产量", CATALOG, factory_id="F001")
+    assert selected == ["quantity"] and mode["mode"] == "rule" and mode["cache"] == "hit"
+    assert len(attempts) == 1 and not provider
+
+
+@pytest.mark.asyncio
+async def test_unrelated_question_is_unavailable_and_never_cached(provider, monkeypatch):
+    from common import llm_router
+
+    success = llm_router.call_chain
+    attempts = []
+
+    async def fail(_slot, payload, **_kwargs):
+        attempts.append(payload)
+        raise LLMChainExhausted("chart", ["fixture: timeout"])
 
     monkeypatch.setattr(llm_router, "call_chain", fail)
     for _ in range(2):
-        selected, mode = await conversation.plan("看产量", CATALOG, factory_id="F001")
+        selected, mode = await conversation.plan("企鹅生活在哪里？", CATALOG, factory_id="F001")
         assert selected == [] and mode["mode"] == "unavailable"
     assert len(attempts) == 2
     monkeypatch.setattr(llm_router, "call_chain", success)
-    selected, mode = await conversation.plan("看产量", CATALOG, factory_id="F001")
-    assert selected == ["quantity"] and mode["cache"] == "miss" and len(provider) == 1
+    selected, mode = await conversation.plan("企鹅生活在哪里？", CATALOG, factory_id="F001")
+    assert selected == ["quantity"] and mode["mode"] == "ai" and mode["cache"] == "miss"
+    assert len(provider) == 1
+
+
+@pytest.mark.asyncio
+async def test_successful_model_takes_precedence_over_rule_order(provider):
+    catalog = [{"id": "stock", "familyId": "inventory.balance"}, *CATALOG]
+    selected, mode = await conversation.plan("看产量", catalog, factory_id="F001")
+    assert selected == ["stock", "quantity"] and mode["mode"] == "ai"
+    assert len(provider) == 1
+
+
+@pytest.mark.asyncio
+async def test_rule_plan_uses_full_authorized_catalog_with_at_most_four_families(provider, monkeypatch):
+    monkeypatch.setenv(LIMIT_ENV, "1")
+
+    async def fail(_slot, payload, **_kwargs):
+        assert len(json.loads(payload["messages"][1]["content"])["catalog"]) == 1
+        raise LLMChainExhausted("chart", ["fixture: timeout"])
+
+    monkeypatch.setattr("common.llm_router.call_chain", fail)
+    catalog = [{"id": "unrelated", "familyId": "weather", "priority": "required"}]
+    catalog += [
+        {"id": f"output-{index}-{unit}", "familyId": f"output.metric_{index}", "unit": unit}
+        for index in range(5)
+        for unit in ("kg", "盒")
+    ]
+    selected, mode = await conversation.plan("看产量", catalog, factory_id="F001")
+    assert mode["mode"] == "rule"
+    assert selected == [f"output-{index}-kg" for index in range(4)]
 
 
 @pytest.fixture(scope="module")
@@ -162,7 +217,7 @@ def liushanmen_catalog():
         )
         for index, unit in enumerate(("KG", "盒", "袋", "件") * 3)
     ]
-    return other + conversation.semantic_catalog(candidates)
+    return other + conversation.semantic_catalog(candidates), candidates
 
 
 def _documented_questions():
@@ -187,10 +242,11 @@ assert len(QUESTIONS) == len(EXPECTED) == 12
 @pytest.mark.parametrize("question,expected", zip(QUESTIONS, EXPECTED), ids=[f"Q{i}" for i in range(1, 13)])
 async def test_liushanmen_questions_retain_expected_family(provider, liushanmen_catalog, question, expected):
     family, unit = expected
-    _, mode = await conversation.plan(question, liushanmen_catalog, factory_id="LIUSHANMEN")
+    catalog, _ = liushanmen_catalog
+    _, mode = await conversation.plan(question, catalog, factory_id="LIUSHANMEN")
     assert mode["mode"] == "ai" and len(provider) == 1
     shortlist = provider[0][0]["catalog"]
-    assert 0 < len(shortlist) <= 40 < 100 <= len(liushanmen_catalog)
+    assert 0 < len(shortlist) <= 40 < 100 <= len(catalog)
     matches = [item for item in shortlist if item["familyId"] == f"{blacklake_production.SOURCE_KEY}.{family}"]
     assert matches, f"{family} missing for {question}"
     if unit is not None:
@@ -198,19 +254,57 @@ async def test_liushanmen_questions_retain_expected_family(provider, liushanmen_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("question,expected", zip(QUESTIONS, EXPECTED), ids=[f"Q{i}" for i in range(1, 13)])
+async def test_liushanmen_rule_selects_expected_first_family(provider, liushanmen_catalog, monkeypatch,
+                                                          question, expected):
+    attempts = []
+
+    async def fail(_slot, payload, **_kwargs):
+        attempts.append(payload)
+        raise LLMChainExhausted("chart", ["fixture: timeout"])
+
+    monkeypatch.setattr("common.llm_router.call_chain", fail)
+    catalog, real_candidates = liushanmen_catalog
+    selected, mode = await conversation.plan(question, catalog, factory_id="LIUSHANMEN")
+    by_id = {item["id"]: item for item in catalog}
+    chosen = [by_id[item_id] for item_id in selected]
+    families = [item["familyId"] for item in chosen]
+    expected_family = f"{blacklake_production.SOURCE_KEY}.{expected[0]}"
+    actual_family = families[0] if families else None
+    print("RULE_QUESTION " + json.dumps({
+        "q": question, "selected_family": actual_family, "expected": expected_family,
+        "ok": actual_family == expected_family,
+    }, ensure_ascii=False))
+
+    assert len(attempts) == 1 and mode["mode"] == "rule"
+    assert actual_family == expected_family, f"{question}: selected {families}"
+    assert 1 <= len(families) == len(set(families)) <= 4
+    if expected[1]:
+        assert {item.get("sourceQuantityUnit", item["unit"]) for item in chosen} == {expected[1]}
+    if "出成率" in question or "单位成本" in question:
+        raw = {item["id"]: item for item in real_candidates}
+        assert all(item_id in raw for item_id in selected)
+        limits = conversation.limitations_for([raw[item_id] for item_id in selected], catalog, question)
+        assert UNAVAILABLE_MESSAGE in limits
+        if "单位成本" in question:
+            assert "黑湖数据缺少制造成本，无法计算单位成本" in limits
+
+
+@pytest.mark.asyncio
 async def test_prefilter_reduces_real_provider_payload_bytes(provider, liushanmen_catalog, monkeypatch, caplog):
     question = QUESTIONS[0]
+    catalog, _ = liushanmen_catalog
     with monkeypatch.context() as settings:
         settings.setenv(LIMIT_ENV, str(conversation.MAX_PLANNER_CATALOG))
-        _, baseline = await conversation.plan(question, liushanmen_catalog, factory_id="LIUSHANMEN")
+        _, baseline = await conversation.plan(question, catalog, factory_id="LIUSHANMEN")
     with caplog.at_level("INFO", logger=conversation.__name__):
-        _, filtered = await conversation.plan(question, liushanmen_catalog, factory_id="LIUSHANMEN")
+        _, filtered = await conversation.plan(question, catalog, factory_id="LIUSHANMEN")
     assert baseline["mode"] == filtered["mode"] == "ai" and len(provider) == 2
     (before, before_bytes), (after, after_bytes) = provider
     before_count, after_count = len(before["catalog"]), len(after["catalog"])
     print(f"planner provider payload: {before_count} -> {after_count} candidates, {before_bytes} -> {after_bytes} bytes")
     assert after_bytes < before_bytes / 2, f"provider bytes {before_bytes} -> {after_bytes}"
-    assert before_count == len(liushanmen_catalog) and after_count == 40
+    assert before_count == len(catalog) and after_count == 40
     assert f"prefilter: {before_count} -> {after_count}" in caplog.text
 
 

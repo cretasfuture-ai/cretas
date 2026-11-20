@@ -343,7 +343,8 @@ def _analysis_response(data: dict[str, Any], *, factory_id: str, source: str,
                       recommendations: list[dict[str, Any]], catalog: list[dict[str, Any]],
                       facts: list[dict[str, Any]], limitations: list[str],
                       context_id: str, subjects: list[dict[str, Any]],
-                      follow_up_questions: list[str]) -> dict[str, Any]:
+                      follow_up_questions: list[str],
+                      planner_mode: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     # Keep the public response stable and camelCase while selected
     # recommendations remain byte-for-byte the trusted legacy candidates.
     return _sanitize_for_json({'success': True, 'data': {
@@ -367,6 +368,7 @@ def _analysis_response(data: dict[str, Any], *, factory_id: str, source: str,
         'followUpQuestions': follow_up_questions,
         'contextId': context_id,
         'subjects': subjects,
+        **({'plannerMode': planner_mode} if planner_mode is not None else {}),
     }, 'message': answer if status != 'answered' else '工厂分析完成'})
 
 
@@ -630,13 +632,14 @@ async def _render_factory_analysis_turn(request: FactoryAnalysisRequest, http_re
         request.question, catalog, context.history, factory_id=factory_id,
         authorized_subjects=subjects,
         authorized_recommendations=recommendation_data.get('recommendations') or [])
-    if planner_mode.get('mode') != 'ai':
+    if planner_mode.get('mode') not in {'ai', 'rule'} or not selected_ids:
+        reason = planner_mode.get('reason', '图表规划不可用')
         conversation.touch_context(context, request.question, [], scope=scope)
         return _analysis_response(recommendation_data, factory_id=factory_id, source=context.source,
                                   question=request.question, status='unavailable',
-                                  answer='AI图表规划暂不可用，未返回未经验证的图表或事实。', selected_ids=[],
+                                  answer=reason + '。', selected_ids=[],
                                   recommendations=[], catalog=catalog, facts=[],
-                                  limitations=[planner_mode.get('reason', 'AI规划不可用')],
+                                  limitations=[reason], planner_mode=planner_mode,
                                   context_id=context.context_id, subjects=subjects,
                                   follow_up_questions=['请稍后重试，或先从图表目录选择分析主题'])
     by_id = conversation._catalog_by_id(recommendation_data.get('recommendations') or [])
@@ -644,9 +647,9 @@ async def _render_factory_analysis_turn(request: FactoryAnalysisRequest, http_re
         conversation.touch_context(context, request.question, [], scope=scope)
         return _analysis_response(recommendation_data, factory_id=factory_id, source=context.source,
                                   question=request.question, status='unavailable',
-                                  answer='当前授权数据已变化，AI选择的图表无法重新验证。', selected_ids=[],
+                                  answer='当前授权数据已变化，所选图表无法重新验证。', selected_ids=[],
                                   recommendations=[], catalog=catalog, facts=[],
-                                  limitations=['AI选择不在当前授权目录中'], context_id=context.context_id,
+                                  limitations=['所选图表不在当前授权目录中'], context_id=context.context_id,
                                   subjects=subjects, follow_up_questions=['请重新提问'])
     # The planner only saw a metadata catalogue.  Re-read the same authorized
     # source/scope and lazily allocate contexts for its actual 1-4 selections.
@@ -667,7 +670,7 @@ async def _render_factory_analysis_turn(request: FactoryAnalysisRequest, http_re
         conversation.touch_context(context, request.question, [], scope=scope)
         return _analysis_response(recommendation_data, factory_id=factory_id, source=context.source,
                                   question=request.question, status='unavailable',
-                                  answer='当前授权数据已变化，AI选择的图表无法重新验证。',
+                                  answer='当前授权数据已变化，所选图表无法重新验证。',
                                   selected_ids=[], recommendations=[], catalog=catalog, facts=[],
                                   limitations=['所选图表已不在当前授权目录中，请重新提问'],
                                   context_id=context.context_id, subjects=subjects,
@@ -677,9 +680,9 @@ async def _render_factory_analysis_turn(request: FactoryAnalysisRequest, http_re
         conversation.touch_context(context, request.question, [], scope=scope)
         return _analysis_response(recommendation_data, factory_id=factory_id, source=context.source,
                                   question=request.question, status='unavailable',
-                                  answer='当前授权数据已变化，AI选择的图表无法重新验证。', selected_ids=[],
+                                  answer='当前授权数据已变化，所选图表无法重新验证。', selected_ids=[],
                                   recommendations=[], catalog=catalog, facts=[],
-                                  limitations=['AI选择的图表来源或范围已变化'],
+                                  limitations=['所选图表来源或范围已变化'],
                                   context_id=context.context_id, subjects=subjects,
                                   follow_up_questions=['请重新提问'])
     fresh_by_id = conversation._catalog_by_id(selected_data.get('recommendations') or [])
@@ -691,9 +694,9 @@ async def _render_factory_analysis_turn(request: FactoryAnalysisRequest, http_re
             conversation.touch_context(context, request.question, [], scope=scope)
             return _analysis_response(recommendation_data, factory_id=factory_id, source=context.source,
                                       question=request.question, status='unavailable',
-                                      answer='当前授权数据已变化，AI选择的图表无法重新验证。', selected_ids=[],
+                                      answer='当前授权数据已变化，所选图表无法重新验证。', selected_ids=[],
                                       recommendations=[], catalog=catalog, facts=[],
-                                      limitations=['AI选择的图表来源、范围或单位已变化'],
+                                      limitations=['所选图表来源、范围或单位已变化'],
                                       context_id=context.context_id, subjects=subjects,
                                       follow_up_questions=['请重新提问'])
     recommendation_data = selected_data
@@ -736,13 +739,15 @@ async def _render_factory_analysis_turn(request: FactoryAnalysisRequest, http_re
                 limitations.extend(str(item) for item in missing[:8] if item)
         limitations = list(dict.fromkeys(limitations))[:16]
     answer = conversation.render_answer(request.question, selected, facts, limitations)
+    if planner_mode.get('mode') == 'rule':
+        answer = planner_mode['reason'] + '。\n' + answer
     conversation.touch_context(context, request.question, selected_ids, unresolved_product=False,
                                unresolved_period=False, period_error=None, scope=scope)
     return _analysis_response(recommendation_data, factory_id=factory_id, source=context.source,
                               question=request.question, status='answered', answer=answer,
                               selected_ids=selected_ids, recommendations=selected, catalog=catalog,
                               facts=facts, limitations=limitations, context_id=context.context_id,
-                              subjects=subjects,
+                              subjects=subjects, planner_mode=planner_mode,
                               follow_up_questions=['再看质量指标', '换一个分析维度', '查看更多图表'])
 
 

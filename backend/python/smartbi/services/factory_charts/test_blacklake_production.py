@@ -9,6 +9,7 @@ from fastapi import FastAPI, Request
 from httpx import ASGITransport, AsyncClient
 from pandas.api.types import is_numeric_dtype
 
+from common.llm_router import LLMChainExhausted
 from smartbi.api import financial_dashboard as api
 from smartbi.services.external_production import ExternalProduction
 from . import (
@@ -76,6 +77,36 @@ def blacklake_app(monkeypatch):
 
     app.include_router(api.router, prefix=PREFIX)
     return app, rows, read, source_calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("question", "required_text"), [
+    ("11 月每天成品入库的良品量是多少？", ("按问题关键词从授权图表目录选择",)),
+    ("11 月出成率是多少？", ("黑湖数据不含投入量，无法计算",)),
+    ("11 月成品入库单位成本是多少？", (
+        "黑湖数据不含投入量，无法计算", "黑湖数据缺少制造成本，无法计算单位成本",
+    )),
+])
+async def test_blacklake_rule_plan_reaches_factory_analysis_response(blacklake_app, monkeypatch,
+                                                                   question, required_text):
+    app, _, _, _ = blacklake_app
+    conversation.clear_contexts()
+    provider = AsyncMock(side_effect=LLMChainExhausted("chart", ["fixture: timeout"]))
+    monkeypatch.setattr("common.llm_router.call_chain", provider)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(f"{PREFIX}/factory-analysis", json={**PERIOD, "question": question})
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert provider.await_count == 1
+    assert data["status"] == "answered" and data["plannerMode"]["mode"] == "rule"
+    first = data["recommendations"][0]
+    assert first["id"] == data["selectedIds"][0]
+    assert first["analysis"]["familyId"] == "blacklake-production.finished.good"
+    assert all(text in data["answer"] for text in required_text)
+    if "无法计算" in "".join(required_text):
+        assert all(fact["candidateId"].startswith("blacklake-production.finished.good")
+                   for fact in data["facts"])
 
 
 @pytest.mark.asyncio

@@ -83,7 +83,7 @@ def test_engine_known_trusted_families_have_generic_labels_before_source_prefix(
 
 
 @pytest.mark.asyncio
-async def test_plan_accepts_only_existing_ids_and_fails_closed(monkeypatch):
+async def test_plan_accepts_only_existing_ids_and_can_recover_with_rules(monkeypatch):
     async def call(_slot, payload, **kwargs):
         import json as _json
         assert kwargs['timeout'] == 6 and kwargs['total_timeout'] == 10
@@ -106,7 +106,7 @@ async def test_plan_accepts_only_existing_ids_and_fails_closed(monkeypatch):
         {'id': 'one', 'familyId': 'production.output', 'chartType': 'line', 'domain': '生产',
          'metric': '产量', 'unit': 'kg'},
     ])
-    assert selected == [] and mode['mode'] == 'unavailable'
+    assert selected == ['one'] and mode['mode'] == 'rule'
 
     async def raw_ids(_slot, _payload, **kwargs):
         return {'choices': [{'message': {'content': '{"selected_ids":["one","two"]}'}}]}
@@ -158,7 +158,7 @@ async def test_plan_validates_count_after_family_dedup(monkeypatch, caplog, fami
         ) == 1
     else:
         assert selected == []
-        assert mode == {'mode': 'unavailable', 'reason': 'AI图表规划暂不可用或回复未通过候选校验'}
+        assert mode == {'mode': 'unavailable', 'reason': '当前授权目录没有与问题匹配的图表'}
         assert validations == ['planner selection count invalid']
         assert any(record.levelno == logging.WARNING and 'fake/chart: invalid_planner selection count invalid'
                    in record.getMessage() for record in caplog.records)
@@ -218,7 +218,7 @@ async def test_mixed_duplicate_family_and_quota_chain_gets_one_retry(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_duplicate_family_second_failure_is_unavailable_without_third_call(monkeypatch):
+async def test_duplicate_family_second_failure_uses_rules_without_third_call(monkeypatch):
     calls = 0
 
     async def call(_slot, _payload, **_kwargs):
@@ -230,7 +230,7 @@ async def test_duplicate_family_second_failure_is_unavailable_without_third_call
     monkeypatch.setattr('common.llm_router.call_chain', call)
     selected, mode = await conversation.plan('看生产和质量', _planner_catalog())
 
-    assert selected == [] and mode['mode'] == 'unavailable'
+    assert selected == ['one', 'two'] and mode['mode'] == 'rule'
     assert calls == 2
 
 
@@ -251,7 +251,7 @@ async def test_quota_timeout_and_other_invalid_do_not_trigger_replan(monkeypatch
 
         monkeypatch.setattr('common.llm_router.call_chain', call)
         selected, mode = await conversation.plan('看生产和质量', _planner_catalog())
-        assert selected == [] and mode['mode'] == 'unavailable'
+        assert selected == ['one', 'two'] and mode['mode'] == 'rule'
         assert calls == 1
 
 
@@ -270,7 +270,7 @@ async def test_non_router_exception_with_errors_attribute_does_not_replan(monkey
     monkeypatch.setattr('common.llm_router.call_chain', call)
     selected, mode = await conversation.plan('看生产和质量', _planner_catalog())
 
-    assert selected == [] and mode['mode'] == 'unavailable'
+    assert selected == ['one', 'two'] and mode['mode'] == 'rule'
     assert calls == 1
 
 
@@ -289,12 +289,12 @@ async def test_duplicate_family_does_not_replan_after_shared_deadline(monkeypatc
     monkeypatch.setattr('common.llm_router.call_chain', call)
     selected, mode = await conversation.plan('看生产和质量', _planner_catalog())
 
-    assert selected == [] and mode['mode'] == 'unavailable'
+    assert selected == ['one', 'two'] and mode['mode'] == 'rule'
     assert calls == 1
 
 
 @pytest.mark.asyncio
-async def test_retry_payload_over_50kb_is_rejected_without_second_provider_call(monkeypatch):
+async def test_retry_payload_over_50kb_is_rejected_without_second_provider_call(monkeypatch, caplog):
     calls = []
     oversized_metric = 'x' * 49200
 
@@ -313,8 +313,8 @@ async def test_retry_payload_over_50kb_is_rejected_without_second_provider_call(
         'domain': '生产', 'metric': oversized_metric, 'unit': 'kg',
     }])
 
-    assert selected == [] and mode['mode'] == 'unavailable'
-    assert '超过安全上限' in mode['reason']
+    assert selected == ['large'] and mode['mode'] == 'rule'
+    assert 'planner correction payload exceeds 50000 bytes' in caplog.text
     assert len(calls) == 1
 
 
@@ -1031,10 +1031,11 @@ async def test_commerce_joint_asgi_uses_every_real_relationship_without_producti
         return
     assert result.status_code == 200
     data = result.json()['data']
-    if failure:
+    if failure == 'fresh_source_missing':
         assert data['status'] == 'unavailable' and not data['facts'] and not data['recommendations']
     else:
         assert data['status'] == 'answered'
+        assert data['plannerMode']['mode'] == ('rule' if failure == 'provider_omits' else 'ai')
         assert {item['analysis']['familyId'] for item in data['recommendations']} == expected
         assert any(fact['value'] == 7 for fact in data['facts'])
         assert any('分别核验' in text for text in data['limitations'])
