@@ -105,7 +105,12 @@ describe('ChartInsightProvider', () => {
   ])('shows the next step for %s and replaces it with a rule finding for the next chart', async (reason, nextStep) => {
     mockFetchTier2Insight
       .mockResolvedValueOnce({ reason })
-      .mockResolvedValueOnce({ finding: '11月17日比11月16日少51.0%。', source: 'rules', tier: 2 });
+      .mockResolvedValueOnce({
+        finding: '从首条记录（2026-11-16）到末条记录（2026-11-17），数量减少51.0%。',
+        suggestion: '2026-11-17的数量比2026-11-16少51.0%。可打开2026-11-17的报工明细，核对是否有工序漏报，以及两处的计量单位是否一致。',
+        source: 'rules',
+        tier: 2,
+      });
     const chart = makeRankingChart();
     const wrapper = mount(ChartInsightProvider, {
       props: {
@@ -113,6 +118,7 @@ describe('ChartInsightProvider', () => {
         perms: PERMS,
         factoryId: 'LIUSHANMEN',
         requireTier2: true,
+        depth: 'detailed',
         unavailableText: '分析暂不可用，请稍后重试',
       },
     });
@@ -125,8 +131,9 @@ describe('ChartInsightProvider', () => {
     await wrapper.setProps({ chart: { ...chart, title: '下一张图' } });
     await vi.runAllTimersAsync();
     expect(wrapper.find('[role="status"]').exists()).toBe(false);
-    expect(wrapper.get('.chart-insight-rule-source').text()).toBe('规则生成');
-    expect(wrapper.get('.chart-insight-finding').text()).toContain('少51.0%');
+    expect(wrapper.get('.chart-insight-finding').text()).toContain('数量减少51.0%');
+    expect(wrapper.get('.chart-insight-suggestion').text()).toContain('可打开2026-11-17的报工明细');
+    expect(wrapper.text()).not.toContain('规则生成');
     wrapper.unmount();
   });
 
