@@ -1,15 +1,7 @@
 import { mount, flushPromises } from '@vue/test-utils';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import ElementPlus from 'element-plus';
-
-/**
- * 生产分析 hub —— 行为验收 (硬约束 9)。见 inventoryQueryHub.mount.spec.ts 头部说明。
- *
- * 额外覆盖本 hub 特有的一点: 3 个「analytics 系」tab (车间实时生产报表/生产数据分析/
- * 成品出厂核算) 合并前各自 hideForFactoryTypes:['RESTAURANT','FACTORY']，合并后
- * 业态门控挪到组件内部 (showAnalyticsTabs) —— 这里用真实 mount 证明 FACTORY 业态下
- * 那 3 个 tab-pane 连 DOM 都不出现，与合并前「路由守卫 403」的最终用户可见效果一致。
- */
+import type { ExternalProductionData } from '@/api/smartbi/factoryGold';
 
 // 成品出厂核算 tab (PAYieldCost = M67YieldCost.vue) 静态 import `@/utils/echarts`，
 // 该模块静态 `import 'echarts-wordcloud'` —— 那个包在没有 canvas 2d context 的 jsdom
@@ -28,8 +20,9 @@ vi.mock('vue-router', () => ({
 }));
 
 let mockFactoryType: string = 'LOGISTICS';
+let mockFactoryId = 'LIUSHANMEN';
 vi.mock('@/store/modules/auth', () => ({
-  useAuthStore: () => ({ factoryId: 'LIUSHANMEN', factoryType: mockFactoryType, hasRole: () => false }),
+  useAuthStore: () => ({ factoryId: mockFactoryId, factoryType: mockFactoryType, hasRole: () => false }),
 }));
 
 vi.mock('@/store/modules/permission', () => ({
@@ -46,6 +39,11 @@ vi.mock('@/api/request', () => ({
   get: (...args: unknown[]) => apiGet(...args),
   post: (...args: unknown[]) => apiPost(...args),
 }));
+const pythonFetch = vi.fn();
+vi.mock('@/api/smartbi/common', async importOriginal => ({
+  ...await importOriginal<typeof import('@/api/smartbi/common')>(),
+  pythonFetch: (...args: unknown[]) => pythonFetch(...args),
+}));
 
 import ProductionAnalysisHub from '../index.vue';
 import ProductionReport from '@/views/analytics/production-report/index.vue';
@@ -54,6 +52,20 @@ import BomAchievement from '@/views/production/BomAchievementView.vue';
 import ProcessIOComparison from '@/views/production/ProcessIOComparison.vue';
 import LaborEfficiency from '@/views/production/labor-efficiency/index.vue';
 import PAYieldCost from '@/views/production-analytics/M67YieldCost.vue';
+import BlacklakeProductionAnalysis from '@/views/production-analytics/BlacklakeProductionAnalysis.vue';
+
+const noExternalSource = { success: true, data: null, message: '' };
+const blacklakeSnapshot: ExternalProductionData = {
+  sourceSystem: 'blacklake',
+  sourceLabel: '黑湖',
+  snapshotCollectedAt: '2026-11-18T15:09:00Z',
+  stale: false,
+  yieldRate: null,
+  cost: null,
+  unavailableMessage: '黑湖数据不含投入量，无法计算',
+  rows: [],
+};
+const externalSource = { success: true, data: blacklakeSnapshot, message: '' };
 
 beforeEach(() => {
   apiGet.mockReset();
@@ -62,7 +74,10 @@ beforeEach(() => {
   routerPush.mockReset();
   apiGet.mockResolvedValue({ success: true, data: [] });
   apiPost.mockResolvedValue({ success: true, data: [] });
+  pythonFetch.mockReset();
+  pythonFetch.mockResolvedValue(noExternalSource);
   mockFactoryType = 'LOGISTICS';
+  mockFactoryId = 'LIUSHANMEN';
   // productionAnalytics.ts 的 getFactoryId() 直接读 localStorage (不经 authStore mock) ——
   // PAProduction (生产数据分析) tab 需要它, 否则 getProductionDashboard() 抛
   // 'Factory ID unavailable'。setup.ts 的全局 beforeEach 会先 clear(), 这里在其后设置。
@@ -142,17 +157,59 @@ describe('生产分析 hub —— 6 个视角逐一挂载真实子页面 (LIUSHA
     wrapper.unmount();
   });
 
-  it('🔴 FACTORY 业态: 3 个 analytics 系 tab 的 pane 连 DOM 都不出现 (与合并前 hideForFactoryTypes 逐字节等价)', async () => {
+  it('FACTORY 有外部生产来源时，深链在核实后打开生产数据分析并显示黑湖区块', async () => {
     mockFactoryType = 'FACTORY';
-    mockRoute.query = { tab: 'bom-achievement' };
+    mockRoute.query = { tab: 'data-analysis' };
+    let resolveSummary!: (result: typeof externalSource) => void;
+    pythonFetch.mockImplementation((path: string) => {
+      if (!path.includes('summaryOnly=true')) return Promise.resolve(externalSource);
+      return new Promise<typeof externalSource>(resolve => { resolveSummary = resolve; });
+    });
+    const wrapper = mountHub();
+    expect(wrapper.find('#tab-data-analysis').exists()).toBe(false);
+    expect(pythonFetch).toHaveBeenCalledWith(
+      '/api/smartbi/factory/external-production?factory_id=LIUSHANMEN&summaryOnly=true',
+    );
+
+    resolveSummary(externalSource);
+    await flushPromises();
+    expect(wrapper.get('#tab-data-analysis').attributes('aria-selected')).toBe('true');
+    expect(wrapper.getComponent(BlacklakeProductionAnalysis).text()).toContain('黑湖');
+    expect(pythonFetch).toHaveBeenCalledWith(expect.stringMatching(
+      /^\/api\/smartbi\/factory\/external-production\?factory_id=LIUSHANMEN&startDate=.+&endDate=.+$/,
+    ));
+    expect(wrapper.find('#tab-workshop-report').exists()).toBe(false);
+    expect(wrapper.find('#tab-yield-cost').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it.each(['F006', 'FOOD_0000_001'])('FACTORY %s 无来源时保留三个标签，数据分析深链回落到 BOM', async factoryId => {
+    mockFactoryType = 'FACTORY';
+    mockFactoryId = factoryId;
+    mockRoute.query = { tab: 'data-analysis' };
     const wrapper = mountHub();
     await flushPromises();
     const outerHeader = wrapper.find('.el-tabs__header');
     const labels = outerHeader.findAll('.el-tabs__item').map((n) => n.text());
     expect(labels).toEqual(['BOM用量对比', '工序投入产出对比', '人效双口径对比']);
-    expect(labels).not.toContain('车间实时生产报表');
-    expect(labels).not.toContain('生产数据分析');
-    expect(labels).not.toContain('成品出厂核算');
+    expect(wrapper.get('#tab-bom-achievement').attributes('aria-selected')).toBe('true');
+    expect(wrapper.findComponent(PAProduction).exists()).toBe(false);
+    expect(wrapper.find('.external-source-warning').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it.each([
+    ['接口返回失败', () => Promise.resolve({ success: false, data: null, message: '读取失败' })],
+    ['HTTP 403', () => Promise.reject({ status: 403 })],
+  ] as const)('FACTORY %s时隐藏生产数据分析并显示提示', async (_, fail) => {
+    mockFactoryType = 'FACTORY';
+    mockRoute.query = { tab: 'data-analysis' };
+    pythonFetch.mockImplementation(fail);
+    const wrapper = mountHub();
+    await flushPromises();
+    expect(wrapper.find('#tab-data-analysis').exists()).toBe(false);
+    expect(wrapper.get('#tab-bom-achievement').attributes('aria-selected')).toBe('true');
+    expect(wrapper.get('.external-source-warning').text()).toContain('暂时无法核实外部生产数据');
     wrapper.unmount();
   });
 
