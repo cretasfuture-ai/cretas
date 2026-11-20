@@ -8,7 +8,6 @@ const props = defineProps<{
   points: Array<{ label: string; value: number; axisLabel?: string }>;
   analysisPoints?: Array<{ label: string; value: number }>;
   title: string;
-  unit: string;
   factoryId: string;
   basis: string;
   cost?: boolean;
@@ -17,6 +16,9 @@ const order = ref<'desc' | 'asc' | 'name'>('desc');
 const element = ref<HTMLDivElement>();
 let chart: echarts.ECharts | undefined;
 let resize: ResizeObserver | undefined;
+const sliderWidth = 28;
+const sliderRight = 4;
+const axisGutter = 12;
 const byName = new Intl.Collator('zh-CN', { numeric: true });
 const sorted = computed(() => [...props.points].sort((a, b) => {
   const byValue = order.value === 'asc' ? a.value - b.value : b.value - a.value;
@@ -42,14 +44,20 @@ watchEffect(() => {
     }
   }
   const points = sorted.value;
+  const showSlider = points.length > 10;
   const axisLabels = new Map(points.map(point => [point.label, point.axisLabel ?? point.label]));
   chart.setOption({
     tooltip: { trigger: 'axis', confine: true, renderMode: 'richText' },
-    grid: { top: 10, right: 24, bottom: 28, left: 12, containLabel: true },
+    grid: {
+      top: 10, right: axisGutter + (showSlider ? sliderWidth + sliderRight : 0), bottom: 28, left: 12,
+      outerBoundsMode: 'same', outerBoundsContain: 'axisLabel',
+    },
     yAxis: { type: 'category', inverse: true, data: points.map(point => point.label),
       axisLabel: { width: 180, overflow: 'truncate', formatter: (label: string) => axisLabels.get(label) ?? label } },
-    xAxis: { type: 'value', name: props.unit },
-    dataZoom: points.length > 10 ? [{ type: 'slider', yAxisIndex: 0, startValue: 0, endValue: 9, right: 0 }] : [],
+    xAxis: { type: 'value' },
+    dataZoom: showSlider
+      ? [{ type: 'slider', yAxisIndex: 0, startValue: 0, endValue: 9, width: sliderWidth, right: sliderRight }]
+      : [],
     series: [{ type: 'bar', name: props.title, data: points.map(point => point.value), barMaxWidth: 26 }],
   }, true);
 }, { flush: 'post' });
