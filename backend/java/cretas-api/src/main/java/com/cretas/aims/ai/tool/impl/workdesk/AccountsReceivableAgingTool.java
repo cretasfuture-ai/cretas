@@ -7,7 +7,11 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -38,6 +42,8 @@ public class AccountsReceivableAgingTool extends AbstractBusinessTool {
     private com.cretas.aims.repository.CustomerRepository customerRepository;
 
     static final int RANK_TOP_N = 5;
+    static final int COLLECT_TOP_N = 3;
+    private static final int OVERDUE_CUSTOMER_LIMIT = 20;
 
     /** 财务行级范围 (仅本人 / 部门): 客户余额排名是全厂视图, 范围受限时不出 (账龄路径按 scopeOwners 收窄)。 */
     @Autowired
@@ -172,20 +178,22 @@ public class AccountsReceivableAgingTool extends AbstractBusinessTool {
         data.put("source", "客户应收余额 (与经营分析页同口径)");
         data.put("owingCustomerCount", owing.size());
         data.put("actionHint", "/finance/ar-ap?tab=aging&type=CUSTOMER");
-        if (owing.isEmpty()) {
-            data.put("ranking", Collections.emptyList());
-            String none = "当前没有客户欠款（客户应收余额为 0）"
-                    + (prepaidCount > 0 ? "；另有 " + prepaidCount + " 个客户预收款" + (showAmounts ? " ¥" + prepaid.setScale(2, java.math.RoundingMode.HALF_UP) : "") + "。" : "。");
-            return buildSimpleResult(none, data);
-        }
-        List<Map<String, Object>> ranking = new java.util.ArrayList<>();
-        // 逾期催收是账龄页口径 (挂账流水): 有逾期单据时它先说, 客户余额排名另起一段并标明口径名称, 两种口径不混在一起
         String overdueBlock = overdueCollectionBlock(factoryId, showAmounts, data);
         StringBuilder msg = new StringBuilder();
         if (!overdueBlock.isEmpty()) {
-            msg.append(overdueBlock).append("\n\n");
-            msg.append("【客户应收余额口径（经营分析页，与上面逾期口径不同）】\n");
+            msg.append(overdueBlock).append("\n\n")
+               .append("【客户应收余额口径（经营分析页，与上面逾期口径不同）】\n");
         }
+        if (owing.isEmpty()) {
+            data.put("ranking", Collections.emptyList());
+            msg.append("当前没有客户欠款（客户应收余额为 0）")
+               .append(prepaidCount > 0 ? "；另有 " + prepaidCount + " 个客户预收款" + (showAmounts ? " ¥" + prepaid.setScale(2, java.math.RoundingMode.HALF_UP) : "") + "。" : "。");
+            if (!overdueBlock.isEmpty()) {
+                msg.append(ledgerPayableLine(factoryId, showAmounts, false));
+            }
+            return buildSimpleResult(msg.toString(), data);
+        }
+        List<Map<String, Object>> ranking = new java.util.ArrayList<>();
         msg.append(showAmounts
                 ? String.format("客户欠款共 %d 家、合计 ¥%s，欠款最多的是 %s。", owing.size(),
                         total.setScale(2, java.math.RoundingMode.HALF_UP), owing.get(0).getName())
@@ -211,9 +219,7 @@ public class AccountsReceivableAgingTool extends AbstractBusinessTool {
         return buildSimpleResult(msg.toString(), data);
     }
 
-    static final int COLLECT_TOP_N = 3;
-
-    /** 逾期催收视图: 只给账龄页口径的逾期总数 + 建议先催的单据, 另附应付一句。 */
+    /** 逾期催收视图: 账龄页口径的逾期客户明细与优先单据，另附应付一句。 */
     private Map<String, Object> doOverdueCollection(String factoryId, Map<String, Object> context) {
         boolean showAmounts = replyShowsAmounts(context, "totalAmount", "highRiskAmount");
         Map<String, Object> data = new LinkedHashMap<>();
@@ -228,7 +234,7 @@ public class AccountsReceivableAgingTool extends AbstractBusinessTool {
     }
 
     /**
-     * 「逾期应收 + 建议先催」文字块 (账龄页口径)。没有逾期单据返回空串。
+     * 「逾期应收客户 + 建议先催」文字块 (账龄页口径)。没有逾期单据返回空串。
      * 排序 = 逾期天数 x 未结清金额 从大到小, 取前 {@link #COLLECT_TOP_N} 张; 逐张写单号 / 客户 / 金额 / 逾期天数 / 理由。
      */
     private String overdueCollectionBlock(String factoryId, boolean showAmounts, Map<String, Object> data) {
@@ -236,23 +242,32 @@ public class AccountsReceivableAgingTool extends AbstractBusinessTool {
         if (docs == null || docs.isEmpty()) {
             return "";
         }
-        java.math.BigDecimal total = java.math.BigDecimal.ZERO;
-        java.util.Set<Object> parties = new java.util.LinkedHashSet<>();
+        BigDecimal total = BigDecimal.ZERO;
+        Map<OverdueCustomerKey, OverdueCustomer> customerTotals = new LinkedHashMap<>();
         long maxDays = 0;
-        java.math.BigDecimal maxAmt = java.math.BigDecimal.ZERO;
+        BigDecimal maxAmt = BigDecimal.ZERO;
         for (Map<String, Object> d : docs) {
-            total = total.add(decimal(d.get("outstanding")));
-            parties.add(d.get("counterpartyName"));
+            BigDecimal outstanding = decimal(d.get("outstanding"));
+            total = total.add(outstanding);
+            String name = (String) d.get("counterpartyName");
+            String id = (String) d.get("counterpartyId");
+            OverdueCustomerKey customerKey = id == null || id.isBlank()
+                    ? new OverdueCustomerKey(null, name) : new OverdueCustomerKey(id, null);
+            // 与账龄分析一样，每个客户用该组首张单据的名称快照。
+            customerTotals.merge(customerKey, new OverdueCustomer(name, outstanding),
+                    (first, next) -> new OverdueCustomer(first.name(), first.outstanding().add(next.outstanding())));
             maxDays = Math.max(maxDays, ((Number) d.get("daysOverdue")).longValue());
-            maxAmt = maxAmt.max(decimal(d.get("outstanding")));
+            maxAmt = maxAmt.max(outstanding);
         }
         List<Map<String, Object>> sorted = new java.util.ArrayList<>(docs);
         sorted.sort((a, b) -> score(b).compareTo(score(a)));
         StringBuilder sb = new StringBuilder();
         sb.append("【逾期应收（账龄页口径：挂账流水里已过到期日的未结清单据）】\n");
-        sb.append("逾期应收共 ").append(parties.size()).append(" 家客户、").append(docs.size()).append(" 张单据");
+        sb.append("逾期应收共 ").append(customerTotals.size()).append(" 家客户、").append(docs.size()).append(" 张单据");
         if (showAmounts) sb.append("，合计 ¥").append(total.setScale(2, java.math.RoundingMode.HALF_UP));
-        sb.append("。\n建议先催（按逾期天数x金额排序，前 ")
+        sb.append("。");
+        appendOverdueCustomers(sb, new ArrayList<>(customerTotals.values()), showAmounts, data);
+        sb.append("\n\n建议先催（按逾期天数x金额排序，前 ")
           .append(Math.min(COLLECT_TOP_N, sorted.size())).append(" 张）：");
         List<Map<String, Object>> top = new java.util.ArrayList<>();
         int n = 0;
@@ -281,10 +296,42 @@ public class AccountsReceivableAgingTool extends AbstractBusinessTool {
             top.add(row);
         }
         data.put("overdueDocumentCount", docs.size());
-        data.put("overdueCustomerCount", parties.size());
+        data.put("overdueCustomerCount", customerTotals.size());
         if (showAmounts) data.put("overdueAmount", total);
         data.put("collectFirst", top);
         return sb.toString();
+    }
+
+    private record OverdueCustomerKey(String id, String fallbackName) {}
+
+    private record OverdueCustomer(String name, BigDecimal outstanding) {}
+
+    private static void appendOverdueCustomers(StringBuilder text, List<OverdueCustomer> customers,
+                                               boolean showAmounts, Map<String, Object> data) {
+        if (showAmounts) {
+            customers.sort(Comparator.comparing(OverdueCustomer::outstanding).reversed());
+        }
+        int shownCount = Math.min(customers.size(), OVERDUE_CUSTOMER_LIMIT);
+        text.append("\n逾期客户明细").append(showAmounts ? "（按逾期金额排序）：" : "（金额按权限不显示）：");
+        List<Map<String, Object>> rows = new ArrayList<>(shownCount);
+        for (OverdueCustomer customer : customers.subList(0, shownCount)) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("customerName", customer.name());
+            text.append("\n- ").append(customer.name());
+            if (showAmounts) {
+                BigDecimal amount = customer.outstanding().setScale(2, RoundingMode.HALF_UP);
+                row.put("outstanding", amount);
+                text.append("：¥").append(amount);
+            }
+            rows.add(row);
+        }
+        int omittedCount = customers.size() - shownCount;
+        if (omittedCount > 0) {
+            text.append("\n另有 ").append(omittedCount).append(" 家逾期客户，可在应收账龄页查看。");
+            if (showAmounts) text.append("上方合计覆盖全部 ").append(customers.size()).append(" 家逾期客户。");
+        }
+        data.put("overdueCustomers", rows);
+        data.put("omittedOverdueCustomerCount", omittedCount);
     }
 
     private static java.math.BigDecimal score(Map<String, Object> d) {
