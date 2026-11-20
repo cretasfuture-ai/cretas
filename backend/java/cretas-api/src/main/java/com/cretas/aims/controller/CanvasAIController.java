@@ -251,13 +251,13 @@ public class CanvasAIController {
     private static final String PRODUCT_PROCESS_WORKFLOW_CHECK_PROMPT = """
             You are a READ-ONLY reviewer of a product-process Workflow definition. The user asks you
             to CHECK something (units, quantity conversion, SKU upstream/downstream, split/merge, ...).
-            用简体中文纯文本回答，使用全角标点。
-            首行只写「结论：没有发现问题。」或「结论：发现 N 个问题。」。
-            每个问题用「1、」这样的编号。每项最多两行、两句短话：先说哪一步遇到什么问题，
-            再说明在哪儿改、改什么。说实际操作，不报字段名、配置代码或内部编号。
-            例如：「清洗去毛」还没选工序类型。请在右侧选择合适的类型。
-            例如：「拼装分装」称重后还换算不出盒数。请核对每盒净重或填写固定比例。
-            工序、物料用画布上的名称。信息缺失就指出缺什么；只有能从画布确认时才推荐具体值。
+            Answer in concise Simplified Chinese plain text only:
+            - First line: 结论：没有发现问题 / 发现 N 个问题.
+            - Then a numbered list. Each item names the process or material, the field
+              (投入单位/产出单位/换算规则/辅料用量/端口物料绑定/SKU 绑定/...) and what is wrong or missing.
+            - Use Chinese business terms only: conversionRule → 换算规则; ACTUAL_WEIGHT → 按实际重量;
+              processCategory → 工艺类别. If a value is absent or null, say 未填写; never guess values.
+              Refer to processes by their processName and materials by their names, without internal IDs.
             You cannot change anything. NEVER output JSON, specs, patches, nodes, edges or ids, and never
             suggest replacing or regenerating the whole canvas. Suggest manual fixes in words only.
 
@@ -593,9 +593,9 @@ public class CanvasAIController {
 
     private String localizeWorkflowCheckConclusion(String conclusion, Object definition) {
         Map<String, String> terms = new HashMap<>(Map.of(
-                "conversionRule", "数量换算", "ACTUAL_WEIGHT", "实际称重",
+                "conversionRule", "换算规则", "ACTUAL_WEIGHT", "按实际重量",
                 "FIXED_RATIO", "按固定比例", "SUM_OUTPUTS", "按产出合计", "FORMULA", "按公式计算",
-                "processCategory", "工序类型", "null", "未填写"));
+                "processCategory", "工艺类别", "null", "未填写"));
         if (readStringObjectMap(definition).get("nodes") instanceof List<?> nodes) {
             for (Object entry : nodes) {
                 Map<String, Object> node = readStringObjectMap(entry);
@@ -612,16 +612,7 @@ public class CanvasAIController {
         // 单次替换，保留工序名里的原始字符，且不误改其他英文单词的一部分。
         Pattern internalTerms = Pattern.compile("(?<![A-Za-z0-9_`])(`?)(" + tokens
                 + ")\\1(?![A-Za-z0-9_`])");
-        String localized = internalTerms.matcher(conclusion)
-                .replaceAll(match -> Matcher.quoteReplacement(terms.get(match.group(2))));
-        return localized
-                .replaceAll("(?m)^\\s*\\*{0,2}(结论)[：:]\\s*([^\\r\\n。.!！*]+)[。.!！]?\\*{0,2}[。.!！]?(?=\\s*$)", "$1：$2。")
-                .replaceAll("(?m)^(\\d+)\\.\\s+", "$1、")
-                .replaceAll("字段\\s*[「“\"『]([^」”\"』]+)[」”\"』]", "$1")
-                .replace("工艺类别", "工序类型")
-                .replaceAll("(?:的\\h*)?工序类型\\h*[:：]?\\h*(?:未填写|没填)", "还没选工序类型")
-                .replaceAll("(?:的\\h*)?(?:数量换算|换算规则)\\h*(?:配置)?(?:为|是)\\h*[「“\"『]?(?:按实际重量|实际称重)[」”\"』]?", "按实际称重")
-                .replace("**", "");
+        return internalTerms.matcher(conclusion).replaceAll(match -> Matcher.quoteReplacement(terms.get(match.group(2))));
     }
 
     /** 前端检查类问题带 {@code params.intent = "check"}; 只认这一个显式标记, 不在后端再猜一份关键词表。 */
