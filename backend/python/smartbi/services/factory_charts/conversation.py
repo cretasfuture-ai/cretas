@@ -16,11 +16,15 @@ import logging
 import re
 import secrets
 import time
+import unicodedata
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any, Mapping, Optional, Sequence
 
 from fastapi import HTTPException
+
+from .planner_catalog import catalog_limit, shortlist
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +33,22 @@ MAX_CONTEXTS = 128
 MAX_HISTORY = 8
 MAX_SELECTED_CHARTS = 4
 MAX_PLANNER_CATALOG = 512
+PLANNER_CACHE_TTL_SECONDS = 600.0
+MAX_PLANNER_CACHE_ENTRIES = 128
+_PLAN_CACHE: OrderedDict[tuple[str, str], tuple[float, tuple[str, ...]]] = OrderedDict()
 _planner_monotonic = time.monotonic
+_cache_monotonic = time.monotonic
+
+
+class _OwnedHistory(list):
+    """Carry the authenticated owner through the route's existing history argument.
+
+    Only turns are serialized to the conversation store or the provider.
+    """
+
+    def __init__(self, turns, owner):
+        super().__init__(turns)
+        self.owner = owner
 
 
 @dataclass
@@ -52,6 +71,9 @@ class ConversationContext:
     lease_token: str = ""
     persisted_version: int = 0
 
+    def __post_init__(self):
+        self.history = _OwnedHistory(self.history, (self.user_id, self.role))
+
 
 _CONTEXTS: dict[str, ConversationContext] = {}
 
@@ -59,6 +81,7 @@ _CONTEXTS: dict[str, ConversationContext] = {}
 def clear_contexts() -> None:
     """Clear in-process contexts for tests and worker lifecycle hooks."""
     _CONTEXTS.clear()
+    _PLAN_CACHE.clear()
 
 
 def _purge(now: Optional[float] = None) -> None:
@@ -216,6 +239,19 @@ def _sanitized_history(history: Sequence[Mapping[str, Any]] | None,
     return result
 
 
+def _plan_cache_key(factory_id, question, catalog, history, subjects, required_families, limit):
+    owner = history.owner if isinstance(history, _OwnedHistory) else None
+    return factory_id, hashlib.sha256(json.dumps({
+        "owner": owner,
+        "question": question,
+        "catalog": catalog,
+        "subjects": subjects,
+        "requiredFamilies": sorted(required_families),
+        "history": _sanitized_history(history),
+        "limit": limit,
+    }, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+
+
 async def plan(question: str, catalog: Sequence[Mapping[str, Any]],
                history: Sequence[Mapping[str, Any]] | None = None,
                factory_id: Optional[str] = None,
@@ -224,9 +260,9 @@ async def plan(question: str, catalog: Sequence[Mapping[str, Any]],
     """Ask the approved chart LLM to select existing ids, fail closed."""
     if not catalog:
         return [], {"mode": "unavailable", "reason": "当前授权数据没有合格图表"}
-    # The full public catalogue is retained, but an oversized provider payload
-    # is a provider-unavailable condition, never a silent keyword fallback.
-    semantic = list(catalog)
+    question = unicodedata.normalize("NFC", question.strip())
+    authorized_catalog = list(catalog)
+    semantic = authorized_catalog
     required_families: set[str] = set()
     if len(semantic) > MAX_PLANNER_CATALOG:
         return [], {"mode": "unavailable", "reason": "合格图表目录超过AI规划安全上限"}
@@ -241,6 +277,20 @@ async def plan(question: str, catalog: Sequence[Mapping[str, Any]],
         if not required_families.issubset({item.get("familyId") for item in semantic}):
             return [], {"mode": "unavailable", "reason": "当前授权目录缺少本问题所需的已验证联合关系"}
         semantic = [item for item in semantic if item.get("familyId") in required_families]
+    limit = max(len(required_families), catalog_limit(MAX_PLANNER_CATALOG))
+    cache_key = None
+    ai_mode = {"mode": "ai", "reason": "AI仅在当前授权目录中规划图表", "cache": "miss"}
+    if factory_id:
+        cache_key = _plan_cache_key(factory_id, question, authorized_catalog, history,
+                                    authorized_subjects, required_families, limit)
+        cached = _PLAN_CACHE.pop(cache_key, None)
+        if cached is not None and cached[0] > _cache_monotonic():
+            _PLAN_CACHE[cache_key] = cached
+            logger.info("Factory conversation planner cache hit")
+            return list(cached[1]), {**ai_mode, "cache": "hit"}
+    semantic = shortlist(question, semantic, required_families, limit)
+    logger.info("Factory conversation planner catalogue prefilter: %d -> %d",
+                len(authorized_catalog), len(semantic))
     aliases = {str(item.get("id")): "chart_" + hashlib.sha256(str(item.get("id")).encode("utf-8")).hexdigest()[:16]
                for item in semantic if item.get("id")}
     provider_semantic = [{**item, "id": aliases[str(item["id"])]} for item in semantic]
@@ -396,7 +446,12 @@ async def plan(question: str, catalog: Sequence[Mapping[str, Any]],
         selected, duplicate_count = validated_selection(content)
         if duplicate_count:
             logger.info("Factory conversation planner removed %d duplicate chart selections by family", duplicate_count)
-        return selected, {"mode": "ai", "reason": "AI仅在当前授权目录中规划图表"}
+        if cache_key is not None:
+            _PLAN_CACHE[cache_key] = (_cache_monotonic() + PLANNER_CACHE_TTL_SECONDS, tuple(selected))
+            _PLAN_CACHE.move_to_end(cache_key)
+            if len(_PLAN_CACHE) > MAX_PLANNER_CACHE_ENTRIES:
+                _PLAN_CACHE.popitem(last=False)
+        return selected, ai_mode
     except Exception as exc:
         logger.warning("Factory conversation planner unavailable (%s): %s", type(exc).__name__, exc)
         return [], {"mode": "unavailable", "reason": "AI图表规划暂不可用或回复未通过候选校验"}
@@ -692,7 +747,8 @@ def touch_context(context: ConversationContext, question: str, selected_ids: Seq
                   unresolved_period: Optional[bool] = None,
                   period_error: Optional[str] = None) -> None:
     selected = [str(item) for item in selected_ids[:MAX_SELECTED_CHARTS]]
-    context.history = (context.history + [{"question": question[:1000], "selectedIds": selected}])[-MAX_HISTORY:]
+    context.history.append({"question": question[:1000], "selectedIds": selected})
+    del context.history[:-MAX_HISTORY]
     context.selected_ids = selected
     if unresolved_product is not None:
         context.unresolved_product = bool(unresolved_product)

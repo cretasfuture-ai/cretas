@@ -961,6 +961,8 @@ def test_context_source_and_upload_are_immutable_metadata():
 async def test_commerce_joint_asgi_uses_every_real_relationship_without_production_subject(monkeypatch, failure):
     from . import test_commerce_joint as fixture
     from .trusted_business_sources import COMMERCE_JOINT_SOURCE
+    conversation.clear_contexts()
+    provider_calls = []
     frame, gaps = fixture.prepared([fixture.sale('l1', 'o1')],
                                    [fixture.shipment('l1', 'o1', 'b1')],
                                    [fixture.inventory('b1', available='7')])
@@ -1004,6 +1006,7 @@ async def test_commerce_joint_asgi_uses_every_real_relationship_without_producti
 
     async def provider(_slot, payload, **kwargs):
         catalog = json.loads(payload['messages'][1]['content'])['catalog']
+        provider_calls.append(catalog)
         assert {item['familyId'] for item in catalog} == expected
         ids = [item['id'] for item in catalog]
         content = json.dumps({'selected_ids': ids[:1] if failure == 'provider_omits' else ids})
@@ -1022,6 +1025,7 @@ async def test_commerce_joint_asgi_uses_every_real_relationship_without_producti
     app.include_router(api.router)
     async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as client:
         result = await client.post('/factory-analysis', json={'question': '联合看客户渠道销售、发货和库存'})
+    assert len(provider_calls) == 1
     if failure == 'permission_denied':
         assert result.status_code == 403
         return
