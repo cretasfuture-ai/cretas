@@ -10,9 +10,8 @@
    2099-01-01  aliyun_a_vl/qwen3.8-flash
    2099-01-01  aliyun_b_vl/qwen3.8-flash
    2099-01-01  local_canada/qwen3:8b
-== chart (len=2)
-   2099-01-01  aurora_chart/qwen3:14b
-   2099-01-01  aliyun_a_vl/qwen3.8-flash
+== chart (len=1)
+   2099-01-01  local_canada/qwen3:8b
 == mapper (len=3)
    2099-01-01  local_canada/qwen3:8b
    2099-01-01  aliyun_a_vl/qwen3.8-flash

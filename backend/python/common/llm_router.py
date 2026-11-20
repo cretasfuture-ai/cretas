@@ -11,7 +11,7 @@ retains its separate LLM_WAREHOUSE_V41_ENABLED=1 gate.
 🔴 2026-11-12 (LLM-PROVIDER-SWITCH, Steve 定稿「长期是阿里云模型配合本地模型」): 链 = 阿里云 + 本地
 local_canada/qwen3:8b; 实测本地胜任的槽(`_LOCAL_FIRST_SLOTS`: chat / simple_text / mapper)本地第一,
 其余阿里云第一、本地兜底。本地一跳有并发上限(`_LOCAL_MAX_INFLIGHT`), 忙时直接换阿里云不排队。
-图表槽使用独立 Aurora → 阿里云 A 链。
+图表槽默认用 Rex，后台规划显式选用独立 Aurora 网关，两档均仅使用本地模型。
 OpenAI / Anthropic 的提供方代码在(Anthropic 走原生 Messages API, `common.llm_anthropic`), 但**默认不进任何链**:
 只在配了出口 `LLM_EGRESS_PROXY` + key 时可选启用(意图细选 Luna = `call_decision_choice`;
 生成链另需 `LLM_PAID_GENERATIVE=1`, 追加在阿里云与本地之后)。
@@ -414,8 +414,10 @@ _LOCAL_PAIR: Tuple[str, str] = ("local_canada", "qwen3:8b")
 # The opt-in, on-demand chart gateway has its own fixed local pair. Keeping it
 # out of the general registry also keeps unattended registry inference off Aurora.
 _AURORA_CHART_PAIR: Tuple[str, str] = ("aurora_chart", "qwen3:14b")
-CHART_ATTEMPT_TIMEOUT_SECONDS = 52.0
-CHART_CHAIN_TIMEOUT_SECONDS = 56.0
+CHART_ATTEMPT_TIMEOUT_SECONDS = 15.0
+CHART_CHAIN_TIMEOUT_SECONDS = 18.0
+CHART_BACKGROUND_ATTEMPT_TIMEOUT_SECONDS = 52.0
+CHART_BACKGROUND_CHAIN_TIMEOUT_SECONDS = 56.0
 
 # 付费账号的标价(美元 / 百万 token, 输入, 输出; 2026-11-12 官方定价页)。用途: ① 日费用估算;
 # ② 计费护栏 —— test_paid_models_stay_in_the_cheap_tier 钉住「任何付费条目单价不超过上限」,
@@ -1644,8 +1646,8 @@ _SLOT_POOLS: Dict[SLOT, List[Tuple[str, str]]] = {
     # SIMPLE_TEXT — low-risk rewrite / summary / classification only.
     # ⚠️ 它「低风险」不代表可以没有兜底: 低风险指的是**任务**, 不是**可用性**。
     SLOT.SIMPLE_TEXT: list(_FAST_TEXT_POOL),
-    # CHART — 独立 Aurora 网关。A 账号后备仅在确认免费额度保护后启用。
-    SLOT.CHART: [_AURORA_CHART_PAIR, ("aliyun_a_vl", "qwen3.8-flash")],
+    # CHART — 交互问数用 Rex，后台 Aurora 由调用方单独选择。
+    SLOT.CHART: [_LOCAL_PAIR],
     # MAPPER — 短 JSON 字段映射。契约是「短 JSON, 快而有界」, 由
     # test_mapper_uses_bounded_fast_models_without_max_or_reasoners 强制:
     # 池内不得含 _THINKING_ONLY / _SLOW_MODELS / Max 档。
@@ -1752,7 +1754,7 @@ _ABSOLUTE_LAST: frozenset = frozenset({
 # DECISION (2026-10-02) 同理: 契约是 top_logprobs, 而文本地板(当时是 zhipu)没有在这个
 # 契约下测过 —— 追加它只会把「拿不到概率 → 明确失败, 调用方回旧路径」变成
 # 「拿到一个没有概率的字母」。
-# CHART 使用独立、显式排序的链，阿里云 A 是它的文本地板。
+# CHART 用本地模型，工厂问数的规则选图负责兜底。
 _NO_TEXT_TAIL_SLOTS: frozenset = frozenset({SLOT.VL, SLOT.WAREHOUSE_VL, SLOT.DECISION, SLOT.CHART})
 
 
@@ -2522,10 +2524,7 @@ _MIN_ATTEMPT_TIMEOUT_SECONDS = 0.05
 
 
 def _chart_cloud_allowed(slot: SLOT, account: str) -> bool:
-    # The account's console must enforce free-tier-only before this is enabled.
-    if slot is not SLOT.CHART or not account.startswith("aliyun_"):
-        return True
-    return account == "aliyun_a_vl" and os.getenv("LLM_CHART_ALIYUN_A_FREE_ONLY_CONFIRMED") == "1"
+    return slot is not SLOT.CHART or account in {_LOCAL_ACCOUNT, _AURORA_CHART_PAIR[0]}
 
 
 def _f006_lease_is_idle() -> bool:
@@ -2721,6 +2720,10 @@ class LLMChainExhausted(RuntimeError):
         self.errors = list(errors)
         super().__init__(f"[llm_router] All providers exhausted for {slot}: {'; '.join(errors)}")
 
+    @property
+    def timed_out(self) -> bool:
+        return any(error.endswith((": timeout", ": total_timeout")) for error in self.errors)
+
 
 def _no_candidates_reason(slot: SLOT, chain: Optional[List[str]], tag: str) -> str:
     """链在**发出任何请求之前**就是空的时, 给出一条能读懂的原因并 ERROR 日志。
@@ -2750,13 +2753,16 @@ async def call_chain(
     total_timeout: Optional[float] = None,
     content_validator: Optional[Callable[[str], Optional[str]]] = None,
     body_validator: Optional[Callable[[Dict[str, Any]], Optional[str]]] = None,
+    *,
+    chart_background: bool = False,
 ) -> Dict[str, Any]:
     """见 ``_call_chain_attempts``。先查好本厂工艺保密产品名 (在每次尝试的超时之外, 库慢不会被当成供应商超时
     去熔断健康的供应商; 换下一家重试也不再查库); 查不了抛 EgressRedactionError, 一个字节都不发。"""
     names_token = await prefetch_names_for_request()
     try:
         return await _call_chain_attempts(slot, payload, chain, timeout, total_timeout,
-                                          content_validator, body_validator)
+                                          content_validator, body_validator,
+                                          chart_background=chart_background)
     finally:
         reset_prefetched_names(names_token)
 
@@ -2769,6 +2775,8 @@ async def _call_chain_attempts(
     total_timeout: Optional[float] = None,
     content_validator: Optional[Callable[[str], Optional[str]]] = None,
     body_validator: Optional[Callable[[Dict[str, Any]], Optional[str]]] = None,
+    *,
+    chart_background: bool = False,
 ) -> Dict[str, Any]:
     """
     Call LLM via provider chain with automatic fallback on 403 FreeTierOnly / 429.
@@ -2789,8 +2797,8 @@ async def _call_chain_attempts(
     so the caller supplies the predicate. A raising predicate is treated as
     "reject this candidate", never propagated to the user.
 
-    Per-call timeout defaults to 30s. Chart requests default to 52s per
-    attempt and a 56s chain budget. Explicit caller budgets take precedence.
+    Per-call timeout defaults to 30s. Chart requests are capped at 15s per
+    attempt and 18s per chain (52s and 56s for the explicit background route).
     Callers with an interactive latency contract may also set ``total_timeout``;
     it is a wall-clock budget for the entire provider cascade, not another
     per-provider allowance.
@@ -2801,11 +2809,17 @@ async def _call_chain_attempts(
     Returns parsed JSON response from the first successful provider.
     Raises RuntimeError if all providers exhaust.
     """
-    if timeout is None:
-        timeout = CHART_ATTEMPT_TIMEOUT_SECONDS if slot is SLOT.CHART else 30.0
-    if slot is SLOT.CHART and total_timeout is None:
-        total_timeout = CHART_CHAIN_TIMEOUT_SECONDS
     slot_chain = SLOT_MODELS.get(slot, [])
+    if slot is SLOT.CHART:
+        attempt_limit, chain_limit = CHART_ATTEMPT_TIMEOUT_SECONDS, CHART_CHAIN_TIMEOUT_SECONDS
+        if chart_background:
+            slot_chain = [_AURORA_CHART_PAIR]
+            attempt_limit = CHART_BACKGROUND_ATTEMPT_TIMEOUT_SECONDS
+            chain_limit = CHART_BACKGROUND_CHAIN_TIMEOUT_SECONDS
+        timeout = attempt_limit if timeout is None else min(timeout, attempt_limit)
+        total_timeout = chain_limit if total_timeout is None or total_timeout <= 0 else min(total_timeout, chain_limit)
+    elif timeout is None:
+        timeout = 30.0
     if chain is not None:
         # Optional account-filter override (legacy callers pass account names).
         slot_chain = [(ac, m) for (ac, m) in slot_chain if ac in chain]
@@ -2831,7 +2845,7 @@ async def _call_chain_attempts(
         if not model:
             continue
         if not _chart_cloud_allowed(slot, account):
-            errors.append(f"{account}/{model}: free_only_not_confirmed")
+            errors.append(f"{account}/{model}: chart_local_only")
             continue
         # ⛔ Unified billing-safety gate (allowlist ∧ ¬denylist ∧ ¬expired ∧ ¬stale).
         # SAME helper in call_chain_stream so the two paths cannot drift. The router
@@ -2897,11 +2911,9 @@ async def _call_chain_attempts(
                     candidate_index + 1,
                 ),
             )
-            if holds_local:
+            if holds_local and slot is not SLOT.CHART:
                 request_timeout = min(request_timeout, _LOCAL_ATTEMPT_TIMEOUT_S)
             is_aurora_chart = account == _AURORA_CHART_PAIR[0]
-            if is_aurora_chart:
-                request_timeout = min(request_timeout, CHART_ATTEMPT_TIMEOUT_SECONDS)
             # Apr 28 2026 (post-review P1, then reviewer round 2 correction):
             # API consistency only — bare `timeout=timeout` and
             # `timeout=httpx.Timeout(timeout)` are EQUIVALENT in httpx (a bare
@@ -3039,7 +3051,8 @@ async def _call_chain_attempts(
                 f"[llm_router] {account}/{model} exception "
                 f"(cb_fails={fails}/{CB_THRESHOLD}): {e}"
             )
-            errors.append(f"{account}/{model}: {type(e).__name__}")
+            reason = "timeout" if slot is SLOT.CHART and isinstance(e, httpx.TimeoutException) else type(e).__name__
+            errors.append(f"{account}/{model}: {reason}")
             continue
         finally:
             if holds_local:
@@ -3435,7 +3448,7 @@ async def _call_chain_stream_attempts(
         if not model:
             continue
         if not _chart_cloud_allowed(slot, account):
-            errors.append(f"{account}/{model}: free_only_not_confirmed")
+            errors.append(f"{account}/{model}: chart_local_only")
             continue
         # ⛔ Unified billing-safety gate — SAME _refuse_reason as call_chain. This
         # path historically LACKED the expiry gate (billing-audit CRITICAL 3); now

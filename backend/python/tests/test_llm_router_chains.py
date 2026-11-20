@@ -59,7 +59,7 @@ def test_every_text_slot_has_a_floor():
     没有这条, 某次注册表重写把 tencent/zhipu 删空后, 所有槽会在最后一个
     aliyun 条目过期的那天同时变成空链 —— 而 CI 全绿。
 
-    视觉及概率槽没有文本地板。CHART 使用独立链，仍须有阿里云 A 地板。
+    视觉及概率槽没有文本地板。CHART 的本地模型也是一个永不过期的条目。
     """
     for slot in SLOT:
         if slot in {SLOT.VL, SLOT.WAREHOUSE_VL, SLOT.DECISION}:

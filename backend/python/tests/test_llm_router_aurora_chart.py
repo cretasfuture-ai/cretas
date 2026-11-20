@@ -1,9 +1,9 @@
-"""Verify the actual chart router chain and its dedicated Aurora fallback."""
+"""Verify the two chart routes, their budgets, and Aurora's F006 priority."""
 
 import asyncio
 import datetime
+import json as jsonlib
 import logging
-from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -14,10 +14,14 @@ from llm import f006_mini_provider
 pytestmark = pytest.mark.usefixtures("egress_as_factory_request")
 
 AURORA = ("aurora_chart", "qwen3:14b")
+REX = ("local_canada", "qwen3:8b")
 ALIYUN_A = ("aliyun_a_vl", "qwen3.8-flash")
 BASE_URL = "http://127.0.0.1:11440/v1"
+REX_URL = "http://127.0.0.1:11437/v1"
 PAYLOAD = {"messages": [{"role": "user", "content": "return a JSON object"}]}
 CONTENT = '{"selected_ids":["chart_approved"]}'
+CATALOG = [{"id": "production", "familyId": "production.output", "domain": "生产",
+            "metric": "产量", "chartType": "line"}]
 
 
 @pytest.fixture
@@ -30,6 +34,8 @@ def configured_router(monkeypatch):
     monkeypatch.setenv("LLM_ALIYUN_A_API_KEY", "a-test")
     monkeypatch.setenv("LLM_ALIYUN_B_API_KEY", "b-test")
     monkeypatch.setenv("LLM_CHART_ALIYUN_A_FREE_ONLY_CONFIRMED", "1")
+    monkeypatch.delenv("SMARTBI_CHART_PLANNER_BACKGROUND", raising=False)
+    monkeypatch.setenv("LLM_LOCAL_CANADA_BASE_URL", REX_URL)
     monkeypatch.setenv("LLM_LOCAL_CANADA_API_KEY", "canada-test")
     monkeypatch.setenv("LLM_AURORA_CHART_BASE_URL", BASE_URL)
     monkeypatch.setenv("LLM_AURORA_CHART_TOKEN", "aurora-test")
@@ -37,10 +43,9 @@ def configured_router(monkeypatch):
     monkeypatch.setattr(llm_router, "_f006_lease_is_idle", lambda: True)
 
 
-def test_chart_chain_has_only_aurora_then_aliyun_a_and_f006_stays_dedicated():
-    assert llm_router.SLOT_MODELS[llm_router.SLOT.CHART] == [AURORA, ALIYUN_A]
-    assert all(AURORA not in chain for slot, chain in llm_router.SLOT_MODELS.items()
-               if slot is not llm_router.SLOT.CHART)
+def test_chart_default_chain_is_rex_and_f006_stays_dedicated():
+    assert llm_router.SLOT_MODELS[llm_router.SLOT.CHART] == [REX]
+    assert all(AURORA not in chain for chain in llm_router.SLOT_MODELS.values())
     assert llm_router.SLOT_MODELS[llm_router.SLOT.CHAT][:3] == [
         ("local_canada", "qwen3:8b"), ALIYUN_A, ("aliyun_b_vl", "qwen3.8-flash"),
     ]
@@ -70,6 +75,7 @@ async def _ask():
     return await llm_router.call_chain(
         llm_router.SLOT.CHART, PAYLOAD, timeout=0.08, total_timeout=0.5,
         content_validator=lambda content: None if content == CONTENT else "unapproved_chart",
+        chart_background=True,
     )
 
 
@@ -85,7 +91,8 @@ async def test_configured_chart_uses_aurora_and_its_separate_token(configured_ro
 async def test_chart_caps_long_aurora_attempts_at_the_measured_budget(configured_router, monkeypatch):
     client = _ChartClient()
     monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
-    await llm_router.call_chain(llm_router.SLOT.CHART, PAYLOAD, timeout=120, total_timeout=120)
+    await llm_router.call_chain(llm_router.SLOT.CHART, PAYLOAD, timeout=120, total_timeout=120,
+                                chart_background=True)
     assert client.calls == [(BASE_URL + "/chat/completions", "Bearer aurora-test", AURORA[1], 52.0)]
 
 
@@ -95,8 +102,9 @@ async def test_chart_skips_aurora_when_proxy_would_intercept_loopback(configured
     monkeypatch.setenv("NO_PROXY", "localhost")
     client = _ChartClient()
     monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
-    assert (await _ask())["choices"][0]["message"]["content"] == CONTENT
-    assert [call[1:3] for call in client.calls] == [("Bearer a-test", ALIYUN_A[1])]
+    with pytest.raises(llm_router.LLMChainExhausted, match="empty_api_key"):
+        await _ask()
+    assert client.calls == []
     assert "回环代理豁免" in caplog.text
 
 
@@ -116,7 +124,7 @@ async def test_proxied_environment_uses_shared_redaction_with_loopback_exemption
         monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: wrapper)
         await llm_router.call_chain(llm_router.SLOT.CHART, {
             "messages": [{"role": "user", "content": "return JSON，联系人电话 13912345678"}],
-        })
+        }, chart_background=True)
     assert len(requests) == 1
     assert str(requests[0].url) == BASE_URL + "/chat/completions"
     assert requests[0].headers["Authorization"] == "Bearer aurora-test"
@@ -139,9 +147,10 @@ async def test_missing_or_invalid_aurora_config_skips_and_warns_once(
         monkeypatch.setenv(name, value)
     client = _ChartClient()
     monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
-    await _ask()
-    await _ask()
-    assert [call[1:3] for call in client.calls] == [("Bearer a-test", ALIYUN_A[1])] * 2
+    for _ in range(2):
+        with pytest.raises(llm_router.LLMChainExhausted, match="empty_api_key"):
+            await _ask()
+    assert client.calls == []
     warnings = [record for record in caplog.records
                 if record.levelno == logging.WARNING and "LLM_AURORA_CHART_BASE_URL" in record.message]
     assert len(warnings) == 1
@@ -149,41 +158,28 @@ async def test_missing_or_invalid_aurora_config_skips_and_warns_once(
 
 @pytest.mark.parametrize("failure", ["timeout", 429])
 @pytest.mark.asyncio
-async def test_chart_falls_back_to_aliyun_a_after_aurora_timeout_or_busy(configured_router, monkeypatch, failure):
+async def test_chart_reports_aurora_timeout_or_busy_without_switching_provider(configured_router, monkeypatch, failure):
     client = _ChartClient(failure)
     monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
-    assert (await _ask())["choices"][0]["message"]["content"] == CONTENT
-    assert [call[1:3] for call in client.calls] == [
-        ("Bearer aurora-test", AURORA[1]), ("Bearer a-test", ALIYUN_A[1]),
-    ]
+    with pytest.raises(llm_router.LLMChainExhausted, match="timeout" if failure == "timeout" else "local_busy"):
+        await _ask()
+    assert [call[1:3] for call in client.calls] == [("Bearer aurora-test", AURORA[1])]
     expected_failures = 1 if failure == "timeout" else 0
     assert llm_router._CB_FAILURES.get("/".join(AURORA), 0) == expected_failures
 
 
 @pytest.mark.asyncio
-async def test_chart_budget_leaves_four_seconds_for_confirmed_cloud(configured_router, monkeypatch):
-    clock = 0.0
-
-    class SlowAurora(_ChartClient):
-        async def post(self, url, **kwargs):
-            nonlocal clock
-            if url.startswith(BASE_URL):
-                self.calls.append((url, kwargs["timeout"].read))
-                clock += kwargs["timeout"].read
-                raise asyncio.TimeoutError
-            return await super().post(url, **kwargs)
-
-    client = SlowAurora()
-    monkeypatch.setattr(llm_router, "time", SimpleNamespace(monotonic=lambda: clock, time=lambda: clock))
+async def test_chart_refuses_legacy_cloud_flag_even_if_cloud_candidates_are_present(configured_router, monkeypatch):
+    client = _ChartClient()
+    monkeypatch.setitem(llm_router.SLOT_MODELS, llm_router.SLOT.CHART, [ALIYUN_A, REX])
     monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
-    await llm_router.call_chain(llm_router.SLOT.CHART, PAYLOAD)
-    assert client.calls[0] == (BASE_URL + "/chat/completions", 52.0)
-    assert client.calls[1][1:] == ("Bearer a-test", ALIYUN_A[1], 4.0)
+    assert (await llm_router.call_chain(llm_router.SLOT.CHART, PAYLOAD))["choices"]
+    assert client.calls == [(REX_URL + "/chat/completions", "Bearer canada-test", REX[1], 15.0)]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", ["f006_lease", "timeout", "invalid_ids", "confirmed_quota_403", None])
-async def test_product_planner_uses_ai_or_rules_according_to_chart_route(configured_router, monkeypatch, failure):
+@pytest.mark.parametrize("failure", ["f006_lease", "invalid_ids", "missing_config"])
+async def test_background_planner_uses_rules_when_aurora_cannot_plan(configured_router, monkeypatch, failure):
     from smartbi.services.factory_charts import conversation
 
     calls = []
@@ -192,35 +188,155 @@ async def test_product_planner_uses_ai_or_rules_according_to_chart_route(configu
     class Client:
         async def post(self, url, *, headers, json, timeout):
             calls.append(url)
-            if failure == "confirmed_quota_403":
-                if url == aurora_url:
-                    return httpx.Response(429, json={"error": "aurora_busy"})
-                return httpx.Response(403, json={"code": "AllocationQuota.FreeTierOnly"})
-            if failure == "timeout":
-                raise asyncio.TimeoutError
-            content = CONTENT
-            if failure is None:
-                from json import dumps, loads
-                candidate = loads(json["messages"][1]["content"])["catalog"][0]["id"]
-                content = dumps({"selected_ids": [candidate]})
-            return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+            return httpx.Response(200, json={"choices": [{"message": {"content": CONTENT}}]})
 
-    if failure != "confirmed_quota_403":
-        monkeypatch.delenv("LLM_CHART_ALIYUN_A_FREE_ONLY_CONFIRMED")
+    if failure == "missing_config":
+        monkeypatch.delenv("LLM_AURORA_CHART_TOKEN")
     monkeypatch.setattr(llm_router, "_f006_lease_is_idle", lambda: failure != "f006_lease")
     monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: Client())
-    catalog = [{"id": "production", "familyId": "production.output", "domain": "生产",
-                "metric": "产量", "chartType": "line"}]
-    chosen, result = await conversation.plan("今天的生产产量", catalog)
+    chosen, result = await conversation.plan("今天的生产产量", CATALOG, background=True)
 
     assert chosen == ["production"]
-    assert result["mode"] == ("ai" if failure is None else "rule")
-    if failure == "confirmed_quota_403":
-        assert calls == [aurora_url, llm_router._provider_config(ALIYUN_A[0])[0] + "/chat/completions"]
-        assert llm_router._quota_should_skip("/".join(ALIYUN_A))
-    else:
-        assert calls == ([] if failure == "f006_lease" else [aurora_url])
-    assert llm_router._CB_FAILURES.get("/".join(AURORA), 0) == (1 if failure == "timeout" else 0)
+    assert result["mode"] == "rule"
+    assert calls == ([aurora_url] if failure == "invalid_ids" else [])
+    assert not llm_router._CB_FAILURES.get("/".join(AURORA), 0)
+
+
+class _ScaledWaits:
+    """Keep real event-loop cancellation while shortening the model and deadline waits."""
+
+    scale = 0.02
+
+    def __init__(self):
+        self.timeouts = []
+
+    async def wait_for(self, awaitable, timeout):
+        self.timeouts.append(timeout)
+        return await asyncio.wait_for(awaitable, timeout * self.scale)
+
+    def __getattr__(self, name):
+        return getattr(asyncio, name)
+
+
+class _PlanningClient:
+    def __init__(self, model_seconds):
+        self.model_seconds = model_seconds
+        self.calls = []
+        self.cancelled = False
+
+    async def post(self, url, *, headers, json, timeout):
+        self.calls.append((url, json["model"], timeout.read))
+        try:
+            if self.model_seconds is None:
+                await asyncio.Future()
+            else:
+                await asyncio.sleep(self.model_seconds * _ScaledWaits.scale)
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+        candidate = jsonlib.loads(json["messages"][1]["content"])["catalog"][0]["id"]
+        content = jsonlib.dumps({"selected_ids": [candidate]})
+        return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+
+
+@pytest.fixture
+def timed_planner(configured_router, monkeypatch):
+    from smartbi.services.factory_charts import conversation
+
+    planner_waits, router_waits = _ScaledWaits(), _ScaledWaits()
+    monkeypatch.setattr(conversation, "asyncio", planner_waits)
+    monkeypatch.setattr(llm_router, "asyncio", router_waits)
+    monkeypatch.setattr(conversation, "_planner_monotonic", lambda: 0.0)
+    monkeypatch.setattr(llm_router, "_LOCAL_ATTEMPT_TIMEOUT_S", 8.0)
+    conversation._PLAN_CACHE.clear()
+    yield conversation, planner_waits, router_waits
+    conversation._PLAN_CACHE.clear()
+
+
+@pytest.mark.asyncio
+async def test_main_planner_accepts_a_rex_result_within_20_seconds(timed_planner, monkeypatch):
+    conversation, planner_waits, router_waits = timed_planner
+    client = _PlanningClient(model_seconds=11)
+    monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
+
+    chosen, result = await conversation.plan("今天的生产产量", CATALOG)
+
+    assert (chosen, result["mode"]) == (["production"], "ai")
+    assert client.calls == [(REX_URL + "/chat/completions", REX[1], 15.0)]
+    assert router_waits.timeouts == [15.0]
+    assert planner_waits.timeouts == [20.0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("background", "url", "model", "attempt", "deadline"), [
+    pytest.param(False, REX_URL, REX[1], 15.0, 20.0, id="rex"),
+    pytest.param(True, BASE_URL, AURORA[1], 52.0, 60.0, id="aurora"),
+])
+async def test_planner_timeout_returns_rule(timed_planner, monkeypatch, background, url, model, attempt, deadline):
+    conversation, planner_waits, router_waits = timed_planner
+    client = _PlanningClient(model_seconds=None)
+    monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
+
+    chosen, result = await conversation.plan("今天的生产产量", CATALOG, background=background)
+
+    assert (chosen, result["mode"]) == (["production"], "rule")
+    assert client.calls == [(url + "/chat/completions", model, attempt)]
+    assert client.cancelled
+    assert router_waits.timeouts == [attempt]
+    assert planner_waits.timeouts == [deadline]
+
+
+@pytest.mark.asyncio
+async def test_background_planner_accepts_aurora_after_12_seconds(timed_planner, monkeypatch):
+    conversation, planner_waits, router_waits = timed_planner
+    client = _PlanningClient(model_seconds=18)
+    monkeypatch.setenv("SMARTBI_CHART_PLANNER_BACKGROUND", "1")
+    monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
+
+    chosen, result = await conversation.plan("今天的生产产量", CATALOG)
+
+    assert (chosen, result["mode"]) == (["production"], "ai")
+    assert client.calls == [(BASE_URL + "/chat/completions", AURORA[1], 52.0)]
+    assert router_waits.timeouts == [52.0]
+    assert planner_waits.timeouts == [60.0]
+
+
+@pytest.mark.asyncio
+async def test_http_timeout_with_no_matching_chart_reports_rule(configured_router, monkeypatch):
+    from smartbi.services.factory_charts import conversation
+
+    class TimedOutClient:
+        async def post(self, *_args, **_kwargs):
+            raise httpx.ReadTimeout("test timeout")
+
+    monkeypatch.setattr(llm_router, "get_llm_http_client", TimedOutClient)
+
+    chosen, result = await conversation.plan("企鹅生活在哪里？", CATALOG)
+
+    assert chosen == []
+    assert result["mode"] == "rule"
+    assert result["reason"] == "当前授权目录没有与问题匹配的图表"
+
+
+@pytest.mark.asyncio
+async def test_planner_cache_keeps_main_rules_separate_from_background_ai(configured_router, monkeypatch):
+    from smartbi.services.factory_charts import conversation
+
+    conversation._PLAN_CACHE.clear()
+    client = _PlanningClient(model_seconds=0)
+    monkeypatch.delenv("LLM_LOCAL_CANADA_API_KEY")
+    monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
+    try:
+        _, main = await conversation.plan("今天的生产产量", CATALOG, factory_id="F001")
+        _, background = await conversation.plan("今天的生产产量", CATALOG, factory_id="F001", background=True)
+        _, cached_main = await conversation.plan("今天的生产产量", CATALOG, factory_id="F001")
+    finally:
+        conversation._PLAN_CACHE.clear()
+
+    assert (main["mode"], main["cache"]) == ("rule", "miss")
+    assert (background["mode"], background["cache"]) == ("ai", "miss")
+    assert (cached_main["mode"], cached_main["cache"]) == ("rule", "hit")
+    assert [call[:2] for call in client.calls] == [(BASE_URL + "/chat/completions", AURORA[1])]
 
 
 @pytest.mark.asyncio
@@ -243,11 +359,11 @@ async def test_aurora_yields_in_flight_when_f006_acquires_lease(configured_route
     client = LeaseDuringRequest()
     monkeypatch.setattr(llm_router, "_f006_lease_is_idle", lambda: not lease_held)
     monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
-    await llm_router.call_chain(llm_router.SLOT.CHART, PAYLOAD, timeout=1, total_timeout=2)
+    with pytest.raises(llm_router.LLMChainExhausted, match="f006_priority"):
+        await llm_router.call_chain(llm_router.SLOT.CHART, PAYLOAD, timeout=1, total_timeout=2,
+                                    chart_background=True)
     assert cancelled.is_set()
-    assert len(client.calls) == 2
-    assert client.calls[0] == BASE_URL + "/chat/completions"
-    assert client.calls[1][1:3] == ("Bearer a-test", ALIYUN_A[1])
+    assert client.calls == [BASE_URL + "/chat/completions"]
     assert "/".join(AURORA) not in llm_router._CB_FAILURES
 
 

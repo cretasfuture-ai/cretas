@@ -83,10 +83,11 @@ def test_engine_known_trusted_families_have_generic_labels_before_source_prefix(
 
 
 @pytest.mark.asyncio
-async def test_plan_accepts_only_existing_ids_and_can_recover_with_rules(monkeypatch):
+@pytest.mark.parametrize(('background', 'attempt', 'chain'), [(False, 15, 18), (True, 52, 56)])
+async def test_plan_accepts_only_existing_ids_and_can_recover_with_rules(monkeypatch, background, attempt, chain):
     async def call(_slot, payload, **kwargs):
         import json as _json
-        assert kwargs['timeout'] == 6 and kwargs['total_timeout'] == 10
+        assert (kwargs['timeout'], kwargs['total_timeout'], kwargs['chart_background']) == (attempt, chain, background)
         assert '10' not in payload['messages'][1]['content']
         alias = _json.loads(payload['messages'][1]['content'])['catalog'][0]['id']
         return {'choices': [{'message': {'content': '{"selected_ids":["' + alias + '"]}'}}]}
@@ -95,7 +96,7 @@ async def test_plan_accepts_only_existing_ids_and_can_recover_with_rules(monkeyp
     selected, mode = await conversation.plan('看产量', [
         {'id': 'one', 'familyId': 'production.output', 'chartType': 'line', 'domain': '生产',
          'metric': '产量', 'unit': 'kg'},
-    ])
+    ], background=background)
     assert selected == ['one'] and mode['mode'] == 'ai'
 
     async def outside(_slot, _payload, **kwargs):
@@ -105,7 +106,7 @@ async def test_plan_accepts_only_existing_ids_and_can_recover_with_rules(monkeyp
     selected, mode = await conversation.plan('看产量', [
         {'id': 'one', 'familyId': 'production.output', 'chartType': 'line', 'domain': '生产',
          'metric': '产量', 'unit': 'kg'},
-    ])
+    ], background=background)
     assert selected == ['one'] and mode['mode'] == 'rule'
 
     async def raw_ids(_slot, _payload, **kwargs):
@@ -276,7 +277,7 @@ async def test_non_router_exception_with_errors_attribute_does_not_replan(monkey
 
 @pytest.mark.asyncio
 async def test_duplicate_family_does_not_replan_after_shared_deadline(monkeypatch):
-    clock = iter([0.0, 0.0, 12.1])
+    clock = iter([0.0, 0.0, 20.1])
     monkeypatch.setattr(conversation, '_planner_monotonic', lambda: next(clock))
     calls = 0
 

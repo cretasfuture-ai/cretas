@@ -139,7 +139,11 @@ async def test_rule_plan_caches_mode_and_returns_independent_values(provider, mo
 
 
 @pytest.mark.asyncio
-async def test_unrelated_question_is_unavailable_and_never_cached(provider, monkeypatch):
+@pytest.mark.parametrize(("failure", "expected_mode"), [
+    ("timeout", "rule"),
+    ("invalid_planner selection count invalid", "unavailable"),
+])
+async def test_unrelated_question_never_caches_an_empty_selection(provider, monkeypatch, failure, expected_mode):
     from common import llm_router
 
     success = llm_router.call_chain
@@ -147,12 +151,13 @@ async def test_unrelated_question_is_unavailable_and_never_cached(provider, monk
 
     async def fail(_slot, payload, **_kwargs):
         attempts.append(payload)
-        raise LLMChainExhausted("chart", ["fixture: timeout"])
+        raise LLMChainExhausted("chart", [f"fixture: {failure}"])
 
     monkeypatch.setattr(llm_router, "call_chain", fail)
     for _ in range(2):
         selected, mode = await conversation.plan("企鹅生活在哪里？", CATALOG, factory_id="F001")
-        assert selected == [] and mode["mode"] == "unavailable"
+        assert selected == [] and mode["mode"] == expected_mode
+        assert mode["reason"] == "当前授权目录没有与问题匹配的图表"
     assert len(attempts) == 2
     monkeypatch.setattr(llm_router, "call_chain", success)
     selected, mode = await conversation.plan("企鹅生活在哪里？", CATALOG, factory_id="F001")
