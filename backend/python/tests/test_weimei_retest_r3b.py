@@ -210,7 +210,7 @@ def test_4_plan_outside_listing_picks_the_detail_table(question, expected):
 async def test_4_stream_entry_lists_every_actual_row_and_marks_missing_code(monkeypatch):
     plan = {"intent": "compute", "filters": [{"col": "结论", "op": "==", "value": "计划外生产"}]}
     events, done, prompts = await ask_stream(
-        monkeypatch, "10月有哪些计划外生产？", {5323: (plan_rows(), PLAN_FIELDS)}, "（桩）", plan)
+        monkeypatch, "10月哪些产品是计划外生产的", {5323: (plan_rows(), PLAN_FIELDS)}, "（桩）", plan)
     sel = [d for e, d in events if e == "data_source"]
     assert sel and sel[0]["uploadId"] == 5323, sel
     block = prompts[0]

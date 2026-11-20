@@ -2992,6 +2992,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
             _rl_block = ""
             _rl_active = False
             _rl_text_answer = None
+            _rl_answer_charts = []
             _rl_result = None  # 行级计算结果: done 之前拿它校验「一共/总共」的总数
             if request.effective_query:
                 try:
@@ -3034,7 +3035,10 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                         return
                     if _rl_out.kind == "text_listing":
                         _rl_text_answer = _rl_out.text
-                    if _rl_out.kind in ("computed", "uncomputed"):
+                    elif _rl_out.answer is not None:
+                        _rl_text_answer = _rl_out.answer
+                        _rl_answer_charts = _rl_out.charts
+                    elif _rl_out.kind in ("computed", "uncomputed"):
                         _rl_block = "\n" + _rl_out.text
                         _rl_active = True
                         _rl_result = _rl_out.result
@@ -3156,7 +3160,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
             if _rl_text_answer is not None or _llm_cache_hit:
                 if _rl_text_answer is not None:
                     _ready_text = _rl_text_answer
-                    _ready_meta = {"source": "row_level_text", "charts": []}
+                    _ready_meta = {"source": "row_level_text", "charts": _rl_answer_charts}
                 else:
                     yield _sse_event("status", "正在读取近期分析结果...")
                     _ready_text = _llm_cache_hit["answer_text"]
