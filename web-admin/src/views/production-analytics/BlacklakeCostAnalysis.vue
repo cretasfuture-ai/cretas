@@ -9,6 +9,7 @@ const trend = ref<HTMLDivElement>();
 const orderPage = ref(1);
 const issuePage = ref(1);
 const pageSize = 20;
+const materialCreditLabel = '含冲销/退料';
 let trendChart: echarts.ECharts | undefined;
 let resize: ResizeObserver | undefined;
 
@@ -41,6 +42,7 @@ const snapshots = computed(() => {
 });
 const orders = computed(() => props.data.workOrders.slice((orderPage.value - 1) * pageSize, orderPage.value * pageSize));
 const issues = computed(() => props.data.materialIssues.slice((issuePage.value - 1) * pageSize, issuePage.value * pageSize));
+const materialCreditDays = computed(() => props.data.daily.filter(row => row.hasMaterialCredit));
 const products = computed(() => [...props.data.products].sort((left, right) => {
   if (left.totalCost === right.totalCost) return 0;
   if (left.totalCost === null) return 1;
@@ -86,6 +88,15 @@ watchEffect(() => {
     yAxis: { type: 'value', name: '金额' },
     series: moneyFields.map(({ key, label }) => ({
       name: label, type: 'line', symbolSize: 7, data: props.data.daily.map(row => row[key]),
+      ...(key === 'materialCost' && {
+        markPoint: {
+          symbol: 'circle', symbolSize: 12, itemStyle: { color: '#b45309' },
+          label: { show: true, position: 'top', formatter: materialCreditLabel, color: '#92400e' },
+          data: materialCreditDays.value.map(row => ({
+            name: materialCreditLabel, coord: [row.costDate, row.materialCost],
+          })),
+        },
+      }),
     })),
   });
 }, { flush: 'post' });
@@ -147,6 +158,10 @@ onBeforeUnmount(() => {
       <el-card v-if="data.daily.length" shadow="never">
         <template #header><h3>每日成本趋势</h3></template>
         <div ref="trend" class="cost-chart" role="img" aria-label="每日总成本、材料成本与人工成本趋势" />
+        <p v-if="materialCreditDays.length" class="basis">
+          {{ materialCreditLabel }}：{{ materialCreditDays.map(row => row.costDate).join('、') }}。
+          这些日期的工单含黑湖材料负账，趋势按原始金额汇总。
+        </p>
       </el-card>
 
       <el-card v-if="products.length" shadow="never">
@@ -192,7 +207,7 @@ onBeforeUnmount(() => {
             <template #default="{ row }">{{ money(row[key]) }}</template>
           </el-table-column>
           <el-table-column label="单位成本" align="right" min-width="100">
-            <template #default="{ row }">{{ money(row.unitCost, 4) }}</template>
+            <template #default="{ row }">{{ row.unitCost === null ? '缺失' : money(row.unitCost, 4) }}</template>
           </el-table-column>
           <el-table-column label="领料投入" min-width="124">
             <template #default="{ row }">{{ quantities(row.inputByUnit) }}</template>

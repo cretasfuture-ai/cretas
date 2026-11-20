@@ -179,7 +179,7 @@ async def load_external_cost(factory_id: str, start: date | None, end: date | No
         # An order can consume material on days outside the selected completion range.
         issues = await conn.fetch(
             """SELECT line_id, issue_date, work_order_code, material_code, material_name, unit, quantity,
-                      effective_unit_price, issue_cost, price_source, snapshot_collected_at
+                      effective_unit_price, issue_cost, price_source, signed_cost_amount, snapshot_collected_at
                FROM fact_external_material_issue
                WHERE factory_id = $1 AND source_system = 'blacklake'
                  AND ((($2::date IS NULL OR issue_date >= $2) AND ($3::date IS NULL OR issue_date <= $3))
@@ -236,12 +236,22 @@ def _sum_present(values) -> Decimal | None:
     return sum(present, Decimal(0)) if present else None
 
 
+def _reported_unit_cost(order) -> Decimal | None:
+    cost = order["unit_cost"]
+    if cost == 0 and (order["total_cost"] or 0) > 0 and (order["output_qty"] or 0) > 0:
+        return None
+    return cost
+
+
 def _cost_metrics(entries: list, issues: list, *, issue_snapshot_available: bool) -> dict:
     unit_totals = defaultdict(Decimal)
     unit_quantities = defaultdict(Decimal)
+    missing_unit_costs = 0
     for order, *_ in entries:
-        unit, qty, cost = order["output_unit"], order["output_qty"], order["unit_cost"]
-        if unit and qty is not None and qty > 0 and cost is not None:
+        unit, qty, cost = order["output_unit"], order["output_qty"], _reported_unit_cost(order)
+        if cost is None:
+            missing_unit_costs += 1
+        elif unit and qty is not None and qty > 0:
             # Unit cost is per source unit. Keep kg and g separate here so a
             # weighted price never combines unlike denominators.
             unit = unit.upper() if unit.isascii() else unit
@@ -257,7 +267,7 @@ def _cost_metrics(entries: list, issues: list, *, issue_snapshot_available: bool
         "costMissingOrders": sum(order["total_cost"] is None for order, *_ in entries),
         "unitCosts": [{"unit": unit, "cost": unit_totals[unit] / unit_quantities[unit]}
                       for unit in sorted(unit_totals)],
-        "unitCostMissingOrders": sum(order["unit_cost"] is None for order, *_ in entries),
+        "unitCostMissingOrders": missing_unit_costs,
         "inputByUnit": _quantities(issues),
         "issuedMaterialCost": _sum_present(row["issue_cost"] for row in issues),
         "yieldRate": (sum(output for output, _ in comparable) * 100 / sum(used for _, used in comparable)
@@ -303,7 +313,7 @@ def external_cost_payload(data: ExternalCost, *, permission_message: str | None 
             "workOrderCode": code, "costDate": order["cost_date"], "productCode": order["product_code"],
             "productName": order["product_name"], "outputUnit": order["output_unit"],
             "outputQty": order["output_qty"], "materialCost": order["material_cost"],
-            "laborCost": order["labor_cost"], "totalCost": order["total_cost"], "unitCost": order["unit_cost"],
+            "laborCost": order["labor_cost"], "totalCost": order["total_cost"], "unitCost": _reported_unit_cost(order),
             "inputByUnit": _quantities(related), "yieldRate": output * 100 / used if used is not None else None,
             "yieldUnavailableReason": reason,
         })
@@ -314,7 +324,22 @@ def external_cost_payload(data: ExternalCost, *, permission_message: str | None 
 
     if orders or issues:
         result["summary"] = _cost_metrics(entries, issues, issue_snapshot_available=issue_at is not None)
-    result["daily"] = [{"costDate": day, **metrics(group)} for day, group in sorted(by_day.items())]
+    result["daily"] = [
+        {
+            "costDate": day, **metrics(group),
+            # A positive signed stock movement on the same snapshot corroborates
+            # a material credit on the order. Plot it on the order's cost date.
+            "hasMaterialCredit": any(
+                (order["material_cost"] or 0) < 0 and any(
+                    (issue["signed_cost_amount"] or 0) > 0
+                    and issue["snapshot_collected_at"] == order["snapshot_collected_at"]
+                    for issue in issues_by_order[order["work_order_code"]]
+                )
+                for order, *_ in group
+            ),
+        }
+        for day, group in sorted(by_day.items())
+    ]
     result["products"] = [
         {"productCode": code, "productName": group[0][0]["product_name"], **metrics(group)}
         for code, group in sorted(by_product.items())

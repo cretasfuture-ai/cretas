@@ -370,9 +370,8 @@ async def test_nightly_external_cost_reaches_http_including_decimal_yield_price_
         assert summary["materialCost"] == Decimal("200.024691356")
         assert summary["laborCost"] == Decimal("18.20")
         assert summary["issuedMaterialCost"] == Decimal("31.43125")
-        assert summary["unitCosts"] == [{"unit": "KG", "cost": Decimal("13.2257")},
-                                        {"unit": "盒", "cost": 0}]
-        assert summary["costMissingOrders"] == summary["unitCostMissingOrders"] == 0
+        assert summary["unitCosts"] == [{"unit": "KG", "cost": Decimal("13.2257")}]
+        assert summary["costMissingOrders"] == 0 and summary["unitCostMissingOrders"] == 1
         assert summary["materialCostMissingOrders"] == summary["laborCostMissingOrders"] == 0
         assert summary["priceMissingCount"] == summary["yieldComparableOrders"] == 1
         assert summary["valuationIssueCount"] == 2
@@ -383,6 +382,9 @@ async def test_nightly_external_cost_reaches_http_including_decimal_yield_price_
         assert by_order["WO-kg"]["inputByUnit"] == [{"unit": "kg", "quantity": 10}]
         assert by_order["WO-box"]["yieldUnavailableReason"] == "incompatible_units"
         assert by_order["WO-box"]["yieldRate"] is None
+        assert by_order["WO-box"]["unitCost"] is None
+        assert payload["products"][1]["unitCostMissingOrders"] == 1
+        assert payload["products"][1]["unitCosts"] == []
         details = {row["lineId"]: row for row in payload["materialIssues"]}
         assert details["1"]["issueDate"] == "2026-11-17" and details["1"]["priceSource"] == "moving_avg"
         assert details["2"]["issueCost"] is None and details["2"]["priceSource"] == "price_missing"
@@ -390,11 +392,13 @@ async def test_nightly_external_cost_reaches_http_including_decimal_yield_price_
         for line_id in ("4", "5"):
             assert details[line_id]["priceSource"] == "invalid_valuation" and details[line_id]["issueCost"] is None
         assert payload["daily"][0]["totalCost"] == summary["totalCost"]
+        assert payload["daily"][0]["unitCostMissingOrders"] == 1
+        assert payload["daily"][0]["hasMaterialCredit"] is False
         assert payload["products"][0]["totalCost"] == Decimal("109.112345678")
         unfiltered = json.loads((await client.get(COST_ROUTE, headers=headers)).text, parse_float=Decimal)["data"]
         assert unfiltered["summary"]["workOrderCount"] == 4
         assert unfiltered["summary"]["costMissingOrders"] == 1
-        assert unfiltered["summary"]["unitCostMissingOrders"] == 2
+        assert unfiltered["summary"]["unitCostMissingOrders"] == 3
         assert unfiltered["summary"]["materialCostMissingOrders"] == unfiltered["summary"]["laborCostMissingOrders"] == 1
         assert unfiltered["summary"]["totalCost"] == Decimal("129.132345678")
         for group in (unfiltered["daily"][0], next(row for row in unfiltered["products"] if row["productCode"] == "P3")):
@@ -425,6 +429,44 @@ async def test_nightly_external_cost_reaches_http_including_decimal_yield_price_
     async with _tenant(target, "NATIVE-OTHER") as conn:
         assert await conn.fetchval("SELECT count(*) FROM fact_external_work_order_cost") == 0
         assert await conn.fetchval("SELECT count(*) FROM fact_external_material_issue") == 0
+
+
+@pytest.mark.asyncio
+async def test_external_cost_preserves_valid_zero_and_signed_material_credit(stores, full_cost_access):
+    bronze, source, target = stores
+    await bronze.execute("INSERT INTO factory_external_integrations VALUES ($1, 'blacklake', 'ACTIVE')", FACTORY)
+    await _snapshot(bronze, FACTORY, COLLECTED, [
+        _work_order("ZERO-TOTAL", qty="2", total="0", material="0", labor="0", unit_cost="0"),
+        _work_order("REPORTED", qty="8", total="80", unit_cost="10"),
+        _work_order("PLACEHOLDER-ZERO", qty="480", total="39738.99", unit_cost="0"),
+        _work_order("CREDIT", day="2026-11-04", total="-140600", material="-152933", labor="12333", unit_cost="-16"),
+        _work_order("UNCONFIRMED-CREDIT", day="2026-11-05", total="-8", material="-9", labor="1", unit_cost="-1"),
+    ], dataset="project_cost")
+    await _snapshot(bronze, FACTORY, COLLECTED, [
+        _issue("credit", "CREDIT", day="2026-11-03", price="-10", amount="152933"),
+        _issue("unrelated", None, day="2026-11-05", price="-1", amount="9"),
+    ], dataset="production_issue")
+    assert (await sync_external_cost(source, target, FACTORY))["snapshots"] == 2
+    async with _tenant(target, FACTORY) as conn:
+        assert await conn.fetchval(
+            "SELECT unit_cost FROM fact_external_work_order_cost WHERE work_order_code = 'PLACEHOLDER-ZERO'"
+        ) == 0
+    async with _client() as client:
+        response = await client.get(COST_ROUTE, headers=_headers(role="factory_super_admin"))
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    by_order = {row["workOrderCode"]: row for row in payload["workOrders"]}
+    assert by_order["ZERO-TOTAL"]["unitCost"] == 0
+    assert by_order["PLACEHOLDER-ZERO"]["unitCost"] is None
+    assert by_order["CREDIT"]["unitCost"] == -16
+    daily = {row["costDate"]: row for row in payload["daily"]}
+    assert daily[DAY]["unitCosts"] == [{"unit": "KG", "cost": 8}]
+    assert daily[DAY]["unitCostMissingOrders"] == 1
+    assert daily[DAY]["hasMaterialCredit"] is False
+    assert daily["2026-11-04"]["hasMaterialCredit"] is True
+    assert daily["2026-11-04"]["materialCost"] == -152933
+    assert daily["2026-11-04"]["totalCost"] == -140600
+    assert daily["2026-11-05"]["hasMaterialCredit"] is False
 
 
 @pytest.mark.asyncio
@@ -574,7 +616,7 @@ async def test_existing_factory_gold_runner_syncs_external_facts(stores, monkeyp
 
 
 @pytest.mark.asyncio
-async def test_page_endpoint_uses_tenant_period_freshness_and_native_precedence(stores):
+async def test_page_endpoint_uses_tenant_period_freshness_and_native_precedence(stores, full_cost_access):
     bronze, source, target = stores
     await _snapshot(bronze, FACTORY, datetime.now(timezone.utc) - timedelta(hours=37), PAYLOAD)
     async with _tenant(target, FACTORY) as conn:
@@ -587,6 +629,9 @@ async def test_page_endpoint_uses_tenant_period_freshness_and_native_precedence(
             (factory_id, stat_date, batch_count, total_material_cost, total_cost)
             VALUES ('F006', '2026-11-18', 5, 33, 33)""")
     await _snapshot(bronze, "F006", COLLECTED, [_line("KG", "9900", "300")])
+    await bronze.execute("INSERT INTO factory_external_integrations VALUES ('F006', 'blacklake', 'ACTIVE')")
+    await _snapshot(bronze, "F006", COLLECTED, [_work_order("F006-EXTERNAL")], dataset="project_cost")
+    assert (await sync_external_cost(source, target, "F006"))["snapshots"] == 1
     filters = {"startDate": "2026-11-17", "endDate": DAY}
     async with _client() as client:
         native_url = "/api/smartbi/factory/cost-structure"
@@ -628,6 +673,13 @@ async def test_page_endpoint_uses_tenant_period_freshness_and_native_precedence(
         assert empty.json()["data"] == {**data, "rows": []}
         native_after = (await client.get(native_url, params=filters, headers=_headers("F006"))).json()
         assert native_after == native_before
+        assert native_after["data"]["summary"]["totalCost"] is None
+        f006_cost_headers = _headers("F006", role="factory_super_admin")
+        native_cost = await client.get(native_url, params=filters, headers=f006_cost_headers)
+        assert native_cost.status_code == 200 and native_cost.json()["data"]["summary"]["totalCost"] == 33
+        assert "blacklake" not in native_cost.text.lower()
+        external_cost = await client.get(COST_ROUTE, params=filters, headers=f006_cost_headers)
+        assert external_cost.status_code == 200 and external_cost.json() == {"success": True, "data": None, "message": ""}
         assert (await client.get(ROUTE, params=filters, headers=_headers("F006"))).json()["data"] is None
         assert (await client.get(ROUTE, params=filters, headers=_headers("UNRELATED"))).json()["data"] is None
         assert (await client.get(ROUTE, params={"factory_id": FACTORY}, headers=_headers("F006"))).status_code == 403

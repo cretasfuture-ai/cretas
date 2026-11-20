@@ -57,7 +57,7 @@ const costMetrics: ExternalCostMetrics = {
 const costSnapshot: ExternalCostData = {
   sourceSystem: 'blacklake', sourceLabel: '黑湖', costCollectedAt: snapshot.snapshotCollectedAt,
   issueCollectedAt: snapshot.snapshotCollectedAt, stale: false, permissionMessage: null, summary: costMetrics,
-  daily: [{ costDate: '2026-11-18', ...costMetrics }],
+  daily: [{ costDate: '2026-11-18', hasMaterialCredit: false, ...costMetrics }],
   products: [{ productCode: CODE, productName: '产品A', ...costMetrics }],
   workOrders: [{
     workOrderCode: 'WO-BLACKLAKE-1', costDate: '2026-11-18', productCode: CODE, productName: '产品A',
@@ -152,6 +152,7 @@ describe('黑湖生产分析页面', () => {
     const external = page.getComponent(BlacklakeCostAnalysis);
     expect(external.get('time').attributes('datetime')).toBe(snapshot.snapshotCollectedAt);
     expect(external.text()).not.toContain('成本缺失');
+    expect(external.text()).not.toContain('含冲销/退料');
     for (const text of ['黑湖', '1,234.56', '1,011.23', '223.33', '12.3456',
       '每日成本趋势', '产品成本对比', '工单成本明细', 'WO-BLACKLAKE-1', '领料原料 A',
       '单位不可比', '移动均价', '不含制费（黑湖未提供）', '缺价 1 行', '计价待核 1 行']) {
@@ -181,6 +182,42 @@ describe('黑湖生产分析页面', () => {
     expect(cards[0].text()).toContain('成本缺失 1 单，未计入合计');
     expect(cards[3].text()).toContain('12.3456');
     expect(cards[3].text()).toContain('单位成本缺失 2 单，未计入平均');
+    page.unmount();
+  });
+
+  it('趋势标注有来源依据的材料冲销并保留负值，明细区分缺失与有效零单价', async () => {
+    pythonFetch.mockResolvedValue({
+      success: true,
+      data: {
+        ...costSnapshot,
+        daily: [
+          { ...costMetrics, costDate: '2026-11-04', materialCost: -152933.11, totalCost: -140601.74, hasMaterialCredit: true },
+          { ...costMetrics, costDate: '2026-11-05', materialCost: -9, totalCost: -8, hasMaterialCredit: false },
+        ],
+        workOrders: [
+          { ...costSnapshot.workOrders[0], workOrderCode: 'MISSING-UNIT-COST', unitCost: null },
+          { ...costSnapshot.workOrders[0], workOrderCode: 'VALID-ZERO-COST', unitCost: 0, totalCost: 0 },
+        ],
+      },
+    });
+    const page = mount(FactoryCostAnalysis, mountOptions());
+    await flushPromises();
+    const analysis = page.getComponent(BlacklakeCostAnalysis);
+    expect(analysis.text()).toContain('含冲销/退料：2026-11-04。');
+    expect(analysis.text()).not.toContain('2026-11-05');
+    const rows = analysis.findAll('tr');
+    expect(rows.find(row => row.text().includes('MISSING-UNIT-COST'))?.text()).toContain('缺失');
+    expect(rows.find(row => row.text().includes('VALID-ZERO-COST'))?.text()).toContain('0.0000');
+    expect(setOption).toHaveBeenLastCalledWith(expect.objectContaining({
+      series: [
+        expect.objectContaining({ data: [-140601.74, -8] }),
+        expect.objectContaining({
+          data: [-152933.11, -9],
+          markPoint: expect.objectContaining({ data: [{ name: '含冲销/退料', coord: ['2026-11-04', -152933.11] }] }),
+        }),
+        expect.objectContaining({ name: '人工成本' }),
+      ],
+    }));
     page.unmount();
   });
 
