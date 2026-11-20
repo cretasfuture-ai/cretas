@@ -40,6 +40,10 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 /**
@@ -366,10 +370,20 @@ public class FactoryDataService {
             manifest.put("requestedFileFormats", requestedFormats.stream().map(Enum::name).toList());
             manifest.put("fileFormats", fmt.stream().map(Enum::name).toList());
             FactoryDataPackageWriter writer = new FactoryDataPackageWriter(out);
-            List<Map<String, Object>> dbManifests = new ArrayList<>();
-            for (Database db : Database.values()) {
-                dbManifests.add(withSnapshot(db, conn -> exportDatabase(conn, db, factoryId, fmt, writer)));
-            }
+            List<Map<String, Object>> dbManifests = withSnapshot(Database.SMARTBI, smartbi -> {
+                var smartbiScope = FactoryDataScopeResolver.resolveVisible(smartbi, Database.SMARTBI, schema, factoryId);
+                rejectForeignHits(smartbi, smartbiScope);
+                var smartbiMetadata = captureExportMetadata(smartbi, smartbiScope, factoryId);
+                // Both preflights finish before the first ZIP entry. SMARTBI only
+                // receives heartbeat queries while CRETAS owns the writer.
+                var cretasManifest = withSnapshotHeartbeat(smartbi, () -> withSnapshot(Database.CRETAS, cretas -> {
+                    var cretasScope = FactoryDataScopeResolver.resolveVisible(cretas, Database.CRETAS, schema, factoryId);
+                    rejectForeignHits(cretas, cretasScope);
+                    var cretasMetadata = captureExportMetadata(cretas, cretasScope, factoryId);
+                    return exportDatabase(cretas, cretasScope, factoryId, fmt, writer, cretasMetadata);
+                }));
+                return List.of(cretasManifest, exportDatabase(smartbi, smartbiScope, factoryId, fmt, writer, smartbiMetadata));
+            });
             manifest.put("databases", dbManifests);
             manifest.put("attachments", exportAttachments(factoryId, mode, writer));
             writer.writeText("README.txt", readme(factoryId, factory.name(), mode, fmt));
@@ -401,16 +415,68 @@ public class FactoryDataService {
         }
     }
 
-    private Map<String, Object> exportDatabase(Connection conn, Database db, String factoryId, Set<Format> formats,
-                                               FactoryDataPackageWriter writer) throws SQLException {
-        FactoryDataScope scope = FactoryDataScopeResolver.resolveVisible(conn, db, schema, factoryId);
+    private void rejectForeignHits(Connection conn, FactoryDataScope scope) throws SQLException {
+        List<ForeignHit> hits = scope.foreignHits();
+        if (hits.isEmpty()) return;
+        Set<String> childTables = hits.stream().map(ForeignHit::table).collect(Collectors.toSet());
+        List<Map<String, Object>> constraints = FactoryDataSchemaMetadata.constraints(conn, schema, childTables);
+        Map<String, Long> counts = hits.stream().collect(Collectors.groupingBy(hit -> {
+            List<String> names = constraints.stream()
+                    .filter(c -> "FOREIGN KEY".equals(c.get("type")) && hit.table().equals(c.get("table"))
+                            && java.util.Objects.equals(hit.viaTable(), c.get("referencedTable")))
+                    .map(c -> String.valueOf(c.get("name"))).distinct().sorted().toList();
+            return hit.table() + " -> " + hit.viaTable() + " (" + hit.kind() + ", 关联外键=" + names + ")";
+        }, java.util.TreeMap::new, Collectors.counting()));
+        // ForeignHit.detail and rowKey may carry another tenant's values.
+        throw new IllegalStateException(scope.database() + " 库有 " + hits.size() + " 条跨租户命中，拒绝导出: " + counts);
+    }
+
+    private FactoryDataSchemaMetadata.Snapshot captureExportMetadata(Connection conn, FactoryDataScope scope,
+                                                                     String factoryId) throws SQLException {
+        return FactoryDataSchemaMetadata.capture(conn, scope.database(), schema,
+                new ArrayList<>(scope.tables().values()), factoryId);
+    }
+
+    private static <T> T withSnapshotHeartbeat(Connection waiting, Supplier<T> work) throws SQLException {
+        long idleMillis;
+        try (PreparedStatement ps = waiting.prepareStatement(
+                "SELECT setting::bigint FROM pg_catalog.pg_settings WHERE name = 'idle_in_transaction_session_timeout'");
+             ResultSet rs = ps.executeQuery()) {
+            if (!rs.next()) throw new SQLException("无法读取快照事务空闲阈值");
+            idleMillis = rs.getLong(1);
+        }
+        if (idleMillis == 0) return work.get();
+        long interval = Math.max(1, idleMillis / 3);
+        var failure = new AtomicReference<SQLException>();
+        T result;
+        // The executor closes and joins the last heartbeat before the caller
+        // uses the JDBC connection again or rolls back the read-only snapshot.
+        try (var executor = Executors.newSingleThreadScheduledExecutor(
+                Thread.ofVirtual().name("factory-export-snapshot-heartbeat").factory())) {
+            executor.scheduleWithFixedDelay(() -> {
+                try (PreparedStatement ps = waiting.prepareStatement("SELECT 1")) {
+                    ps.setQueryTimeout(10);
+                    ps.executeQuery().close();
+                } catch (SQLException e) {
+                    failure.set(e);
+                    throw new IllegalStateException(e);
+                }
+            }, interval, interval, TimeUnit.MILLISECONDS);
+            result = work.get();
+        }
+        if (failure.get() != null) throw new SQLException("等待写出期间快照心跳失败", failure.get());
+        return result;
+    }
+
+    private Map<String, Object> exportDatabase(Connection conn, FactoryDataScope scope, String factoryId, Set<Format> formats,
+                                               FactoryDataPackageWriter writer,
+                                               FactoryDataSchemaMetadata.Snapshot sourceMetadata) throws SQLException {
+        Database db = scope.database();
         String dir = db.name().toLowerCase();
         List<Map<String, Object>> tables = new ArrayList<>();
         List<Map<String, Object>> notExported = new ArrayList<>();
         long rows = 0;
         Map<String, Object> m = new LinkedHashMap<>();
-        FactoryDataSchemaMetadata.Snapshot sourceMetadata =
-                FactoryDataSchemaMetadata.capture(conn, db, schema, new ArrayList<>(scope.tables().values()));
         try (FactoryDataXlsxBook book = formats.contains(Format.XLSX)
                 ? new FactoryDataXlsxBook(writer.redactionKey()) : null) {
             for (TableScope ts : scope.tables().values()) {

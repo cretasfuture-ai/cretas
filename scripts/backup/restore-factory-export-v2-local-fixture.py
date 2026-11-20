@@ -25,6 +25,25 @@ ARGS = None
 
 
 class PureContract(unittest.TestCase):
+    def test_legacy_descriptor_cannot_reuse_a_protected_fingerprint(self):
+        current = {"tables": [{"table": "orders", "rows": 1, "depth": 0}],
+                   "constraints": [{"table": "orders", "name": "orders_pk", "type": "PRIMARY KEY",
+                                    "referencedSchema": None, "definitionFingerprint": "original"}]}
+        legacy = copy.deepcopy(current)
+        legacy["constraints"][0].pop("referencedSchema")
+        forged_legacy = copy.deepcopy(legacy)
+        forged_legacy["constraints"][0]["definitionFingerprint"] = "changed"
+        for legitimate, tampered in ((current, legacy), (legacy, forged_legacy)):
+            with self.subTest(legitimate=legitimate):
+                trusted = restore.schema_descriptor_fingerprint(legitimate)
+                baseline = {"schemaFingerprint": trusted}
+                legitimate["fingerprint"] = trusted
+                restore.validate_schema_fingerprint("CRETAS", legitimate, baseline, baseline)
+                tampered["fingerprint"] = trusted
+                self.assertTrue(restore.legacy_constraint_descriptors(tampered["constraints"]))
+                with self.assertRaisesRegex(restore.RestoreRefused, "重算指纹"):
+                    restore.validate_schema_fingerprint("CRETAS", tampered, baseline, baseline)
+
     def test_decimal_exact_beyond_context_precision(self):
         value = Decimal("123456789012345678901234567890.12345678901234567890")
         self.assertEqual(restore.typed_value(value, {"dataType": "numeric"}),
@@ -102,6 +121,106 @@ class PureContract(unittest.TestCase):
             malformed["databases"][0]["tables"][0]["files"] = [1]
             with self.assertRaises(restore.RestoreRefused):
                 restore.validate_database_manifest(archive, malformed, "CRETAS", schema)
+
+    def _external_fk_archive(self, proof=None, *, template_id=None, constraints=None,
+                             factory_id="F006", source_schema="public"):
+        schema = {
+            "restoreContract": "COMPATIBLE_SCHEMA_REQUIRED",
+            "rawDdlIncluded": False,
+            "fingerprint": "schema-fingerprint",
+            "snapshot": {"crossDatabaseAtomic": False},
+            "tables": [{"table": "factory_configurations", "category": "BUSINESS", "rows": 1}],
+            "columns": [{"table": "factory_configurations", "column": "id"},
+                        {"table": "factory_configurations", "column": "factory_id"},
+                        {"table": "factory_configurations", "column": "template_id"}],
+            "constraints": constraints if constraints is not None else [{
+                "table": "factory_configurations", "name": "fk_factory_template",
+                "type": "FOREIGN KEY", "column": "template_id",
+                "referencedTable": "factory_templates", "referencedColumn": "id",
+                "referencedSchema": "public"}],
+            "externalReferences": [] if proof is None else [proof],
+        }
+        if source_schema is not None:
+            schema["sourceSchema"] = source_schema
+        rows = [{"id": 1, "factory_id": factory_id, "template_id": template_id}]
+        migration = {"fingerprint": "migration-fingerprint"}
+        output = io.BytesIO()
+        with zipfile.ZipFile(output, "w") as package:
+            package.writestr("cretas/metadata/schema.json", json.dumps(schema).encode())
+            package.writestr("cretas/metadata/migrations.json", json.dumps(migration).encode())
+            package.writestr("cretas/json/factory_configurations.json", json.dumps(rows).encode())
+        manifest = {"factoryId": factory_id, "databases": [{
+            "database": "CRETAS", "tables": [{"table": "factory_configurations"}]}]}
+        return output, manifest
+
+    @staticmethod
+    def _checked_metadata(package, manifest):
+        schema, migrations = restore.metadata_for(package, "CRETAS")
+        restore.validate_external_reference_proofs(package, manifest, "CRETAS", schema)
+        return schema, migrations
+
+    def test_external_fk_zero_proof_is_factory_and_rows_bound(self):
+        proof = {"table": "factory_configurations", "constraint": "fk_factory_template",
+                 "column": "template_id", "referencedTable": "factory_templates",
+                 "referencedColumn": "id", "referencedSchema": "public",
+                 "action": "SCHEMA_ONLY_ZERO_REFERENCES",
+                 "factoryId": "F006", "referencingRows": 0}
+        output, manifest = self._external_fk_archive(proof)
+        with zipfile.ZipFile(output) as package:
+            schema, migrations = self._checked_metadata(package, manifest)
+            self.assertEqual(schema["externalReferences"][0]["referencingRows"], 0)
+            self.assertEqual(migrations["fingerprint"], "migration-fingerprint")
+
+    def test_external_fk_zero_proof_rejects_ambiguous_or_tenant_data(self):
+        valid = {"table": "factory_configurations", "constraint": "fk_factory_template",
+                 "column": "template_id", "referencedTable": "factory_templates",
+                 "referencedColumn": "id", "referencedSchema": "public",
+                 "action": "SCHEMA_ONLY_ZERO_REFERENCES",
+                 "factoryId": "F006", "referencingRows": 0}
+        cases = {
+            "wrong_factory": dict(valid, factoryId="F007"),
+            "nonzero": dict(valid, referencingRows=1),
+            "unknown_action": dict(valid, action="IMPORT_PARENT_ROWS"),
+            "extra_field": dict(valid, note="unexpected"),
+            "wrong_schema": dict(valid, referencedSchema="other_schema"),
+            "missing_schema": {key: value for key, value in valid.items() if key != "referencedSchema"},
+        }
+        for name, proof in cases.items():
+            with self.subTest(name=name):
+                output, manifest = self._external_fk_archive(proof)
+                with zipfile.ZipFile(output) as package:
+                    with self.assertRaises(restore.RestoreRefused):
+                        self._checked_metadata(package, manifest)
+        output, manifest = self._external_fk_archive(valid, template_id=42)
+        with zipfile.ZipFile(output) as package:
+            with self.assertRaises(restore.RestoreRefused):
+                self._checked_metadata(package, manifest)
+        output, manifest = self._external_fk_archive(valid, constraints=[])
+        with zipfile.ZipFile(output) as package:
+            with self.assertRaises(restore.RestoreRefused):
+                self._checked_metadata(package, manifest)
+        output, manifest = self._external_fk_archive()
+        with zipfile.ZipFile(output) as package:
+            with self.assertRaises(restore.RestoreRefused):
+                self._checked_metadata(package, manifest)
+        constraint = {"table": "factory_configurations", "name": "fk_factory_template",
+                      "type": "FOREIGN KEY", "column": "template_id",
+                      "referencedTable": "factory_templates", "referencedColumn": "id",
+                      "referencedSchema": "other_schema"}
+        output, manifest = self._external_fk_archive(valid, constraints=[constraint])
+        with zipfile.ZipFile(output) as package:
+            with self.assertRaises(restore.RestoreRefused):
+                self._checked_metadata(package, manifest)
+        constraint_without_schema = dict(constraint)
+        constraint_without_schema.pop("referencedSchema")
+        output, manifest = self._external_fk_archive(valid, constraints=[constraint_without_schema])
+        with zipfile.ZipFile(output) as package:
+            with self.assertRaises(restore.RestoreRefused):
+                self._checked_metadata(package, manifest)
+        output, manifest = self._external_fk_archive(valid, source_schema=None)
+        with zipfile.ZipFile(output) as package:
+            with self.assertRaises(restore.RestoreRefused):
+                self._checked_metadata(package, manifest)
 
 
 @unittest.skipUnless(ARGS, "explicit owned PG arguments required")

@@ -165,6 +165,111 @@ def baseline_info(path: Path) -> dict[str, Any]:
     return info
 
 
+def legacy_constraint_descriptors(constraints: list[dict[str, Any]]) -> bool:
+    schema_fields = {"referencedSchema" in constraint for constraint in constraints}
+    if schema_fields == {True, False}:
+        raise fail("混用了新旧约束描述")
+    return schema_fields == {False}
+
+
+def validate_external_reference_proofs(archive: zipfile.ZipFile, manifest: dict[str, Any],
+                                      database: str, schema: dict[str, Any]) -> None:
+    """Accept only an exact proof that an external FK has no tenant references.
+
+    The parent table is intentionally not imported by the factory package. A
+    Java exporter may therefore record a proof for a nullable external FK, but
+    the proof must be tied to this factory, this exported child table and the
+    actual FK descriptor. Any non-zero or ambiguous reference remains
+    fail-closed.
+    """
+    references = schema.get("externalReferences", [])
+    if not isinstance(references, list):
+        raise fail(f"{database} externalReferences 格式不受支持")
+    factory_id = manifest.get("factoryId")
+    db = next((item for item in manifest.get("databases", [])
+               if isinstance(item, dict) and item.get("database") == database), None)
+    if not isinstance(factory_id, str) or not factory_id.strip() or not isinstance(db, dict):
+        raise fail(f"{database} 外部 FK 证明缺少工厂范围")
+    exported_tables = {item.get("table") for item in db.get("tables", [])
+                       if isinstance(item, dict)}
+    columns_by_table: dict[str, set[str]] = {}
+    for column in schema.get("columns", []):
+        if isinstance(column, dict) and isinstance(column.get("table"), str) \
+                and isinstance(column.get("column"), str):
+            columns_by_table.setdefault(column["table"], set()).add(column["column"])
+    constraints = schema.get("constraints")
+    if not isinstance(constraints, list) or any(not isinstance(c, dict) for c in constraints):
+        raise fail(f"{database} 外部 FK 证明缺少约束结构")
+    source_schema = schema.get("sourceSchema")
+    foreign_constraints = [constraint for constraint in constraints if constraint.get("type") == "FOREIGN KEY"]
+    if foreign_constraints and (not isinstance(source_schema, str) or not source_schema):
+        raise fail(f"{database} FK 证明缺少明确 sourceSchema")
+    if legacy_constraint_descriptors(constraints):
+        # Old exports had no per-FK schema field and never supported external
+        # references. Compare their exact dictionaries against the verified
+        # baseline and independently check the target FK schemas after DDL.
+        if references or any(c.get("referencedTable") not in exported_tables for c in foreign_constraints):
+            raise fail(f"{database} 旧 v2 不支持包外 FK 依赖或零引用证明")
+        return
+    if any(constraint.get("referencedSchema") != source_schema
+           for constraint in foreign_constraints):
+        raise fail(f"{database} 存在跨 schema 或缺失引用 schema 的 FK")
+    required = {"table", "constraint", "column", "referencedTable", "referencedColumn",
+                "referencedSchema", "action", "factoryId", "referencingRows"}
+    proof_keys = set()
+    for proof in references:
+        if not isinstance(proof, dict) or set(proof) != required:
+            raise fail(f"{database} 外部 FK 证明字段不完整")
+        if proof["action"] != "SCHEMA_ONLY_ZERO_REFERENCES":
+            raise fail(f"{database} 外部 FK 证明动作不受支持")
+        if proof["factoryId"] != factory_id:
+            raise fail(f"{database} 外部 FK 证明工厂范围不一致")
+        if type(proof["referencingRows"]) is not int or proof["referencingRows"] != 0:
+            raise fail(f"{database} 外部 FK 引用数不是明确的零")
+        values = {key: proof[key] for key in
+                  ("table", "constraint", "column", "referencedTable", "referencedColumn",
+                   "referencedSchema")}
+        if any(not isinstance(value, str) or not value for value in values.values()):
+            raise fail(f"{database} 外部 FK 证明标识不完整")
+        if values["referencedSchema"] != source_schema:
+            raise fail(f"{database} 外部 FK 证明引用 schema 不一致")
+        table = values["table"]
+        column = values["column"]
+        if table not in exported_tables or column not in columns_by_table.get(table, set()):
+            raise fail(f"{database} 外部 FK 证明指向未导出的子表或列")
+        if values["referencedTable"] in exported_tables:
+            raise fail(f"{database} 内部 FK 不能冒充包外引用证明")
+        rows = table_json(archive, database, table)
+        if any(column not in row or row[column] is not None for row in rows):
+            raise fail(f"{database} 外部 FK 证明与导出行的非 NULL 值不一致")
+        matches = [constraint for constraint in constraints
+                   if isinstance(constraint, dict)
+                   and constraint.get("type") == "FOREIGN KEY"
+                   and constraint.get("table") == values["table"]
+                   and constraint.get("name") == values["constraint"]
+                   and constraint.get("column") == values["column"]
+                   and constraint.get("referencedTable") == values["referencedTable"]
+                   and constraint.get("referencedColumn") == values["referencedColumn"]
+                   and constraint.get("referencedSchema") == values["referencedSchema"]]
+        if len(matches) != 1:
+            raise fail(f"{database} 外部 FK 证明未匹配真实约束")
+        proof_keys.add((values["table"], values["constraint"], values["column"],
+                        values["referencedTable"], values["referencedColumn"],
+                        values["referencedSchema"]))
+    if len(proof_keys) != len(references):
+        raise fail(f"{database} 外部 FK 证明重复")
+    external_constraints = {
+        (constraint.get("table"), constraint.get("name"), constraint.get("column"),
+         constraint.get("referencedTable"), constraint.get("referencedColumn"),
+         constraint.get("referencedSchema"))
+        for constraint in constraints
+        if isinstance(constraint, dict) and constraint.get("type") == "FOREIGN KEY"
+        and constraint.get("referencedTable") not in exported_tables
+    }
+    if external_constraints != proof_keys:
+        raise fail(f"{database} 存在未证明的包外 FK 依赖")
+
+
 def metadata_for(archive: zipfile.ZipFile, database: str) -> tuple[dict[str, Any], dict[str, Any]]:
     prefix = database.lower()
     schema = parse_json_bytes(archive.read(f"{prefix}/metadata/schema.json"), f"{prefix}/metadata/schema.json")
@@ -177,8 +282,6 @@ def metadata_for(archive: zipfile.ZipFile, database: str) -> tuple[dict[str, Any
         raise fail(f"{database} 缺少结构/迁移指纹")
     if schema.get("snapshot", {}).get("crossDatabaseAtomic") is not False:
         raise fail(f"{database} 错误宣称跨数据库原子快照")
-    if schema.get("externalReferences"):
-        raise fail(f"{database} 存在包外 FK 依赖，必须提供兼容依赖基线")
     return schema, migrations
 
 
@@ -551,6 +654,74 @@ def sha256_text(value: Any) -> str | None:
     return hashlib.sha256(str(value).encode("utf-8")).hexdigest()
 
 
+def read_target_constraints(cur, source_schema: str, names: list[str], legacy: bool) -> list[dict[str, Any]]:
+    placeholders = ",".join(["%s"] * len(names))
+    if legacy:
+        cur.execute("""
+            SELECT EXISTS (
+                SELECT 1 FROM pg_catalog.pg_constraint pc
+                JOIN pg_catalog.pg_class child ON child.oid = pc.conrelid
+                JOIN pg_catalog.pg_namespace child_schema ON child_schema.oid = child.relnamespace
+                JOIN pg_catalog.pg_class parent ON parent.oid = pc.confrelid
+                JOIN pg_catalog.pg_namespace parent_schema ON parent_schema.oid = parent.relnamespace
+                WHERE pc.contype = 'f' AND child_schema.nspname = %s AND parent_schema.oid <> child_schema.oid
+                  AND child.relname IN (""" + placeholders + "))", [source_schema, *names])
+        if cur.fetchone()[0]:
+            raise fail("目标旧 v2 baseline 存在跨 schema FK")
+        # Preserve the original v2 column and reference dictionary exactly.
+        cur.execute("""
+            SELECT tc.table_name,tc.constraint_name,tc.constraint_type,kcu.column_name,kcu.ordinal_position,
+                   ccu.table_name,ccu.column_name,rc.update_rule,rc.delete_rule,
+                   md5(pg_get_constraintdef(pc.oid))
+            FROM information_schema.table_constraints tc
+            LEFT JOIN information_schema.key_column_usage kcu ON kcu.constraint_schema=tc.constraint_schema
+              AND kcu.constraint_name=tc.constraint_name AND kcu.table_name=tc.table_name
+            LEFT JOIN information_schema.constraint_column_usage ccu ON ccu.constraint_schema=tc.constraint_schema
+              AND ccu.constraint_name=tc.constraint_name
+            LEFT JOIN information_schema.referential_constraints rc ON rc.constraint_schema=tc.constraint_schema
+              AND rc.constraint_name=tc.constraint_name
+            JOIN pg_catalog.pg_namespace n ON n.nspname=tc.table_schema
+            JOIN pg_catalog.pg_class child ON child.relnamespace=n.oid AND child.relname=tc.table_name
+            LEFT JOIN pg_catalog.pg_constraint pc ON pc.conrelid=child.oid AND pc.conname=tc.constraint_name
+            WHERE tc.table_schema=%s AND tc.table_name IN (""" + placeholders + ")",
+                    [source_schema, *names])
+    else:
+        cur.execute("""
+            SELECT child.relname,pc.conname,
+                   CASE pc.contype WHEN 'f' THEN 'FOREIGN KEY' WHEN 'p' THEN 'PRIMARY KEY'
+                     WHEN 'u' THEN 'UNIQUE' WHEN 'c' THEN 'CHECK' END,
+                   child_column.attname,key_column.ordinality::integer,parent.relname,parent_column.attname,
+                   CASE pc.confupdtype WHEN 'a' THEN 'NO ACTION' WHEN 'r' THEN 'RESTRICT' WHEN 'c' THEN 'CASCADE'
+                     WHEN 'n' THEN 'SET NULL' WHEN 'd' THEN 'SET DEFAULT' END,
+                   CASE pc.confdeltype WHEN 'a' THEN 'NO ACTION' WHEN 'r' THEN 'RESTRICT' WHEN 'c' THEN 'CASCADE'
+                     WHEN 'n' THEN 'SET NULL' WHEN 'd' THEN 'SET DEFAULT' END,
+                   md5(pg_get_constraintdef(pc.oid)),parent_namespace.nspname
+            FROM pg_catalog.pg_constraint pc
+            JOIN pg_catalog.pg_class child ON child.oid=pc.conrelid
+            JOIN pg_catalog.pg_namespace child_namespace ON child_namespace.oid=child.relnamespace
+            LEFT JOIN LATERAL unnest(pc.conkey) WITH ORDINALITY key_column(attnum, ordinality) ON pc.contype <> 'c'
+            LEFT JOIN pg_catalog.pg_attribute child_column ON child_column.attrelid=child.oid
+              AND child_column.attnum=key_column.attnum AND NOT child_column.attisdropped
+            LEFT JOIN pg_catalog.pg_class parent ON pc.contype='f' AND parent.oid=pc.confrelid
+            LEFT JOIN pg_catalog.pg_namespace parent_namespace ON parent_namespace.oid=parent.relnamespace
+            LEFT JOIN pg_catalog.pg_attribute parent_column ON parent_column.attrelid=parent.oid
+              AND parent_column.attnum=pc.confkey[key_column.ordinality::integer] AND NOT parent_column.attisdropped
+            WHERE pc.contype IN ('f', 'p', 'u', 'c')
+              AND child_namespace.nspname=%s AND child.relname IN (""" + placeholders + ")",
+                    [source_schema, *names])
+    constraints = []
+    for r in cur.fetchall():
+        name = "__NOT_NULL__" if legacy and r[2] == "CHECK" and re.fullmatch(r"\d+_\d+_\d+_not_null", r[1]) else r[1]
+        definition = {"table": r[0], "name": name, "type": r[2], "column": r[3], "ordinal": r[4],
+                      "referencedTable": r[5], "referencedColumn": r[6], "updateRule": r[7], "deleteRule": r[8],
+                      "definitionFingerprint": r[9]}
+        if not legacy:
+            definition["referencedSchema"] = r[10]
+        constraints.append(definition)
+    return sorted(constraints, key=lambda c: tuple(str(c[key]) for key in
+                  ("table", "name", "column", "ordinal", "referencedColumn")))
+
+
 def read_target_structure(conn, schema: dict[str, Any]) -> dict[str, Any]:
     source_schema = schema.get("sourceSchema", "public")
     names = sorted({str(item.get("table")) for item in schema.get("tables", [])}
@@ -586,26 +757,8 @@ def read_target_structure(conn, schema: dict[str, Any]) -> dict[str, Any]:
                         [source_schema, *names])
             if cur.fetchone()[0] != 0:
                 raise fail("目标 vector 类型不属于真实 pgvector extension")
-        cur.execute("SELECT count(*) FROM information_schema.table_constraints WHERE table_schema=%s AND table_name IN (" + placeholders + ")",
-                    [source_schema, *names])
-        constraint_count = cur.fetchone()[0]
-        cur.execute("SELECT tc.table_name,tc.constraint_name,tc.constraint_type,kcu.column_name,kcu.ordinal_position,"
-                    "ccu.table_name,ccu.column_name,rc.update_rule,rc.delete_rule,"
-                    "(SELECT md5(pg_get_constraintdef(pc.oid)) FROM pg_constraint pc JOIN pg_class pr ON pr.oid=pc.conrelid "
-                    "JOIN pg_namespace pn ON pn.oid=pr.relnamespace WHERE pn.nspname=tc.table_schema AND pr.relname=tc.table_name "
-                    "AND pc.conname=tc.constraint_name LIMIT 1) FROM information_schema.table_constraints tc "
-                    "LEFT JOIN information_schema.key_column_usage kcu ON kcu.constraint_schema=tc.constraint_schema "
-                    "AND kcu.constraint_name=tc.constraint_name AND kcu.table_name=tc.table_name "
-                    "LEFT JOIN information_schema.constraint_column_usage ccu ON ccu.constraint_schema=tc.constraint_schema "
-                    "AND ccu.constraint_name=tc.constraint_name LEFT JOIN information_schema.referential_constraints rc "
-                    "ON rc.constraint_schema=tc.constraint_schema AND rc.constraint_name=tc.constraint_name "
-                    "WHERE tc.table_schema=%s AND tc.table_name IN (" + placeholders + ") "
-                    "ORDER BY tc.table_name,tc.constraint_name,kcu.ordinal_position", [source_schema, *names])
-        constraints = [{"table": r[0], "name": "__NOT_NULL__" if r[2] == "CHECK" and r[1] and r[1].endswith("_not_null") and r[1].split("_")[0].isdigit() else r[1], "type": r[2], "column": r[3], "ordinal": r[4],
-                        "referencedTable": r[5], "referencedColumn": r[6], "updateRule": r[7], "deleteRule": r[8],
-                        "definitionFingerprint": r[9]} for r in cur.fetchall()]
-        constraints.sort(key=lambda item: (str(item.get("table")), str(item.get("name")), str(item.get("column")),
-                                           str(item.get("ordinal")), str(item.get("referencedColumn"))))
+        constraints = read_target_constraints(cur, source_schema, names,
+                                             legacy_constraint_descriptors(schema.get("constraints", [])))
         cur.execute("SELECT t.relname,i.relname,x.indisunique,x.indisprimary,x.indisvalid,md5(pg_get_indexdef(i.oid)),"
                     "array_remove(array_agg(a.attname ORDER BY k.ordinality),NULL) FROM pg_class t JOIN pg_namespace n ON n.oid=t.relnamespace "
                     "JOIN pg_index x ON x.indrelid=t.oid JOIN pg_class i ON i.oid=x.indexrelid LEFT JOIN LATERAL "
@@ -635,6 +788,25 @@ def read_target_structure(conn, schema: dict[str, Any]) -> dict[str, Any]:
             "triggers": triggers, "sequences": sequences}
 
 
+def schema_descriptor_fingerprint(schema: dict[str, Any]) -> str:
+    stable = {k: v for k, v in schema.items() if k not in {"fingerprint", "snapshot", "tables"}}
+    stable["tables"] = [{k: v for k, v in table.items() if k not in {"rows", "depth"}}
+                        for table in schema.get("tables", [])]
+    try:
+        encoded = json.dumps(stable, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    except (TypeError, UnicodeEncodeError) as exc:
+        raise fail("源结构描述无法计算指纹") from exc
+    return sha256_bytes(encoded)
+
+
+def validate_schema_fingerprint(database: str, schema: dict[str, Any],
+                                sidecar: dict[str, Any], baseline: dict[str, Any]) -> None:
+    fingerprint = schema_descriptor_fingerprint(schema)
+    if any(value != fingerprint for value in (schema["fingerprint"], sidecar.get("schemaFingerprint"),
+                                              baseline.get("schemaFingerprint"))):
+        raise fail(f"{database} 源结构描述重算指纹与声明或受保护 baseline 不匹配")
+
+
 def structural_fingerprint(conn, schema: dict[str, Any]) -> str:
     actual_structure = read_target_structure(conn, schema)
     result = copy.deepcopy(schema)
@@ -650,13 +822,7 @@ def structural_fingerprint(conn, schema: dict[str, Any]) -> str:
             raise fail(f"目标 {label} 完整定义与源描述不一致")
         result[label] = actual
     result["columns"] = columns
-    stable = {k: v for k, v in result.items() if k not in {"fingerprint", "snapshot", "tables"}}
-    stable_tables = []
-    for table in result.get("tables", []):
-        stable_tables.append({k: v for k, v in table.items() if k not in {"rows", "depth"}})
-    stable["tables"] = stable_tables
-    encoded = json.dumps(stable, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
+    return schema_descriptor_fingerprint(result)
 
 
 def import_rows(conn, archive: zipfile.ZipFile, database: str, manifest: dict[str, Any], schema: dict[str, Any]) -> None:
@@ -943,19 +1109,21 @@ def main() -> int:
     manifest, archive = verify_package(args.package)
     baseline_manifest = read_json(args.baseline_manifest)
     baselines = {"CRETAS": args.cretas_schema_baseline, "SMARTBI": args.smartbi_schema_baseline}
+    verified_metadata = {}
     for database, baseline in baselines.items():
         schema, migrations = metadata_for(archive, database)
+        validate_external_reference_proofs(archive, manifest, database, schema)
         validate_database_manifest(archive, manifest, database, schema)
         info = baseline_info(baseline)
         expected = baseline_manifest.get(database, {})
-        if info.get("schemaFingerprint") != schema["fingerprint"] or expected.get("schemaFingerprint") != schema["fingerprint"]:
-            raise fail(f"{database} schema fingerprint 不匹配")
+        validate_schema_fingerprint(database, schema, info, expected)
         if info.get("migrationFingerprint") != migrations["fingerprint"] or expected.get("migrationFingerprint") != migrations["fingerprint"]:
             raise fail(f"{database} migration fingerprint 不匹配")
         listing = run_tool(args.pg_bin, "pg_restore", ["--list", str(baseline)])
         provenance = re.search(r"^;\s*Dumped from database version:\s*(\d+)", listing, re.MULTILINE)
         if provenance is None or int(provenance.group(1)) != int(info["postgresMajor"]):
             raise fail(f"{database} baseline 原始数据库 major 与 archive provenance 不符")
+        verified_metadata[database] = (schema, migrations)
     if not args.apply:
         print(json.dumps({"status": "VALIDATED_ONLY", "format": manifest["format"]}, ensure_ascii=False))
         return 0
@@ -984,7 +1152,7 @@ def main() -> int:
             states[database]["stage"] = "PREFLIGHT_VERIFIED"
             conn.commit()
         for database, baseline in baselines.items():
-            schema, migrations = metadata_for(archive, database)
+            schema, migrations = verified_metadata[database]
             info = baseline_info(baseline)
             conn = connections[database]
             set_target_schema(conn, schema.get("sourceSchema", "public"))
