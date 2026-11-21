@@ -28,7 +28,7 @@ content. The whole call is wrapped so a failure only logs a warning and leaves
 """
 from __future__ import annotations
 
-import hashlib
+from common.smartbi_analysis_cache import AnalysisScope, analysis_result, result_key
 import json
 import logging
 from typing import Any, Dict, List, Optional
@@ -160,6 +160,10 @@ async def generate_llm_insights(
     results: List[TemplateResult],
     domain: str,
     factory_id: Optional[str] = None,
+    *,
+    cache_scope: AnalysisScope | None = None,
+    data_version=None,
+    cache_fields: dict | None = None,
 ) -> Optional[str]:
     """Generate rich LLM insights for all applicable templates (single call).
 
@@ -167,8 +171,8 @@ async def generate_llm_insights(
     the LLM produced an insight for. Returns the executive summary string (or
     ``None`` if generation failed / produced nothing).
 
-    ``factory_id`` (optional) only tags the distillation training sample
-    captured on success — it does not affect insight generation.
+    Background materialization uses its own permission scope. Request handlers
+    pass the authenticated scope after checking upload ownership.
 
     NEVER raises — all failures are swallowed and leave ``llm_insight=None`` so
     the caller's persistence falls back to the deterministic ``insight_text``.
@@ -194,30 +198,32 @@ async def generate_llm_insights(
     ]
     prompt = _build_prompt(prompt_payload, domain)
     system_role = system_role_for(domain)
+    key = result_key(cache_scope, "materialized-summary", (data_version, prompt_payload, domain, system_role),
+                     prompt_version="materialized-summary-v1", model_version="insights-routing-v1")
+    async with analysis_result(key) as cached:
+        if cached.entry.hit:
+            value = cached.entry.value
+            for result in applicable:
+                if result.code in value["insights"]:
+                    result.llm_insight = value["insights"][result.code]
+            summary = value["summary"]
+        else:
+            summary = await _generate_materialized_insights(applicable, domain, factory_id, prompt, system_role)
+            insights = {item.code: item.llm_insight for item in applicable if item.llm_insight}
+            if summary or insights:
+                await cached.store({"summary": summary, "insights": insights})
+        if cache_fields is not None:
+            cache_fields.update(cached.response_fields)
+        return summary
 
-    # 内容未变跳过 LLM (榨干持久缓存): prompt 与上次 byte-identical (模板 KPI 没变) → 复用
-    # 上次 LLM 输出, 跳过调用 (0 token)。可证明正确: 同一 prompt → 同一解析结果。复用已持久的
-    # smart_bi_distillation_samples (它按 input_hash 存了 prompt→teacher_output)。
-    input_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
-    raw = await _get_cached_teacher_output(input_hash)
-    from_cache = bool(raw)
-    if from_cache:
-        logger.info("[llm-mat] content-hash cache HIT — 复用上次洞察, 跳过 LLM (0 token)")
-    else:
-        try:
-            from smartbi.services.insights import llm_client as llm
-            raw = await llm.call_llm(
-                prompt,
-                system_role=system_role,
-                enable_thinking=False,
-                max_tokens=_MAX_TOKENS,
-            )
-        except Exception as e:
-            logger.warning(
-                f"[llm-mat] LLM call raised ({type(e).__name__}: {e}) — "
-                f"keeping rule insights for {len(applicable)} templates"
-            )
-            return None
+
+async def _generate_materialized_insights(applicable, domain, factory_id, prompt, system_role):
+    try:
+        from smartbi.services.insights import llm_client as llm
+        raw = await llm.call_llm(prompt, system_role=system_role, enable_thinking=False, max_tokens=_MAX_TOKENS)
+    except Exception as e:
+        logger.warning("[llm-mat] LLM call failed (%s), keeping rule insights", type(e).__name__)
+        return None
 
     if not raw or not raw.strip():
         logger.warning(
@@ -277,7 +283,7 @@ async def generate_llm_insights(
     # router resolves the actual model internally).  We record "router:INSIGHTS"
     # as honest provenance — the slot + routing fact — rather than hardcoding a
     # specific model name that may not match the actual resolved provider.
-    if applied > 0 and not from_cache:
+    if applied > 0:
         try:
             await _persist_distillation_sample(
                 prompt=prompt,
@@ -352,28 +358,3 @@ async def _persist_distillation_sample(
         )
     except Exception as e:  # belt-and-suspenders; helper already swallows
         logger.warning(f"[distill] sample capture failed (non-blocking): {e}")
-
-
-async def _get_cached_teacher_output(input_hash: str) -> Optional[str]:
-    """复用对同一 prompt (byte-identical) 的上次 LLM 输出 —— 物化时模板 KPI 没变则 prompt
-    完全一致, 直接复用跳过 LLM (0 token)。可证明正确: 同输入 → 解析结果完全相同。
-
-    数据源: smart_bi_distillation_samples (已按 input_hash 持久存 prompt→teacher_output,
-    且只在 applied>0 即上次产出可用时才写) —— 天然是一个"内容哈希→可用洞察"持久缓存。
-    只读, 永不抛错; 表空/缺失 → 返回 None → 正常调 LLM (退化为原行为)。
-    """
-    try:
-        from smartbi.config import get_pg_pool
-        pool = await get_pg_pool()
-        if pool is None:
-            return None
-        async with pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT teacher_output FROM smart_bi_distillation_samples WHERE input_hash = $1",
-                input_hash,
-            )
-        if row and row["teacher_output"] and str(row["teacher_output"]).strip():
-            return row["teacher_output"]
-    except Exception as e:
-        logger.debug(f"[llm-mat] content-hash cache lookup skipped (non-blocking): {e}")
-    return None

@@ -186,12 +186,18 @@ async def call_llm(
 # Streaming LLM call (JSON output)
 # ---------------------------------------------------------------------------
 
+class StreamCompletion:
+    def __init__(self) -> None:
+        self.completed = False
+
+
 async def call_llm_stream(
     prompt: str,
     system_role: Optional[str] = None,
     *,
     max_tokens: int = 2500,
     model_override: Optional[str] = None,
+    completion: StreamCompletion | None = None,
 ) -> AsyncGenerator[str, None]:
     """Call LLM via multi-provider router (INSIGHTS slot) with SSE streaming.
 
@@ -234,12 +240,15 @@ async def call_llm_stream(
     _set_llm_caller("insight_generator")
     try:
         async for event in call_chain_stream(
-            SLOT.INSIGHTS, payload, timeout=LLM_TIMEOUT_STREAM
+            SLOT.INSIGHTS, payload, timeout=LLM_TIMEOUT_STREAM,
+            **({"include_completion": True} if completion is not None else {}),
         ):
             if event.get("type") == "delta":
                 text = event.get("text") or ""
                 if text:
                     yield text
+            elif event.get("type") == "complete" and completion is not None:
+                completion.completed = True
             # Ignore "usage" events here — caller of this function
             # only expects text chunks.
     except EgressRedactionError:
@@ -266,6 +275,7 @@ async def call_llm_stream_text(
     max_tokens: int = 3000,
     temperature: float = 0.4,
     model_override: Optional[str] = None,
+    completion: StreamCompletion | None = None,
 ) -> AsyncGenerator[str, None]:
     """Call LLM via multi-provider router (CHAT slot) with SSE streaming.
 
@@ -318,12 +328,15 @@ async def call_llm_stream_text(
     _set_llm_caller("ai_query_chat")
     try:
         async for event in call_chain_stream(
-            SLOT.CHAT, payload, timeout=LLM_TIMEOUT_STREAM
+            SLOT.CHAT, payload, timeout=LLM_TIMEOUT_STREAM,
+            **({"include_completion": True} if completion is not None else {}),
         ):
             if event.get("type") == "delta":
                 text = event.get("text") or ""
                 if text:
                     yield text
+            elif event.get("type") == "complete" and completion is not None:
+                completion.completed = True
     except EgressRedactionError:
         # 外发被拦 (没有工厂 / 脱敏失败) 不是供应商故障: ⛔ 不重试、不返回空串, 原样抛给调用方报错
         # (Steve 2026-10-29 复审 H3)

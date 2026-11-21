@@ -9,6 +9,8 @@ import pytest
 
 from common.llm_router import LLMChainExhausted
 from smartbi.services.external_production import UNAVAILABLE_MESSAGE
+from common import smartbi_analysis_cache as analysis_result_cache
+from tests.analysis_cache_fixtures import analysis_cache  # noqa: F401
 from . import blacklake_production, conversation, engine
 
 
@@ -17,7 +19,7 @@ CATALOG = [{"id": "quantity", "familyId": "production.output", "unit": "kg"}]
 
 
 @pytest.fixture
-def provider(monkeypatch):
+def provider(monkeypatch, analysis_cache):
     conversation.clear_contexts()
     monkeypatch.delenv(LIMIT_ENV, raising=False)
     calls = []
@@ -87,35 +89,31 @@ async def test_authorized_directory_fingerprint_covers_excluded_items(provider, 
     other = {"id": "inventory", "familyId": "inventory.balance", "unit": "盒"}
     for unit in ("盒", "件"):
         catalog = CATALOG + [{**other, "unit": unit}]
-        selected, mode = await conversation.plan("看产量", catalog, factory_id="F001")
+        selected, mode = await conversation.plan("看产量", catalog, _history("F001"), factory_id="F001")
         assert selected == ["quantity"] and mode["cache"] == "miss"
     assert len(provider) == 2 and provider[0][0] == provider[1][0]
 
 
 @pytest.mark.asyncio
-async def test_cache_expires_at_600_seconds_and_evicts_least_recently_used(provider, monkeypatch):
-    monkeypatch.setattr(conversation, "MAX_PLANNER_CACHE_ENTRIES", 2)
-    now = 1000
-    monkeypatch.setattr(conversation, "_cache_monotonic", lambda: now)
+async def test_cache_capacity_evicts_oldest_entry(provider, monkeypatch):
+    monkeypatch.setattr(analysis_result_cache, "_MAX_ENTRIES", 2)
 
     async def ask(question, expect):
-        _, mode = await conversation.plan(question, CATALOG, factory_id="F001")
+        _, mode = await conversation.plan(question, CATALOG, _history("F001"), factory_id="F001")
         assert mode["cache"] == expect
 
     await ask("A", "miss")
     await ask("B", "miss")
-    now += 599
     await ask("A", "hit")
     await ask("C", "miss")
-    await ask("A", "hit")
-    now += 1
+    await ask("B", "hit")
     await ask("A", "miss")
     await ask("B", "miss")
     assert len(provider) == 5
 
 
 @pytest.mark.asyncio
-async def test_rule_plan_caches_mode_and_returns_independent_values(provider, monkeypatch):
+async def test_rule_plan_does_not_mask_recovered_model(provider, monkeypatch):
     from common import llm_router
 
     success = llm_router.call_chain
@@ -128,14 +126,14 @@ async def test_rule_plan_caches_mode_and_returns_independent_values(provider, mo
     monkeypatch.setattr(llm_router, "call_chain", fail)
     selected, mode = await conversation.plan("看产量", CATALOG, factory_id="F001")
     assert selected == ["quantity"] and mode == {
-        "mode": "rule", "reason": "按问题关键词从授权图表目录选择", "cache": "miss",
+        "mode": "rule", "reason": "按问题关键词从授权图表目录选择", "cache": "miss", "cacheHit": False,
     }
     selected.clear()
     mode["mode"] = "changed by caller"
     monkeypatch.setattr(llm_router, "call_chain", success)
     selected, mode = await conversation.plan("看产量", CATALOG, factory_id="F001")
-    assert selected == ["quantity"] and mode["mode"] == "rule" and mode["cache"] == "hit"
-    assert len(attempts) == 1 and not provider
+    assert selected == ["quantity"] and mode["mode"] == "ai" and mode["cache"] == "miss"
+    assert len(attempts) == 1 and len(provider) == 1
 
 
 @pytest.mark.asyncio

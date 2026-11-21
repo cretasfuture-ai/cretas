@@ -447,8 +447,8 @@ def test_full_fact_queue_resumes_without_regenerating_overview_and_only_then_fin
     created=client.post('/api/smartbi/blacklake/period-reports',headers=headers,
         json={'start_date':'2026-11-03','end_date':'2026-11-03'}).json()['data']
     original=period_runtime.compile_report;overviews=[];batches=[]
-    async def overview(*args):
-        overviews.append(1);result=await original(*args)
+    async def overview(*args,**kwargs):
+        overviews.append(1);result=await original(*args,**kwargs)
         result['ai'].update(status='partial',validation={'allSections':True})
         return result
     def attached(job,*args):
@@ -529,8 +529,8 @@ def test_rate_limited_local_ai_keeps_saved_rules_pending_and_resumes_automatical
     job=client.post('/api/smartbi/blacklake/period-reports',headers=headers,
                     json={'start_date':'2026-11-03','end_date':'2026-11-03'}).json()['data']
     original=period_runtime.compile_report
-    async def limited(*args):
-        result=await original(*args)
+    async def limited(*args,**kwargs):
+        result=await original(*args,**kwargs)
         result['ai']={'status':'rate_limited','message':'本地AI配额暂不可用，规则已保存'}
         return result
     monkeypatch.setattr(period_runtime,'compile_report',limited)

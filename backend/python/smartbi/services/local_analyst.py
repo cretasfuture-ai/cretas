@@ -166,7 +166,7 @@ def _usage(calls):
             'requestIds':[c['requestId'] for c in calls if c.get('requestId')]}
 
 
-async def enrich(report,requester=None,analysis_context=None):
+async def enrich(report,requester=None,analysis_context=None,*,allow_local_cache=True):
     from . import alert_local_ai as provider
     from .alert_ai_coordination import run,ReviewBusy
     try:config=provider.provider_config()
@@ -177,7 +177,7 @@ async def enrich(report,requester=None,analysis_context=None):
     pack=build(report,analysis_context);facts=provider.facts_for(report)
     key=hashlib.sha256(json.dumps({'version':VERSION,'provider':config,'report':provider.fingerprint(report),
                                  'evidence':pack},sort_keys=True,ensure_ascii=False,default=str).encode()).hexdigest()
-    cached=_cache.get(key)
+    cached=_cache.get(key) if allow_local_cache else None
     if cached and time.monotonic()-cached[0]<600:
         report['ai']=deepcopy(cached[1]);report['ai'].update(cacheHit=True,currentRequestUsage={'inputTokens':0,'outputTokens':0,'totalTokens':0,'source':'cache','estimated':False})
         return report
@@ -217,8 +217,10 @@ async def enrich(report,requester=None,analysis_context=None):
             'flywheel':{'status':learning_status,'candidateIds':learning_ids,'automaticallyApproved':False}}
         if pack['omittedFacts'] or len(provider.representative_groups(report))>len(facts):
             ai.update(status='partial',message='本地模型完成所提供代表事实的解读，仍有未覆盖证据，不能称为全部核对')
-        report['ai']=ai;_cache[key]=(time.monotonic(),deepcopy(ai))
-        while len(_cache)>64:_cache.popitem(last=False)
+        report['ai']=ai
+        if allow_local_cache:
+            _cache[key]=(time.monotonic(),deepcopy(ai))
+            while len(_cache)>64:_cache.popitem(last=False)
     except Exception as error:
         report['ai']={'status':'busy' if isinstance(error,ReviewBusy) else 'unavailable',
                       'message':'本地经营分析仍在排队' if isinstance(error,ReviewBusy) else '本地经营解读未通过证据校验或服务暂不可用；规则统计保留，未展示未经校验的结论',

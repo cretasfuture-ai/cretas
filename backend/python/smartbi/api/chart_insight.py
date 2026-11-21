@@ -33,6 +33,8 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
+from common.smartbi_analysis_cache import AnalysisCacheUnavailable, fingerprint, invalidate, request_scope
+
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Chart Auto-Insight"])
 
@@ -254,6 +256,7 @@ async def chart_insight(request: Request, body: ChartInsightRequest) -> Dict[str
             ctx,
             caller_role=caller_role,
             jwt_factory_id=jwt_factory_id,  # Pass explicitly for internal cross-tenant guard
+            serve_corpus=False,  # Redis is the sole serve cache for HTTP feedback.
         )
 
     if request.headers.get("accept") == "text/event-stream":
@@ -323,6 +326,7 @@ def _insight_response(result) -> Dict[str, Any]:
             "tier": result.tier,
             "input_hash": result.input_hash,  # G4: corpus row key for feedback endpoint
             "cacheHit": result.cache_hit,
+            **({"cacheToken": result.cache_token} if result.cache_token else {}),
         },
     }
 
@@ -342,13 +346,40 @@ class InsightFeedbackRequest(BaseModel):
     input_hash: str = Field(..., min_length=1, description="sha256 hex of corpus row input_text")
     vote: str = Field(..., description='"up" or "down"')
     factory_id: str = Field(..., description="Tenant ID — must match JWT factoryId")
+    cache_token: Optional[str] = Field(default=None, max_length=97)
+
+
+class AnalysisFeedbackRequest(BaseModel):
+    cache_token: str = Field(pattern=r"^[a-f0-9]{64}\.[a-f0-9]{32}$")
+    upload_id: Optional[int] = Field(default=None, gt=0)
+
+
+@router.post("/analysis-feedback")
+async def analysis_feedback(request: Request, body: AnalysisFeedbackRequest):
+    """Invalidate the specific completed analysis in the caller's scope."""
+    scope = request_scope(request)
+    if scope is None:
+        return JSONResponse(status_code=401, content={"success": False, "code": "UNAUTHORIZED"})
+    if body.upload_id is not None:
+        from .analysis_cache import require_feedback_upload, revoke_feedback_projection
+
+        require_feedback_upload(body.upload_id, scope.factory)
+    try:
+        removed = await invalidate(scope, body.cache_token)
+    except AnalysisCacheUnavailable:
+        return JSONResponse(status_code=503, content={"success": False, "code": "CACHE_UNAVAILABLE"})
+    if body.upload_id is not None:
+        removed = revoke_feedback_projection(body.upload_id, scope, body.cache_token) or removed
+    if not removed:
+        return JSONResponse(status_code=404, content={"success": False, "code": "ANALYSIS_NOT_FOUND"})
+    return {"success": True, "data": {"invalidated": True}}
 
 
 # SQL: fetch the row to verify existence + read current metadata
 _FEEDBACK_FETCH_SQL = """
     SELECT id, quality, metadata
     FROM smart_bi_distillation_samples
-    WHERE input_hash = $1 AND factory_id = $2
+    WHERE input_hash = $1 AND factory_id = $2 AND source = 'chart_insight'
     LIMIT 1
 """
 
@@ -357,7 +388,7 @@ _FEEDBACK_UPDATE_SQL = """
     UPDATE smart_bi_distillation_samples
     SET metadata = $1::jsonb,
         quality  = $2
-    WHERE input_hash = $3 AND factory_id = $4
+    WHERE input_hash = $3 AND factory_id = $4 AND source = 'chart_insight'
 """
 
 
@@ -422,11 +453,29 @@ async def insight_feedback(request: Request, body: InsightFeedbackRequest) -> Di
             },
         )
 
+    from smartbi.services.insights.chart_insight_service import chart_analysis_scope
+
+    permission_tier = _derive_permission_tier(getattr(request.state, "role", None))
+    scope = chart_analysis_scope(jwt_factory_id, permission_tier)
+
+    async def invalidate_requested():
+        return await invalidate(scope, body.cache_token, input_hash=body.input_hash)
+
+    async def feedback_without_corpus():
+        if vote == "down" and body.cache_token and await invalidate_requested():
+            return {"success": True, "data": {"feedback_recorded": True, "vote": vote, "invalidated": True}}
+        return {"success": False, "message": "分析结果不存在或已更新", "code": "ROW_NOT_FOUND"}
+
     # ------------------------------------------------------------------
     # DB update
     # ------------------------------------------------------------------
     svc = await _get_service()
     if svc is None or svc._pool is None:
+        if vote == "down" and body.cache_token:
+            try:
+                return await feedback_without_corpus()
+            except AnalysisCacheUnavailable:
+                return _feedback_cache_unavailable()
         return JSONResponse(
             status_code=503,
             content={
@@ -443,16 +492,7 @@ async def insight_feedback(request: Request, body: InsightFeedbackRequest) -> Di
         async with pool.acquire() as conn:
             row = await conn.fetchrow(_FEEDBACK_FETCH_SQL, body.input_hash, jwt_factory_id)
             if row is None:
-                # No-fake-data: explicit not-found, never silently swallow
-                return {
-                    "success": False,
-                    "message": (
-                        f"Corpus row not found for input_hash '{body.input_hash[:16]}…'. "
-                        "The insight may have expired (corpus rows are date-partitioned) "
-                        "or the hash is incorrect."
-                    ),
-                    "code": "ROW_NOT_FOUND",
-                }
+                return await feedback_without_corpus()
 
             current_quality: int = int(row["quality"] or 5)
             raw_meta = row["metadata"]
@@ -465,9 +505,20 @@ async def insight_feedback(request: Request, body: InsightFeedbackRequest) -> Di
             except Exception:
                 meta_dict = {}
 
-            # Apply vote: increment counter, enforce idempotency via simple integer add
+            if meta_dict.get("permission_tier") not in (None, permission_tier):
+                return {"success": False, "code": "ROW_NOT_FOUND", "message": "分析结果不存在"}
+
+            # A retry after a Redis failure must not count the same vote twice.
+            duplicate = False
             if vote == "down":
-                meta_dict["feedback_down"] = int(meta_dict.get("feedback_down", 0)) + 1
+                vote_id = fingerprint((getattr(request.state, "user_id", None), body.cache_token or body.input_hash))
+                prior = meta_dict.get("recent_downvotes")
+                recent = prior if isinstance(prior, list) else []
+                duplicate = vote_id in recent
+                if not duplicate:
+                    meta_dict["feedback_down"] = int(meta_dict.get("feedback_down", 0)) + 1
+                    meta_dict["recent_downvotes"] = [*recent[-31:], vote_id]
+                meta_dict["cache_invalidated"] = True
             else:
                 meta_dict["feedback_up"] = int(meta_dict.get("feedback_up", 0)) + 1
 
@@ -486,11 +537,12 @@ async def insight_feedback(request: Request, body: InsightFeedbackRequest) -> Di
                     body.input_hash[:12], feedback_down, current_quality, new_quality,
                 )
 
-            meta_json = _json.dumps(meta_dict, ensure_ascii=False)
-            await conn.execute(_FEEDBACK_UPDATE_SQL, meta_json, new_quality, body.input_hash, jwt_factory_id)
+            if not duplicate:
+                meta_json = _json.dumps(meta_dict, ensure_ascii=False)
+                await conn.execute(_FEEDBACK_UPDATE_SQL, meta_json, new_quality, body.input_hash, jwt_factory_id)
 
         if vote == "down":
-            svc.invalidate_answer(jwt_factory_id, body.input_hash)
+            await invalidate_requested()
 
         logger.info(
             "[insight-feedback] recorded vote=%s input_hash=%s... factory=%s "
@@ -509,6 +561,8 @@ async def insight_feedback(request: Request, body: InsightFeedbackRequest) -> Di
             "message": "感谢反馈",
         }
 
+    except AnalysisCacheUnavailable:
+        return _feedback_cache_unavailable()
     except Exception as exc:
         logger.exception("[insight-feedback] unexpected error for input_hash=%s", body.input_hash[:16])
         return JSONResponse(
@@ -519,3 +573,9 @@ async def insight_feedback(request: Request, body: InsightFeedbackRequest) -> Di
                 "code": "INTERNAL_ERROR",
             },
         )
+
+
+def _feedback_cache_unavailable():
+    return JSONResponse(status_code=503, content={
+        "success": False, "code": "CACHE_UNAVAILABLE", "message": "分析缓存暂不可用，请重试",
+    })

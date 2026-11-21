@@ -12,6 +12,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from common.responses import ApiException, ErrorCode
+from common.smartbi_analysis_cache import request_scope
 
 from services.insight_generator import InsightGenerator
 
@@ -62,10 +63,12 @@ class InsightResponse(BaseModel):
     method: Optional[str] = None
     message: Optional[str] = None
     error: Optional[str] = None
+    cacheHit: bool = False
+    cacheToken: Optional[str] = None
 
 
 @router.post("/generate", response_model=InsightResponse)
-async def generate_insights(request: InsightRequest):
+async def generate_insights(request: InsightRequest, http_request: Request):
     """
     Generate AI-powered business insights from data
 
@@ -94,7 +97,8 @@ async def generate_insights(request: InsightRequest):
             insight_types=request.insightTypes,
             max_insights=request.maxInsights,
             upload_id=request.upload_id,
-            sheet_index=request.sheet_index
+            sheet_index=request.sheet_index,
+            cache_scope=request_scope(http_request),
         )
 
         # Convert insights to Pydantic models (skip malformed items)
@@ -110,6 +114,8 @@ async def generate_insights(request: InsightRequest):
             insights=insights,
             totalGenerated=result.get("totalGenerated"),
             method=result.get("method"),
+            cacheHit=result.get("cacheHit", False),
+            cacheToken=result.get("cacheToken"),
             # 失败时 message 也带上说明 (复审 Low 3: 前端有的只读 message)
             message=result.get("message") or result.get("error"),
             error=result.get("error")
@@ -170,7 +176,7 @@ async def get_insight_types():
 
 
 @router.post("/analyze-metrics")
-async def analyze_metrics(metrics: List[dict]):
+async def analyze_metrics(metrics: List[dict], http_request: Request):
     """
     Generate insights specifically from pre-calculated metrics
 
@@ -182,12 +188,12 @@ async def analyze_metrics(metrics: List[dict]):
         if not metrics:
             raise ApiException("Metrics are required", ErrorCode.VALIDATION_ERROR, 400)
 
-        # Create minimal data structure for insight generation
         result = await insight_generator.generate_insights(
-            data=[{}],  # Empty data placeholder
+            data=metrics,
             metrics=metrics,
             analysis_context="Metrics-based analysis",
-            max_insights=5
+            max_insights=5,
+            cache_scope=request_scope(http_request),
         )
 
         # 外发被拦等失败的说明原样带出 (复审 Low 3, 2026-10-29): 以前丢掉 error, 前端只看到空结果
@@ -196,6 +202,8 @@ async def analyze_metrics(metrics: List[dict]):
             insights=[Insight(**i) for i in result.get("insights", [])],
             totalGenerated=result.get("totalGenerated"),
             method=result.get("method"),
+            cacheHit=result.get("cacheHit", False),
+            cacheToken=result.get("cacheToken"),
             message=result.get("message") or result.get("error"),
             error=result.get("error"),
         )
@@ -398,7 +406,7 @@ async def quick_summary(request: Request):
 
 
 @router.post("/generate-stream")
-async def generate_insights_stream(request: InsightRequest):
+async def generate_insights_stream(request: InsightRequest, http_request: Request):
     """
     Stream AI insights via SSE (Server-Sent Events).
 
@@ -419,7 +427,9 @@ async def generate_insights_stream(request: InsightRequest):
             analysis_context=request.analysisContext,
             max_insights=request.maxInsights,
             upload_id=request.upload_id,
-            sheet_index=request.sheet_index
+            sheet_index=request.sheet_index,
+            insight_types=request.insightTypes,
+            cache_scope=request_scope(http_request),
         ):
             evt_type = event.get("event", "chunk")
             evt_data = event.get("data", "")

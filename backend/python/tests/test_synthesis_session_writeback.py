@@ -16,6 +16,8 @@ class _FakeResponse:
     plan = {"intent": "profit"}
     tokens = 123
     fact_check = {"ok": True}
+    cache_hit = False
+    cache_token = None
 
     def to_dict(self):
         return {
@@ -43,11 +45,15 @@ class _FakeEngine:
         conversation_history=None,
         page_context=None,
         dimension_hints=None,
+        *,
+        cache_scope=None,
+        allow_legacy_cache=True,
     ):
         assert factory_id == "F001"
         assert question
         assert window == (date(2026, 5, 1), date(2026, 6, 30))
         assert conversation_history is None
+        assert cache_scope is None and allow_legacy_cache is False
         self.calls.append({
             "question": question,
             "page_context": page_context,

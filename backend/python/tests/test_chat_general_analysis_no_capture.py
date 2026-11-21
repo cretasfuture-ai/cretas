@@ -15,14 +15,15 @@ from fastapi.testclient import TestClient
 
 import smartbi.api.chat as chat_mod
 from auth_middleware import JWTAuthMiddleware
-from common.insight_cache import get_insight_cache
+from common import smartbi_analysis_cache as analysis_result_cache
+from tests.analysis_cache_fixtures import MemoryCache
 
 SECRET = "internal-secret-for-no-capture-test"
 JWT_SECRET = "jwt-secret-for-no-capture-test"
 FACTORY = "F-NO-CAPTURE"
 ROUTE = "/api/chat/general-analysis"
 PROMPT = "【时间范围成本分析】 保密产品 秘制酱牛肉 单位成本 79.3571"
-INTERNAL = {"X-Internal-Secret": SECRET, "X-Factory-Id": FACTORY}
+INTERNAL = {"X-Internal-Secret": SECRET, "X-Factory-Id": FACTORY, "X-User-Role": "factory_super_admin"}
 NO_CAPTURE = {**INTERNAL, "X-No-Training-Capture": "1"}
 
 
@@ -35,6 +36,8 @@ class _Spy:
 @pytest.fixture
 def spy(monkeypatch):
     calls = _Spy()
+    cache = MemoryCache()
+    calls.cache = cache
 
     class _Generator:
         async def generate_text_analysis(self, text):
@@ -51,9 +54,8 @@ def spy(monkeypatch):
     monkeypatch.setattr(chat_mod, "InsightGenerator", _Generator)
     monkeypatch.setattr("smartbi.services.distillation_capture.persist_distillation_sample", _persist)
     monkeypatch.setattr("smartbi.config.get_pg_pool", _no_pool)
-    get_insight_cache().clear()
-    yield calls
-    get_insight_cache().clear()
+    monkeypatch.setattr(analysis_result_cache, "get_cache", lambda: cache)
+    return calls
 
 
 def _client():
@@ -67,10 +69,6 @@ def _post(client, headers, message=PROMPT):
     return client.post(ROUTE, json={"message": message, "allow_tenant_data_fallback": False}, headers=headers)
 
 
-def _cache_size():
-    return len(get_insight_cache()._cache)
-
-
 def test_signal_present_stores_nothing_and_still_answers(spy):
     response = _post(_client(), NO_CAPTURE)
     assert response.status_code == 200
@@ -78,7 +76,7 @@ def test_signal_present_stores_nothing_and_still_answers(spy):
     assert "成本结构正常" in response.json()["aiAnalysis"]
     assert spy.llm_calls == 1, "这次确实走到了模型"
     assert spy.captured == []
-    assert _cache_size() == 0
+    assert len(spy.cache.values) == 0
 
 
 def test_signal_absent_captures_exactly_as_before(spy):
@@ -88,7 +86,7 @@ def test_signal_absent_captures_exactly_as_before(spy):
     assert len(spy.captured) == 1
     assert PROMPT in spy.captured[0]["input_text"]
     assert spy.captured[0]["factory_id"] == FACTORY
-    assert _cache_size() == 1
+    assert len(spy.cache.values) == 1
 
 
 def test_signal_never_reads_a_cached_answer(spy):

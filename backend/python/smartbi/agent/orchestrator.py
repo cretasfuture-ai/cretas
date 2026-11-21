@@ -215,6 +215,7 @@ class AgentOrchestrator:
         date_range: Tuple[date, date],
         *,
         cache_ttl_hours: int = 24,
+        current_data: Optional[Dict[str, Any]] = None,
     ) -> InsightResponse:
         """Main entry point. See module docstring for flow."""
         t0 = time.monotonic()
@@ -223,7 +224,7 @@ class AgentOrchestrator:
 
         # 1. Narrative cache check (in-process, today's answer keyed by question+range+factory)
         q_hash = compute_question_hash(question, start_iso, end_iso, factory_id)
-        hit = await self._cache.get(factory_id, q_hash)
+        hit = await self._cache.get(factory_id, q_hash) if current_data is None else None
         if hit is not None:
             budget = await self._budget.check_budget(factory_id)
             return InsightResponse(
@@ -244,7 +245,7 @@ class AgentOrchestrator:
         # → regenerate with the LATEST data.  We NEVER serve a stale insight once
         # the underlying data has moved.  _gather_data is 3 cheap agg queries via
         # asyncio.gather — the only way to know "did the data change" is to read it.
-        data = await self._gather_data(factory_id, date_range)
+        data = await self._gather_data(factory_id, date_range) if current_data is None else current_data
         user_prompt = self._build_user_prompt(question, start_iso, end_iso, data)
 
         # 2b. Serve-from-corpus flywheel: look up today's distillation corpus by the
@@ -256,7 +257,7 @@ class AgentOrchestrator:
         # factory_id is inside user_prompt (data + question text) so cross-tenant
         # collision is impossible (table has no RLS by design).
         corpus_hash = compute_input_hash(user_prompt)
-        corpus_hit = await self._read_corpus_cache(corpus_hash)
+        corpus_hit = await self._read_corpus_cache(corpus_hash) if current_data is None else None
         if corpus_hit is not None:
             budget = await self._budget.check_budget(factory_id)
             logger.debug(
@@ -311,12 +312,10 @@ class AgentOrchestrator:
 
         # 5. Post-call bookkeeping
         post_budget = await self._budget.consume(factory_id, tokens)
-        await self._cache.put(
-            factory_id, q_hash, answer,
-            chart_config=None,
-            tokens=tokens,
-            ttl_hours=cache_ttl_hours,
-        )
+        if current_data is None:
+            await self._cache.put(
+                factory_id, q_hash, answer, chart_config=None, tokens=tokens, ttl_hours=cache_ttl_hours,
+            )
 
         # 6. Distillation capture (training corpus). Fire-and-forget; only the
         # freshly-generated LLM answer reaches here (cache/corpus hits returned above).
@@ -481,6 +480,7 @@ class AgentOrchestrator:
         date_range: Tuple[date, date],
         *,
         cache_ttl_hours: int = 24,
+        current_data: Optional[Dict[str, Any]] = None,
     ) -> AsyncIterator[Dict[str, Any]]:
         """Streaming variant of answer_insight. Yields event dicts:
           - {"type": "meta", "source": "cache"|"llm"|"degraded", ...}  (first event)
@@ -496,7 +496,7 @@ class AgentOrchestrator:
 
         # 1. Narrative cache check
         q_hash = compute_question_hash(question, start_iso, end_iso, factory_id)
-        hit = await self._cache.get(factory_id, q_hash)
+        hit = await self._cache.get(factory_id, q_hash) if current_data is None else None
         if hit is not None:
             budget = await self._budget.check_budget(factory_id)
             yield {"type": "meta", "source": RESULT_SOURCE_CACHE,
@@ -508,14 +508,14 @@ class AgentOrchestrator:
 
         # 2. Gather data + prompt FIRST so the corpus key embeds the current data
         # fingerprint (Steve principle #1 — mirrors answer_insight step 2/2b).
-        data = await self._gather_data(factory_id, date_range)
+        data = await self._gather_data(factory_id, date_range) if current_data is None else current_data
         user_prompt = self._build_user_prompt(question, start_iso, end_iso, data)
 
         # 2b. Serve-from-corpus flywheel: same data-bearing key as the capture side
         # (sha256(user_prompt)).  Identical data → hit (0 LLM); changed data → miss
         # → stream a fresh answer.  Hit guarantees data unchanged → never stale.
         corpus_hash = compute_input_hash(user_prompt)
-        corpus_hit = await self._read_corpus_cache(corpus_hash)
+        corpus_hit = await self._read_corpus_cache(corpus_hash) if current_data is None else None
         if corpus_hit is not None:
             budget = await self._budget.check_budget(factory_id)
             logger.debug(
@@ -560,6 +560,7 @@ class AgentOrchestrator:
         # emit RESTORED (real-name) deltas live via the StreamRestorer.
         full_text_parts = []
         total_tokens = 0
+        completed = False
         try:
             async for chunk in self._call_llm_stream(user_prompt, factory_id):
                 if chunk.get("text"):
@@ -569,6 +570,8 @@ class AgentOrchestrator:
                         yield {"type": "delta", "text": emitted}
                 if chunk.get("tokens"):
                     total_tokens = chunk["tokens"]
+                if chunk.get("completed"):
+                    completed = True
             tail = _restorer.flush()
             if tail:
                 yield {"type": "delta", "text": tail}
@@ -585,10 +588,11 @@ class AgentOrchestrator:
         answer = restore_text("".join(full_text_parts), _scope.placeholder_map).strip()
         if answer:
             post_budget = await self._budget.consume(factory_id, total_tokens)  # noqa: F841
-            await self._cache.put(
-                factory_id, q_hash, answer,
-                chart_config=None, tokens=total_tokens, ttl_hours=cache_ttl_hours,
-            )
+            if completed and current_data is None:
+                await self._cache.put(
+                    factory_id, q_hash, answer,
+                    chart_config=None, tokens=total_tokens, ttl_hours=cache_ttl_hours,
+                )
             # Distillation capture (training corpus). Fire-and-forget; only a
             # freshly-streamed LLM answer (cache-hit / degraded paths return
             # above and never reach here).
@@ -596,12 +600,14 @@ class AgentOrchestrator:
             # _read_corpus_cache hashes, so write and read-back agree (flywheel
             # grows); data-bearing key → a future hit can only occur while data
             # is unchanged (never serve stale — principle #1).
-            await _capture_insight_distillation(
-                user_prompt, answer, factory_id, total_tokens,
-                teacher_model="router:INSIGHTS",
-            )
+            if completed:
+                await _capture_insight_distillation(
+                    user_prompt, answer, factory_id, total_tokens,
+                    teacher_model="router:INSIGHTS",
+                )
         yield {"type": "done", "tokens": total_tokens,
-               "elapsed_ms": int((time.monotonic() - t0) * 1000)}
+               "elapsed_ms": int((time.monotonic() - t0) * 1000),
+               **({"completed_answer": answer} if completed and current_data is not None and answer else {})}
 
     async def _call_llm_stream(
         self, user_prompt: str, factory_id: Optional[str] = None
@@ -634,7 +640,7 @@ class AgentOrchestrator:
         )
         _llm_caller_var.set("agent_orchestrator_stream")
         _llm_factory_var.set(factory_id)
-        async for event in call_chain_stream(SLOT.INSIGHTS, payload, timeout=60.0):
+        async for event in call_chain_stream(SLOT.INSIGHTS, payload, timeout=60.0, include_completion=True):
             etype = event.get("type")
             if etype == "delta":
                 text = event.get("text")
@@ -644,6 +650,8 @@ class AgentOrchestrator:
                 tokens = event.get("tokens") or 0
                 if tokens:
                     yield {"tokens": int(tokens)}
+            elif etype == "complete":
+                yield {"completed": True}
 
     # ---------- Corpus read-back (serve-from-corpus flywheel) ----------
 

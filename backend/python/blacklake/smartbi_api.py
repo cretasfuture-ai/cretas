@@ -57,9 +57,11 @@ async def local_review(request:Request):
     await cost_authority(request, configured)
     import asyncio
     from smartbi.services.alert_local_ai import enrich
+    from common.smartbi_analysis_cache import request_scope
     try:data=await asyncio.to_thread(read,configured)
     except Exception:raise HTTPException(503,'黑湖测试数据集读取或一致性验证失败') from None
-    report=await enrich(data['dataAlerts'],getattr(request.state,'user_id',None),analysis_context=data)
+    report=await enrich(data['dataAlerts'],getattr(request.state,'user_id',None),analysis_context=data,
+                        cache_scope=request_scope(request),allow_local_cache=False)
     from .section_review import save
     if report.get('ai',{}).get('status')=='complete':
         await asyncio.to_thread(save, report, Path(path).resolve().parent/'cost-common-ai.dpapi')
@@ -246,7 +248,9 @@ async def followup(payload: Followup, request: Request):
     # The rule answer uses current evidence; 27B only selects bounded checks.
     from smartbi.services.alert_local_ai import enrich
     if report.get('ai',{}).get('status') not in ('complete','partial'):
-        await enrich(report,getattr(request.state,'user_id',None),analysis_context=data)
+        from common.smartbi_analysis_cache import request_scope
+        await enrich(report,getattr(request.state,'user_id',None),analysis_context=data,
+                     cache_scope=request_scope(request),allow_local_cache=False)
         if report.get('ai',{}).get('status')=='complete' and payload.period is None:
             from .section_review import save
             await asyncio.to_thread(save,report,Path(path).resolve().parent/'cost-common-ai.dpapi')

@@ -36,12 +36,11 @@ from common.process_secret_harness import with_process_secret_harness
 import os
 import re
 from collections import Counter
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from cachetools import TTLCache
-
+from common.smartbi_analysis_cache import AnalysisScope, analysis_result, result_key
 from .claim_recompute import recompute_claim, infer_sign_from_prose
 from ..distillation_capture import persist_distillation_sample, compute_input_hash
 
@@ -81,8 +80,8 @@ _ABSOLUTE_AMOUNT_RE = re.compile(
 
 # Default promote threshold (retained for test import compatibility)
 DEFAULT_PROMOTE_THRESHOLD = 3
-_ANSWER_CACHE_TTL_SECONDS = 15 * 60
-_ANSWER_CACHE_MAX_ENTRIES = 1024
+CHART_PROMPT_VERSION = "chart-insight-v3"
+CHART_MODEL_VERSION = "chart-insight-routing-v1"
 
 
 # ---------------------------------------------------------------------------
@@ -115,6 +114,7 @@ class InsightResult:
     tier: int = 2
     input_hash: Optional[str] = None  # G4: corpus row key — exposed so frontend can send feedback
     cache_hit: bool = False
+    cache_token: Optional[str] = None
 
 
 class InsightUnavailable(str, Enum):
@@ -825,13 +825,17 @@ def _chart_data(ctx: ChartInsightContext) -> dict:
     }
 
 
+def chart_analysis_scope(factory_id: str, permission_tier: str) -> AnalysisScope:
+    return AnalysisScope(factory_id, f"chart:{permission_tier}")
+
+
 def _json_key(value: dict) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 def _corpus_input_text(ctx: ChartInsightContext) -> str:
     """Canonical, tenant-scoped corpus input shared by capture and read-back."""
-    return "chart_insight:v2:" + _json_key(
+    return f"chart_insight:{CHART_PROMPT_VERSION}:{CHART_MODEL_VERSION}:" + _json_key(
         {**_chart_data(ctx), "factory_id": ctx.factory_id, "permission_tier": ctx.permission_tier},
     )
 
@@ -897,15 +901,7 @@ class ChartInsightService:
         self._pool = pool
         self._budget_tracker = budget_tracker
         self._promote_threshold = promote_threshold
-        self._answers: TTLCache = TTLCache(
-            maxsize=_ANSWER_CACHE_MAX_ENTRIES, ttl=_ANSWER_CACHE_TTL_SECONDS,
-        )
-        self._pending_answers: dict[tuple[str, str, str], asyncio.Task] = {}
-
-    def invalidate_answer(self, factory_id: str, input_hash: str) -> None:
-        for key, result in list(self._answers.items()):
-            if key[0] == factory_id and result.input_hash == input_hash:
-                self._answers.pop(key, None)
+        self._pending_answers: set[asyncio.Task] = set()
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -917,6 +913,7 @@ class ChartInsightService:
         *,
         caller_role: Optional[str] = None,
         jwt_factory_id: Optional[str] = None,
+        serve_corpus: bool = True,
     ) -> InsightResult | InsightUnavailable | None:
         """Return verified or rule-generated text, or a reason when analysis is unavailable.
 
@@ -945,38 +942,27 @@ class ChartInsightService:
         if _is_comparison_chart(resolved_ctx) and sum(map(math.isfinite, resolved_ctx.series_values)) < 2:
             return InsightUnavailable.INSUFFICIENT_DATA
 
-        # Scope the answer cache with the authenticated tenant and server-derived tier.
-        key = (
-            effective_factory_id,
-            resolved_ctx.permission_tier,
-            compute_input_hash(_json_key(_chart_data(resolved_ctx))),
-        )
-        cached = self._answers.get(key)
-        if cached is not None:
-            return replace(cached, cache_hit=True)
-
-        pending = self._pending_answers.get(key)
-        if pending is not None:
-            result = await asyncio.shield(pending)
-            return replace(result, cache_hit=True) if isinstance(result, InsightResult) else result
-
         # A closed browser connection may stop reading SSE while the provider is
         # still working. Finish accounting and caching under the captured tenant context.
-        pending = asyncio.create_task(self._generate_and_store(key, resolved_ctx))
-        self._pending_answers[key] = pending
+        scope = (chart_analysis_scope(jwt_factory_id, resolved_ctx.permission_tier)
+                 if jwt_factory_id and not serve_corpus else None)
+        key = result_key(scope, "chart-insight", _chart_data(resolved_ctx),
+                         prompt_version=CHART_PROMPT_VERSION, model_version=CHART_MODEL_VERSION)
+        pending = asyncio.create_task(self._generate_and_store(key, resolved_ctx, serve_corpus))
+        self._pending_answers.add(pending)
+        pending.add_done_callback(self._pending_answers.discard)
         pending.add_done_callback(self._observe_generation_failure)
         return await asyncio.shield(pending)
 
-    async def _generate_and_store(
-        self, key: tuple[str, str, str], ctx: ChartInsightContext,
-    ) -> InsightResult | InsightUnavailable:
-        try:
-            result = await self._generate_insight(ctx)
-            if isinstance(result, InsightResult):
-                self._answers[key] = result
+    async def _generate_and_store(self, key, ctx: ChartInsightContext, serve_corpus: bool) -> InsightResult | InsightUnavailable:
+        async with analysis_result(key) as cached:
+            if cached.entry.hit:
+                return replace(InsightResult(**cached.entry.value), cache_hit=True, cache_token=cached.entry.token)
+            result = await self._generate_insight(ctx, serve_corpus=serve_corpus)
+            if isinstance(result, InsightResult) and result.source in {"llm", "cache", "template"}:
+                await cached.store(asdict(result))
+                return replace(result, cache_token=cached.response_fields.get("cacheToken"))
             return result
-        finally:
-            self._pending_answers.pop(key, None)
 
     @staticmethod
     def _observe_generation_failure(pending: asyncio.Task) -> None:
@@ -984,7 +970,7 @@ class ChartInsightService:
         if not pending.cancelled() and (error := pending.exception()) is not None:
             logger.error("[chart-insight] generation failed", exc_info=error)
 
-    async def _generate_insight(self, resolved_ctx: ChartInsightContext) -> InsightResult | InsightUnavailable:
+    async def _generate_insight(self, resolved_ctx: ChartInsightContext, *, serve_corpus: bool = True) -> InsightResult | InsightUnavailable:
         effective_factory_id = resolved_ctx.factory_id
         # Demo/common-chart flywheel: serve accepted corpus rows or deterministic
         # templates before any LLM budget gate. This keeps demo chart narration useful
@@ -992,11 +978,12 @@ class ChartInsightService:
         input_text = _corpus_input_text(resolved_ctx)
         input_hash = compute_input_hash(input_text)
         deterministic_first = os.getenv("CHART_INSIGHT_DETERMINISTIC_FIRST") == "1"
-        if deterministic_first:
+        if deterministic_first and serve_corpus:
             cached = await self._serve_corpus_answer(input_hash, resolved_ctx.permission_tier)
             if cached is not None:
                 return cached
 
+        if deterministic_first:
             deterministic = _deterministic_insight(resolved_ctx)
             if deterministic is not None:
                 await persist_distillation_sample(
@@ -1034,7 +1021,7 @@ class ChartInsightService:
             logger.info("[chart-insight] budget blocked for factory=%s", effective_factory_id)
             return InsightUnavailable.BUDGET_EXHAUSTED
 
-        if not deterministic_first:
+        if not deterministic_first and serve_corpus:
             cached = await self._serve_corpus_answer(input_hash, resolved_ctx.permission_tier)
             if cached is not None:
                 return cached
@@ -1159,7 +1146,8 @@ class ChartInsightService:
                     )
                     feedback_down = int(meta_dict.get("feedback_down", 0))
                     feedback_up = int(meta_dict.get("feedback_up", 0))
-                    if feedback_down >= _FEEDBACK_DOWN_SERVE_THRESHOLD or feedback_down > feedback_up:
+                    if (meta_dict.get("cache_invalidated")
+                            or feedback_down >= _FEEDBACK_DOWN_SERVE_THRESHOLD or feedback_down > feedback_up):
                         if feedback_down >= _FEEDBACK_DOWN_SERVE_THRESHOLD:
                             logger.info(
                                 "[chart-insight] serve-skip: row input_hash=%s... has "

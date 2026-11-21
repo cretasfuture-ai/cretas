@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
 import smartbi.services.materialized_analytics.llm_materializer as lm
+from common.smartbi_analysis_cache import AnalysisScope
+from tests.analysis_cache_fixtures import analysis_cache  # noqa: F401
 
 
 def _result(code):
@@ -21,26 +24,20 @@ def _patch_common(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_cache_hit_skips_llm_and_reuses(monkeypatch):
+async def test_cache_hit_skips_llm_and_reuses(monkeypatch, analysis_cache):
     _patch_common(monkeypatch)
-    called = {"llm": False}
-
-    async def _boom(*a, **k):
-        called["llm"] = True
-        raise AssertionError("LLM 不应被调用 (内容未变, 应命中缓存)")
-
-    # 缓存命中: 返回上次的 LLM 原始输出
-    async def _cached(input_hash):
-        return '{"insights":{"X":"复用的洞察X"},"executive_summary":"复用摘要"}'
-
-    monkeypatch.setattr(lm, "_get_cached_teacher_output", _cached)
-    monkeypatch.setattr("smartbi.services.insights.llm_client.call_llm", _boom)
-
-    r = _result("X")
-    summary = await lm.generate_llm_insights([r], "restaurant")
-    assert called["llm"] is False
-    assert summary == "复用摘要"
-    assert r.llm_insight == "复用的洞察X"   # 从缓存解析, 结果一致
+    model = AsyncMock(return_value='{"insights":{"X":"产品洞察"},"executive_summary":"经营摘要"}')
+    monkeypatch.setattr("smartbi.services.insights.llm_client.call_llm", model)
+    monkeypatch.setattr(lm, "_persist_distillation_sample", AsyncMock())
+    for factory, expected in (("A", False), ("A", True), ("B", False)):
+        r = _result("X")
+        fields = {}
+        summary = await lm.generate_llm_insights(
+            [r], "restaurant", cache_scope=AnalysisScope(factory, "finance"), cache_fields=fields,
+        )
+        assert fields["cacheHit"] is expected
+        assert summary == "经营摘要" and r.llm_insight == "产品洞察"
+    assert model.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -52,10 +49,6 @@ async def test_cache_miss_calls_llm(monkeypatch):
         called["llm"] = True
         return '{"insights":{"X":"新洞察"},"executive_summary":"新摘要"}'
 
-    async def _no_cache(input_hash):
-        return None
-
-    monkeypatch.setattr(lm, "_get_cached_teacher_output", _no_cache)
     monkeypatch.setattr("smartbi.services.insights.llm_client.call_llm", _real)
 
     # 缓存 miss 时会尝试写 distillation; mock 掉避免 DB

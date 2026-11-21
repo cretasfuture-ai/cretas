@@ -68,6 +68,7 @@
       </template>
       <span v-else-if="voteState === 'submitting'" class="feedback-ack">…</span>
       <span v-else-if="voteState === 'done'" class="feedback-ack">感谢反馈</span>
+      <span v-if="voteFailed" class="feedback-ack" role="status">反馈未提交，请重试</span>
     </div>
 
     <!--
@@ -123,10 +124,12 @@ const props = withDefaults(
 // G4: feedback state machine — idle → submitting → done
 type VoteState = 'idle' | 'submitting' | 'done';
 const voteState = ref<VoteState>('idle');
+const voteFailed = ref(false);
 let voteRevision = 0;
-watch([() => props.factoryId, () => props.insight?.input_hash], () => {
+watch([() => props.factoryId, () => props.insight?.input_hash, () => props.insight?.cacheToken], () => {
   voteRevision++;
   voteState.value = 'idle';
+  voteFailed.value = false;
 });
 
 /** Only show feedback buttons when the insight has a corpus key and we have a factoryId */
@@ -140,10 +143,12 @@ async function handleVote(vote: 'up' | 'down'): Promise<void> {
 
   const revision = voteRevision;
   voteState.value = 'submitting';
-  await submitInsightFeedback(props.insight.input_hash, vote, props.factoryId);
-  // Always show confirmation even on network failure (honest-null principle —
-  // user feedback was noted; backend failure is non-blocking)
-  if (revision === voteRevision) voteState.value = 'done';
+  voteFailed.value = false;
+  const sent = await submitInsightFeedback(props.insight.input_hash, vote, props.factoryId, props.insight.cacheToken);
+  if (revision === voteRevision) {
+    voteState.value = sent ? 'done' : 'idle';
+    voteFailed.value = !sent;
+  }
 }
 </script>
 

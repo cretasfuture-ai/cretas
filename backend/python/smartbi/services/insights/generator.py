@@ -17,6 +17,7 @@ from config import get_settings
 from common.utils.json_parser import robust_json_parse
 from services.context_extractor import ContextInfo
 
+from common.smartbi_analysis_cache import analysis_result, cached_response, result_key
 from . import data_summarizer as ds
 from . import scenario_context as sc
 from . import prompt_builder as pb
@@ -28,6 +29,8 @@ ANALYSIS_FAILED_MESSAGE = "分析生成失败，请稍后重试"
 from .statistical import generate_statistical_insights
 
 logger = logging.getLogger(__name__)
+INSIGHT_PROMPT_VERSION = "smartbi-insight-v1"
+INSIGHT_MODEL_VERSION = "insights-routing-v1"
 
 
 class InsightGenerator:
@@ -74,7 +77,25 @@ class InsightGenerator:
         context_info: Optional[ContextInfo] = None,
         upload_id: Optional[Any] = None,
         sheet_index: Optional[int] = None,
+        *,
+        cache_scope=None,
     ) -> Dict[str, Any]:
+        key = self._result_key(cache_scope, "business-insight", data, metrics, analysis_context,
+                               insight_types, max_insights, context_info, upload_id, sheet_index)
+        return await cached_response(
+            key, lambda: self._generate_insights(data, metrics, analysis_context, insight_types,
+                                                  max_insights, context_info),
+            cacheable=lambda result: any(item.get("source") == "llm" for item in result.get("insights", [])),
+        )
+
+    def _result_key(self, scope, surface, data, metrics, context, types, limit, info, upload, sheet):
+        columns = list(dict.fromkeys(key for row in data for key in row)) if scope is not None else None
+        return result_key(scope, surface, (data, columns, metrics, types, limit, upload, sheet,
+                                          info.to_prompt_text() if info else None, self._active_model),
+                          prompt_version=INSIGHT_PROMPT_VERSION, model_version=INSIGHT_MODEL_VERSION,
+                          question=context or "")
+
+    async def _generate_insights(self, data, metrics, analysis_context, insight_types, max_insights, context_info):
         """Generate business insights from *data*."""
         try:
             df = pd.DataFrame(data)
@@ -85,26 +106,6 @@ class InsightGenerator:
                     "insights": [],
                     "message": "No data available for analysis",
                 }
-
-            # Check insight result cache
-            cache_key = None
-            if upload_id is not None:
-                from common.insight_cache import get_insight_cache
-                cache = get_insight_cache()
-                cache_key = cache.make_key(upload_id, sheet_index or 0, data)
-                entry = cache.get(cache_key)
-                if entry is not None:
-                    logger.info(f"[InsightCache] HIT key={cache_key[:12]}...")
-                    cached_result = entry.insights
-                    if isinstance(cached_result, dict):
-                        cached_result["cached"] = True
-                        return cached_result
-                    return {
-                        "success": True,
-                        "insights": cached_result if isinstance(cached_result, list) else [],
-                        "method": "cached",
-                        "cached": True,
-                    }
 
             # Statistical insights (rule-based)
             stat_insights = generate_statistical_insights(df, metrics)
@@ -131,12 +132,6 @@ class InsightGenerator:
                 "method": "llm" if self.settings.llm_api_key else "statistical",
             }
 
-            # Store in cache
-            if cache_key is not None:
-                from common.insight_cache import get_insight_cache
-                get_insight_cache().set(cache_key, result)
-                logger.info(f"[InsightCache] SET key={cache_key[:12]}...")
-
             return result
 
         except EgressRedactionError as e:
@@ -160,7 +155,43 @@ class InsightGenerator:
         context_info: Optional[ContextInfo] = None,
         upload_id: Optional[Any] = None,
         sheet_index: Optional[int] = None,
+        *,
+        insight_types: Optional[List[str]] = None,
+        cache_scope=None,
     ):
+        key = self._result_key(cache_scope, "business-insight", data, metrics, analysis_context,
+                               insight_types, max_insights, context_info, upload_id, sheet_index)
+        if cache_scope is not None and data:
+            # The client can render verified rules before the model finishes.
+            preview = generate_statistical_insights(pd.DataFrame(data), metrics)
+            if insight_types:
+                preview = [item for item in preview if item.get("type") in insight_types]
+            if preview:
+                yield {"event": "preview", "data": json.dumps({"insights": preview[:max_insights]},
+                                                              ensure_ascii=False, default=str)}
+        async with analysis_result(key) as cached:
+            if cached.entry.hit:
+                yield self._done_event(cached.entry.value, cached.response_fields)
+                return
+            async for event in self._generate_insights_stream(data, metrics, analysis_context, context_info):
+                if event["event"] == "done":
+                    result = json.loads(event["data"])
+                    if result.get("method") == "llm":
+                        items = result["insights"]
+                        if insight_types:
+                            items = [item for item in items if item.get("type") in insight_types]
+                        items = items[:max_insights]
+                        result.update(insights=items, totalGenerated=len(items))
+                        if event.get("completed") and any(item.get("source") == "llm" for item in items):
+                            await cached.store(result)
+                    event = self._done_event(result, cached.response_fields)
+                yield event
+
+    @staticmethod
+    def _done_event(result, cache_fields):
+        return {"event": "done", "data": json.dumps({**result, **cache_fields}, ensure_ascii=False, default=str)}
+
+    async def _generate_insights_stream(self, data, metrics, analysis_context, context_info):
         """Stream AI insights as SSE events.
 
         Yields ``'chunk'`` events with raw LLM text, then a final ``'done'``
@@ -248,10 +279,12 @@ class InsightGenerator:
 
             system_role = pb.build_cacheable_system_prompt(tier, scenario)
             full_response = ""
+            completion = llm.StreamCompletion()
             _restorer = StreamRestorer(_scope.placeholder_map)  # P0: 流式占位实时还原
             async for chunk in llm.call_llm_stream(
                 prompt, system_role, max_tokens=max_tokens,
                 model_override=self.model_override,
+                completion=completion,
             ):
                 full_response += chunk
                 out = _restorer.push(chunk)
@@ -279,22 +312,10 @@ class InsightGenerator:
                 "method": "llm",
             }
 
-            # Cache the streaming result
-            if upload_id is not None:
-                try:
-                    from common.insight_cache import get_insight_cache
-                    cache = get_insight_cache()
-                    ck = cache.make_key(upload_id, sheet_index or 0, data)
-                    cache.set(ck, done_result)
-                    logger.info(f"[InsightCache] SET (stream) key={ck[:12]}...")
-                except Exception as cache_err:
-                    logger.debug(
-                        "[InsightCache] stream cache store failed: %s", cache_err,
-                    )
-
             yield {
                 "event": "done",
                 "data": json.dumps(done_result, ensure_ascii=False, default=str),
+                "completed": completion.completed,
             }
 
         except EgressRedactionError as e:
@@ -324,11 +345,13 @@ class InsightGenerator:
     async def _call_llm_stream_text(
         self, prompt: str, system_role: Optional[str] = None,
         max_tokens: int = 3000, temperature: float = 0.4,
+        *, completion: llm.StreamCompletion | None = None,
     ):
         async for chunk in llm.call_llm_stream_text(
             prompt, system_role,
             max_tokens=max_tokens, temperature=temperature,
             model_override=self.model_override,
+            **({"completion": completion} if completion is not None else {}),
         ):
             yield chunk
 

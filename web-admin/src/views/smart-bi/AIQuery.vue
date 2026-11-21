@@ -92,6 +92,7 @@ import { buildJavaIntentChartOption } from './components/chat/javaIntentChartAda
 import { chooseAiQueryRoute } from './components/chat/aiQueryRoute';
 import { sanitizeFactoryAiText } from './components/chat/factoryAiText';
 import FactoryAnalysisChat from './FactoryAnalysisChat.vue';
+import { markAnalysisUnhelpful } from '@/api/smartbi/analysis-feedback';
 
 // Render markdown content safely
 function renderMarkdown(text: string): string {
@@ -170,6 +171,7 @@ interface ChatMessage {
   templateCode?: string;
   // Phase 1 (Apr 23 2026): log id of the fallback log row (LLM answers only)
   logId?: number | null;
+  cacheToken?: string;
   // Java Tool-Skill answers do not use Python fallback logs. Keep enough context
   // to submit feedback to /ai-intents/feedback and feed the intent learning loop.
   feedbackTarget?: {
@@ -921,14 +923,15 @@ function triggerRelatedFollowup(query: string, ownerActionScenario?: string) {
 }
 
 async function sendFeedback(msg: ChatMessage, value: 1 | -1) {
-  if (!msg.logId && !msg.feedbackTarget) return;
+  const invalidate = value === -1 && msg.cacheToken;
+  if (!msg.logId && !msg.feedbackTarget && !invalidate) return;
   if (msg.feedbackPending) return;  // in-flight, ignore rapid double-click
   if (msg.feedbackValue === value) return;  // already this value, no-op
   const prevValue = msg.feedbackValue;
   msg.feedbackPending = true;
   msg.feedbackValue = value;  // optimistic
   let comment: string | undefined;
-  if (value === -1) {
+  if (value === -1 && (msg.logId || msg.feedbackTarget)) {
     const result = await ElMessageBox.prompt('说一下哪里不准确? (可选)', '反馈', {
       confirmButtonText: '提交',
       cancelButtonText: '取消',
@@ -942,7 +945,10 @@ async function sendFeedback(msg: ChatMessage, value: 1 | -1) {
     comment = (result as { value?: string }).value || undefined;
   }
   let ok = false;
-  if (msg.logId) {
+  if (invalidate) {
+    ok = await markAnalysisUnhelpful(invalidate);
+    if (ok && msg.logId) await logFeedback(msg.logId, value, comment);
+  } else if (msg.logId) {
     ok = await logFeedback(msg.logId, value, comment);
   } else if (msg.feedbackTarget && factoryId.value) {
     ok = await submitIntentFeedback(factoryId.value, {
@@ -1917,6 +1923,7 @@ async function handleSendMessage() {
         msg.source = result.source;
         msg.templateCode = result.template_code;
         msg.logId = result.log_id ?? null;
+        msg.cacheToken = result.cacheToken;
         msg.warning = (result as { warning?: string | null }).warning ?? null;
         // D1 (Apr 26 2026): detect 25s soft-timeout truncation marker
         // (chat.py emits one of "*分析超过 25 秒已截断*" or
@@ -2950,11 +2957,12 @@ function handleKeydown(event: KeyboardEvent) {
                 <!-- Feedback for both LLM and template answers (Apr 24 2026 extended).
                      Template hits get a logId via _log_template_hit_safe in chat.py. -->
                 <div
-                  v-if="message.role === 'assistant' && !message.loading && !message.streaming && (message.logId || message.feedbackTarget)"
+                  v-if="message.role === 'assistant' && !message.loading && !message.streaming && (message.logId || message.feedbackTarget || message.cacheToken)"
                   class="message-feedback"
                 >
                   <span class="feedback-label">这个回答有用吗?</span>
                   <el-button
+                    v-if="message.logId || message.feedbackTarget"
                     :size="uiBtnSize"
                     :type="message.feedbackValue === 1 ? 'success' : 'default'"
                     plain

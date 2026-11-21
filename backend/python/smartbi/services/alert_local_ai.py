@@ -8,6 +8,7 @@ from collections import OrderedDict
 import hashlib
 import json
 from common.process_secret_harness import with_process_secret_harness
+from common.smartbi_analysis_cache import analysis_result, result_key
 import math
 import os
 import subprocess
@@ -140,11 +141,43 @@ def infer(payload,config):
         raw=message.get('content') if isinstance(message,dict) else None
         raise LocalAIOutputError(usage,raw if isinstance(raw,str) else None) from None
 
-async def enrich(report,requester=None,*,analysis_context=None):
+async def enrich(report, requester=None, *, analysis_context=None, cache_scope=None, allow_local_cache=True):
+    if cache_scope is None:
+        return await _enrich(report, requester, analysis_context, allow_local_cache)
+    analyst_mode = os.getenv("SMARTBI_LOCAL_ANALYST_ENABLED") == "1"
+    prompt_version = "data-alert-review-v1"
+    model_input = None
+    if analyst_mode:
+        from .local_analyst import VERSION
+        from .analysis_evidence import build
+        prompt_version = VERSION
+        model_input = (build(report, analysis_context), (analysis_context or {}).get("analysisValidationFeedback"))
+    try:
+        config = provider_config()
+    except (TypeError, ValueError):
+        return await _enrich(report, requester, analysis_context, False)
+
+    key = result_key(cache_scope, "data-alert-review", (fingerprint(report), model_input),
+                     prompt_version=prompt_version, model_version=config["model"])
+    async with analysis_result(key) as cached:
+        if cached.entry.hit:
+            report["ai"] = {**cached.entry.value["ai"], **cached.response_fields,
+                            "currentRequestUsage": {"inputTokens": 0, "outputTokens": 0, "totalTokens": 0,
+                                                    "source": "cache", "estimated": False}}
+        else:
+            await _enrich(report, requester, analysis_context, False)
+            ai = report["ai"]
+            if ai.get("status") in {"complete", "partial"}:
+                await cached.store({"ai": ai})
+            ai.update(cached.response_fields)
+    return report
+
+
+async def _enrich(report, requester, analysis_context, allow_local_cache):
     """Optional AI failure is reported explicitly without invalidating the rules."""
     if os.getenv('SMARTBI_LOCAL_ANALYST_ENABLED')=='1':
         from .local_analyst import enrich as explain
-        return await explain(report,requester,analysis_context)
+        return await explain(report,requester,analysis_context,allow_local_cache=allow_local_cache)
     try:
         config=provider_config()
         if config['transport']=='disabled':
@@ -154,7 +187,7 @@ async def enrich(report,requester=None,*,analysis_context=None):
             report['ai']={'status':'not_applicable','message':'当前没有需要AI核对的提醒'};return report
         key=(fingerprint(report),json.dumps(config,sort_keys=True))
         async with _lock:
-            if key in _cache and time.monotonic()-_cache[key][0]<600:
+            if allow_local_cache and key in _cache and time.monotonic()-_cache[key][0]<600:
                 report['ai']=dict(_cache[key][1],cacheHit=True,currentRequestUsage={'inputTokens':0,'outputTokens':0,'totalTokens':0,'source':'cache','estimated':False});return report
         from .alert_ai_coordination import run
         scope=report.get('scope') or {}
@@ -172,8 +205,9 @@ async def enrich(report,requester=None,*,analysis_context=None):
         if total>len(facts):
             ai.update(status='partial',message=f'本次本地AI核对 {len(facts)}/{total} 类代表问题，其余尚未核对；规则提醒不受影响')
         async with _lock:
-            _cache[key]=(time.monotonic(),ai)
-            while len(_cache)>128:_cache.popitem(last=False)
+            if allow_local_cache:
+                _cache[key]=(time.monotonic(),ai)
+                while len(_cache)>128:_cache.popitem(last=False)
             report['ai']=ai
     except Exception as exc:
         from .alert_ai_coordination import ReviewBusy

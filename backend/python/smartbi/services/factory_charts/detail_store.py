@@ -121,7 +121,7 @@ def _prepared(candidates: Sequence[Mapping[str, Any]], datasets: Sequence[Any], 
         item = copy.deepcopy(dict(candidate))
         # Incoming annotations can only describe an earlier owner or snapshot.
         # Recompute them from the trusted scope, even when quota admission fails.
-        for field in ('detailContext', 'detailSnapshotKey', 'detailStatus'):
+        for field in ('detailContext', 'detailSnapshotKey', 'detailStatus', 'analysisDataVersion'):
             item.pop(field, None)
         source = item.get("source")
         base = prepared.get(source)
@@ -208,8 +208,9 @@ def _prepared(candidates: Sequence[Mapping[str, Any]], datasets: Sequence[Any], 
         if size > details.MAX_FRAME_BYTES:
             yield item, None
             continue
+        snapshot_material = [source, scope, details._period_label(request), unit, rows, columns, dimension_contract]
         snapshot_key = hashlib.sha256(json.dumps(
-            [owner, source, scope, details._period_label(request), unit, rows, columns, dimension_contract],
+            [owner, *snapshot_material],
             ensure_ascii=False, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8")).hexdigest()
         yield item, {
             "source": str(source), "period": details._period_label(request), "unit": unit,
@@ -217,6 +218,9 @@ def _prepared(candidates: Sequence[Mapping[str, Any]], datasets: Sequence[Any], 
             "dimension_contract": dimension_contract,
             "price_columns": list(prices), "financial": financial, "size": size,
             "snapshot_key": snapshot_key,
+            "analysis_data_version": hashlib.sha256(json.dumps(
+                snapshot_material, ensure_ascii=False, sort_keys=True, default=str, separators=(",", ":"),
+            ).encode("utf-8")).hexdigest(),
         }
 
 
@@ -331,6 +335,7 @@ def prepare_shared_metadata(candidates: Sequence[Mapping[str, Any]], datasets: S
             }
         else:
             item["detailSnapshotKey"] = snapshot["snapshot_key"]
+            item["analysisDataVersion"] = snapshot["analysis_data_version"]
             item["detailStatus"] = {
                 "state": "unavailable",
                 "message": "点击查看时加载详情",

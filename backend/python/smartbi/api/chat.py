@@ -14,6 +14,7 @@ Part of SmartBI Phase 6: AI Chat Deep Integration.
 """
 import asyncio
 import hashlib
+from contextlib import AsyncExitStack
 import json as _json
 import logging
 from datetime import date
@@ -42,6 +43,8 @@ from services.insight_dimensions import (
     InsightReport
 )
 from services.insight_generator import InsightGenerator
+from smartbi.services.insights.llm_client import StreamCompletion
+from common.smartbi_analysis_cache import analysis_result, cached_response, fingerprint, request_scope, result_key
 
 # Cache
 from common.insight_cache import get_insight_cache
@@ -638,6 +641,8 @@ class GeneralAnalysisResponse(BaseModel):
     queryPlanHash: Optional[str] = None
     executedResolvers: List[str] = []
     processing_time_ms: int = 0
+    cacheHit: bool = False
+    cacheToken: Optional[str] = None
 
 class MultiDimensionRequest(BaseModel):
     """Request for multi-dimensional insight analysis"""
@@ -1220,7 +1225,10 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
     # on an identical cache key and leak each other's results (cross-tenant
     # cache pollution).
     # No-capture signal: no cache key at all, so every cache read / write below is a no-op.
-    cache_key = None if _no_capture_requested(http_request) else _make_chat_cache_key(
+    no_capture = _no_capture_requested(http_request)
+    cache_scope = None if no_capture else request_scope(http_request)
+    use_legacy_cache = not no_capture and not getattr(http_request.state, "auth_method", None)
+    cache_key = _make_chat_cache_key(
         "general_analysis",
         factory_id=trusted_factory_id,
         trusted_user_id=trusted_user_key,
@@ -1234,7 +1242,7 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
         query=request.effective_query,
         data=request.data,
         context=analysis_context,
-    )
+    ) if use_legacy_cache else None
     cached = _chat_cache_get(cache_key)
     if cached is not None:
         cached["processing_time_ms"] = 0
@@ -1310,7 +1318,17 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
                 # Use LLM to analyze the text directly
                 try:
                     insight_gen = InsightGenerator()
-                    llm_result = await insight_gen.generate_text_analysis(query)
+                    async def generate_text():
+                        return {"answer": await insight_gen.generate_text_analysis(query)}
+
+                    key = result_key(cache_scope, "chat-general-text",
+                                     (analysis_context, validated_upload_id,
+                                      request.enable_thinking, request.thinking_budget),
+                                     prompt_version="chat-general-text-v1", model_version="insights-routing-v1",
+                                     question=query)
+                    generated = await cached_response(key, generate_text,
+                                                      cacheable=lambda value: bool((value["answer"] or "").strip()))
+                    llm_result = generated["answer"]
                     answer = llm_result if llm_result else "分析完成，暂无更多见解。"
                     response = GeneralAnalysisResponse(
                         success=True,
@@ -1320,14 +1338,16 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
                         thinkingEnabled=request.enable_thinking,
                         insights=[],
                         charts=[],
-                        processing_time_ms=int((time.time() - start_time) * 1000)
+                        processing_time_ms=int((time.time() - start_time) * 1000),
+                        cacheHit=generated["cacheHit"],
+                        cacheToken=generated.get("cacheToken"),
                     )
                     _chat_cache_set(cache_key, response.dict())
                     # Distillation capture (training corpus): freshly-generated
                     # LLM answer (text-only, no-data branch). Cache-hit returns
                     # above this point so this is always a fresh teacher pair.
                     # No structured data available → data_context=None → quality=3.
-                    if llm_result:
+                    if llm_result and not generated["cacheHit"]:
                         await _capture_qa_distillation(
                             query, answer, http_request,
                             data_context=None,
@@ -1386,6 +1406,7 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
         insights_result = await insight_gen.generate_insights(
             data,
             analysis_context=analysis_ctx,
+            **({"cache_scope": cache_scope} if cache_scope is not None else {}),
         )
 
         # Format response — prefer executive_summary from first insight over generic "summary"
@@ -1606,7 +1627,9 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
             thinkingEnabled=request.enable_thinking,
             insights=insights,
             charts=charts,
-            processing_time_ms=int((time.time() - start_time) * 1000)
+            processing_time_ms=int((time.time() - start_time) * 1000),
+            cacheHit=insights_result.get("cacheHit", False),
+            cacheToken=insights_result.get("cacheToken"),
         )
 
         # Cache successful result
@@ -1618,10 +1641,8 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
         # Build data_context summary so the corpus pair is self-contained:
         # future model learns to answer FROM data, not hallucinate numbers.
         _qa_data_ctx = _build_qa_data_context(data, insights_result)
-        await _capture_qa_distillation(
-            query, answer, http_request,
-            data_context=_qa_data_ctx,
-        )
+        if not response.cacheHit:
+            await _capture_qa_distillation(query, answer, http_request, data_context=_qa_data_ctx)
 
         return response
 
@@ -1651,6 +1672,9 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
     # real HTTP 403/404 responses, never HTTP 200 followed by an SSE error.
     trusted_factory_id = _require_trusted_factory_id(http_request)
     trusted_role, _, trusted_session_user_id, _ = _trusted_chat_identity(http_request)
+    no_capture = _no_capture_requested(http_request)
+    cache_scope = None if no_capture else request_scope(http_request)
+    use_legacy_cache = not no_capture and not getattr(http_request.state, "auth_method", None)
     validated_upload_id = await _require_owned_upload_id(
         request.sheet_id,
         trusted_factory_id,
@@ -1662,6 +1686,11 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
         return f"event: {event}\ndata: {payload}\n\n"
 
     async def event_stream() -> AsyncGenerator[str, None]:
+        async with AsyncExitStack() as leases:
+            async for event in analysis_events(leases):
+                yield event
+
+    async def analysis_events(leases: AsyncExitStack) -> AsyncGenerator[str, None]:
         start_time = time.time()
         # Apr 24 2026 — C-quality.md C-rec 12 + Direction 1: extract N /
         # frequency / role intent signals once per request, log for
@@ -1776,6 +1805,8 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                             syn = await engine.synthesize(
                                 factory_id_hdr, user_q, window,
                                 conversation_history=_syn_history,
+                                cache_scope=cache_scope,
+                                allow_legacy_cache=use_legacy_cache,
                             )
                             yield _sse_event("status", "综合分析：评价+经营多维")
                             answer_syn = syn.answer or ""
@@ -1790,6 +1821,8 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                                 "answer": answer_syn,
                                 "charts": syn.charts,
                                 "source": "comprehensive_synthesis",
+                                "cacheHit": syn.cache_hit,
+                                **({"cacheToken": syn.cache_token} if syn.cache_token else {}),
                                 "plan": syn.plan,
                                 "fact_check": syn.fact_check,
                                 "processingTimeMs": wall_ms,
@@ -2665,11 +2698,13 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                 query = request.effective_query
                 if query and len(query.strip()) >= 2:
                     try:
-                        insight_gen = InsightGenerator()
                         yield _sse_event("status", "正在分析...")
                         full_text = ""
-                        async for chunk in insight_gen._call_llm_stream_text(
-                            query, max_tokens=1500, temperature=0.2
+                        cache_fields = {}
+                        async for chunk in _stream_llm_response(
+                            None, query, max_tokens=1500, temperature=0.2,
+                            scope=cache_scope, cache_fields=cache_fields,
+                            data_version=validated_upload_id,
                         ):
                             full_text += chunk
                             yield _sse_event("chunk", chunk)
@@ -2677,6 +2712,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                             "success": True,
                             "answer": full_text,
                             "charts": [],
+                            **cache_fields,
                             "processingTimeMs": int((time.time() - start_time) * 1000)
                         })
                         # Distillation capture (training corpus): freshly-streamed
@@ -2684,7 +2720,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                         # non-stream call site). Cache-serve / degraded paths return
                         # earlier, so reaching here means a complete fresh teacher
                         # pair. Guarded on non-empty full_text. Fire-and-forget.
-                        if full_text:
+                        if full_text and not cache_fields.get("cacheHit"):
                             await _capture_qa_distillation(
                                 request.effective_query, full_text, http_request
                             )
@@ -3000,6 +3036,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                         all_field_names as _rl_names,
                         answer_row_level as _rl_answer,
                         load_upload_frame as _rl_load,
+                        parse_plan as _rl_parse,
                         TooManyRows as _RlTooMany,
                     )
                     _rl_df = df
@@ -3012,15 +3049,28 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                                 _rl_conn, _question_chart_upload_id, trusted_factory_id
                             )
                     _rl_fm = field_meta if 'field_meta' in locals() else None
+                    row_data_version = fingerprint(_rl_df.to_dict("records")) if cache_scope is not None else None
 
                     async def _rl_llm(_p: str, _s: str) -> str:
-                        return await insight_gen._call_llm(_p, _s, max_tokens=700)
+                        async def generate():
+                            return {"answer": await insight_gen._call_llm(_p, _s, max_tokens=700)}
 
+                        key = result_key(cache_scope, "chat-row-grounded",
+                                         (_p, _s, upload_id, row_data_version),
+                                         prompt_version="row-grounded-v1", model_version="insights-routing-v1")
+                        value = await cached_response(key, generate,
+                                                      cacheable=lambda result: bool(_rl_parse(result["answer"] or "")))
+                        row_cache_fields.update(cacheHit=value["cacheHit"])
+                        if value.get("cacheToken"):
+                            row_cache_fields["cacheToken"] = value["cacheToken"]
+                        return value["answer"]
+
+                    row_cache_fields = {}
                     _rl_out = await _rl_answer(
                         request.effective_query, _rl_df, _rl_names(_rl_fm, _rl_df), _rl_llm,
                         field_meta=_rl_fm,
                         upload_key=(trusted_factory_id, _question_chart_upload_id)
-                        if _question_chart_upload_id is not None else None,
+                        if use_legacy_cache and _question_chart_upload_id is not None else None,
                     )
                     if _rl_out.kind == "refuse":
                         for i in range(0, len(_rl_out.text), 60):
@@ -3133,7 +3183,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
             # normalized_q + upload_id), TTL 24h. ~80% of follow-ups go through
             # LLM costing 10-12s; cache hit returns in 200ms.
             _llm_cache_hit = None
-            if (request.allow_tenant_data_fallback
+            if (use_legacy_cache and request.allow_tenant_data_fallback
                     and _rl_text_answer is None
                     and not _rl_active  # 行级计算过的问题不读旧缓存 (旧答案可能是样本猜的)
                     and not chat_session_parent and _session_factory_id
@@ -3160,7 +3210,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
             if _rl_text_answer is not None or _llm_cache_hit:
                 if _rl_text_answer is not None:
                     _ready_text = _rl_text_answer
-                    _ready_meta = {"source": "row_level_text", "charts": _rl_answer_charts}
+                    _ready_meta = {"source": "row_level_text", "charts": _rl_answer_charts, **row_cache_fields}
                 else:
                     yield _sse_event("status", "正在读取近期分析结果...")
                     _ready_text = _llm_cache_hit["answer_text"]
@@ -3209,10 +3259,28 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
             # Soft 25s cut-off uses elapsed check between chunks (only fires
             # when LLM produces something then stalls). Pure silent (0-chunk)
             # case is caught by post-loop safety net below.
+            key = result_key(cache_scope, "chat-general-sse",
+                             (data, prompt, system_role, upload_id,
+                              trusted_session_user_id if chat_session_parent else None),
+                             prompt_version="chat-general-sse-v1", model_version="insights-routing-v1",
+                             question=request.effective_query)
+            cached = await leases.enter_async_context(analysis_result(key))
+            if cached.entry.hit:
+                hit = cached.entry.value
+                _v2_writeback_bg(request.session_id, trusted_factory_id, trusted_session_user_id,
+                                 query=request.effective_query, answer=hit["answer"], upload_id=validated_upload_id)
+                yield _sse_event("chunk", hit["answer"])
+                if hit.get("charts"):
+                    yield _sse_event("charts", hit["charts"])
+                yield _sse_event("done", {**hit, **cached.response_fields,
+                                          "processingTimeMs": int((time.time() - start_time) * 1000)})
+                return
+
             full_text = ""
             _llm_start = time.time()
             _LLM_SOFT_TIMEOUT_S = 25.0
             _llm_truncated = False
+            completion = StreamCompletion()
             _silent_timeout = False
 
             # Apr 28 2026: max_tokens 400 → 380. Initial reduction to 320
@@ -3222,7 +3290,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
             # while still capping rambling models at ~50% of prior 800-token
             # ceiling.
             async for chunk in insight_gen._call_llm_stream_text(
-                prompt, system_role, max_tokens=380, temperature=0.2
+                prompt, system_role, max_tokens=380, temperature=0.2, completion=completion,
             ):
                 if await http_request.is_disconnected():
                     logger.info("[stream] Client disconnected, stopping")
@@ -3267,7 +3335,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                 # empty text with the cached answer + note. Avoids forcing
                 # users to re-ask (which doubles LLM cost).
                 _cache_fallback = None
-                if (request.allow_tenant_data_fallback
+                if (use_legacy_cache and request.allow_tenant_data_fallback
                         and _session_factory_id and request.effective_query
                         and not chat_session_parent):
                     try:
@@ -3518,9 +3586,9 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
             # yield done, so any code after yield never runs. _spawn_bg
             # schedules background task which keeps running after this
             # generator closes (anchored in _PENDING_BG_TASKS).
-            if (request.allow_tenant_data_fallback
+            if (use_legacy_cache and request.allow_tenant_data_fallback
                     and not chat_session_parent and _session_factory_id
-                    and full_text and not _llm_truncated):
+                    and full_text and completion.completed and not _llm_truncated):
                 try:
                     from smartbi.services.llm_answer_cache import LlmAnswerCache as _LAC
                     from smartbi.services.query_normalizer import normalize_for_match
@@ -3577,7 +3645,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
             # materialized_cache / llm_answer_cache / capability_short_circuit)
             # return earlier and never reach here. Fire-and-forget — the helper
             # swallows all exceptions and never delays the stream.
-            if full_text and not _llm_truncated:
+            if full_text and completion.completed and not _llm_truncated:
                 await _capture_qa_distillation(
                     request.effective_query, full_text, http_request
                 )
@@ -3588,7 +3656,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
             # + chat-session upsert above use _spawn_bg to schedule background
             # tasks anchored in _PENDING_BG_TASKS, so they survive generator
             # cancellation.
-            yield _sse_event("done", {
+            final = {
                 "success": True,
                 "answer": full_text,
                 "answer_corrected": _answer_corrected,
@@ -3596,8 +3664,11 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                 "log_id": _log_id,
                 "warning": _guard_warning,
                 "answer_replaced": _answer_replaced,
-                "processingTimeMs": int((time.time() - start_time) * 1000)
-            })
+            }
+            if full_text.strip() and completion.completed and not _llm_truncated and not _guard_warning:
+                await cached.store({key: value for key, value in final.items() if key != "log_id"})
+            yield _sse_event("done", {**final, **cached.response_fields,
+                                     "processingTimeMs": int((time.time() - start_time) * 1000)})
 
         except Exception as e:
             logger.error(f"[stream] General analysis stream failed: {e}", exc_info=True)
@@ -3622,10 +3693,14 @@ def _sse_event(event: str, data) -> str:
 
 
 async def _stream_llm_response(
-    system_prompt: str,
+    system_prompt: Optional[str],
     user_prompt: str,
     max_tokens: int = 1500,
     temperature: float = 0.2,
+    *,
+    scope=None,
+    cache_fields=None,
+    data_version=None,
 ) -> AsyncGenerator[str, None]:
     """
     Shared helper: calls InsightGenerator._call_llm_stream_text and yields SSE-formatted strings.
@@ -3634,11 +3709,29 @@ async def _stream_llm_response(
         SSE chunk events as text chunks arrive from the LLM.
         Caller is responsible for sending the final "done" and "error" events.
     """
-    insight_gen = InsightGenerator()
-    async for chunk in insight_gen._call_llm_stream_text(
-        user_prompt, system_prompt, max_tokens=max_tokens, temperature=temperature
-    ):
-        yield chunk
+    key = result_key(scope, "chat-text-stream", (system_prompt, user_prompt, max_tokens, temperature, data_version),
+                     prompt_version="chat-text-stream-v1", model_version="insights-routing-v1")
+    async with analysis_result(key) as cached:
+        if cached.entry.hit:
+            yield cached.entry.value["text"]
+        else:
+            insight_gen = InsightGenerator()
+            chunks = []
+            completion = StreamCompletion()
+            async for chunk in insight_gen._call_llm_stream_text(
+                user_prompt, system_prompt, max_tokens=max_tokens, temperature=temperature, completion=completion,
+            ):
+                chunks.append(chunk)
+                yield chunk
+            text = "".join(chunks)
+            if text.strip() and completion.completed:
+                await cached.store({"text": text})
+        if cache_fields is not None:
+            cache_fields.update(cached.response_fields)
+
+
+def _analysis_stream_scope(http_request: Request):
+    return None if _no_capture_requested(http_request) else request_scope(http_request)
 
 
 def _build_analysis_ctx(query: str, context: Optional[Dict[str, Any]]) -> str:
@@ -3770,7 +3863,11 @@ async def drill_down_stream(request: DrillDownRequest, http_request: Request):
             yield _sse_event("status", "正在分析...")
 
             full_text = ""
-            async for chunk in _stream_llm_response(system_prompt, user_prompt, max_tokens=1200, temperature=0.2):
+            cache_fields = {}
+            async for chunk in _stream_llm_response(
+                system_prompt, user_prompt, max_tokens=1200, scope=_analysis_stream_scope(http_request),
+                cache_fields=cache_fields, data_version=("drill-down", data, request.sheet_id, v2_user),
+            ):
                 if await http_request.is_disconnected():
                     logger.info("[drill-down-stream] Client disconnected, stopping")
                     return
@@ -3790,6 +3887,7 @@ async def drill_down_stream(request: DrillDownRequest, http_request: Request):
                 "answer": full_text,
                 "dimension": request.dimension,
                 "filter_value": request.filter_value,
+                **cache_fields,
                 "processingTimeMs": int((time.time() - start_time) * 1000)
             })
 
@@ -3902,7 +4000,11 @@ KPI统计: {stats_text}
             yield _sse_event("status", "正在分析根本原因...")
 
             full_text = ""
-            async for chunk in _stream_llm_response(system_prompt, user_prompt, max_tokens=1200, temperature=0.2):
+            cache_fields = {}
+            async for chunk in _stream_llm_response(
+                system_prompt, user_prompt, max_tokens=1200, scope=_analysis_stream_scope(http_request),
+                cache_fields=cache_fields, data_version=("root-cause", data, request.sheet_id, v2_user),
+            ):
                 if await http_request.is_disconnected():
                     logger.info("[root-cause-stream] Client disconnected, stopping")
                     return
@@ -3921,6 +4023,7 @@ KPI统计: {stats_text}
                 "success": True,
                 "kpi": request.kpi,
                 "answer": full_text,
+                **cache_fields,
                 "processingTimeMs": int((time.time() - start_time) * 1000)
             })
 
@@ -4004,7 +4107,11 @@ async def benchmark_stream(request: BenchmarkRequest, http_request: Request):
             yield _sse_event("status", "正在对标分析...")
 
             full_text = ""
-            async for chunk in _stream_llm_response(system_prompt, user_prompt, max_tokens=1200, temperature=0.2):
+            cache_fields = {}
+            async for chunk in _stream_llm_response(
+                system_prompt, user_prompt, max_tokens=1200, scope=_analysis_stream_scope(http_request),
+                cache_fields=cache_fields, data_version=("benchmark", request.metrics, request.sheet_id, v2_user),
+            ):
                 if await http_request.is_disconnected():
                     logger.info("[benchmark-stream] Client disconnected, stopping")
                     return
@@ -4023,6 +4130,7 @@ async def benchmark_stream(request: BenchmarkRequest, http_request: Request):
                 "success": True,
                 "industry": request.industry,
                 "answer": full_text,
+                **cache_fields,
                 "processingTimeMs": int((time.time() - start_time) * 1000)
             })
 
@@ -4122,7 +4230,11 @@ async def multi_dimension_analysis_stream(request: MultiDimensionRequest, http_r
             yield _sse_event("status", "正在生成多维度洞察...")
 
             full_text = ""
-            async for chunk in _stream_llm_response(system_prompt, user_prompt, max_tokens=1500, temperature=0.2):
+            cache_fields = {}
+            async for chunk in _stream_llm_response(
+                system_prompt, user_prompt, scope=_analysis_stream_scope(http_request),
+                cache_fields=cache_fields, data_version=("multi-dimension", request.data, request.sheet_id),
+            ):
                 if await http_request.is_disconnected():
                     logger.info("[multi-dimension-stream] Client disconnected, stopping")
                     return
@@ -4133,6 +4245,7 @@ async def multi_dimension_analysis_stream(request: MultiDimensionRequest, http_r
                 "success": True,
                 "answer": full_text,
                 "dimensions": request.dimensions,
+                **cache_fields,
                 "processingTimeMs": int((time.time() - start_time) * 1000)
             })
 

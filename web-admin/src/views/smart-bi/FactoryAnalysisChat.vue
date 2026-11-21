@@ -7,6 +7,7 @@ import { useAuthStore } from '@/store/modules/auth';
 import { toDateString } from '@/utils/dateFormat';
 import PeriodSelector, { type PeriodSelection } from '@/components/smartbi/PeriodSelector.vue';
 import { getUploadHistory, type UploadHistoryItem } from '@/api/smartbi/upload';
+import { markAnalysisUnhelpful } from '@/api/smartbi/analysis-feedback';
 import type { FactoryChartPeriodType, FactoryChartSource, FactoryRecommendation, FactoryJointUploads } from '@/api/smartbi/factory-charts';
 import {
   postFactoryAnalysis,
@@ -37,6 +38,8 @@ interface ChatTurn {
   clarification?: boolean;
   clarificationHasSubjects?: boolean;
   loading?: boolean;
+  cacheToken?: string;
+  feedback?: 'sending' | 'sent' | 'error';
   question?: string;
   scopeKey?: string;
   metadata?: {
@@ -58,6 +61,12 @@ interface FactoryRouteScope {
   jointRequested: boolean;
   inspectionUploadId: number | null;
   costUploadId: number | null;
+}
+
+async function sendAnalysisFeedback(turn: ChatTurn) {
+  if (!turn.cacheToken || turn.feedback === 'sending' || turn.feedback === 'sent') return;
+  turn.feedback = 'sending';
+  turn.feedback = await markAnalysisUnhelpful(turn.cacheToken) ? 'sent' : 'error';
 }
 
 interface AcceptedAnswerScope {
@@ -501,6 +510,7 @@ async function sendQuestion(
     if (data.analysisSubject) analysisSubject.value = data.analysisSubject;
     assistantTurn.text = data.answer || result.message || '当前分析没有可显示的结论。';
     assistantTurn.status = data.status;
+    assistantTurn.cacheToken = data.status === 'answered' ? data.cacheToken : undefined;
     assistantTurn.recommendations = data.status === 'answered' ? (data.recommendations || []) : [];
     assistantTurn.facts = data.facts || [];
     assistantTurn.limitations = data.limitations || [];
@@ -718,6 +728,11 @@ onBeforeUnmount(() => { requestVersion.value += 1; clearChartReadiness(); });
             </div>
           </div>
           <div v-if="turn.followUps?.length" class="followups"><el-button v-for="followUp in turn.followUps" :key="followUp" size="small" plain @click="sendFollowUp(followUp)">{{ followUp }}</el-button></div>
+          <div v-if="turn.cacheToken">
+            <el-button v-if="turn.feedback !== 'sent'" link size="small" :loading="turn.feedback === 'sending'" @click="sendAnalysisFeedback(turn)">无帮助</el-button>
+            <small v-if="turn.feedback === 'sent'" role="status">感谢反馈</small>
+            <small v-if="turn.feedback === 'error'" role="status">反馈未提交，请重试</small>
+          </div>
           <el-button v-if="retryQuestion && turn === turns[turns.length - 1]" size="small" type="primary" @click="retryExpired">重新发送</el-button>
         </template>
       </article>

@@ -15,6 +15,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from common.tenant_identity import require_same_factory
+from common.smartbi_analysis_cache import request_scope
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Cross-Sheet Analysis"])
@@ -53,6 +54,8 @@ class CrossSheetResponse(BaseModel):
     aiSummary: Optional[str] = None
     error: Optional[str] = None
     processingTimeMs: int = 0
+    cacheHit: bool = False
+    cacheToken: Optional[str] = None
 
 
 # ============================================================================
@@ -88,7 +91,8 @@ async def cross_sheet_analysis(request: CrossSheetRequest, http_request: Request
         result = await aggregator.aggregate(
             upload_ids=request.upload_ids,
             sheet_names=request.sheet_names,
-            factory_id=factory_id
+            factory_id=factory_id,
+            cache_scope=request_scope(http_request),
         )
 
         elapsed = int((time.time() - start_time) * 1000)
@@ -98,6 +102,8 @@ async def cross_sheet_analysis(request: CrossSheetRequest, http_request: Request
             kpiComparison=[SheetKPI(**k) for k in result.get("kpiComparison", [])],
             charts=[CrossSheetChart(**c) for c in result.get("charts", [])],
             aiSummary=result.get("aiSummary"),
+            cacheHit=result.get("cacheHit", False),
+            cacheToken=result.get("cacheToken"),
             error=result.get("error"),
             processingTimeMs=elapsed
         )

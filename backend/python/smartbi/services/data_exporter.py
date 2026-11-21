@@ -16,14 +16,16 @@ import io
 import json
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
+from hashlib import sha256
 from typing import Any, Dict, List, Optional
 
 import openpyxl
 import pandas as pd
 
-from services.structure_detector import StructureDetector
+from common.smartbi_analysis_cache import AnalysisScope, analysis_result, result_key
+from services.structure_detector import MergedCellInfo, StructureDetectionResult, StructureDetector
 from services.context_extractor import ContextExtractor, ContextInfo
 
 logger = logging.getLogger(__name__)
@@ -312,10 +314,38 @@ class DataExporter:
 
     SMARTBI_VERSION = "1.0"
 
-    def __init__(self):
+    def __init__(self, *, cache_scope: AnalysisScope | None = None):
         self._structure_detector = StructureDetector()
         self._context_extractor = ContextExtractor()
         self._header_flattener = HeaderFlattener()
+        self._cache_scope = cache_scope
+
+    async def _detect_export_structure(self, file_bytes: bytes, sheet_index: int) -> StructureDetectionResult:
+        detector = self._structure_detector
+        key = None
+        if self._cache_scope is not None:
+            settings = detector.settings
+            key = result_key(
+                self._cache_scope, "excel-export-structure",
+                (sha256(file_bytes).hexdigest(), sheet_index, settings.use_llm_first,
+                 settings.enable_multi_model_enhancement, settings.structure_detection_confidence_threshold,
+                 settings.multi_model_voting_confidence_threshold),
+                prompt_version="excel-export-structure-v1",
+                model_version=f"structure-v1:{settings.llm_model}:{settings.llm_fast_model}",
+            )
+        async with analysis_result(key) as cached:
+            if cached.entry.hit:
+                saved = dict(cached.entry.value)
+                saved["merged_cells"] = [MergedCellInfo(**cell) for cell in saved["merged_cells"]]
+                return StructureDetectionResult(**saved)
+            result = await detector.detect(file_bytes, sheet_index=sheet_index, max_header_rows=10)
+            if result.success and not result.error and not (result.note or "").startswith("Fallback"):
+                await cached.store({
+                    "header_row_count": result.header_row_count,
+                    "data_start_row": result.data_start_row,
+                    "merged_cells": [asdict(cell) for cell in result.merged_cells],
+                })
+            return result
 
     async def from_excel(
         self,
@@ -349,11 +379,7 @@ class DataExporter:
             result.source_sheet = ws.title
 
             # Detect structure
-            structure = await self._structure_detector.detect(
-                file_bytes,
-                sheet_index=sheet_index,
-                max_header_rows=10
-            )
+            structure = await self._detect_export_structure(file_bytes, sheet_index)
 
             if not structure.success:
                 result.processing_notes.append(f"Structure detection failed: {structure.error}")
@@ -895,8 +921,8 @@ class BatchExporter:
     - csv/{sheet_name}.csv: Individual CSV files
     """
 
-    def __init__(self):
-        self._exporter = DataExporter()
+    def __init__(self, *, cache_scope: AnalysisScope | None = None):
+        self._exporter = DataExporter(cache_scope=cache_scope)
 
     async def export_all_sheets(
         self,

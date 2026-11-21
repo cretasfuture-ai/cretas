@@ -19,7 +19,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from services.utils.json_parser import robust_json_parse
+from common.utils.json_parser import robust_json_parse
 
 logger = logging.getLogger(__name__)
 

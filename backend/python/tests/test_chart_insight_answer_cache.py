@@ -14,6 +14,8 @@ from httpx import ASGITransport, AsyncClient
 from auth_middleware import JWTAuthMiddleware
 from smartbi.api import chart_insight
 from smartbi.services.insights import chart_insight_service
+from common import smartbi_analysis_cache as storage
+from tests.analysis_cache_fixtures import MemoryCache, analysis_cache  # noqa: F401
 
 
 PATH = "/api/smartbi/chart-insight"
@@ -52,7 +54,7 @@ def model_result(ctx):
 
 
 @pytest.fixture
-async def entry(monkeypatch):
+async def entry(monkeypatch, analysis_cache):
     monkeypatch.delenv("CHART_INSIGHT_DETERMINISTIC_FIRST", raising=False)
     budget = SimpleNamespace(
         check_budget=AsyncMock(return_value=SimpleNamespace(blocked=False)),
@@ -130,19 +132,17 @@ async def test_chart_version_change_misses(entry, changes):
     assert model.await_count == 2
 
 
-async def test_expiry_allows_regeneration(entry, monkeypatch):
-    clock = [100.0]
-    monkeypatch.setattr(chart_insight_service, "_ANSWER_CACHE_TTL_SECONDS", 2)
-    client, model, _, service = entry
-    service._answers = chart_insight_service.TTLCache(
-        maxsize=1024, ttl=chart_insight_service._ANSWER_CACHE_TTL_SECONDS, timer=lambda: clock[0],
-    )
-    assert answer(await client.post(PATH, json=payload(), headers=headers()))["cacheHit"] is False
-    clock[0] += 1
+async def test_process_replacement_keeps_cached_answer_and_entry_has_no_expiry(entry, analysis_cache, monkeypatch):
+    client, model, budget, _ = entry
+    initial = answer(await client.post(PATH, json=payload(), headers=headers()))
+    replacement = chart_insight_service.ChartInsightService(pool=None, budget_tracker=budget)
+    monkeypatch.setattr(replacement, "_call_llm", model)
+    monkeypatch.setattr(chart_insight, "_service", replacement)
+    if not isinstance(analysis_cache, MemoryCache):
+        assert await analysis_cache.ttl(storage._VALUES) == -1
     assert answer(await client.post(PATH, json=payload(), headers=headers()))["cacheHit"] is True
-    clock[0] += 2
-    assert answer(await client.post(PATH, json=payload(), headers=headers()))["cacheHit"] is False
-    assert model.await_count == 2
+    assert answer(await client.post(PATH, json=payload(), headers=headers())) == {**initial, "cacheHit": True}
+    model.assert_awaited_once()
 
 
 async def test_concurrent_same_key_uses_one_model_call(entry):
@@ -165,6 +165,89 @@ async def test_concurrent_same_key_uses_one_model_call(entry):
     assert [result["cacheHit"] for result in results] == [False, True]
     model.assert_awaited_once()
     budget.consume.assert_awaited_once()
+
+
+async def test_lease_is_renewed_until_the_model_completes(entry, analysis_cache, monkeypatch):
+    if isinstance(analysis_cache, MemoryCache):
+        pytest.skip("lease renewal requires Redis")
+    monkeypatch.setattr(storage, "_LEASE_SECONDS", 1)
+    client, model, _, _ = entry
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def delayed(ctx):
+        entered.set()
+        await release.wait()
+        return model_result(ctx)
+
+    model.side_effect = delayed
+    primary = asyncio.create_task(client.post(PATH, json=payload(), headers=headers()))
+    await asyncio.wait_for(entered.wait(), 2)
+    secondary = asyncio.create_task(client.post(PATH, json=payload(), headers=headers()))
+    try:
+        await asyncio.sleep(1.3)
+        assert model.await_count == 1
+    finally:
+        release.set()
+        first, second = await asyncio.gather(primary, secondary)
+    assert answer(second) == {**answer(first), "cacheHit": True}
+
+
+async def test_analysis_lease_wait_has_deadline_without_stealing(analysis_cache, monkeypatch):
+    if isinstance(analysis_cache, MemoryCache):
+        pytest.skip("lease timeout requires Redis")
+    monkeypatch.setattr(storage, "_MAX_WAIT_SECONDS", 0.05)
+    key = storage.result_key(storage.AnalysisScope(FACTORY, "operator"), "lease", 1,
+                             prompt_version="v1", model_version="v1")
+    cache = storage.get_cache()
+    try:
+        owner = await cache.acquire(key)
+        async with storage.analysis_result(key) as waiting:
+            assert waiting.response_fields == {"cacheHit": False}
+            await waiting.store({"answer": "uncached"})
+        assert await analysis_cache.get(key.lock) == owner.revision.encode()
+        assert await cache.complete(owner, {"answer": "owner"})
+    finally:
+        await cache.redis.aclose()
+    async with storage.analysis_result(key) as reused:
+        assert reused.entry.value == {"answer": "owner"}
+
+
+async def test_cancelled_acquire_releases_lease_even_if_redis_already_applied_it(analysis_cache, monkeypatch):
+    if isinstance(analysis_cache, MemoryCache):
+        pytest.skip("acquire cancellation requires Redis")
+    key = storage.result_key(storage.AnalysisScope(FACTORY, "operator"), "lease", 2,
+                             prompt_version="v1", model_version="v1")
+    cache = storage.get_cache()
+    applied, closed = asyncio.Event(), asyncio.Event()
+    original_eval, original_close = cache.redis.eval, cache.redis.aclose
+
+    async def pause_after_eval(script, *args):
+        result = await original_eval(script, *args)
+        if script == storage._ACQUIRE:
+            applied.set()
+            await asyncio.Future()
+        return result
+
+    async def observe_close():
+        await original_close()
+        closed.set()
+
+    monkeypatch.setattr(cache.redis, "eval", pause_after_eval)
+    monkeypatch.setattr(cache.redis, "aclose", observe_close)
+    monkeypatch.setattr(storage, "get_cache", lambda: cache)
+
+    async def enter():
+        async with storage.analysis_result(key):
+            pytest.fail("Cancelled acquire reached the generator")
+
+    task = asyncio.create_task(enter())
+    await asyncio.wait_for(applied.wait(), 2)
+    assert await analysis_cache.exists(key.lock)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert closed.is_set() and not await analysis_cache.exists(key.lock)
 
 
 async def test_concurrent_cold_start_uses_one_service_cache(entry, monkeypatch):
@@ -293,5 +376,49 @@ async def test_feedback_is_tenant_scoped_and_invalidates_downvoted_answer(entry,
     sql, _, _, hash_arg, factory_arg = conn.execute.await_args.args
     assert "WHERE input_hash = $3 AND factory_id = $4" in sql
     assert (hash_arg, factory_arg) == (input_hash, FACTORY)
+    assert answer(await client.post(PATH, json=payload(), headers=headers()))["cacheHit"] is False
+    assert model.await_count == 2
+
+
+async def test_retry_after_cache_failure_does_not_count_feedback_twice(entry, monkeypatch):
+    from smartbi.api import chart_insight as api
+
+    client, model, _, service = entry
+    initial = answer(await client.post(PATH, json=payload(), headers=headers()))
+    row = {"quality": 5, "metadata": {"permission_tier": "finance_visible"}}
+
+    async def save(_sql, metadata, quality, _hash, _factory):
+        row.update(metadata=json.loads(metadata), quality=quality)
+
+    conn = SimpleNamespace(fetchrow=AsyncMock(return_value=row), execute=AsyncMock(side_effect=save))
+
+    @asynccontextmanager
+    async def acquire():
+        yield conn
+
+    monkeypatch.setattr(service, "_pool", SimpleNamespace(acquire=acquire))
+    monkeypatch.setattr(service, "_read_corpus_cache", AsyncMock(return_value=None))
+    monkeypatch.setattr(chart_insight_service, "persist_distillation_sample", AsyncMock())
+    invalidate = api.invalidate
+    monkeypatch.setattr(api, "invalidate", AsyncMock(side_effect=api.AnalysisCacheUnavailable))
+    vote = {"input_hash": initial["input_hash"], "cache_token": initial["cacheToken"],
+            "vote": "down", "factory_id": FACTORY}
+    path = "/api/smartbi/insight/feedback"
+    assert (await client.post(path, json=vote, headers=headers())).status_code == 503
+    monkeypatch.setattr(api, "invalidate", invalidate)
+    assert answer(await client.post(path, json=vote, headers=headers()))["new_quality"] == 5
+    conn.execute.assert_awaited_once()
+    assert row["metadata"]["feedback_down"] == 1
+    assert answer(await client.post(PATH, json=payload(), headers=headers()))["cacheHit"] is False
+    assert model.await_count == 2
+
+
+async def test_redis_feedback_does_not_depend_on_corpus_capture(entry):
+    client, model, _, _ = entry
+    initial = answer(await client.post(PATH, json=payload(), headers=headers()))
+    vote = {"input_hash": initial["input_hash"], "cache_token": initial["cacheToken"],
+            "vote": "down", "factory_id": FACTORY}
+    response = await client.post("/api/smartbi/insight/feedback", json=vote, headers=headers())
+    assert answer(response)["invalidated"] is True
     assert answer(await client.post(PATH, json=payload(), headers=headers()))["cacheHit"] is False
     assert model.await_count == 2

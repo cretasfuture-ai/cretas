@@ -289,12 +289,18 @@ async def trigger_materialization(upload_id: int, request: Request) -> Dict[str,
     # Must run BEFORE save so the rich insight lands in the persisted `insights`
     # column. Wrapped: any failure leaves result.llm_insight=None → persistence
     # falls back to rule insight_text (禁止降级处理: never store empty/fake).
+    cache_fields = {"cacheHit": False}
     try:
         from smartbi.services.materialized_analytics.llm_materializer import (
             generate_llm_insights,
         )
+        from common.smartbi_analysis_cache import request_scope
+
         t_llm = time.time()
-        exec_summary = await generate_llm_insights(results, domain_value, factory_id=user_factory)
+        exec_summary = await generate_llm_insights(
+            results, domain_value, factory_id=user_factory, cache_scope=request_scope(request),
+            data_version=upload_id, cache_fields=cache_fields,
+        )
         logger.info(
             f"[materialize] upload {upload_id}: LLM insight materialization done "
             f"in {time.time() - t_llm:.1f}s"
@@ -353,6 +359,7 @@ async def trigger_materialization(upload_id: int, request: Request) -> Dict[str,
         "errored": errored,
         "saved": saved,
         "narrative_invalidated": narrative_invalidated,
+        **cache_fields,
         "wall_ms": int((time.time() - t_start) * 1000),
     }
 
