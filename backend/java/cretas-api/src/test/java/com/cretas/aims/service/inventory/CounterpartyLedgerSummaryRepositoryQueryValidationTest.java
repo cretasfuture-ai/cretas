@@ -4,6 +4,7 @@ import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.enums.*;
 import com.cretas.aims.entity.finance.ArApTransaction;
 import com.cretas.aims.entity.inventory.*;
+import com.cretas.aims.security.BusinessRowScope;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import org.junit.jupiter.api.BeforeEach;
@@ -21,6 +22,8 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /** 供应商/客户账本汇总 (G4): 真实 JPA Context, 真实 JPQL. */
 @DataJpaTest(showSql = false, properties = {"spring.flyway.enabled=false"})
@@ -33,6 +36,7 @@ class CounterpartyLedgerSummaryRepositoryQueryValidationTest {
     private static final String F = "IT-LEDGER";
     @PersistenceContext private EntityManager em;
     private CounterpartyLedgerSummaryService svc;
+    private BusinessRowScope rowScope;
     private int seq;
     private Long userId;
 
@@ -55,6 +59,9 @@ class CounterpartyLedgerSummaryRepositoryQueryValidationTest {
         em.persist(product);
         svc = new CounterpartyLedgerSummaryService();
         ReflectionTestUtils.setField(svc, "em", em);
+        rowScope = mock(BusinessRowScope.class);
+        when(rowScope.recordCreatorIds(F)).thenReturn(null);
+        ReflectionTestUtils.setField(svc, "businessRowScope", rowScope);
     }
 
     private PurchaseOrder po(String supplier, PurchaseOrderStatus st, String total, PurchaseInvoiceStatus inv) {
@@ -190,5 +197,18 @@ class CounterpartyLedgerSummaryRepositoryQueryValidationTest {
         assertThat(m.get("averageOrderValue")).isNull();
         assertThat(m.get("lastOrderDate")).isNull();
         assertThat((BigDecimal) m.get("contractAmount")).isEqualByComparingTo("0");
+    }
+
+    @Test
+    void restrictedAccountNeverGetsFactoryWideLedgerAmounts() {
+        tx(CounterpartyType.CUSTOMER, "CUS-1", ArApTransactionType.AR_INVOICE, "150");
+        tx(CounterpartyType.CUSTOMER, "CUS-1", ArApTransactionType.AR_PAYMENT, "50");
+        em.flush();
+        assertThat((BigDecimal) svc.customerSummary(F, "CUS-1").get("pendingCollection")).isEqualByComparingTo("100");
+
+        when(rowScope.recordCreatorIds(F)).thenReturn(List.of(userId));
+
+        assertThat(svc.customerSummary(F, "CUS-1")).containsEntry("pendingCollection", null)
+                .containsEntry("receivedAmount", null);
     }
 }
