@@ -78,6 +78,111 @@ def answer(response):
     return result["data"]
 
 
+@pytest.mark.parametrize(("finding", "labels"), [
+    ("2026年11月（11-01至11-21），蒸饺 · 2026100001占73.0%。", ["蒸饺 · 2026100001", "锅贴"]),
+    ("2026年第47周、2026Q4，11月21日蒸饺 · 2026100001占73.0%。", ["蒸饺 · 2026100001", "锅贴"]),
+    ("蒸饺 · 2026100001占73.0%，第四季度可核对产品编码2026100001。", ["蒸饺 · 2026100001", "锅贴"]),
+    ("11-21，工单 WO-2026100001 占73.0%。", ["工单 WO-2026100001", "工单 WO-2026100002"]),
+    ("11月，批次 2026100001 占73.0%。", ["批次 2026100001", "批次 2026100002"]),
+    ("2026-11-01/2026-11-21，产品编码2026100001占73.0%。", ["蒸饺 · 2026100001", "锅贴"]),
+    ("2026 年 11 月 21 日，蒸饺 · 2026100001占73.0%。", ["蒸饺 · 2026100001", "锅贴"]),
+    ("11-21，工单号WO-2026100001占73.0%。", ["工单 WO-2026100001", "工单 WO-2026100002"]),
+], ids=["date-range", "week-quarter-day", "product-code", "work-order", "batch", "iso-range-code-only",
+        "spaced-date", "work-order-code-only"])
+async def test_chart_claim_context_numbers_are_not_statistics(entry, caplog, finding, labels):
+    client, model, _, _ = entry
+    model.side_effect = None
+    model.return_value = {"finding": finding, "claims": []}
+    body = payload(factory_id="LIUSHANMEN", series_values=[730, 270], series_labels=labels)
+    with caplog.at_level("INFO", logger=chart_insight_service.__name__):
+        first = answer(await client.post(PATH, json=body, headers=headers("LIUSHANMEN")))
+        print(f"POST {PATH}: source={first['source']}, cacheHit={first['cacheHit']}, finding={first['finding']}")
+        assert first["source"] == "llm"
+        assert first["finding"] == finding
+        assert first["cacheHit"] is False
+        again = answer(await client.post(PATH, json=body, headers=headers("LIUSHANMEN")))
+        assert again == {**first, "cacheHit": True}
+        print(f"POST {PATH} refresh: source={again['source']}, cacheHit={again['cacheHit']}, model_calls={model.await_count}")
+    assert "claims_rejected" not in caplog.text
+    model.assert_awaited_once()
+
+
+@pytest.mark.parametrize("finding", [
+    "11月，蒸饺 · 2026100001占73.0%，合计999999件。",
+    "11-21，蒸饺 · 2026100001占91.75%。",
+    "蒸饺 · 2026100001合计2026100001件。",
+    "蒸饺 · 2026100001占2026100001%。",
+    "蒸饺 · 2026100001占73.0%，占比为11-21%。",
+    "蒸饺 · 2026100001占73.0%，合计为11.21件。",
+    "11月，蒸饺 · 2026100001占73.0%，核对产品编码20261000010。",
+    "产品编码2026100001占27.0%。",
+    "2026年11月，查看蒸饺 · 2026100001。",
+    None,
+], ids=["invented-total", "invented-share", "code-as-total", "code-as-share", "date-as-share",
+        "decimal-total", "unseen-code", "swapped-code-share", "context-only", "no-response"])
+async def test_invalid_chart_model_result_stores_only_completed_rules(entry, caplog, finding):
+    client, model, budget, _ = entry
+    model.side_effect = None
+    model.return_value = {"finding": finding, "claims": []} if finding is not None else None
+    body = payload(series_values=[730, 270], series_labels=["蒸饺 · 2026100001", "锅贴"])
+    with caplog.at_level("INFO", logger=chart_insight_service.__name__):
+        first = answer(await client.post(PATH, json=body, headers=headers()))
+        assert first["source"] == "rules"
+        assert first["finding"] == "参与比较的产品中，蒸饺的数量最高，锅贴最低。蒸饺占这些产品合计73.0%。"
+        assert first["suggestion"] and first["input_hash"] and first["cacheToken"]
+        assert first["cacheHit"] is False
+        model.assert_awaited_once()
+
+        again = answer(await client.post(PATH, json=body, headers=headers()))
+        assert again == {**first, "cacheHit": True}
+        print(f"POST {PATH} refresh: source={again['source']}, cacheHit={again['cacheHit']}, model_calls={model.await_count}")
+        model.assert_awaited_once()
+    budget.consume.assert_awaited_once()
+    assert ("reason=claims_rejected" if finding is not None else "reason=no_response") in caplog.text
+
+
+async def test_cached_rules_downvote_invalidates_only_the_callers_entry(entry):
+    client, model, _, _ = entry
+    model.side_effect = None
+    model.return_value = None
+    first = answer(await client.post(PATH, json=payload(), headers=headers()))
+    assert first["source"] == "rules" and first["cacheHit"] is False
+    vote = {"input_hash": first["input_hash"], "cache_token": first["cacheToken"],
+            "vote": "down", "factory_id": FACTORY}
+    feedback_path = "/api/smartbi/insight/feedback"
+    wrong_tier = await client.post(feedback_path, json=vote, headers=headers(role="warehouse_worker"))
+    assert wrong_tier.json()["code"] == "ROW_NOT_FOUND"
+    wrong_factory = await client.post(feedback_path, json=vote, headers=headers(OTHER_FACTORY))
+    assert wrong_factory.status_code == 403
+    assert answer(await client.post(PATH, json=payload(), headers=headers())) == {**first, "cacheHit": True}
+    model.assert_awaited_once()
+
+    assert answer(await client.post(feedback_path, json=vote, headers=headers()))["invalidated"] is True
+    model.side_effect = model_result
+    refreshed = answer(await client.post(PATH, json=payload(), headers=headers()))
+    assert refreshed["source"] == "llm" and refreshed["cacheHit"] is False
+    assert refreshed["input_hash"] != first["input_hash"]
+    assert refreshed["cacheToken"].split(".")[0] == first["cacheToken"].split(".")[0]
+    assert model.await_count == 2
+
+
+async def test_model_failure_without_rules_leaves_no_cache_entry(entry):
+    client, model, _, _ = entry
+    model.side_effect = None
+    model.return_value = None
+    body = payload(chart_type="PIE")
+    response = await client.post(PATH, json=body, headers=headers())
+    assert response.status_code == 200
+    assert response.json()["code"] == "RESULT_UNAVAILABLE"
+    assert response.json()["data"] is None
+    model.assert_awaited_once()
+
+    model.side_effect = model_result
+    valid = answer(await client.post(PATH, json=body, headers=headers()))
+    assert valid["source"] == "llm" and valid["cacheHit"] is False
+    assert model.await_count == 2
+
+
 async def test_same_chart_hits_and_body_order_is_irrelevant(entry):
     client, model, budget, _ = entry
     body = payload()

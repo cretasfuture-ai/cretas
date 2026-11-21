@@ -485,6 +485,89 @@ _SINGLE_ENTITY_STATS: frozenset[str] = frozenset({"value", "share", "complement"
 # Regex to find Arabic numbers (integers and decimals) in prose
 _ARABIC_NUMBER_RE = re.compile(r"\d+\.?\d*")
 
+_YEAR = r"\d{4}"
+_MONTH = r"(?:0?[1-9]|1[0-2])"
+_DAY = r"(?:0?[1-9]|[12]\d|3[01])"
+_WEEK = r"(?:0?[1-9]|[1-4]\d|5[0-3])"
+_ISO_DAY = rf"{_YEAR}-{_MONTH}-{_DAY}"
+_CALENDAR_REFERENCE_RE = re.compile(
+    r"(?<![A-Za-z0-9_.])(?<!\d[-/])(?:"
+    rf"{_ISO_DAY}/{_ISO_DAY}"
+    rf"|{_YEAR}(?:-{_MONTH}(?:-{_DAY})?|/{_MONTH}(?:/{_DAY})?|\.{_MONTH}\.{_DAY})"
+    rf"|{_MONTH}[-/]{_DAY}"
+    rf"|{_YEAR}\s*年(?:\s*{_MONTH}\s*月(?:\s*{_DAY}\s*[日号])?)?"
+    rf"|{_MONTH}\s*月(?:\s*{_DAY}\s*[日号])?|{_DAY}\s*[日号]"
+    rf"|(?:{_YEAR}-?)?W{_WEEK}|(?:{_YEAR}\s*)?Q[1-4]"
+    rf"|(?:第\s*)?{_WEEK}\s*周|(?:第\s*)?[1-4]\s*(?:季度|季)"
+    r")(?![A-Za-z0-9_]|[./-]\d)",
+    re.IGNORECASE,
+)
+_LABEL_TOKEN_EDGE = r"[A-Za-z0-9_]"
+_CHART_IDENTIFIER_LABEL_RE = re.compile(
+    r"(?:产品(?:编码|编号)|批次(?:号|编号)?|工单(?:号|编号)?)\s*[:：]?\s*"
+    r"([A-Za-z0-9][A-Za-z0-9_./-]*)",
+)
+_IDENTIFIER_PREFIX_RE = re.compile(
+    r"(?:产品(?:编码|编号)|批次(?:号|编号)?|工单(?:号|编号)?|SKU|编码|编号|期间)"
+    r"\s*为?\s*[:：]?\s*$", re.I,
+)
+_ENTITY_SUFFIX_RE = re.compile(r"\s*(?:的|占|高于|低于|多于|少于|排名)")
+_STAT_PREFIX_RE = re.compile(
+    r"(?:合计|总计|总量|总额|占比|增长率|增幅|降幅|平均值|最大值|最小值|增长|上涨|下降|减少|占|[¥￥])"
+    r"\s*(?:为|是|约为|约|达|[:：])?\s*[-+]?\s*$"
+)
+_STAT_SUFFIX_RE = re.compile(r"\s*(?:[%％‰]|[万亿]?元|倍|件|箱|吨|公斤|kg|个(?:月|季度)?|天)", re.I)
+
+
+def _prose_number_context(prose: str, labels: List[str]) -> tuple[List[re.Match[str]], Dict[int, str]]:
+    """Find statistics and the enclosing chart entities without changing prose offsets."""
+    context_starts: set[int] = set()
+    entities: Dict[int, str] = {}
+
+    def add_reference(start: int, end: int) -> None:
+        if _STAT_SUFFIX_RE.match(prose, end):
+            return
+        numbers = list(_ARABIC_NUMBER_RE.finditer(prose, start, end))
+        for number in numbers:
+            lead = prose[max(0, number.start() - 24):number.start()]
+            if _STAT_PREFIX_RE.search(lead):
+                return
+            if number.start() == start and _STAT_SUFFIX_RE.match(prose, number.end(), end):
+                return
+        context_starts.update(number.start() for number in numbers)
+
+    for reference in _CALENDAR_REFERENCE_RE.finditer(prose):
+        add_reference(*reference.span())
+
+    references = {label: label for label in labels if label}
+    code_owners: Dict[str, set[str]] = {}
+    for label in references:
+        # Labels can qualify the code with a product name or a dimension prefix.
+        name, _, code = label.rpartition(" · ")
+        prefixed = _CHART_IDENTIFIER_LABEL_RE.fullmatch(label)
+        if prefixed:
+            code = prefixed[1]
+        if (name or prefixed) and _ARABIC_NUMBER_RE.search(code):
+            code_owners.setdefault(code, set()).add(label)
+    for code, owners in code_owners.items():
+        if len(owners) == 1:
+            references.setdefault(code, next(iter(owners)))
+
+    # An exact full label takes priority over its suffix ending at the same character.
+    for reference in sorted(references, key=len, reverse=True):
+        pattern = rf"(?<!{_LABEL_TOKEN_EDGE})(?<!\d[.-]){re.escape(reference)}(?!{_LABEL_TOKEN_EDGE}|[.-]\d)"
+        for mention in re.finditer(pattern, prose):
+            start, end = mention.span()
+            if re.fullmatch(r"[\d./-]+", reference):
+                lead = prose[max(0, start - 24):start]
+                if not (_IDENTIFIER_PREFIX_RE.search(lead) or _ENTITY_SUFFIX_RE.match(prose, end)):
+                    continue
+            entities.setdefault(end, references[reference])
+            add_reference(start, end)
+
+    numbers = [m for m in _ARABIC_NUMBER_RE.finditer(prose) if m.start() not in context_starts]
+    return numbers, entities
+
 
 def _coerce_number(v: Any) -> Optional[float]:
     """Coerce an LLM-emitted claim value to float. Handles int/float and strings like
@@ -524,16 +607,11 @@ def _validate_claims(
     """C1.2 — Validate LLM structured claims by server-side recomputation + numeric-adjacency gate.
 
     Algorithm:
-      1. For each claim in llm_obj["claims"], recompute the true value from ctx.series_*.
-         If recompute returns None OR abs(claim.value - true) > tolerance → drop the claim.
-      2. Numeric-adjacency gate: scan finding+implication+suggestion prose for every Arabic
-         number. Each number must:
-           a) Match (within tolerance) at least one valid claim's value.
-           b) For entity-bearing claims (entity is not None), the nearest entity-label
-              occurrence in the prose to that number must equal the claim's entity.
-         Any prose number failing either check → return None (reject entire response).
-      3. Empty/missing claims → return None.
-      4. All checks pass → return {"finding":…, "implication":…, "suggestion":…}.
+      1. Scan the prose for numbers outside calendar and chart-label references.
+      2. Require at least one statistic anchored to the series' recomputed values.
+      3. When all candidate values belong to individual entities, require the
+         closest preceding chart label (or closest label if none precedes) to match.
+      4. Return {"finding":…, "implication":…, "suggestion":…} if every statistic passes.
 
     Args:
         llm_obj: Parsed LLM response dict with keys "claims", "finding", "implication",
@@ -555,14 +633,14 @@ def _validate_claims(
     prose_fields = [str(llm_obj.get(k)) for k in ("finding", "implication", "suggestion") if llm_obj.get(k)]
     full_prose = " ".join(prose_fields)
 
-    # --- Gate: every Arabic number in the prose must anchor to a TRUE recomputed stat ---
+    # --- Gate: every statistic in the prose must anchor to a TRUE recomputed stat ---
     # (Fable MF1: validate against the full arithmetic closure of the series, not just the
     # LLM's emitted claims — the closure is dense enough that checking doesn't throttle the
     # LLM's intelligence; an invented number matches no true stat → reject.)
-    numbers = list(_ARABIC_NUMBER_RE.finditer(full_prose))
+    numbers, entities = _prose_number_context(full_prose, ctx.series_labels)
     if not numbers:
         # A data insight must cite at least one (verifiable) number.
-        logger.info("[chart-insight] validate: finding has no numbers to verify → reject")
+        logger.info("[chart-insight] validate: finding has no statistics to verify → reject")
         return None
 
     for match in numbers:
@@ -586,9 +664,8 @@ def _validate_claims(
         single_entity = [c for c in candidates if c[1] in _SINGLE_ENTITY_STATS and c[0] is not None]
         other = [c for c in candidates if c[1] not in _SINGLE_ENTITY_STATS]
         if single_entity and not other:
-            attributed = _nearest_preceding_label(full_prose, char_pos, ctx.series_labels)
-            if attributed is None:
-                attributed = _nearest_label_in_prose(full_prose, char_pos, ctx.series_labels)
+            nearest = max((end for end in entities if end <= char_pos), default=min(entities, default=-1))
+            attributed = entities.get(nearest)
             if not any(ent == attributed for ent, _ in single_entity):
                 logger.info("[chart-insight] validate: number %s attributed=%r ≠ true-stat entities %s → reject",
                             num_str, attributed, [ent for ent, _ in single_entity])
@@ -674,6 +751,7 @@ def _annotate_direction_mismatch(
         if not directional_claims:
             return validated
 
+        numbers, _ = _prose_number_context(full_prose, ctx.series_labels)
         # Recompute true sign for each directional claim
         mismatch_found = False
         for claim in directional_claims:
@@ -693,7 +771,7 @@ def _annotate_direction_mismatch(
                 continue
 
             # Scan all numeric occurrences in prose; for each one close to claim_abs, check direction.
-            for m in _ARABIC_NUMBER_RE.finditer(full_prose):
+            for m in numbers:
                 try:
                     prose_num = float(m.group())
                 except ValueError:
@@ -729,64 +807,6 @@ def _annotate_direction_mismatch(
         logger.warning("[chart-insight] _annotate_direction_mismatch failed: %s", exc)
 
     return validated
-
-
-def _nearest_preceding_label(prose: str, target_pos: int, labels: List[str]) -> Optional[str]:
-    """Find the series label whose occurrence is nearest to target_pos but at-or-before it.
-
-    Chinese BI prose attributes a number to the entity stated just before it
-    ("{entity}占{number}%"). So the entity that owns a number is the closest label
-    occurrence starting at index <= target_pos. Returns None if no label precedes.
-    """
-    best_label: Optional[str] = None
-    best_start: int = -1
-    for label in labels:
-        if not label:
-            continue
-        start = 0
-        while True:
-            idx = prose.find(label, start)
-            if idx == -1 or idx > target_pos:
-                break
-            if idx > best_start:  # latest-starting occurrence at-or-before target
-                best_start = idx
-                best_label = label
-            start = idx + 1
-    return best_label
-
-
-def _nearest_label_in_prose(prose: str, target_pos: int, labels: List[str]) -> Optional[str]:
-    """Find the series label whose occurrence in the prose is nearest (by char distance) to target_pos.
-
-    For each label, find all occurrences in the prose. Compute the minimum char distance
-    from target_pos to any occurrence of that label. Return the label with the smallest
-    minimum distance.
-
-    If a label is a substring of another (e.g. "外卖" vs "外卖平台"), we still do simple
-    substring search; the shortest-distance match wins regardless of label length.
-
-    Returns None if no label appears in the prose at all.
-    """
-    best_label: Optional[str] = None
-    best_dist: int = len(prose) + 1  # sentinel: larger than any real distance
-
-    for label in labels:
-        if not label:
-            continue
-        start = 0
-        while True:
-            idx = prose.find(label, start)
-            if idx == -1:
-                break
-            # Distance from target_pos to the start of this occurrence
-            # (could also measure to end; start is fine for nearest-mention intent)
-            dist = abs(idx - target_pos)
-            if dist < best_dist:
-                best_dist = dist
-                best_label = label
-            start = idx + 1  # look for next occurrence
-
-    return best_label
 
 
 # ---------------------------------------------------------------------------
@@ -959,9 +979,16 @@ class ChartInsightService:
             if cached.entry.hit:
                 return replace(InsightResult(**cached.entry.value), cache_hit=True, cache_token=cached.entry.token)
             result = await self._generate_insight(ctx, serve_corpus=serve_corpus)
-            if isinstance(result, InsightResult) and result.source in {"llm", "cache", "template"}:
-                await cached.store(asdict(result))
-                return replace(result, cache_token=cached.response_fields.get("cacheToken"))
+            if isinstance(result, InsightResult) and result.source in {"llm", "cache", "template", "rules"}:
+                stored_result = result
+                if result.source == "rules" and cached.entry.leased:
+                    # Allow a downvote to invalidate this entry without voting on a model corpus row.
+                    rules_hash = compute_input_hash(f"rules:{_corpus_input_text(ctx)}")
+                    stored_result = replace(result, input_hash=rules_hash)
+                await cached.store(asdict(stored_result))
+                token = cached.response_fields.get("cacheToken")
+                if token:
+                    return replace(stored_result, cache_token=token)
             return result
 
     @staticmethod

@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from auth_middleware import JWTAuthMiddleware
 from smartbi.api import chart_insight
 from smartbi.services.insights import chart_insight_service
+from tests.analysis_cache_fixtures import analysis_cache  # noqa: F401
 
 
 _SECRET = "local-chart-insight-regression-key"
@@ -68,7 +69,7 @@ _PRODUCTION_RANK = _request(
 
 
 @pytest.fixture
-def entry(monkeypatch):
+def entry(monkeypatch, analysis_cache):
     monkeypatch.delenv("CHART_INSIGHT_DETERMINISTIC_FIRST", raising=False)
     budget = SimpleNamespace(
         check_budget=AsyncMock(return_value=SimpleNamespace(blocked=False)),
@@ -123,7 +124,8 @@ def test_rejected_model_output_uses_chart_numbers(entry, payload, rejected_findi
     assert result["source"] == "rules"
     assert result["finding"] == expected_finding
     assert result["suggestion"] == expected_suggestion
-    assert result["input_hash"] is None
+    assert result["input_hash"] and result["cacheToken"]
+    assert result["cacheHit"] is False
     assert model.await_args.args[0].permission_tier == "finance_visible"
     budget.consume.assert_awaited_once_with("LIUSHANMEN", 800)
     persist.assert_not_awaited()
