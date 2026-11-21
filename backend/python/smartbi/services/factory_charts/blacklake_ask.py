@@ -1,6 +1,7 @@
 """Answer explicit Blacklake report questions from the authorized chart points."""
 import re
 from dataclasses import dataclass
+from decimal import Decimal, ROUND_HALF_UP
 
 from smartbi.services.external_production import FINISHED_PROCESS, SOURCE_KEY, UNAVAILABLE_MESSAGE, defect_rate
 
@@ -10,6 +11,7 @@ UNIT_COST_LIMIT = "黑湖成本不含制造费用"
 
 _CODE = re.compile(r"(?:产品(?:编码)?|SKU)\s*[:：]?\s*([A-Z]+(?: [A-Z]+)?\d{5,})(?![A-Z0-9])")
 _LABELS = {"good": "良品量", "defects": "不良数量", "defect_rate": "不良率", "ranking": "良品量最多的产品"}
+_COUNT_UNITS = {"件", "盒", "袋", "包", "箱", "瓶", "桶", "支", "个"}
 
 
 @dataclass(frozen=True)
@@ -107,7 +109,10 @@ def _value(value, unit, metric):
         return "无可计算的报工量"
     if metric == "defect_rate":
         return f"{value:.3f}".rstrip("0").rstrip(".") + "%"
-    return f"{value:,.3f}".rstrip("0").rstrip(".") + f" {unit}"
+    normalized_unit = _unit(unit)
+    places = 0 if normalized_unit in _COUNT_UNITS else 2 if normalized_unit == "kg" else 3
+    displayed = Decimal(str(value)).quantize(Decimal(1).scaleb(-places), rounding=ROUND_HALF_UP)
+    return f"{displayed:,.{places}f} {unit}"
 
 
 def render(question, intent, selected, catalog, period):

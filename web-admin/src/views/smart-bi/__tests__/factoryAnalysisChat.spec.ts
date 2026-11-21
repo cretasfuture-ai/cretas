@@ -35,7 +35,7 @@ vi.mock('../FactoryChartCanvas.vue', () => ({
   default: defineComponent({
     name: 'FactoryChartCanvasStub',
     emits: ['ready', 'click'],
-    props: { option: { type: Object, required: true } },
+    props: { option: { type: Object, required: true }, fullCategoryLabels: Boolean },
     mounted() { const emitReady = () => this.$emit('ready'); h.readyEmitters.push(emitReady); if (h.canvasReady) queueMicrotask(emitReady); },
     template: '<div class="factory-chart-canvas" data-testid="rendered-factory-chart">{{ option.title?.text }}</div>',
   }),
@@ -176,6 +176,7 @@ describe('FactoryAnalysisChat mounted workflow', () => {
     expect(page!.find('[data-testid="factory-analysis-answer"]').text()).toContain('已根据授权数据完成分析');
     expect(page!.find('[data-testid="factory-analysis-turn-scope"]').text()).toContain('工厂F006 · 业务系统 · 全部历史 · 全厂范围');
     expect(page!.findAll('[data-testid="rendered-factory-chart"]')).toHaveLength(1);
+    expect(page!.getComponent({ name: 'FactoryChartCanvasStub' }).props('fullCategoryLabels')).toBe(true);
     expect(page!.get('.answer-chart__heading').text()).toContain('折线 · kg');
     expect(page!.get('.answer-chart__heading').text()).not.toContain('line');
     expect(page!.find('[data-testid="factory-analysis-facts"]').text()).toContain('12 kg');
