@@ -242,8 +242,9 @@ _FAMILIES = ("finished.good", "finished.ranking", "", "process.good", "process.d
 
 
 async def _ask(client, question, **scope):
-    response = await client.post(f"{PREFIX}/factory-analysis",
-                                 json={"source": "business", "question": question, **scope})
+    response = await client.post(f"{PREFIX}/factory-analysis", json={
+        "source": "business", "question": question, "year": 2026, "period_type": "all", **scope,
+    })
     assert response.status_code == 200, response.text
     return response.json()["data"]
 
