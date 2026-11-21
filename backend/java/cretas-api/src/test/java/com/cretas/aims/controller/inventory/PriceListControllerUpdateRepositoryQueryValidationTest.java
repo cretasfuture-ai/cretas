@@ -34,12 +34,14 @@ class PriceListControllerUpdateRepositoryQueryValidationTest {
 
     private static final String F = "IT-PL";
     @Autowired private PriceListRepository lists;
+    @Autowired private org.springframework.jdbc.core.JdbcTemplate jdbc;
     @Autowired private PriceListItemRepository items;
     private PriceListController controller;
     private String listId;
 
     @BeforeEach
     void setUp() {
+        jdbc.execute("SET REFERENTIAL_INTEGRITY FALSE");
         controller = new PriceListController(lists, items, null);
         PriceList pl = new PriceList();
         pl.setFactoryId(F);

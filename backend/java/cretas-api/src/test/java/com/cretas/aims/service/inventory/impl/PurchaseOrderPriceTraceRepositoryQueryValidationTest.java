@@ -51,6 +51,7 @@ class PurchaseOrderPriceTraceRepositoryQueryValidationTest {
         item.setMaterialName("盐");
         item.setQuantity(dto.getQuantity());
         item.setUnit("kg");
+        item.setPriceUnit("kg");
         PurchaseServiceImpl.applyPriceTrace(item, dto);
         Long id = items.saveAndFlush(item).getId();
         items.flush();

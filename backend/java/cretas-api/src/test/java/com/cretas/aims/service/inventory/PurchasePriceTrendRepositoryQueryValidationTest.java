@@ -33,11 +33,13 @@ class PurchasePriceTrendRepositoryQueryValidationTest {
 
     private static final String F = "IT-TREND";
     @PersistenceContext private EntityManager em;
+    @org.springframework.beans.factory.annotation.Autowired private org.springframework.jdbc.core.JdbcTemplate jdbc;
     private PurchasePriceTrendService svc;
     private int seq;
 
     @BeforeEach
     void setUp() {
+        jdbc.execute("SET REFERENTIAL_INTEGRITY FALSE");
         svc = new PurchasePriceTrendService();
         ReflectionTestUtils.setField(svc, "em", em);
         // 10 月: 盐 100kg@10 + 300kg@20 → 加权 (1000+6000)/400 = 17.5 (简单平均会是 15)
@@ -71,6 +73,7 @@ class PurchasePriceTrendRepositoryQueryValidationTest {
         o.setId("PO-" + (++seq));
         o.setFactoryId(F);
         o.setOrderNumber("PON-" + seq);
+        o.setCreatedBy(1L);
         o.setSupplierId(supplier);
         o.setOrderDate(date);
         o.setStatus(st);

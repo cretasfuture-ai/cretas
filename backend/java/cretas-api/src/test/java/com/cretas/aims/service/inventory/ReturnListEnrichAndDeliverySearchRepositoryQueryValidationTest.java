@@ -52,10 +52,10 @@ class ReturnListEnrichAndDeliverySearchRepositoryQueryValidationTest {
         s.setId("S1"); s.setFactoryId(F); s.setCode("S1"); s.setSupplierCode("S1"); s.setName("乙供应商"); s.setCreatedBy(1L);
         em.persist(s);
         SalesOrder so = new SalesOrder();
-        so.setId("SO1"); so.setFactoryId(F); so.setOrderNumber("SO-001"); so.setCustomerId("C1"); so.setOrderDate(LocalDate.now());
+        so.setId("SO1"); so.setFactoryId(F); so.setOrderNumber("SO-001"); so.setCreatedBy(1L); so.setCustomerId("C1"); so.setOrderDate(LocalDate.now());
         em.persist(so);
         PurchaseOrder po = new PurchaseOrder();
-        po.setId("PO1"); po.setFactoryId(F); po.setOrderNumber("PO-001"); po.setSupplierId("S1"); po.setOrderDate(LocalDate.now());
+        po.setId("PO1"); po.setFactoryId(F); po.setOrderNumber("PO-001"); po.setCreatedBy(1L); po.setSupplierId("S1"); po.setOrderDate(LocalDate.now());
         em.persist(po);
         em.flush();
     }
