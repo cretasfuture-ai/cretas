@@ -17,6 +17,27 @@ const source = limitation => `<div class="blacklake-source">
   <span>快照采集　<time datetime="2026-11-20T00:00:00Z">2026年11月20日 08:00</time>（北京时间）</span></div>
   <div class="el-alert__title">出成率与生产成本 · ${limitation}</div></div>`;
 const limitation = '黑湖数据不含投入量，无法计算';
+const blacklakeCostPage = ({ charts }) => `<section class="blacklake-cost" aria-label="黑湖生产成本分析">
+  <div class="source-details"><strong>数据来源　黑湖</strong>
+    <span>最近工单快照　<time datetime="2026-11-20T00:00:00Z">2026年11月20日 08:00</time>（北京时间）</span>
+    <span>最近领料快照　<time datetime="2026-11-19T00:00:00Z">2026年11月19日 08:00</time>（北京时间）</span>
+  </div>
+  <div class="kpis">
+    <div class="el-card"><div class="metric-label">总成本</div><strong>¥12.50</strong></div>
+    <div class="el-card"><div class="metric-label">材料成本</div><strong>¥10.00</strong></div>
+  </div>
+  <p class="basis">总成本取黑湖工单汇总 · 不含制费（黑湖未提供） · 缺价 0 行</p>
+  <div class="el-card"><h3>每日成本趋势</h3>
+    <div class="cost-chart" role="img" aria-label="每日总成本、材料成本与人工成本趋势">
+      ${charts ? '<canvas></canvas><canvas></canvas>' : ''}
+    </div>
+  </div>
+  <div class="el-card"><h3>产品成本对比（元）</h3>
+    <div class="bar-chart" role="img" aria-label="产品工单总成本">${charts ? '<canvas></canvas>' : ''}</div>
+  </div>
+  <div class="cost-chart" hidden><canvas></canvas></div>
+  <div class="unrelated-chart"><canvas></canvas></div>
+</section>`;
 const table = (headers, cells) => `<table><thead><tr>${headers.map(text => `<th>${text}</th>`).join('')}</tr></thead>
   <tbody class="el-table__body"><tr>${cells.map(text => `<td>${text}</td>`).join('')}</tr></tbody></table>`;
 const shell = content => `<div class="app-layout"><header class="app-header">本地只读验收 · 生产管理与分析</header>
@@ -59,6 +80,8 @@ async function runFixture(page, testInfo, {
     limitation: source(limitation),
     empty: '<div class="fca-empty-title">该工厂暂无生产成本数据</div><div class="fca-empty-desc">报工时填写材料、人工成本后，生产成本分析将在此处展示。</div>',
     data: '<div class="fca-kpi-card">总成本 ¥12.50</div><div class="fca-chart-body"><canvas></canvas></div>',
+    blacklake: blacklakeCostPage({ charts: true }),
+    blacklakeWithoutCharts: blacklakeCostPage({ charts: false }),
   };
   const costPage = `<main class="fca-root"><h2>生产成本分析</h2><p>统计期间：2026年11月01日至2026年11月20日</p>${costDisplay[cost]}</main>${fetched}`
     + (errors ? '<img src="/missing.png"><script>fetch("/api/mobile/LIUSHANMEN/fixture-error"); console.error("fixture cost error");</script>' : '')
@@ -105,7 +128,7 @@ async function runFixture(page, testInfo, {
 
 test('one guarded UI login drives the Blacklake hub and independent cost scenario', async ({ page }, testInfo) => {
   const { report, requests } = await runFixture(page, testInfo);
-  expect(report.scenarios.map(item => item.result), JSON.stringify(report.scenarios)).toEqual(['PASS', 'PASS']);
+  expect(report.scenarios.map(item => item.result), JSON.stringify(report.scenarios)).toEqual(['PASS', 'UNVERIFIED']);
   expect(report.tenant.factoryId).toBe('LIUSHANMEN');
   expect(report.scenarios[0].pageEvidence[1]).toMatchObject({ dailyRows: 1, productRows: 1, snapshotVisible: true, yieldAndCostUnavailable: true });
   expect(report.scenarios[1].pageEvidence[1]).toMatchObject({ state: 'limitation', limitation: `出成率与生产成本 · ${limitation}` });
@@ -122,15 +145,40 @@ test('one guarded UI login drives the Blacklake hub and independent cost scenari
   expect(report.blockedMutationAttempts).toHaveLength(0);
 });
 
-for (const cost of ['empty', 'data']) {
-  test(`cost can run alone and records ${cost}`, async ({ page }, testInfo) => {
+for (const [cost, expectedResult] of [['empty', 'UNVERIFIED'], ['data', 'PASS']]) {
+  test(`cost can run alone and records ${cost} as ${expectedResult}`, async ({ page }, testInfo) => {
     const { report, requests } = await runFixture(page, testInfo, { scenarios: [COST], cost });
     expect(report.scenarios).toHaveLength(1);
-    expect(report.scenarios[0].result).toBe('PASS');
+    expect(report.scenarios[0].result).toBe(expectedResult);
     expect(report.scenarios[0].pageEvidence[1].state).toBe(cost);
     expect(requests.some(item => item.includes('/production/analysis-query'))).toBe(false);
   });
 }
+
+test('Blacklake cost passes with rendered charts, KPI cards and snapshot evidence', async ({ page }, testInfo) => {
+  const { report } = await runFixture(page, testInfo, { scenarios: [COST], cost: 'blacklake' });
+  const [result] = report.scenarios;
+  expect(result.pageEvidence[0]).toMatchObject({
+    expectedLandmarks: ['生产成本分析'], matchedLandmarks: ['生产成本分析'], appMounted: true,
+  });
+  expect(result.pageEvidence[1]).toMatchObject({
+    state: 'data', chartCount: 2, kpiCount: 2, sourceConfirmed: true,
+    sourceLabel: '数据来源　黑湖', snapshotVisible: true,
+    snapshotDisplay: '2026年11月20日 08:00', snapshotCollectedAt: '2026-11-20T00:00:00Z',
+    costBasis: expect.stringContaining('不含制费'),
+  });
+  expect(result.result).toBe('PASS');
+});
+
+test('Blacklake cost without rendered charts stays UNVERIFIED despite source, KPI cards and chart headings', async ({ page }, testInfo) => {
+  const { report } = await runFixture(page, testInfo, { scenarios: [COST], cost: 'blacklakeWithoutCharts' });
+  const [result] = report.scenarios;
+  expect(result.pageEvidence[0]).toMatchObject({ matchedLandmarks: ['生产成本分析'], appMounted: true });
+  expect(result.pageEvidence[1]).toMatchObject({
+    state: 'unknown', chartCount: 0, kpiCount: 2, sourceConfirmed: true, snapshotVisible: true,
+  });
+  expect(result.result).toBe('UNVERIFIED');
+});
 
 test('a local storage tenant cannot substitute for the live login response', async ({ page }, testInfo) => {
   const { report, requests } = await runFixture(page, testInfo, { factoryId: 'F006' });
@@ -141,7 +189,7 @@ test('a local storage tenant cannot substitute for the live login response', asy
 
 test('cost, production analysis and dashboard send their same-tenant chart insight POSTs', async ({ page }, testInfo) => {
   const { report, requests } = await runFixture(page, testInfo, {
-    scenarios: [COST, HUB, DASHBOARD], insightFactoryId: 'LIUSHANMEN',
+    scenarios: [COST, HUB, DASHBOARD], cost: 'blacklake', insightFactoryId: 'LIUSHANMEN',
   });
   expect(report.scenarios.map(item => item.result), JSON.stringify(report.scenarios)).toEqual(['PASS', 'PASS', 'PASS']);
   expect(report.scenarios[2].pageEvidence[1]).toMatchObject({ findingCount: 1 });
