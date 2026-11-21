@@ -2,6 +2,8 @@ package com.cretas.aims.service.execution;
 
 import com.cretas.aims.ai.client.DashScopeClient;
 import com.cretas.aims.ai.grounding.FactoryNumberProvenance;
+import com.cretas.aims.ai.tool.ReadReplyNotices;
+import com.cretas.aims.ai.tool.impl.production.ProductionDemandQueryTool;
 import com.cretas.aims.dto.ai.IntentExecuteResponse;
 import com.cretas.aims.service.consent.LlmEgressGuard;
 import com.cretas.aims.service.consent.LlmEgressRedactor;
@@ -120,6 +122,13 @@ public class WorkdeskOutputSummarizer {
 
         String formattedText = response.getFormattedText();
         String message = response.getMessage();
+        // Product names may contain braces. Keep the tool's verified table through finalization,
+        // including read notices the formatter added to the displayed reply.
+        String schedule = ProductionDemandQueryTool.validatedSkillReply(response).orElse(null);
+        if (schedule != null && (schedule.equals(formattedText)
+                || ReadReplyNotices.prefix(schedule, ReadReplyNotices.texts(response.getMetadata())).equals(formattedText))) {
+            return;
+        }
         // Skill 组合结果里的工具输出是 JsonNode (SkillExecutorImpl readTree): JsonNode 也是 Iterable,
         // 直接走 stripUnderscoreKeys 会被拆成空列表 —— 先统一转成 Map / List / 标量
         Object rawResultData = response.getResultData();

@@ -318,6 +318,15 @@ class DigitalCrewRecognitionFixesEntryContractTest {
 
     @Test
     void productionDemandQuestionUsesItsBoundSkillInsteadOfTheShiftKeyword() throws Exception {
+        assertProductionDemandReply("", "bp05.capture");
+    }
+
+    @Test
+    void productionDemandTableSurvivesBraceHeavyProductNames() throws Exception {
+        assertProductionDemandReply("{常温}{原味}{礼盒}{独立装}", "bp05.braces.capture");
+    }
+
+    private void assertProductionDemandReply(String productSuffix, String captureProperty) throws Exception {
         String input = "现在该排什么、排多少？这几个产品排产各要多少人、几个班？";
         String otherInput = "查几个班";
         String code = "PRODUCTION_DEMAND_ANALYSIS";
@@ -344,7 +353,7 @@ class DigitalCrewRecognitionFixesEntryContractTest {
         assertThat(skills.getSkillForFactory(FACTORY, "production-demand-analysis").getTools())
                 .containsExactly("production_demand_query");
 
-        var orders = registerProductionDemandTool(h, mapper);
+        var orders = registerProductionDemandTool(h, mapper, productSuffix);
         // A factory-configured competing keyword Skill exercises the real priority branch.
         var shiftTool = mock(ToolExecutor.class);
         when(shiftTool.getToolName()).thenReturn("shift_fixture_query");
@@ -395,13 +404,23 @@ class DigitalCrewRecognitionFixesEntryContractTest {
                                     "sessionId", "a26b499c-6b5d-40af-b8f0-d8c3bc02c44a"))))
                     .andExpect(status().isOk()).andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
             // Retain the actual HTTP envelope for the headed local UI check when requested.
-            String capture = System.getProperty("bp05.capture");
+            String capture = System.getProperty(captureProperty);
             if (capture != null) {
                 Files.writeString(Path.of(capture), payload);
             }
             var response = mapper.readTree(payload).path("data");
+            var toolEnvelope = response.path("resultData").path("production_demand_query");
+            assertThat(toolEnvelope.path("success").asBoolean()).isTrue();
+            assertThat(toolEnvelope.path("data").path("data").path("products").size()).isEqualTo(3);
+            if (!productSuffix.isEmpty()) {
+                String toolText = toolEnvelope.path("data").path("message").asText();
+                assertThat(toolText.chars().filter(c -> c == '{' || c == '}').count())
+                        .as("排产工具正文的花括号占比超过摘要器的 5%% 阈值")
+                        .isGreaterThan(toolText.length() / 20L);
+            }
             String text = response.path("formattedText").asText();
             assertThat(text)
+                    .as("execute 保留三行排产表")
                     .isEqualTo("""
                             建议安排 3 个产品生产。
 
@@ -421,7 +440,10 @@ class DigitalCrewRecognitionFixesEntryContractTest {
 
                             （排产量已扣除发货量和在产量。人数按产线配置，班次按每班 8 小时估算。）
 
-                            先核对最早交期，再确认产线和班次。人数或班次待定的，补齐表中缺项后再排。""")
+                            先核对最早交期，再确认产线和班次。人数或班次待定的，补齐表中缺项后再排。"""
+                            .replace("酱卤牛肉", "酱卤牛肉" + productSuffix)
+                            .replace("藤椒掌中宝", "藤椒掌中宝" + productSuffix)
+                            .replace("卤鸭", "卤鸭" + productSuffix))
                     .doesNotContain("*", "...", "个人次班次", "inProgressQuantity", "staffingMissing", "当前系统");
             assertThat(response.path("message").asText()).isEqualTo(text);
             verify(h.workdeskSummarizer).apply(any(), org.mockito.ArgumentMatchers.eq(FACTORY));
@@ -447,7 +469,7 @@ class DigitalCrewRecognitionFixesEntryContractTest {
     }
 
     private static SalesOrderRepository registerProductionDemandTool(
-            StreamTurnCollectorEntryParityContractTest.Harness h, ObjectMapper mapper) {
+            StreamTurnCollectorEntryParityContractTest.Harness h, ObjectMapper mapper, String productSuffix) {
         var orders = mock(SalesOrderRepository.class);
         var items = mock(SalesOrderItemRepository.class);
         var caps = mock(ProductionLineCapacityConfigRepository.class);
@@ -458,7 +480,7 @@ class DigitalCrewRecognitionFixesEntryContractTest {
         order.setRequiredDeliveryDate(LocalDate.of(2026, 11, 23));
         var item = new SalesOrderItem();
         item.setProductTypeId("PT-BEEF");
-        item.setProductName("酱卤牛肉");
+        item.setProductName("酱卤牛肉" + productSuffix);
         item.setQuantity(new BigDecimal("100"));
         item.setUnit("kg");
         var capacity = new ProductionLineCapacityConfig();
@@ -472,12 +494,12 @@ class DigitalCrewRecognitionFixesEntryContractTest {
                 org.mockito.ArgumentMatchers.eq(FACTORY), any(), any())).thenReturn(List.of(order));
         var chicken = new SalesOrderItem();
         chicken.setProductTypeId("PT-CHICKEN");
-        chicken.setProductName("藤椒掌中宝");
+        chicken.setProductName("藤椒掌中宝" + productSuffix);
         chicken.setQuantity(new BigDecimal("60"));
         chicken.setUnit("kg");
         var duck = new SalesOrderItem();
         duck.setProductTypeId("PT-DUCK");
-        duck.setProductName("卤鸭");
+        duck.setProductName("卤鸭" + productSuffix);
         duck.setQuantity(new BigDecimal("30.05"));
         duck.setUnit("盒");
         when(items.findBySalesOrderId(order.getId())).thenReturn(List.of(item, chicken, duck));

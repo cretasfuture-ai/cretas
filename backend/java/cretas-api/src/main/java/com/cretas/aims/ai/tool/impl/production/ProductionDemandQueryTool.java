@@ -2,6 +2,7 @@ package com.cretas.aims.ai.tool.impl.production;
 
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.config.BusinessQueryPhrases;
+import com.cretas.aims.dto.ai.IntentExecuteResponse;
 import com.cretas.aims.entity.enums.ProductionBatchStatus;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
 import com.cretas.aims.entity.ProductionBatch;
@@ -64,6 +65,16 @@ public class ProductionDemandQueryTool extends AbstractBusinessTool {
         return Optional.ofNullable(reply).filter(text -> !text.isBlank());
     }
 
+    /** Only trust the reply chosen from the successful bound Skill's tool result. */
+    public static Optional<String> validatedSkillReply(IntentExecuteResponse response) {
+        if (!"SUCCESS".equals(response.getStatus())
+                || !"PRODUCTION_DEMAND_ANALYSIS".equals(response.getIntentCode())) {
+            return Optional.empty();
+        }
+        return replyFromSkillResult(response.getResultData())
+                .filter(reply -> reply.equals(response.getMessage()));
+    }
+
     private static final Set<SalesOrderStatus> ACTIVE_SO_STATUSES = Set.of(
             SalesOrderStatus.CONFIRMED,
             SalesOrderStatus.FINANCE_APPROVED,
@@ -99,7 +110,8 @@ public class ProductionDemandQueryTool extends AbstractBusinessTool {
 
     @Override
     public String getToolName() {
-        return TOOL_NAME;
+        // The descriptor inventory scans this method for a source literal.
+        return "production_demand_query";
     }
 
     @Override

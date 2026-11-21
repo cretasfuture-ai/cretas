@@ -119,10 +119,9 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
             }
             // The bound scheduling Skill already rendered the approved tool result. Preserve
             // that reply through final formatting so the generic placeholder cannot trigger summarization.
-            if ("PRODUCTION_DEMAND_ANALYSIS".equals(intentCode) && response.getMessage() != null
-                    && ProductionDemandQueryTool.replyFromSkillResult(resultData)
-                            .filter(response.getMessage()::equals).isPresent()) {
-                return response.getMessage();
+            String schedule = ProductionDemandQueryTool.validatedSkillReply(response).orElse(null);
+            if (schedule != null) {
+                return schedule;
             }
             String shortageOverview = formatShortageOverview(resultData);
             if (shortageOverview != null) {
