@@ -710,6 +710,8 @@ onBeforeUnmount(() => { requestVersion.value += 1; clearChartReadiness(); });
             <div v-for="item in turn.recommendations" :key="item.id" class="answer-chart" :data-testid="`factory-chart-card-${item.id}`">
               <div class="answer-chart__heading"><strong>{{ item.title }}</strong><span>{{ catalogChartTypeLabel(item.chart.chartType) }} · {{ item.unit }}</span></div>
               <FactoryChartCanvas :option="item.chart.echartsOption" full-category-labels
+                :product-category-labels="item.analysis?.familyId === 'blacklake-production.finished.ranking'
+                  || item.analysis?.familyId === 'blacklake-cost.work-order-total.product'"
                 @ready="markChartReady(turn, item)" @click="openDetails(item, $event, turn)" />
               <el-button link type="primary" @click="openDetails(item, undefined, turn)">查看原始明细</el-button>
               <p v-if="item.detailStatus" class="detail-status">{{ item.detailStatus.message }}</p>

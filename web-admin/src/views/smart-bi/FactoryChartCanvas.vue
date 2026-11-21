@@ -6,6 +6,7 @@ const props = withDefaults(defineProps<{
   option: Record<string, unknown>;
   height?: number;
   fullCategoryLabels?: boolean;
+  productCategoryLabels?: boolean;
 }>(), { height: 320 });
 const emit = defineEmits<{
   click: [params: { name?: string; seriesName?: string; dataIndex?: number }];
@@ -30,6 +31,32 @@ function record(value: unknown): ChartOption | undefined {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as ChartOption : undefined;
 }
 
+function productAxisLabels(labels: string[]): Map<string, string> {
+  const separator = ' · ';
+  const codesByName = new Map<string, Set<string>>();
+  const products = labels.map(label => {
+    // The final separator belongs to the source's code, even when the name
+    // itself contains a middle dot. A code-only category remains usable.
+    const divider = label.lastIndexOf(separator);
+    const name = divider > 0 ? label.slice(0, divider) : label;
+    const code = divider > 0 ? label.slice(divider + separator.length) : '';
+    const codes = codesByName.get(name) ?? new Set<string>();
+    codes.add(code);
+    codesByName.set(name, codes);
+    return { label, name, code, codes };
+  });
+  return new Map(products.map(({ label, name, code, codes }) => {
+    if (!code || codes.size === 1) return [label, name];
+    const peers = [...codes].filter(other => other !== code);
+    const characters = Array.from(code);
+    let length = 1;
+    while (length < characters.length && peers.some(other => other.endsWith(characters.slice(-length).join('')))) {
+      length += 1;
+    }
+    return [label, `${name}（${characters.slice(-length).join('')}）`];
+  }));
+}
+
 function wrapCategories(option: ChartOption, availableWidth: number) {
   let height = props.height;
   let minWidth = 0;
@@ -46,7 +73,9 @@ function wrapCategories(option: ChartOption, availableWidth: number) {
 
     const fontSize = typeof axisLabel?.fontSize === 'number' ? axisLabel.fontSize : labelFontSize;
     const lineHeight = Math.max(labelLineHeight, fontSize + 4);
-    const labelLengths = labels.map(text => text.split('\n').map(line => Array.from(line).length));
+    const displayLabels = props.productCategoryLabels ? productAxisLabels(labels) : undefined;
+    const labelLengths = labels.map(label =>
+      (displayLabels?.get(label) ?? label).split('\n').map(line => Array.from(line).length));
     const longest = Math.max(...labelLengths.map(lines => Math.max(...lines)));
     // Keep room for the plot on phones. Dense horizontal axes can scroll
     // inside the card, with a slot wide enough to wrap each tick's text.
@@ -66,6 +95,8 @@ function wrapCategories(option: ChartOption, availableWidth: number) {
       axisLabel: {
         ...axisLabel, interval: 0, hideOverlap: false, overflow: 'breakAll',
         width, fontSize, lineHeight, rotate: 0,
+        // Keep axis.data intact for tooltip headers and point drill-down.
+        ...(displayLabels && { formatter: (label: string) => displayLabels.get(label) ?? label }),
       },
     };
     option.grid = {
@@ -121,7 +152,8 @@ onMounted(async () => {
     resizeObserver.observe(viewportEl.value);
   }
 });
-watch(() => [props.option, props.height, props.fullCategoryLabels], () => { void render(); }, { deep: true });
+watch(() => [props.option, props.height, props.fullCategoryLabels, props.productCategoryLabels],
+  () => { void render(); }, { deep: true });
 onBeforeUnmount(() => { renderVersion += 1; resizeObserver?.disconnect(); resizeObserver = null; instance?.dispose(); instance = null; });
 </script>
 <template>

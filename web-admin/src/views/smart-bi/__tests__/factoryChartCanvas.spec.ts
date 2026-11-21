@@ -101,3 +101,33 @@ it('wraps named x-axis ticks and leaves the date interval unchanged', async () =
     wrapper.unmount();
   }
 });
+
+it('shows product names without code tails and uses the shortest distinct suffix for namesakes', async () => {
+  vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(260);
+  const categories = [
+    '干式 · 熟成鸡350g · C P2026110018',
+    '样品 · C P2026110017', '样品 · BCP2026100017', '样品 · P29', 'P23',
+  ];
+  const tooltip = { trigger: 'axis', renderMode: 'richText' };
+  const option = {
+    yAxis: { type: 'category', data: categories },
+    xAxis: { type: 'value' },
+    tooltip,
+    series: [{ type: 'bar', data: [8, 4, 3, 2, 1] }],
+  };
+  const wrapper = mount(FactoryChartCanvas, {
+    props: { option, fullCategoryLabels: true, productCategoryLabels: true },
+  });
+  try {
+    await flushPromises();
+    const rendered = h.setOption.mock.lastCall?.[0];
+    const labels = categories.map(label => rendered.yAxis.axisLabel.formatter(label));
+    expect(labels).toEqual(['干式 · 熟成鸡350g', '样品（10017）', '样品（00017）', '样品（9）', 'P23']);
+    expect(labels.join('\n')).not.toMatch(/ · [A-Z][A-Z0-9 ]*\d/u);
+    expect(rendered.yAxis.data).toEqual(categories);
+    expect(rendered.series).toEqual(option.series);
+    expect(rendered.tooltip).toEqual(tooltip);
+  } finally {
+    wrapper.unmount();
+  }
+});
