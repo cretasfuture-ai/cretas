@@ -165,6 +165,8 @@ node --env-file=.env.test scripts/e2e/production-readonly/cli-runner.mjs --heade
 ```
 
 数据分析、成本和经营驾驶舱场景保留截图、页面状态、控制台错误与 HTTP 4xx/5xx 计数。
+成本场景要求看到成本页标题、已渲染的图表与 KPI 卡。黑湖版同时核对来源、快照与成本口径。
+图表按含可见 canvas 的容器计数。空态、旧版口径限制或只有 KPI 而无图时，保留页面证据并返回 `UNVERIFIED`。
 这三个场景只为同源网关的 `POST /smartbi-api/api/smartbi/chart-insight`（Python 路由 `/api/smartbi/chart-insight`）增加放行。请求体 `factory_id` 必须与实时登录响应一致，且拒绝 LSMDEMO。此请求允许写入本厂派生洞察缓存或语料，并可消耗本厂 LLM 额度。
 通过须有实时登录响应证明租户，并满足 `actualBusinessWrites == 0` 且无被阻断的写入尝试。
 工厂问数只允许 `F006` 和 `LIUSHANMEN`。
@@ -201,6 +203,7 @@ MCP 返回相同的 `exitCode`。使用这些结果与黑湖标准答案逐题�
 ```powershell
 node --test scripts/e2e/production-readonly/tests/unit.test.js
 npx playwright test scripts/e2e/production-readonly/tests/fixture.spec.js --workers=1
+npx playwright test scripts/e2e/production-readonly/tests/lsm-production-analytics.fixture.spec.js --workers=1
 node --check scripts/e2e/production-readonly/cli-runner.mjs
 node --check scripts/e2e/production-readonly/mcp-entry.js
 ```

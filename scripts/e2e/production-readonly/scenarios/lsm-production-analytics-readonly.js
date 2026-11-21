@@ -6,6 +6,7 @@ const HUB_PATH = '/production/analysis-query';
 const COST_PATH = '/production-analytics/cost';
 const DASHBOARD_PATH = '/smart-bi/dashboard';
 const LIMITATION = /^出成率与生产成本\s*·\s*黑湖数据不含投入量，无法计算$/u;
+const COST_TITLE = '生产成本分析';
 
 function validateFactory(factoryId) {
   if (factoryId !== 'LIUSHANMEN') throw new Error('Production analytics acceptance is limited to LIUSHANMEN');
@@ -15,11 +16,14 @@ async function visibleText(locator) {
   return (await locator.allInnerTexts()).map(text => text.trim()).filter(Boolean);
 }
 
-async function readSource(section) {
+async function readSource(section, blacklakeCost) {
   const source = section.locator('.blacklake-source:visible');
-  const [sourceLabel = ''] = await visibleText(source.locator('.blacklake-source__details strong:visible'));
+  const details = blacklakeCost
+    ? blacklakeCost.locator('.source-details')
+    : source.locator('.blacklake-source__details');
+  const [sourceLabel = ''] = await visibleText(details.locator('strong:visible'));
   const [limitation = ''] = await visibleText(source.locator('.el-alert__title:visible'));
-  const time = source.locator('.blacklake-source__details time:visible');
+  const time = details.locator('time:visible');
   const [snapshotDisplay = ''] = await visibleText(time);
   const snapshotCollectedAt = snapshotDisplay ? await time.first().getAttribute('datetime') : null;
   return {
@@ -70,22 +74,28 @@ async function inspectCost(page, _body, ctx) {
   await ctx.network.settle();
   const root = page.locator('.fca-root');
   await root.locator('.el-loading-mask').first().waitFor({ state: 'hidden', timeout: 15_000 });
-  const titleVisible = await root.getByRole('heading', { name: '生产成本分析', exact: true }).isVisible();
-  const source = await readSource(root);
-  const errors = await visibleText(root.locator('.fca-error .el-alert__title:visible'));
-  const emptyText = await visibleText(root.locator('.fca-empty-title:visible, .fca-empty-desc:visible, .fca-inline-empty .el-empty__description:visible'));
-  const chartCount = await root.locator('.fca-chart-body:visible canvas:visible').count();
-  const kpiCount = await root.locator('.fca-kpi-card:visible').count();
+  const titleVisible = await root.getByRole('heading', { name: COST_TITLE, exact: true }).isVisible();
+  const blacklakeCost = root.locator('.blacklake-cost:visible');
+  const isBlacklakeCost = await blacklakeCost.isVisible();
+  const source = await readSource(root, isBlacklakeCost ? blacklakeCost : null);
+  const [costBasis = ''] = await visibleText(blacklakeCost.locator('p.basis:visible')
+    .filter({ hasText: /总成本.*黑湖.*不含制费/u }));
+  const errors = await visibleText(root.locator('.fca-error .el-alert__title:visible, .blacklake-cost > .el-alert .el-alert__title:visible'));
+  const emptyText = await visibleText(root.locator(
+    '.fca-empty-title:visible, .fca-empty-desc:visible, .fca-inline-empty .el-empty__description:visible, .blacklake-cost > .el-empty .el-empty__description:visible',
+  ));
+  // Count chart containers with a rendered canvas, since ECharts can create multiple canvas layers.
+  const chartCount = await root.locator('.fca-chart-body:visible, .blacklake-cost :is(.cost-chart, .bar-chart):visible')
+    .filter({ has: page.locator('canvas:visible') }).count();
+  const kpiCount = await root.locator('.fca-kpi-card:visible, .blacklake-cost .kpis .el-card:visible').count();
   const state = errors.length ? 'error'
-    : source.sourceLabel ? 'limitation'
-      : kpiCount || chartCount ? 'data'
+    : !isBlacklakeCost && source.limitation ? 'limitation'
+      : kpiCount > 0 && chartCount > 0 ? 'data'
         : emptyText.length ? 'empty' : 'unknown';
   return {
-    state, ...source, errors, emptyText, chartCount, kpiCount,
-    assessment: assessment(new URL(page.url()).pathname === COST_PATH && titleVisible && (
-      state === 'data' || state === 'empty'
-      || (state === 'limitation' && source.sourceConfirmed && source.snapshotVisible && source.yieldAndCostUnavailable)
-    )),
+    state, ...source, costBasis, errors, emptyText, chartCount, kpiCount,
+    assessment: assessment(new URL(page.url()).pathname === COST_PATH && titleVisible && state === 'data'
+      && (!isBlacklakeCost || (source.sourceConfirmed && source.snapshotVisible && Boolean(costBasis)))),
   };
 }
 
@@ -100,7 +110,7 @@ async function inspectDashboard(page) {
   };
 }
 
-function scenario(id, path, inspect) {
+function scenario(id, path, inspect, landmarks) {
   return {
     id, path, defaultEnabled: false, validateFactory, includeNonApiHttpErrors: true,
     // This permits only the derived, same-tenant insight cache upsert and LLM quota use.
@@ -111,7 +121,7 @@ function scenario(id, path, inspect) {
           || !['factory_admin', 'factory_super_admin'].includes(ctx.loginEvidence.role)) {
         throw new Error('Production analytics acceptance requires a verified LIUSHANMEN administrator');
       }
-      const result = await runReadOnlyPageScenario(ctx, { id, path, inspect, screenshot: true, screenshotOptions: { fullPage: true } });
+      const result = await runReadOnlyPageScenario(ctx, { id, path, inspect, landmarks, screenshot: true, screenshotOptions: { fullPage: true } });
       result.pageEvidence.push({
         consoleErrorCount: result.consoleErrors.length,
         http4xxCount: result.httpErrors.filter(({ status }) => status >= 400 && status < 500).length,
@@ -124,6 +134,6 @@ function scenario(id, path, inspect) {
 
 module.exports = {
   dataAnalysis: scenario('lsm-production-data-analysis-readonly', `${HUB_PATH}?tab=data-analysis`, inspectDataAnalysis),
-  cost: scenario('lsm-production-cost-readonly', COST_PATH, inspectCost),
+  cost: scenario('lsm-production-cost-readonly', COST_PATH, inspectCost, [COST_TITLE]),
   dashboard: scenario('lsm-smartbi-dashboard-insight-readonly', DASHBOARD_PATH, inspectDashboard),
 };
