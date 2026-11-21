@@ -261,6 +261,9 @@ def _check_answer(data, n):
     if n in {3, 8, 10}:
         assert answer.startswith("11 月产品 C P2026100002 在黑湖快照里没有成品入库/出料记录。")
         assert not data["facts"] and "10 月" not in answer
+        if data["analysisSubject"]:
+            assert any(item["id"] == data["analysisSubject"] and item["label"] == "C P2026100002"
+                       for item in data["subjects"])
     if n == 11:
         assert answer == "黑湖数据不含投入量，无法计算出成率。"
     if n == 12:

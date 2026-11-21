@@ -637,6 +637,10 @@ async def _render_factory_analysis_turn(request: FactoryAnalysisRequest, http_re
                        and not request.analysis_subject and explicit_code
                        and not any(item.get('sku') == explicit_code for item in subjects))
         if (not subject_error and (not subject_id or product)) or absent_code:
+            # Keep the selected SKU readable even when the current period's
+            # catalogue only contains other products.
+            if product and not any(item['id'] == subject_id for item in subjects):
+                subjects = [*subjects, {'id': subject_id, 'label': product, 'sku': product}]
             period = blacklake_ask.period_name(recommendation_data['period'])
             stages = set() if absent_code else set(report['stages'])
             answer = blacklake_ask.limited_answer(intent, period, stages, product or (explicit_code if absent_code else None))
