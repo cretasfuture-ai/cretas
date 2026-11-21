@@ -319,7 +319,7 @@ class PurchasePriceVisibilityConfigContractTest {
             return PageResponse.of(List.of(t), 1, 20, 1L);
         });
         var rowScope = mock(FinanceRowScopeQuery.class);
-        when(rowScope.responseTransactions(eq(F), any())).thenAnswer(inv -> inv.getArgument(1));
+        when(rowScope.responseRecordTransactions(eq(F), any())).thenAnswer(inv -> inv.getArgument(1));
         var controller = new ArApController(service, json, null, null, null);
         ReflectionTestUtils.setField(controller, "financeRowScopeQuery", rowScope);
         return controller;

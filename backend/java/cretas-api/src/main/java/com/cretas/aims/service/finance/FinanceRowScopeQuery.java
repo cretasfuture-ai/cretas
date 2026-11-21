@@ -57,7 +57,7 @@ public class FinanceRowScopeQuery {
         return BusinessRowScope.creators(businessRowScope, factoryId);
     }
 
-    /** Invoice/payment list contract: applies inherited non-ALL scopes too. */
+    /** Finance record lists and ledger totals apply inherited non-ALL scopes too. */
     public List<Long> recordCreators(String factoryId) {
         return BusinessRowScope.recordCreators(businessRowScope, factoryId);
     }
@@ -283,7 +283,15 @@ public class FinanceRowScopeQuery {
 
     public PageResponse<ArApTransaction> responseTransactions(String factoryId,
                                                                PageResponse<ArApTransaction> source) {
-        if (source == null || creators(factoryId) == null) return source;
+        return source == null || creators(factoryId) == null ? source : withoutRunningBalances(source);
+    }
+
+    public PageResponse<ArApTransaction> responseRecordTransactions(String factoryId,
+                                                                    PageResponse<ArApTransaction> source) {
+        return source == null || recordCreators(factoryId) == null ? source : withoutRunningBalances(source);
+    }
+
+    private PageResponse<ArApTransaction> withoutRunningBalances(PageResponse<ArApTransaction> source) {
         List<ArApTransaction> projected = source.getContent() == null ? List.of()
                 : source.getContent().stream().map(row -> {
                     ArApTransaction copy = new ArApTransaction();

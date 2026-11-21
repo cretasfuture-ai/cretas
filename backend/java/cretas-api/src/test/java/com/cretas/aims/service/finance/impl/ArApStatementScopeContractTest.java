@@ -30,6 +30,7 @@ class ArApStatementScopeContractTest {
                 mock(CustomerRepository.class), mock(SupplierRepository.class));
         ReflectionTestUtils.setField(service, "financeRowScopeQuery", scope);
         when(scope.creators("F1")).thenReturn(List.of(11L));
+        when(scope.recordCreators("F1")).thenReturn(List.of(11L));
         org.mockito.Mockito.doAnswer(call -> {
             org.springframework.data.domain.Pageable page = call.getArgument(4);
             assertThat(page.getSort().isUnsorted()).isTrue();
@@ -48,6 +49,9 @@ class ArApStatementScopeContractTest {
                 org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.eq(List.of(11L)),
                 org.mockito.ArgumentMatchers.any());
         service.getTransactions("F1", null, null, 2, 10);
+        org.mockito.Mockito.verify(transactions).findScopedTransactions(org.mockito.ArgumentMatchers.eq("F1"),
+                org.mockito.ArgumentMatchers.isNull(), org.mockito.ArgumentMatchers.isNull(),
+                org.mockito.ArgumentMatchers.eq(List.of(11L)), org.mockito.ArgumentMatchers.any());
         service.getPendingAdjustments("F1", 2, 10);
         service.getPendingAdjustments("F1", CounterpartyType.SUPPLIER, null, null, null, null, 2, 10);
     }

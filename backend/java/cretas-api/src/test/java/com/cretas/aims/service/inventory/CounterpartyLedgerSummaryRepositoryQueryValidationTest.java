@@ -5,6 +5,7 @@ import com.cretas.aims.controller.SupplierController;
 import com.cretas.aims.controller.finance.ArApController;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.User;
+import com.cretas.aims.entity.config.RoleDefinition;
 import com.cretas.aims.entity.enums.*;
 import com.cretas.aims.entity.finance.ArApTransaction;
 import com.cretas.aims.entity.inventory.*;
@@ -32,6 +33,8 @@ import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.domain.EntityScan;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
@@ -246,8 +249,9 @@ class CounterpartyLedgerSummaryRepositoryQueryValidationTest extends TradeJpaQue
         assertThat((BigDecimal) m.get("contractAmount")).isEqualByComparingTo("0");
     }
 
-    @Test
-    void httpLedgerTotalsMatchVisibleTransactionsForCustomersAndSuppliers() throws Exception {
+    @ParameterizedTest(name = "factory SELF override={0}")
+    @ValueSource(booleans = {true, false})
+    void httpLedgerTotalsMatchVisibleTransactionsForCustomersAndSuppliers(boolean explicitOverride) throws Exception {
         em.find(User.class, userId).setRoleCode(SELF_ROLE);
         Long other = TradeJpaFixtures.createUser(em, F, "ledger-other", SELF_ROLE);
         Long all = TradeJpaFixtures.createUser(em, F, "ledger-all", ALL_ROLE);
@@ -280,11 +284,16 @@ class CounterpartyLedgerSummaryRepositoryQueryValidationTest extends TradeJpaQue
         tx(ap, "SUP-2", ArApTransactionType.AP_INVOICE, "999").setOperatedBy(userId);
         em.flush();
 
-        MockMvc mvc = ledgerHttp();
+        MockMvc mvc = ledgerHttp(explicitOverride);
         assertHttpTotals(mvc, userId, SELF_ROLE, ar, "CUS-1", 4, "112", "50", "SCOPED");
         assertHttpTotals(mvc, all, ALL_ROLE, ar, "CUS-1", 6, "912", "150", "SCOPED");
         assertHttpTotals(mvc, userId, SELF_ROLE, ap, "SUP-1", 3, "315", "75", "SCOPED");
         assertHttpTotals(mvc, all, ALL_ROLE, ap, "SUP-1", 5, "815", "275", "SCOPED");
+        String receivables = "/api/mobile/" + F + "/finance/receivable-items";
+        assertThat(getAs(mvc, get(receivables).param("counterpartyId", "CUS-1").param("size", "1"), userId, SELF_ROLE)
+                .required("totalElements").asLong()).isEqualTo(1);
+        assertThat(getAs(mvc, get(receivables).param("counterpartyId", "CUS-1").param("size", "1"), all, ALL_ROLE)
+                .required("totalElements").asLong()).isEqualTo(2);
 
         TradeJpaFixtures.createProductionSettings(em, F, "{\"counterpartyLedgerScopeMode\":\"HIDDEN\"}");
         var hiddenArSummary = httpSummary(mvc, userId, SELF_ROLE, true, "CUS-1");
@@ -299,12 +308,19 @@ class CounterpartyLedgerSummaryRepositoryQueryValidationTest extends TradeJpaQue
         assertHttpTotals(mvc, all, ALL_ROLE, ap, "SUP-1", 5, "815", "275", "HIDDEN");
     }
 
-    private MockMvc ledgerHttp() {
+    private MockMvc ledgerHttp(boolean explicitOverride) {
+        roles.saveAndFlush(RoleDefinition.builder().roleCode(SELF_ROLE).displayName("财务测试角色")
+                .dataScope(explicitOverride ? "ALL" : "SELF").build());
         JdbcTemplate config = spy(jdbc);
         String readScope = "SELECT data_scope FROM factory_role_data_scopes WHERE factory_id=? AND role_code=?";
-        doReturn("SELF").when(config).queryForObject(readScope, String.class, F, SELF_ROLE);
+        if (explicitOverride) {
+            doReturn("SELF").when(config).queryForObject(readScope, String.class, F, SELF_ROLE);
+        } else {
+            org.mockito.Mockito.doThrow(new org.springframework.dao.EmptyResultDataAccessException(1))
+                    .when(config).queryForObject(readScope, String.class, F, SELF_ROLE);
+        }
         doReturn("ALL").when(config).queryForObject(readScope, String.class, F, ALL_ROLE);
-        doReturn(1L).when(config).queryForObject(
+        doReturn(explicitOverride ? 1L : 0L).when(config).queryForObject(
                 "SELECT COUNT(*) FROM factory_role_data_scopes WHERE factory_id=? AND role_code=?", Long.class, F, SELF_ROLE);
         DataScopeResolver resolver = new DataScopeResolver(users, roles, config);
         BusinessRowScope scope = new BusinessRowScope(resolver, config);
@@ -342,6 +358,7 @@ class CounterpartyLedgerSummaryRepositoryQueryValidationTest extends TradeJpaQue
         BigDecimal net = BigDecimal.ZERO;
         BigDecimal paid = BigDecimal.ZERO;
         for (JsonNode row : details) {
+            assertThat(row.path("balanceAfter").isNumber()).as("running balance visibility").isEqualTo(ALL_ROLE.equals(role));
             BigDecimal amount = row.required("amount").decimalValue();
             String transactionType = row.required("transactionType").asText();
             switch (transactionType) {

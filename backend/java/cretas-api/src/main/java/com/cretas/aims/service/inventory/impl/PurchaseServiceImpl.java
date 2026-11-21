@@ -2051,7 +2051,8 @@ public class PurchaseServiceImpl implements PurchaseService {
         order.getItems().addAll(items);
         order.setTotalAmount(totalAmount);
         order.setTaxAmount(taxAmount);
-        } else if (supplierChanged || orderDateChanged) {
+        } else if (priceMode == PurchasePriceMode.SERVER_DETERMINED || supplierChanged || orderDateChanged) {
+            // A header-only save can be the first save after switching away from client-preserved labels.
             for (PurchaseOrderItem item : existingItems) {
                 applyPriceTrace(order, item, priceMode, item.getPriceSource());
             }

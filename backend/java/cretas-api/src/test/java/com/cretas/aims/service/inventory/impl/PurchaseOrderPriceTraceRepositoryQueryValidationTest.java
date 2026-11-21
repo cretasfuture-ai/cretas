@@ -204,6 +204,32 @@ class PurchaseOrderPriceTraceRepositoryQueryValidationTest extends TradeJpaQuery
     }
 
     @Test
+    void headerOnlySaveUsesCurrentServerModeAndKeepsExistingLine() throws Exception {
+        TradeJpaFixtures.createProductionSettings(em, FACTORY, "{\"purchasePriceSourceMode\":\"CLIENT_PRESERVED\"}");
+        var create = mapper.readValue(createJson(lineJson("M1", "11")), CreatePurchaseOrderRequest.class);
+        var created = service.createPurchaseOrder(FACTORY, create, userId);
+        assertThat(created.getPurchasePriceSourceMode()).isEqualTo("CLIENT_PRESERVED");
+        String orderId = created.getId();
+        var before = reloadDraftLine(orderId, "草稿备注");
+        assertTrace(before, "伪造来源", "10");
+
+        var update = mapper.readValue("{\"remark\":\"只改表头\"}", UpdatePurchaseOrderRequest.class);
+        assertThat(service.updateDraftOrder(FACTORY, orderId, update).getPurchasePriceSourceMode())
+                .isEqualTo("CLIENT_PRESERVED");
+        assertTrace(reloadDraftLine(orderId, "只改表头"), "伪造来源", "10");
+
+        settings.findByFactoryId(FACTORY).orElseThrow().setProductionSettings("{}");
+        em.flush();
+        assertThat(service.updateDraftOrder(FACTORY, orderId, update).getPurchasePriceSourceMode())
+                .isEqualTo("SERVER_DETERMINED");
+        var after = reloadDraftLine(orderId, "只改表头");
+        assertTrace(after, "手改", "10");
+        assertThat(after.getId()).isEqualTo(before.getId());
+        assertThat(after.getQuantity()).isEqualByComparingTo(before.getQuantity());
+        assertThat(after.getUnitPrice()).isEqualByComparingTo(before.getUnitPrice());
+    }
+
+    @Test
     void orderDateOnlyUpdateRefreshesTheReferenceAndSupportsLargeDeviation() throws Exception {
         priceList(FACTORY, "FINE", "kg", "0.0001", LocalDate.of(2026, 11, 22), null, true, "M1");
         var create = mapper.readValue(createJson(lineJson("M1", "10")), CreatePurchaseOrderRequest.class);
