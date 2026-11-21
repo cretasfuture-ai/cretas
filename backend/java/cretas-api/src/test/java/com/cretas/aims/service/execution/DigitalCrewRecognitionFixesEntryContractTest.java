@@ -8,6 +8,7 @@ import com.cretas.aims.ai.tool.WriteGuardService;
 import com.cretas.aims.ai.tool.impl.production.ProductionDemandQueryTool;
 import com.cretas.aims.ai.tool.impl.report.ReportCostQueryTool;
 import com.cretas.aims.config.IntentKnowledgeBase.QuestionType;
+import com.cretas.aims.controller.AIIntentConfigController;
 import com.cretas.aims.controller.DigitalCrewController;
 import com.cretas.aims.dto.intent.IntentMatchResult;
 import com.cretas.aims.dto.skill.SkillDefinition;
@@ -40,6 +41,7 @@ import com.cretas.aims.service.PreviewTokenService;
 import com.cretas.aims.service.ToolRouterService;
 import com.cretas.aims.service.crew.DigitalCrewService;
 import com.cretas.aims.service.impl.IntentExecutorServiceImpl;
+import com.cretas.aims.service.impl.ResultFormatterServiceImpl;
 import com.cretas.aims.service.intent.LegacyIntentExitMetrics;
 import com.cretas.aims.service.intent.flywheel.FlywheelDecisionAnalysis;
 import com.cretas.aims.service.intent.flywheel.IntentFlywheelRecorder;
@@ -54,12 +56,19 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.http.MediaType;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.PlatformTransactionManager;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -70,6 +79,8 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
  * 2026-11-17 F006 数字班组实测 (BP 截图) 的识别问题, 跑在产品真实入口
@@ -314,8 +325,15 @@ class DigitalCrewRecognitionFixesEntryContractTest {
         AIIntentConfig demand = h.intent(code, "订单缺产分析与排产建议", null, ToolExecutor.AccessMode.READ);
         demand.setIntentCategory("WORKDESK");
         h.recognizerAnswers(answer(input, h.readIntent));
-        var mapper = new ObjectMapper();
+        var mapper = new ObjectMapper().findAndRegisterModules();
         var summaryClient = mock(DashScopeClient.class);
+        h.useRealSessionServices();
+        // Replay the observed model failure shape, including the output that exceeded the 800-character cap.
+        String modelOpening = "当前系统共识别出产品需求，inProgressQuantity 和 staffingMissing 为内部字段。\n"
+                + "酱卤牛肉。藤椒掌中宝。\n";
+        String modelFiller = "订单明细。".repeat(160);
+        when(summaryClient.chatFast(anyString(), anyString())).thenReturn(modelOpening
+                + modelFiller.substring(0, 794 - modelOpening.length()) + "**资源需求仍在生成。");
         h.workdeskSummarizer = org.mockito.Mockito.spy(new WorkdeskOutputSummarizer(summaryClient, mapper));
         ReflectionTestUtils.setField(h.workdeskSummarizer, "enabled", true);
         ReflectionTestUtils.setField(h.workdeskSummarizer, "maxChars", 800);
@@ -356,34 +374,59 @@ class DigitalCrewRecognitionFixesEntryContractTest {
             ReflectionTestUtils.setField(routing, "clarificationCandidateService", mock(ClarificationCandidateService.class));
             h.build();
             ReflectionTestUtils.setField(h.sse, "dynamicToolSelectionService", routing);
+            var priceView = new com.cretas.aims.security.PriceFieldResponseAdvice();
+            ReflectionTestUtils.setField(priceView, "objectMapper", mapper);
+            ReflectionTestUtils.setField(priceView, "userRepository", mock(UserRepository.class));
+            var formatter = new ResultFormatterServiceImpl();
+            ReflectionTestUtils.setField(formatter, "priceView", priceView);
+            ReflectionTestUtils.setField(h.sse, "priceView", priceView);
+            ReflectionTestUtils.setField(h.sse, "resultFormatterService", formatter);
 
-            var response = h.sendThroughFacade(com.cretas.aims.dto.ai.IntentExecuteRequest.builder()
-                    .userInput(input).mode("READ").build());
-
-            assertThat(response.getFormattedText())
+            var jwt = mock(com.cretas.aims.utils.JwtUtil.class);
+            when(jwt.getUserIdFromToken("local-fixture")).thenReturn(USER);
+            when(jwt.getRoleFromToken("local-fixture")).thenReturn(ROLE);
+            var controller = new AIIntentConfigController(h.recognizer, h.facade(), null, null, null, jwt, h.configService);
+            var mvc = MockMvcBuilders.standaloneSetup(controller).build();
+            String payload = mvc.perform(post("/api/mobile/{factoryId}/ai-intents/execute", FACTORY)
+                            .requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE, h.actor())
+                            .header("Authorization", "Bearer local-fixture")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(mapper.writeValueAsString(Map.of("userInput", input, "mode", "READ",
+                                    "sessionId", "a26b499c-6b5d-40af-b8f0-d8c3bc02c44a"))))
+                    .andExpect(status().isOk()).andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+            // Retain the actual HTTP envelope for the headed local UI check when requested.
+            String capture = System.getProperty("bp05.capture");
+            if (capture != null) {
+                Files.writeString(Path.of(capture), payload);
+            }
+            var response = mapper.readTree(payload).path("data");
+            String text = response.path("formattedText").asText();
+            assertThat(text)
                     .isEqualTo("""
                             建议安排 3 个产品生产。
 
                             | 产品 | 排多少 | 几人几班 | 最早交期 |
                             | --- | --- | --- | --- |
-                            | 酱卤牛肉 | 100 kg | 2 个班、每班 3 人 | 未填交期 |
-                            | 藤椒掌中宝 | 60 kg | 1 个班、每班 3 人 | 未填交期 |
-                            | 卤鸭 | 30 kg | 1 个班、每班 3 人 | 未填交期 |
+                            | 酱卤牛肉 | 100 kg | 2 个班、每班 3 人 | 2026-11-23 |
+                            | 藤椒掌中宝 | 60 kg | 1 个班、每班 3 人 | 2026-11-23 |
+                            | 卤鸭 | 30.05 盒 | 班次待估、人数待定（缺该产品按「盒」计的产线小时产能） | 2026-11-23 |
 
                             客户与订单
 
-                            酱卤牛肉：SO-STAFFING 待交 100 kg（未填交期）。产线：熟食线。
+                            酱卤牛肉：SO-STAFFING 待交 100 kg（2026-11-23）。产线：熟食线。
 
-                            藤椒掌中宝：SO-STAFFING 待交 60 kg（未填交期）。产线：熟食线。
+                            藤椒掌中宝：SO-STAFFING 待交 60 kg（2026-11-23）。产线：熟食线。
 
-                            卤鸭：SO-STAFFING 待交 30 kg（未填交期）。产线：熟食线。
+                            卤鸭：SO-STAFFING 待交 30.05 盒（2026-11-23）。产线：未配置产线。小数来自订单待交量和在产量的原始记录。
 
-                            （排产量已扣除发货量和在产量。人数按产线配置，班次按每班 8 小时估算。）""")
-                    .doesNotContain("*", "...", "个人次班次");
-            assertThat(response.getMessage()).isEqualTo(response.getFormattedText());
+                            （排产量已扣除发货量和在产量。人数按产线配置，班次按每班 8 小时估算。）
+
+                            先核对最早交期，再确认产线和班次。人数或班次待定的，补齐表中缺项后再排。""")
+                    .doesNotContain("*", "...", "个人次班次", "inProgressQuantity", "staffingMissing", "当前系统");
+            assertThat(response.path("message").asText()).isEqualTo(text);
             verify(h.workdeskSummarizer).apply(any(), org.mockito.ArgumentMatchers.eq(FACTORY));
             org.mockito.Mockito.verifyNoInteractions(summaryClient);
-            assertThat(response.getIntentCode()).isEqualTo(code);
+            assertThat(response.path("intentCode").asText()).isEqualTo(code);
             assertThat(h.recognitionCalls()).isZero();
             verify(orders).findByFactoryIdAndStatusInOrderByCreatedAtDesc(
                     org.mockito.ArgumentMatchers.eq(FACTORY), any(), any());
@@ -412,6 +455,7 @@ class DigitalCrewRecognitionFixesEntryContractTest {
         var order = new SalesOrder();
         order.setId("SO-STAFFING");
         order.setOrderNumber("SO-STAFFING");
+        order.setRequiredDeliveryDate(LocalDate.of(2026, 11, 23));
         var item = new SalesOrderItem();
         item.setProductTypeId("PT-BEEF");
         item.setProductName("酱卤牛肉");
@@ -434,8 +478,8 @@ class DigitalCrewRecognitionFixesEntryContractTest {
         var duck = new SalesOrderItem();
         duck.setProductTypeId("PT-DUCK");
         duck.setProductName("卤鸭");
-        duck.setQuantity(new BigDecimal("30"));
-        duck.setUnit("kg");
+        duck.setQuantity(new BigDecimal("30.05"));
+        duck.setUnit("盒");
         when(items.findBySalesOrderId(order.getId())).thenReturn(List.of(item, chicken, duck));
         when(caps.findEffectiveForProduct(org.mockito.ArgumentMatchers.eq(FACTORY),
                 anyString(), any())).thenReturn(List.of(capacity));

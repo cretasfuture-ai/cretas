@@ -1,6 +1,7 @@
 package com.cretas.aims.ai.tool.impl.production;
 
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
+import com.cretas.aims.config.BusinessQueryPhrases;
 import com.cretas.aims.entity.enums.ProductionBatchStatus;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
 import com.cretas.aims.entity.ProductionBatch;
@@ -18,6 +19,7 @@ import com.cretas.aims.entity.ProductionLine;
 import com.cretas.aims.entity.ProductionLineCapacityConfig;
 import com.cretas.aims.repository.ProductionLineCapacityConfigRepository;
 import com.cretas.aims.repository.ProductionLineRepository;
+import com.fasterxml.jackson.databind.JsonNode;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -43,6 +45,24 @@ import java.util.stream.Collectors;
 @Slf4j
 @Component
 public class ProductionDemandQueryTool extends AbstractBusinessTool {
+
+    private static final String TOOL_NAME = "production_demand_query";
+
+    /** The Skill executor supplies a JSON envelope. The caller's masked view may convert it to maps. */
+    public static Optional<String> replyFromSkillResult(Object resultData) {
+        if (!(resultData instanceof Map<?, ?> results)) {
+            return Optional.empty();
+        }
+        Object envelope = results.get(TOOL_NAME);
+        String reply = null;
+        if (envelope instanceof JsonNode node && node.path("success").asBoolean(false)) {
+            reply = node.path("data").path("message").textValue();
+        } else if (envelope instanceof Map<?, ?> map && Boolean.TRUE.equals(map.get("success"))
+                && map.get("data") instanceof Map<?, ?> payload && payload.get("message") instanceof String text) {
+            reply = text;
+        }
+        return Optional.ofNullable(reply).filter(text -> !text.isBlank());
+    }
 
     private static final Set<SalesOrderStatus> ACTIVE_SO_STATUSES = Set.of(
             SalesOrderStatus.CONFIRMED,
@@ -79,7 +99,7 @@ public class ProductionDemandQueryTool extends AbstractBusinessTool {
 
     @Override
     public String getToolName() {
-        return "production_demand_query";
+        return TOOL_NAME;
     }
 
     @Override
@@ -196,6 +216,8 @@ public class ProductionDemandQueryTool extends AbstractBusinessTool {
         // 5. 构建结果 (人数/班次按产线配置折算)
         List<Map<String, Object>> rows = new ArrayList<>();
         StringBuilder text = new StringBuilder();
+        boolean schedulingQuestion = params.get("userQuery") instanceof String query
+                && BusinessQueryPhrases.productionDemandQuestion(query);
         text.append("建议安排 ").append(matching.size()).append(" 个产品生产。");
         if (nonEmpty.size() < matching.size()) {
             text.append("本次列出 ").append(nonEmpty.size()).append(" 项。");
@@ -206,10 +228,13 @@ public class ProductionDemandQueryTool extends AbstractBusinessTool {
         for (ProductDemand pd : nonEmpty) {
             Map<String, Object> row = toRow(factoryId, pd);
             rows.add(row);
-            appendScheduleRow(text, details, pd, row);
+            appendScheduleRow(text, details, pd, row, schedulingQuestion);
         }
         text.append(details).append("\n（排产量已扣除发货量和在产量。人数按产线配置，班次按每班 ")
                 .append(SHIFT_HOURS.toPlainString()).append(" 小时估算。）");
+        if (schedulingQuestion) {
+            text.append("\n\n先核对最早交期，再确认产线和班次。人数或班次待定的，补齐表中缺项后再排。");
+        }
 
         Map<String, Object> data = new HashMap<>();
         data.put("totalCount", nonEmpty.size());
@@ -248,7 +273,7 @@ public class ProductionDemandQueryTool extends AbstractBusinessTool {
 
     @SuppressWarnings("unchecked")
     private void appendScheduleRow(StringBuilder summary, StringBuilder details, ProductDemand demand,
-                                   Map<String, Object> row) {
+                                   Map<String, Object> row, boolean showMissingInTable) {
         List<PendingOrder> orders = demand.pendingOrders.values().stream()
                 .sorted(Comparator.comparing(PendingOrder::deliveryDate,
                         Comparator.nullsLast(Comparator.naturalOrder())))
@@ -256,11 +281,15 @@ public class ProductionDemandQueryTool extends AbstractBusinessTool {
         String name = (String) row.get("productName");
         Object workers = row.get("requiredWorkersPerShift");
         Object shifts = row.get("requiredShifts");
+        List<String> missing = (List<String>) row.get("staffingMissing");
         summary.append("| ").append(tableCell(name)).append(" | ")
                 .append(tableCell(qtyWithUnit(demand.getNetShortage(), demand.getUnit())))
                 .append(" | ").append(shifts == null ? "班次待估" : shifts + " 个班")
-                .append("、").append(workers == null ? "人数待定" : "每班 " + workers + " 人")
-                .append(" | ").append(Objects.toString(orders.get(0).deliveryDate(), "未填交期")).append(" |\n");
+                .append("、").append(workers == null ? "人数待定" : "每班 " + workers + " 人");
+        if (showMissingInTable && !missing.isEmpty()) {
+            summary.append("（缺").append(tableCell(String.join("、", missing))).append("）");
+        }
+        summary.append(" | ").append(Objects.toString(orders.get(0).deliveryDate(), "未填交期")).append(" |\n");
 
         details.append('\n').append(name).append("：");
         for (int i = 0; i < Math.min(2, orders.size()); i++) {
@@ -275,8 +304,7 @@ public class ProductionDemandQueryTool extends AbstractBusinessTool {
         }
         if (orders.size() > 2) details.append("；另 ").append(orders.size() - 2).append(" 单");
         details.append("。产线：").append(row.get("recommendedLineName"));
-        List<String> missing = (List<String>) row.get("staffingMissing");
-        if (missing != null && !missing.isEmpty()) {
+        if (!showMissingInTable && !missing.isEmpty()) {
             details.append("（缺").append(String.join("、", missing)).append("）");
         }
         details.append("。");
