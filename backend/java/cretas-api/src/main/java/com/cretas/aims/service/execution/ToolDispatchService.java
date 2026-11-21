@@ -20,6 +20,7 @@ import com.cretas.aims.ai.tool.gateway.ToolExecutionSource;
 import com.cretas.aims.ai.tool.TimeRangeFilter;
 import com.cretas.aims.ai.tool.impl.foodsafety.BatchTraceByCustomerDateTool;
 import com.cretas.aims.ai.tool.impl.material.MaterialExpiringAlertTool;
+import com.cretas.aims.ai.tool.impl.report.ReportBatchYieldRankTool;
 import com.cretas.aims.config.IntentKnowledgeBase;
 import com.cretas.aims.config.TimeNormalizationRules;
 import com.cretas.aims.dev.faultinjection.ToolExecutionFaultInjector;
@@ -664,8 +665,25 @@ public class ToolDispatchService {
                     : shortcutPreprocess(request, factoryId, userId);
             boolean expiryWindowBound = !boundConfirmation && tool instanceof MaterialExpiringAlertTool
                     && MaterialExpiringAlertTool.applyFutureExpiryWindow(params, request.getUserInput(), LocalDate.now());
-            // 追溯使用单日 date。通用预处理可能把「9 月 20 日」的前半段识别成整月。
             String originalInput = request.getUserInput();
+            ReportBatchYieldRankTool lossAnomalyTool = !writeOperation && !boundConfirmation
+                    && "REPORT_BATCH_YIELD_RANK".equals(intent.getIntentCode())
+                    && tool instanceof ReportBatchYieldRankTool candidate ? candidate : null;
+            var explicitLossWindow = lossAnomalyTool == null
+                    ? null : PhraseShortcutEligibility.explicitLossAnomalyWindow(originalInput);
+            if (explicitLossWindow != null) {
+                LocalDate from = explicitLossWindow.getStartDate();
+                LocalDate to = explicitLossWindow.getEndDate();
+                String rejection = lossAnomalyTool.explicitLossAnomalyWindowRejection(from, to);
+                if (rejection != null) {
+                    return readTurnRefusal(intent, "NEED_CLARIFICATION", rejection);
+                }
+                params.put("startDate", from.toString());
+                params.put("endDate", to.toString());
+                params.put(TimeRangeFilter.SAID, from + "~" + to);
+                params.put("view", "loss_anomaly");
+            }
+            // 追溯使用单日 date。通用预处理可能把「9 月 20 日」的前半段识别成整月。
             LocalDate traceDay = null;
             if (!boundConfirmation && tool instanceof BatchTraceByCustomerDateTool
                     && IntentKnowledgeBase.isCustomerDateTrace(originalInput)
@@ -720,7 +738,7 @@ public class ToolDispatchService {
 
                 // 2.6. 从预处理结果中提取时间范围
                 // 用户原话里根本没说时间 (预处理按上下文补出的日期不算「你说的」): 不带时间参数, 也不出「不能按时间筛选」提示
-                if (traceDay == null && !expiryWindowBound && pq.hasTimeRange()
+                if (traceDay == null && !expiryWindowBound && explicitLossWindow == null && pq.hasTimeRange()
                         && com.cretas.aims.ai.tool.TimeRangeFilter.mentionsTime(request.getUserInput())) {
                     TimeNormalizationRules.TimeRange timeRange = pq.getPrimaryTimeRange();
                     if (timeRange != null && timeRange.isValid()) {
@@ -743,6 +761,9 @@ public class ToolDispatchService {
                 IntentExecuteResponse refusal = prepareReadTurn(tool, intent, request, userInputToUse, params,
                         readSources, readDoNotInherit);
                 if (refusal != null) return refusal;
+                if (explicitLossWindow != null) {
+                    readSources.put("view", ReadTurnParameters.Source.CURRENT_TURN);
+                }
             }
 
             // 2.7. 优先使用已学习的规则提取参数
@@ -772,7 +793,8 @@ public class ToolDispatchService {
             }
 
             // 2.8. LLM 提取剩余参数
-            Map<String, Object> llmExtractedParams = boundConfirmation ? new HashMap<>()
+            // 完整的单一损耗问句只指定区间和视图，直接使用已绑定的参数。
+            Map<String, Object> llmExtractedParams = boundConfirmation || explicitLossWindow != null ? new HashMap<>()
                     : extractParametersWithLLM(factoryId, userInputToUse, tool, params);
             if (readTurn) llmExtractedParams = withoutModelPaging(llmExtractedParams, readSources);
             if (!llmExtractedParams.isEmpty() && isFollowUpConfirmation(request)) {
