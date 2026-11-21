@@ -273,6 +273,20 @@ class PurchasePriceVisibilityConfigContractTest {
     }
 
     @Test
+    void priceTraceMetadataUsesTheSameVisibilityAsPurchasePrice() throws Exception {
+        String url = "/api/mobile/" + F + "/purchase/orders/PO-1";
+        JsonNode visible = body(PROCUREMENT, url, 200).at("/data/items/0");
+        JsonNode masked = body(FINANCE, url, 200).at("/data/items/0");
+
+        assertThat(visible.path("priceSource").asText()).isEqualTo("手改");
+        assertThat(visible.path("referencePriceListId").asText()).isEqualTo("PL-1");
+        assertThat(visible.path("referencePriceListName").asText()).isEqualTo("年度采购价");
+        for (String name : List.of("priceSource", "referencePriceListId", "referencePriceListName")) {
+            assertThat(masked.path(name).isNull() || masked.path(name).isMissingNode()).as(name).isTrue();
+        }
+    }
+
+    @Test
     void financeSeesPurchaseAmountsOnFinanceSurfacesOnly() throws Exception {
         // 三单核对 / 收票 (财务入口, 裁定 a): 发票金额与由采购单价推出的应开数都可见
         JsonNode views = body(FINANCE, "/api/mobile/" + F + "/invoices/views?poId=PO-1", 200);
@@ -628,6 +642,9 @@ class PurchasePriceVisibilityConfigContractTest {
         item.setQuantity(new BigDecimal("100"));
         item.setUnit("kg");
         item.setUnitPrice(new BigDecimal("1.50"));
+        item.setPriceSource("手改");
+        item.setReferencePriceListId("PL-1");
+        item.setReferencePriceListName("年度采购价");
         item.setTaxRate(BigDecimal.ZERO);
         po.setItems(new ArrayList<>(List.of(item)));
         return po;

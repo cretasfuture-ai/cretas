@@ -110,6 +110,7 @@ public class PurchaseOrderItem extends BaseEntity {
     private BigDecimal unitPrice;
 
     /** 单价来源标签 (如 价目表 / 手改 / 手填); 原样保存客户端传入的标签 (G3). */
+    @PriceSensitive(permission = PriceSensitive.PURCHASE)
     @Column(name = "price_source", length = 32)
     private String priceSource;
 
@@ -118,9 +119,11 @@ public class PurchaseOrderItem extends BaseEntity {
     @Column(name = "reference_price", precision = 15, scale = 4)
     private BigDecimal referencePrice;
 
+    @PriceSensitive(permission = PriceSensitive.PURCHASE)
     @Column(name = "reference_price_list_id", length = 191)
     private String referencePriceListId;
 
+    @PriceSensitive(permission = PriceSensitive.PURCHASE)
     @Column(name = "reference_price_list_name", length = 200)
     private String referencePriceListName;
 
