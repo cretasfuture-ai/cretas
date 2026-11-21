@@ -21,8 +21,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.context.annotation.Profile;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -37,8 +36,7 @@ import java.util.UUID;
 
 /** Deliberately test-only until the configuration assistant has an approved caller. */
 @Service
-@Profile("test")
-@ConditionalOnProperty(name = FactoryShortageConfigService.ENABLED_PROPERTY, havingValue = "true")
+@Conditional(FactoryShortageConfigActivation.class)
 @RequiredArgsConstructor
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
 public class FactoryShortageConfigService {

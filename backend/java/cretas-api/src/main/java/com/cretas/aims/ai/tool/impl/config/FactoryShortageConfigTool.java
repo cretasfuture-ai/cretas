@@ -1,11 +1,11 @@
 package com.cretas.aims.ai.tool.impl.config;
 
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
+import com.cretas.aims.service.config.aiconfig.FactoryShortageConfigActivation;
 import com.cretas.aims.service.config.aiconfig.FactoryShortageConfigService;
 import com.cretas.aims.service.config.aiconfig.FactoryShortageConfigStore;
 import lombok.RequiredArgsConstructor;
 import org.springframework.core.env.Environment;
-import org.springframework.core.env.Profiles;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -20,10 +20,7 @@ public class FactoryShortageConfigTool extends AbstractBusinessTool {
 
     @Override
     public boolean isEnabled() {
-        // Catalog scans instantiate metadata-only tools without Spring injection.
-        return environment != null
-                && environment.acceptsProfiles(Profiles.of("test"))
-                && environment.getProperty(FactoryShortageConfigService.ENABLED_PROPERTY, Boolean.class, false);
+        return FactoryShortageConfigActivation.isEnabled(environment);
     }
 
     @Override
