@@ -41,7 +41,7 @@ def route_stubs(monkeypatch):
     monkeypatch.setattr(engine, "build", lambda *_: (deepcopy(candidate_list), []))
 
     async def rank_candidates(candidates, *_args, **_kwargs):
-        return candidates, []
+        return candidates, {"mode": "rule"}
 
     async def register(candidates, *_args):
         calls.append([item["id"] for item in candidates])

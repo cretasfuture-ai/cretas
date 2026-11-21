@@ -343,13 +343,15 @@ async def test_load_upload_frame_over_cap_raises_instead_of_sampling():
 # ---------------------- 接线: 产品真实入口 ----------------------
 
 def test_chat_stream_wires_row_level_qa_into_prompt_refusal_and_cache_bypass():
-    """event_stream 是产品入口 (整个 SSE 生成器无法在单测里端到端驱动, 见
-    test_chat_stream_distillation.py 的说明), 所以按 AST 钉住接线: 调用了
+    """用 AST 核对由 event_stream 驱动的实际分析生成器: 调用了
     answer_row_level、结果块进了提示词、拒答直接 done、行级问题不读旧 LLM 缓存。"""
     src = (Path(__file__).resolve().parents[1] / "smartbi" / "api" / "chat.py").read_text(encoding="utf-8")
     tree = ast.parse(src)
     stream = next(n for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef)
-                  and n.name == "event_stream" and "answer_row_level" in ast.unparse(n))
+                  and n.name == "analysis_events" and "answer_row_level" in ast.unparse(n))
+    wrapper = next(n for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef)
+                   and n.name == "event_stream" and "analysis_events(leases)" in ast.unparse(n))
+    assert any(isinstance(n, ast.Yield) for n in ast.walk(wrapper))
     code = ast.unparse(stream)
     assert "_rl_answer(" in code and "load_upload_frame" in code or "_rl_load(" in code
     # 提示词: 结果块变量出现在 prompt f-string 里

@@ -78,7 +78,7 @@ def test_notice_names_the_table():
 
 
 def test_chat_stream_uses_question_matched_upload_for_both_cache_and_data_load():
-    """event_stream 是产品入口 (整个 SSE 生成器无法在单测里端到端驱动), 按 AST 钉住接线:
+    """核对由 event_stream 驱动的实际分析生成器:
     没选数据源时先调 pick_upload_for_question; 取数据那一步用选中的上传,
     而不是再取一次「行数最多」; 并把选中的表通过 data_source 事件告诉前端。"""
     import ast
@@ -87,7 +87,10 @@ def test_chat_stream_uses_question_matched_upload_for_both_cache_and_data_load()
     src = (Path(__file__).resolve().parents[1] / "smartbi" / "api" / "chat.py").read_text(encoding="utf-8")
     tree = ast.parse(src)
     stream = next(n for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef)
-                  and n.name == "event_stream" and "pick_upload_for_question" in ast.unparse(n))
+                  and n.name == "analysis_events" and "pick_upload_for_question" in ast.unparse(n))
+    wrapper = next(n for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef)
+                   and n.name == "event_stream" and "analysis_events(leases)" in ast.unparse(n))
+    assert any(isinstance(n, ast.Yield) for n in ast.walk(wrapper))
     code = ast.unparse(stream)
     assert "pick_upload_for_question(" in code
     assert "'data_source'" in code or '"data_source"' in code

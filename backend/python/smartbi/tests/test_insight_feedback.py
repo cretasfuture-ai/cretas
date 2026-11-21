@@ -178,6 +178,13 @@ class TestServeSkip:
 class TestFeedbackEndpoint:
     """Tests for POST /api/smartbi/insight/feedback endpoint logic (sans HTTP layer)."""
 
+    @pytest.fixture(autouse=True)
+    def _cache_backend(self, monkeypatch):
+        from common import smartbi_analysis_cache
+        from tests.analysis_cache_fixtures import MemoryCache
+
+        monkeypatch.setattr(smartbi_analysis_cache, "get_cache", MemoryCache)
+
     def _make_request_state(self, factory_id: str = "F001", role: str = "factory_super_admin"):
         state = MagicMock()
         state.factory_id = factory_id

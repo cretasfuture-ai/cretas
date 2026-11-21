@@ -2681,7 +2681,7 @@ async def export_with_validation(
         content = await file.read()
 
         # 1. 导出数据
-        exporter = DataExporter()
+        exporter = DataExporter(cache_scope=request_scope(request))
         data = await exporter.from_excel(content, sheet_index=effective_index)
 
         exported = {
@@ -2807,7 +2807,7 @@ async def export_with_validation_and_fix(
         content = await file.read()
 
         # 1. 导出数据
-        exporter = DataExporter()
+        exporter = DataExporter(cache_scope=request_scope(request))
         data = await exporter.from_excel(content, sheet_index=effective_index)
 
         exported = {
@@ -2946,7 +2946,7 @@ async def batch_export_with_validation(
         filename = file.filename or "workbook.xlsx"
 
         # 1. 批量导出
-        batch_exporter = BatchExporter()
+        batch_exporter = BatchExporter(cache_scope=request_scope(request))
         export_result = await batch_exporter.export_all_sheets(
             content,
             source_filename=filename,

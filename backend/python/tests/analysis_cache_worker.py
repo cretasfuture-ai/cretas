@@ -40,6 +40,7 @@ async def _serve(channel, redis_keys, signing_key):
     from services.insights import llm_client as llm_alias
     from services.llm_structure_analyzer import LLMStructureAnalyzer
     from services.parallel_processor import ParallelProcessor, SheetResult, WorkbookResult
+    from services.structure_detector import StructureDetectionResult, StructureDetector
     from services.unified_analyzer import Insight, UnifiedAnalysisResult, UnifiedAnalyzer
     from tests.test_chart_insight_answer_cache import model_result
     from tests.test_smartbi_shared_alerts import ROWS
@@ -49,7 +50,7 @@ async def _serve(channel, redis_keys, signing_key):
     state = SimpleNamespace(calls=0, data=100, generation="初次结论", path="", saved=None)
     settings = config.get_settings().model_copy(update={
         "llm_api_key": "fixture", "llm_base_url": "http://fixture.invalid", "llm_insight_model": "fixture",
-        "llm_model": "fixture", "use_llm_first": False, "enable_multi_model_enhancement": False,
+        "llm_model": "fixture", "use_llm_first": True,
     })
     config.get_settings = lambda: settings
     dashboard.get_settings = lambda: settings
@@ -125,6 +126,13 @@ async def _serve(channel, redis_keys, signing_key):
         return WorkbookResult(success=True, total_sheets=1, processed_sheets=1, sheets=[
             SheetResult(0, text(), True, detection_method="llm_fast", row_count=2),
         ])
+
+    async def export_structure(self, raw_rows, merged_cells, sheet_name, total_rows, total_cols):
+        text()
+        return StructureDetectionResult(
+            confidence=0.99, method="llm_fast", sheet_name=sheet_name, total_rows=total_rows,
+            total_cols=total_cols, header_row_count=1, data_start_row=1, merged_cells=merged_cells,
+        )
 
     async def unified_sheet(self, file_bytes, sheet_index, question, options):
         assert not options.use_cache and not options.save_to_cache
@@ -279,6 +287,7 @@ async def _serve(channel, redis_keys, signing_key):
     llm_structure_analyzer.get_settings = lambda: settings
     LLMStructureAnalyzer._call_llm = excel_model
     ParallelProcessor.process_workbook = workbook_data
+    StructureDetector._detect_with_llm_fast = export_structure
     UnifiedAnalyzer.__init__ = lambda self: None
     UnifiedAnalyzer.analyze = unified_sheet
     UnifiedAnalyzer.close = noop

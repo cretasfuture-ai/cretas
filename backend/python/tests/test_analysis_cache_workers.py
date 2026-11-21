@@ -190,8 +190,14 @@ async def test_route_across_workers_restart_and_negative_feedback(analysis_cache
             for case in CASES:
                 try:
                     answer, first, content = analysis_response(case, primary)
-                    # Grounded chat plans then drafts. Export repair reviews then suggests fixes.
-                    expected_calls = 2 if case in {"chat-insight-sse", "excel-export-fix-review"} else 1
+                    # Grounded chat plans then drafts. Exports first detect structure;
+                    # the repair route also reviews and suggests fixes.
+                    expected_calls = {
+                        "chat-insight-sse": 2,
+                        "excel-export-review": 2,
+                        "excel-export-fix-review": 3,
+                        "excel-export-batch-review": 2,
+                    }.get(case, 1)
                     assert first == expected_calls and answer["cacheHit"] is False, (case, first)
                     refreshed, refresh, same = analysis_response(case, primary)
                     alternate, alternate_calls, another = analysis_response(case, secondary)
