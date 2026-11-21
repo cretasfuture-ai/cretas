@@ -23,7 +23,7 @@ class ToolRuntimeClassificationContractTest {
                 "user_disable", "canvas_work_process_catalog",
                 "canvas_toggle_module", "canvas_toggle_tool", "canvas_toggle_skill",
                 "canvas_update_field", "canvas_update_trigger_chain", "canvas_apply_template",
-                "product_create", "alert_rule_toggle");
+                "product_create", "alert_rule_toggle", "factory_shortage_config_update");
         ToolDescriptorPolicyResolver resolver = new ToolDescriptorPolicyResolver(descriptors);
         for (ToolDescriptor descriptor : writes) {
             assertThat(descriptor.allowedSources()).doesNotContain(ToolExecutionSource.AI_INTENT_DISPATCH);

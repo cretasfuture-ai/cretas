@@ -44,7 +44,8 @@ class RuntimeToolDescriptorRegistryTest {
                         "material_batch_query",
                         "material_expired_query",
                         "smartbi_factory_analysis",
-                        "alert_rule_toggle");
+                        "alert_rule_toggle",
+                        "factory_shortage_config_update");
         for (String toolName : registry.approvedToolNames()) {
             ToolDescriptor descriptor = registry.findApproved(toolName).orElseThrow();
             assertThat(descriptor.provenance()).isEqualTo(DescriptorProvenance.EXPLICIT);

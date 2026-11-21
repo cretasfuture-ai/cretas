@@ -206,7 +206,7 @@ public class GatedDataToolAiPathPermissionTest {
         // Readings that must happen, or this gate guards nothing.
         assertThat(scan.uninstantiable).as("tools the scan cannot name are invisible to it").isEmpty();
         // 2026-11-18 v3 复核缺口 +3 新工具 (my_wage_query / employee_work_location_query / ssop_schedule_plan)
-        assertThat(scan.toolCalls).hasSize(501);
+        assertThat(scan.toolCalls).hasSize(502);
         assertThat(scan.handlers).isGreaterThan(1000);
         for (String known : List.of("balance_sheet_query", "attendance_stats", "purchase_statistics", "order_list")) {
             assertThat(scan.gatedCalls(known)).as("%s must read gated data per the scan", known).isNotEmpty();

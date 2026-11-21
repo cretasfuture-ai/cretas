@@ -1,6 +1,6 @@
 # Runtime authorization truth. D1 tool-descriptors.yaml remains a separate source audit inventory.
 schemaVersion: 1
-expectedPolicyCount: 15
+expectedPolicyCount: 16
 policies:
   - implementationClass: "com.cretas.aims.ai.tool.impl.user.UserDisableTool"
     toolName: "user_disable"
@@ -296,6 +296,25 @@ policies:
     idempotencyPolicy: REQUIRED_FOR_EXECUTION
     dataClassification: INTERNAL
     allowedSources: [SCHEDULER]
+    egressPolicy:
+      mode: DENY_ALL
+      allowedDestinations: []
+    provenance: EXPLICIT
+  - implementationClass: "com.cretas.aims.ai.tool.impl.config.FactoryShortageConfigTool"
+    toolName: "factory_shortage_config_update"
+    actionType: UPDATE
+    riskLevel: MEDIUM
+    requiredPermissions: []
+    allowedRoles: [factory_super_admin, permission_admin]
+    allowedBusinessTypes: [FACTORY, CENTRAL_KITCHEN]
+    domainTags: ["factory-config", "production", "shortage"]
+    version: "1.0.0"
+    supportsPreview: true
+    confirmationPolicy: REQUIRED_FOR_EXECUTION
+    approvalPolicy: NOT_REQUIRED
+    idempotencyPolicy: REQUIRED_FOR_EXECUTION
+    dataClassification: INTERNAL
+    allowedSources: [INTERNAL_SERVICE]
     egressPolicy:
       mode: DENY_ALL
       allowedDestinations: []

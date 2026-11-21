@@ -68,7 +68,7 @@ class ToolDescriptorCatalogTest {
         assertThat(new RuntimeToolPolicyLoader().loadDefault().policies())
                 .extracting(RuntimeToolPolicyEntry::toolName).doesNotContain(PurchaseGrantExecuteTool.NAME);
         assertThat(RuntimeToolDescriptorRegistry.loadDefault().findApproved(PurchaseGrantExecuteTool.NAME)).isEmpty();
-        assertThat(RuntimeToolDescriptorRegistry.loadDefault().approvedToolNames()).hasSize(15);
+        assertThat(RuntimeToolDescriptorRegistry.loadDefault().approvedToolNames()).hasSize(16);
     }
 
     @Test
@@ -77,10 +77,10 @@ class ToolDescriptorCatalogTest {
         ToolDescriptorStatistics statistics = catalog.statistics();
 
         assertThat(catalog.inventory().schemaVersion()).isEqualTo(1);
-        assertThat(catalog.inventory().expectedToolCount()).isEqualTo(501); // 2026-11-18 v3 复核缺口: +3 EXPLICIT 新工具 (my_wage_query / employee_work_location_query READ·LOW; ssop_schedule_plan WRITE·MEDIUM·preview), customer_create 补 preview
+        assertThat(catalog.inventory().expectedToolCount()).isEqualTo(502); // +1 缺料开工配置工具
         assertThat(catalog.inventory().expectedLegacyCount()).isEqualTo(461);
         // Existing factory analysis adds one explicit, approved ANALYZE/LOW tool.
-        assertThat(statistics.total()).isEqualTo(501);
+        assertThat(statistics.total()).isEqualTo(502);
         // 2026-10-29 S6-04: alert_rule_toggle declares UPDATE/MEDIUM/v2/roles and gets the first SCHEDULER write policy.
         assertThat(statistics.legacy()).isEqualTo(461);
         // 2026-09-15: #815 新增 source_individual_query，EXPLICIT/READ/LOW/REVIEW_REQUIRED；
@@ -104,14 +104,14 @@ class ToolDescriptorCatalogTest {
         assertThat(statistics.actionTypes()).containsExactlyInAnyOrderEntriesOf(Map.of(
                 ToolExecutor.ActionType.READ, 365L,
                 ToolExecutor.ActionType.WRITE, 63L,
-                ToolExecutor.ActionType.UPDATE, 31L,
+                ToolExecutor.ActionType.UPDATE, 32L,
                 ToolExecutor.ActionType.DELETE, 11L,
                 ToolExecutor.ActionType.ANALYZE, 11L,
                 ToolExecutor.ActionType.GENERATE, 15L,
                 ToolExecutor.ActionType.NOTIFY, 5L));
         assertThat(statistics.riskLevels()).containsExactlyInAnyOrderEntriesOf(Map.of(
                 ToolExecutor.RiskLevel.LOW, 424L,
-                ToolExecutor.RiskLevel.MEDIUM, 69L,
+                ToolExecutor.RiskLevel.MEDIUM, 70L,
                 ToolExecutor.RiskLevel.HIGH, 8L,
                 ToolExecutor.RiskLevel.CRITICAL, 0L));
         // previewSupported 36 → 37 (+1): RestaurantDishDeleteTool 新增 doPreview() 实现 —— 安全改进
@@ -123,7 +123,7 @@ class ToolDescriptorCatalogTest {
         // 周转框发出 + 归还 / 质检任务 + 不良登记), 同 ToolDescriptorInventoryDriftTest 的 override supportsPreview 44 → 52。
         // Controlled purchase now requires a real preview and current procurement permission.
         // user_disable v3 adds a zero-write preview; its FACTORY chat intent stays retired.
-        assertThat(statistics.previewSupported()).isEqualTo(56); // +2: ssop_schedule_plan / customer_create (2026-11-18)
+        assertThat(statistics.previewSupported()).isEqualTo(57);
         // 2026-10-06: 44 → 45 (+1): report_sku_gross_margin 现在声明 procurement:price:view
         // (它返回售价/收入/成本/毛利, 门与 App 里同一份数据的入口同口径; 见下方登记)。
         // Supplier comparison v2 declares the existing procurement/finance read permission policy.
@@ -131,13 +131,13 @@ class ToolDescriptorCatalogTest {
         // re-review: lineage_query opens again (traceability parity) and the 2 HACCP tools move to codes (-3).
         // 2026-11-03 strict sweep (follow-up of #1316): role gates where the data is only served by role-gated endpoints;
         // after the organizer's rulings (quality / cold chain / procurement / not-stricter) most became permission codes.
-        assertThat(statistics.requiresPermission()).isEqualTo(84);
+        assertThat(statistics.requiresPermission()).isEqualTo(85);
         // governanceStatus: REVIEW_REQUIRED 553 → 558 (+5), #815 再增 1 → 559;
         //   Factory analysis adds one APPROVED tool; REVIEW_REQUIRED_P0 remains unchanged.
         assertThat(statistics.governanceStatuses()).containsExactlyInAnyOrderEntriesOf(Map.of(
                 ToolGovernanceStatus.REVIEW_REQUIRED, 474L,
                 ToolGovernanceStatus.REVIEW_REQUIRED_P0, 12L,
-                ToolGovernanceStatus.APPROVED, 15L,
+                ToolGovernanceStatus.APPROVED, 16L,
                 ToolGovernanceStatus.WAIVED, 0L));
 
         // 2026-08-27 (#185 修复解析器盲区后浮现): 这 3 个 LEGACY_INFERRED 的 HIGH 风险 WRITE
@@ -212,7 +212,8 @@ class ToolDescriptorCatalogTest {
                         "material_batch_query",
                         "material_expired_query",
                         "smartbi_factory_analysis",
-                        "alert_rule_toggle");
+                        "alert_rule_toggle",
+                        "factory_shortage_config_update");
     }
 
     @Test

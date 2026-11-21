@@ -2,7 +2,7 @@
 # LEGACY_INFERRED, or APPROVED metadata lacking both permissions and allowed roles, remains review debt.
 # This inventory is an independent source-audit truth and is never sufficient by itself to execute.
 schemaVersion: 1
-expectedToolCount: 501
+expectedToolCount: 502
 expectedLegacyCount: 461
 descriptors:
   - toolName: "gate_diagnose_batch"
@@ -10059,6 +10059,27 @@ descriptors:
     - analytics
     provenance: EXPLICIT
     requiresPermission: true
+    overrideFlags:
+      actionType: true
+      riskLevel: true
+      supportsPreview: true
+      requiresPermission: true
+      hasPermission: true
+      requiredPermissions: true
+      version: true
+      domainTags: true
+    governanceStatus: APPROVED
+  - toolName: "factory_shortage_config_update"
+    implementationClass: "com.cretas.aims.ai.tool.impl.config.FactoryShortageConfigTool"
+    provenance: EXPLICIT
+    actionType: UPDATE
+    riskLevel: MEDIUM
+    supportsPreview: true
+    requiresPermission: true
+    requiredPermissions: []
+    allowedRoles: [factory_super_admin, permission_admin]
+    version: "1.0.0"
+    domainTags: ["factory-config", "production", "shortage"]
     overrideFlags:
       actionType: true
       riskLevel: true
