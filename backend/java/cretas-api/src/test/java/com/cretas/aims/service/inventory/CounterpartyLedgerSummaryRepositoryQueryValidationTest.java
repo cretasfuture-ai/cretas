@@ -49,6 +49,7 @@ class CounterpartyLedgerSummaryRepositoryQueryValidationTest {
         o.setId("PO-" + (++seq));
         o.setFactoryId(F);
         o.setOrderNumber("PON-" + seq);
+        o.setCreatedBy(1L);
         o.setSupplierId(supplier);
         o.setOrderDate(LocalDate.of(2026, 11, 1));
         o.setStatus(st);
@@ -64,6 +65,8 @@ class CounterpartyLedgerSummaryRepositoryQueryValidationTest {
         i.setMaterialName("盐");
         i.setQuantity(new BigDecimal(qty));
         i.setUnit("kg");
+        i.setPriceUnit("kg");
+        i.setMaterialTypeId("M1");
         i.setReceivedQuantity(new BigDecimal(received));
         i.setUnitPrice(price == null ? null : new BigDecimal(price));
         em.persist(i);
@@ -74,6 +77,7 @@ class CounterpartyLedgerSummaryRepositoryQueryValidationTest {
         o.setId("SO-" + (++seq));
         o.setFactoryId(F);
         o.setOrderNumber("SON-" + seq);
+        o.setCreatedBy(1L);
         o.setCustomerId(customer);
         o.setCustomerName("客户");
         o.setOrderDate(LocalDate.of(2026, 11, 2 + seq % 5));
