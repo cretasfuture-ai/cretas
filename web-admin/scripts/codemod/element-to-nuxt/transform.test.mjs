@@ -55,3 +55,11 @@ test('选择器收集动态选项，已有翻译绑定重跑稳定', () => {
   assert.match(outcome.code, /<CompatOption v-for="x in list"/);
   assert.equal(outcome.code, run(outcome.code).code);
 });
+
+test('兼容旧式单选 label 时，保留模型实际写入的业务值', () => {
+  const outcome = run(`<script setup>const reason = '';</script>
+<template><el-radio-group v-model="reason"><el-radio label="其他">其他原因</el-radio></el-radio-group></template>`);
+  assert.match(outcome.code, /label="其他"/);
+  assert.deepEqual(Object.values(outcome.catalog), ['其他原因']);
+  assert.equal(outcome.todos.some(todo => todo.reason === 'label 同时充当选项业务值'), true);
+});

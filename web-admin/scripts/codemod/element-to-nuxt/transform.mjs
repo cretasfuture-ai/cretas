@@ -239,6 +239,13 @@ export function transform(source, file, { translate = true } = {}) {
       }
       for (const prop of node.props) {
         const name = staticName(prop);
+        if (name === 'label' && ['el-radio', 'el-radio-button', 'el-checkbox', 'el-checkbox-button'].includes(tag)
+          && !node.props.some(attr => staticName(attr) === 'value')
+          && han.test(prop.value?.content ?? prop.exp?.content ?? '') && translate) {
+          untranslated++;
+          todo('label 同时充当选项业务值', line);
+          continue;
+        }
         const rename = replacement && Object.hasOwn(spec.rename, name) ? spec.rename[name] : name;
         if (replacement && rename === null) {
           if (tag === 'el-card' && name === 'header') {

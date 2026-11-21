@@ -1,8 +1,9 @@
 import { readFileSync } from 'node:fs';
+import { sourceWithChinese } from '@/i18n-pilot/sourceForTests';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-const source = readFileSync(resolve(import.meta.dirname, '../list.vue'), 'utf8');
+const source = sourceWithChinese(readFileSync(resolve(import.meta.dirname, '../list.vue'), 'utf8'));
 
 describe('sales order positive price guard', () => {
   it('rejects zero and negative prices in both create and edit before submission', () => {

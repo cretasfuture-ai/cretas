@@ -1,8 +1,9 @@
 import { readFileSync } from 'node:fs';
+import { sourceWithChinese } from '@/i18n-pilot/sourceForTests';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-const source = readFileSync(resolve(process.cwd(), 'src/views/sales/orders/list.vue'), 'utf8');
+const source = sourceWithChinese(readFileSync(resolve(process.cwd(), 'src/views/sales/orders/list.vue'), 'utf8'));
 
 describe('sales order list lifecycle UX source contract', () => {
   it('uses one lifecycle dropdown (W6, no tab bar) plus independent shipment and payment filters', () => {
