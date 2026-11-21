@@ -10,6 +10,7 @@ import com.cretas.aims.dto.supplier.SupplierDTO;
 import com.cretas.aims.dto.supplier.SupplierStatusChangeRequest;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.security.PriceMaskResolver;
+import com.cretas.aims.security.PriceSensitive;
 import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.SupplierService;
 import com.cretas.aims.service.supplier.SupplierImportService;
@@ -32,6 +33,7 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -290,14 +292,25 @@ public class SupplierController {
      * 获取供应商统计信息
      */
     @GetMapping("/{supplierId}/statistics")
+    @RequirePermission({"procurement:read", "procurement:read_write", "finance:read", "finance:read_write"})
     @Operation(summary = "获取供应商统计信息", description = "获取供应商的供货统计，包括供货次数、总金额、质量评分等")
     public ApiResponse<Map<String, Object>> getSupplierStatistics(
             @Parameter(description = "工厂ID", example = "F001", required = true)
             @PathVariable @NotBlank String factoryId,
             @Parameter(description = "供应商ID", example = "SUP-001", required = true)
-            @PathVariable @NotBlank String supplierId) {
+            @PathVariable @NotBlank String supplierId,
+            @RequestHeader(value = "Authorization", required = false) String authorization) {
 
-        Map<String, Object> statistics = supplierService.getSupplierStatistics(factoryId, supplierId);
+        Map<String, Object> statistics = new LinkedHashMap<>(supplierService.getSupplierStatistics(factoryId, supplierId));
+        if (priceMaskResolver.shouldMaskPrice(authorization, PriceSensitive.PURCHASE)) {
+            for (String key : List.of("totalAmount", "purchaseAmount", "pendingReceiptAmount", "pendingInvoiceAmount")) {
+                if (statistics.containsKey(key)) statistics.put(key, null);
+            }
+        }
+        if (priceMaskResolver.shouldMaskPrice(authorization, PriceSensitive.PURCHASE_OR_FINANCE)) {
+            statistics.put("pendingPayable", null);
+            statistics.put("paidAmount", null);
+        }
         return ApiResponse.success(statistics);
     }
 

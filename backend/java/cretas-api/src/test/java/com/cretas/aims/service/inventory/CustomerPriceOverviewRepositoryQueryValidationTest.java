@@ -2,7 +2,6 @@ package com.cretas.aims.service.inventory;
 
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.inventory.CustomerPriceOverviewRow;
-import com.cretas.aims.entity.Customer;
 import com.cretas.aims.entity.CustomerPriceHistory;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.inventory.PriceList;
@@ -41,8 +40,9 @@ class CustomerPriceOverviewRepositoryQueryValidationTest {
         svc = new CustomerPriceOverviewService();
         ReflectionTestUtils.setField(svc, "em", em);
 
-        customer("C1", "甲客户");
-        customer("C2", "乙客户");
+        Long userId = TradeJpaFixtures.createFactoryUser(em, F);
+        TradeJpaFixtures.createCustomer(em, F, userId, "C1", "甲客户");
+        TradeJpaFixtures.createCustomer(em, F, userId, "C2", "乙客户");
         product("P1", "SKU1", "面包", "310g*42袋/箱");
         product("P2", "SKU2", "蛋糕", null);
         priceList("C1", "SELLING_PRICE", "P1", "10");
@@ -53,17 +53,6 @@ class CustomerPriceOverviewRepositoryQueryValidationTest {
         history("C1", "P1", "9", LocalDate.of(2026, 10, 1));
         history("C1", "P1", "13", LocalDate.of(2026, 11, 1));
         em.flush();
-    }
-
-    private void customer(String id, String name) {
-        Customer c = new Customer();
-        c.setId(id);
-        c.setFactoryId(F);
-        c.setCode(id);
-        c.setCustomerCode(id);
-        c.setName(name);
-        c.setCreatedBy(1L);
-        em.persist(c);
     }
 
     private void product(String id, String code, String name, String spec) {

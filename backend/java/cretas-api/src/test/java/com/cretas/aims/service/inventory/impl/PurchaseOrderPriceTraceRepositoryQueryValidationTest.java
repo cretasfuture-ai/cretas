@@ -1,18 +1,21 @@
 package com.cretas.aims.service.inventory.impl;
 
 import com.cretas.aims.dto.inventory.CreatePurchaseOrderRequest;
+import com.cretas.aims.entity.inventory.PurchaseOrder;
 import com.cretas.aims.entity.inventory.PurchaseOrderItem;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.inventory.PurchaseOrderItemRepository;
+import com.cretas.aims.service.inventory.TradeJpaFixtures;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.domain.EntityScan;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 
 import java.math.BigDecimal;
@@ -29,7 +32,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class PurchaseOrderPriceTraceRepositoryQueryValidationTest {
 
     @Autowired private PurchaseOrderItemRepository items;
-    @Autowired private JdbcTemplate jdbc;
+    @PersistenceContext private EntityManager em;
 
     private final ObjectMapper mapper = new ObjectMapper().registerModule(new JavaTimeModule());
 
@@ -44,9 +47,20 @@ class PurchaseOrderPriceTraceRepositoryQueryValidationTest {
         CreatePurchaseOrderRequest.PurchaseOrderItemDTO dto = req.getItems().get(0);
         assertThat(dto.getRemark()).isEqualTo("行备注");
 
-        jdbc.execute("SET REFERENTIAL_INTEGRITY FALSE");
+        String factoryId = "IT-PO-TRACE";
+        Long userId = TradeJpaFixtures.createFactoryUser(em, factoryId);
+        TradeJpaFixtures.createSupplier(em, factoryId, userId, "S1", "供货商");
+        TradeJpaFixtures.createMaterial(em, factoryId, "M1");
+        PurchaseOrder order = new PurchaseOrder();
+        order.setId("PO-TRACE");
+        order.setFactoryId(factoryId);
+        order.setOrderNumber("PO-TRACE");
+        order.setSupplierId(req.getSupplierId());
+        order.setOrderDate(req.getOrderDate());
+        order.setCreatedBy(userId);
+        em.persist(order);
         PurchaseOrderItem item = new PurchaseOrderItem();
-        item.setPurchaseOrderId("PO-TRACE");
+        item.setPurchaseOrderId(order.getId());
         item.setMaterialTypeId("M1");
         item.setMaterialName("盐");
         item.setQuantity(dto.getQuantity());
@@ -54,7 +68,7 @@ class PurchaseOrderPriceTraceRepositoryQueryValidationTest {
         item.setPriceUnit("kg");
         PurchaseServiceImpl.applyPriceTrace(item, dto);
         Long id = items.saveAndFlush(item).getId();
-        items.flush();
+        em.clear();
 
         PurchaseOrderItem back = items.findById(id).orElseThrow();
         assertThat(back.getPriceSource()).isEqualTo("手改");

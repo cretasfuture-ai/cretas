@@ -102,6 +102,8 @@ class PurchasePriceVisibilityConfigContractTest {
     private final FactoryModuleConfigRepository l2 = mock(FactoryModuleConfigRepository.class);
     private final UserRepository users = mock(UserRepository.class);
     private final PurchaseService purchaseService = mock(PurchaseService.class);
+    private final com.cretas.aims.service.inventory.PurchasePriceTrendService priceTrend =
+            mock(com.cretas.aims.service.inventory.PurchasePriceTrendService.class);
     private final SupplierMaterialService supplierMaterialService = mock(SupplierMaterialService.class);
     private final PurchaseInvoiceService invoiceService = mock(PurchaseInvoiceService.class);
     private final ListSummaryService listSummaryService = mock(ListSummaryService.class);
@@ -227,6 +229,7 @@ class PurchasePriceVisibilityConfigContractTest {
         ReflectionTestUtils.setField(purchaseController, "approvalInstanceRepository", approvals);
         ReflectionTestUtils.setField(purchaseController, "workflowEngine", workflowEngine);
         ReflectionTestUtils.setField(purchaseController, "approvalHistoryRepository", approvalHistory);
+        ReflectionTestUtils.setField(purchaseController, "priceTrendService", priceTrend);
         MaterialPackagingHierarchyController packagingController =
                 new MaterialPackagingHierarchyController(packagingService, mobile);
         ReflectionTestUtils.setField(packagingController, "priceVisibility", new PriceVisibility(permissions));
@@ -576,6 +579,21 @@ class PurchasePriceVisibilityConfigContractTest {
         String text = r.getResponse().getContentAsString(StandardCharsets.UTF_8);
         assertThat(r.getResponse().getStatus()).as(text).isEqualTo(expectStatus);
         return json.readTree(text);
+    }
+
+    @Test
+    void priceTrendAndCsvUseConfiguredProcurementVisibility() throws Exception {
+        String url = "/api/mobile/" + F + "/purchase/price-trend";
+        when(priceTrend.exportCsv(List.of())).thenReturn("sentinel".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        assertThat(call(FINANCE, get(url).param("from", "2026-10-01").param("to", "2026-10-31"))
+                .getResponse().getStatus()).isEqualTo(403);
+        assertThat(call(FINANCE, get(url + "/export").param("from", "2026-10-01").param("to", "2026-10-31"))
+                .getResponse().getStatus()).isEqualTo(403);
+        assertThat(call(DEPT_ADMIN, get(url).param("from", "2026-10-01").param("to", "2026-10-31"))
+                .getResponse().getStatus()).isEqualTo(200);
+        assertThat(call(DEPT_ADMIN, get(url + "/export").param("from", "2026-10-01").param("to", "2026-10-31"))
+                .getResponse().getContentAsString()).isEqualTo("sentinel");
     }
 
     private MvcResult call(long userId, MockHttpServletRequestBuilder request) throws Exception {

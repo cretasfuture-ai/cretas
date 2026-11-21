@@ -1,8 +1,6 @@
 package com.cretas.aims.service.inventory;
 
 import com.cretas.aims.dto.common.PageResponse;
-import com.cretas.aims.entity.Customer;
-import com.cretas.aims.entity.Supplier;
 import com.cretas.aims.entity.enums.ReturnType;
 import com.cretas.aims.entity.enums.SalesDeliveryStatus;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
@@ -37,6 +35,8 @@ class ReturnListEnrichAndDeliverySearchRepositoryQueryValidationTest {
     @PersistenceContext private EntityManager em;
     private ReturnOrderListEnricher enricher;
     private SalesDeliverySearchService search;
+    private Long userId;
+    private Long otherUserId;
 
     @BeforeEach
     void setUp() {
@@ -45,17 +45,16 @@ class ReturnListEnrichAndDeliverySearchRepositoryQueryValidationTest {
         search = new SalesDeliverySearchService();
         ReflectionTestUtils.setField(search, "em", em);
 
-        Customer c = new Customer();
-        c.setId("C1"); c.setFactoryId(F); c.setCode("C1"); c.setCustomerCode("C1"); c.setName("甲客户"); c.setCreatedBy(1L);
-        em.persist(c);
-        Supplier s = new Supplier();
-        s.setId("S1"); s.setFactoryId(F); s.setCode("S1"); s.setSupplierCode("S1"); s.setName("乙供应商"); s.setCreatedBy(1L);
-        em.persist(s);
+        userId = TradeJpaFixtures.createFactoryUser(em, F);
+        otherUserId = TradeJpaFixtures.createFactoryUser(em, "OTHER");
+        TradeJpaFixtures.createCustomer(em, F, userId, "C1", "甲客户");
+        TradeJpaFixtures.createCustomer(em, "OTHER", otherUserId, "C-OTHER", "其他客户");
+        TradeJpaFixtures.createSupplier(em, F, userId, "S1", "乙供应商");
         SalesOrder so = new SalesOrder();
-        so.setId("SO1"); so.setFactoryId(F); so.setOrderNumber("SO-001"); so.setCreatedBy(1L); so.setCustomerId("C1"); so.setOrderDate(LocalDate.now());
+        so.setId("SO1"); so.setFactoryId(F); so.setOrderNumber("SO-001"); so.setCreatedBy(userId); so.setCustomerId("C1"); so.setOrderDate(LocalDate.now());
         em.persist(so);
         PurchaseOrder po = new PurchaseOrder();
-        po.setId("PO1"); po.setFactoryId(F); po.setOrderNumber("PO-001"); po.setCreatedBy(1L); po.setSupplierId("S1"); po.setOrderDate(LocalDate.now());
+        po.setId("PO1"); po.setFactoryId(F); po.setOrderNumber("PO-001"); po.setCreatedBy(userId); po.setSupplierId("S1"); po.setOrderDate(LocalDate.now());
         em.persist(po);
         em.flush();
     }
@@ -105,11 +104,11 @@ class ReturnListEnrichAndDeliverySearchRepositoryQueryValidationTest {
         d.setFactoryId(factory);
         d.setDeliveryNumber(no);
         d.setOrderNumber(orderNo);
-        d.setCustomerId("C1");
+        d.setCustomerId(F.equals(factory) ? "C1" : "C-OTHER");
         d.setCustomerName(customer);
         d.setStatus(st);
         d.setDeliveryDate(date);
-        d.setShippedBy(1L);
+        d.setShippedBy(F.equals(factory) ? userId : otherUserId);
         em.persist(d);
     }
 

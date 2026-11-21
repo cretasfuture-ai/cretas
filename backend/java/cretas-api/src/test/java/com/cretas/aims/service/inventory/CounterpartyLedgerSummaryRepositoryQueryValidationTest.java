@@ -1,5 +1,6 @@
 package com.cretas.aims.service.inventory;
 
+import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.enums.*;
 import com.cretas.aims.entity.finance.ArApTransaction;
 import com.cretas.aims.entity.inventory.*;
@@ -11,8 +12,6 @@ import org.springframework.boot.autoconfigure.domain.EntityScan;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.util.ReflectionTestUtils;
 
@@ -33,13 +32,27 @@ class CounterpartyLedgerSummaryRepositoryQueryValidationTest {
 
     private static final String F = "IT-LEDGER";
     @PersistenceContext private EntityManager em;
-    @Autowired private JdbcTemplate jdbc;
     private CounterpartyLedgerSummaryService svc;
     private int seq;
+    private Long userId;
 
     @BeforeEach
     void setUp() {
-        jdbc.execute("SET REFERENTIAL_INTEGRITY FALSE");
+        userId = TradeJpaFixtures.createFactoryUser(em, F);
+        TradeJpaFixtures.createMaterial(em, F, "M1");
+        for (String id : List.of("SUP-1", "SUP-2", "SUP-3")) {
+            TradeJpaFixtures.createSupplier(em, F, userId, id, id);
+        }
+        for (String id : List.of("CUS-1", "CUS-2")) {
+            TradeJpaFixtures.createCustomer(em, F, userId, id, id);
+        }
+        ProductType product = new ProductType();
+        product.setId("P1");
+        product.setFactoryId(F);
+        product.setCode("P1");
+        product.setName("面包");
+        product.setUnit("个");
+        em.persist(product);
         svc = new CounterpartyLedgerSummaryService();
         ReflectionTestUtils.setField(svc, "em", em);
     }
@@ -49,7 +62,7 @@ class CounterpartyLedgerSummaryRepositoryQueryValidationTest {
         o.setId("PO-" + (++seq));
         o.setFactoryId(F);
         o.setOrderNumber("PON-" + seq);
-        o.setCreatedBy(1L);
+        o.setCreatedBy(userId);
         o.setSupplierId(supplier);
         o.setOrderDate(LocalDate.of(2026, 11, 1));
         o.setStatus(st);
@@ -77,7 +90,7 @@ class CounterpartyLedgerSummaryRepositoryQueryValidationTest {
         o.setId("SO-" + (++seq));
         o.setFactoryId(F);
         o.setOrderNumber("SON-" + seq);
-        o.setCreatedBy(1L);
+        o.setCreatedBy(userId);
         o.setCustomerId(customer);
         o.setCustomerName("客户");
         o.setOrderDate(LocalDate.of(2026, 11, 2 + seq % 5));
@@ -91,6 +104,7 @@ class CounterpartyLedgerSummaryRepositoryQueryValidationTest {
     private void soItem(SalesOrder o, String qty, String delivered, String price) {
         SalesOrderItem i = new SalesOrderItem();
         i.setSalesOrderId(o.getId());
+        i.setProductTypeId("P1");
         i.setProductName("面包");
         i.setQuantity(new BigDecimal(qty));
         i.setUnit("个");

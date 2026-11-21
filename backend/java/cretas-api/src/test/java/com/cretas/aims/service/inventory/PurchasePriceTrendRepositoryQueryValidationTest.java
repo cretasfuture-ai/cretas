@@ -33,13 +33,16 @@ class PurchasePriceTrendRepositoryQueryValidationTest {
 
     private static final String F = "IT-TREND";
     @PersistenceContext private EntityManager em;
-    @org.springframework.beans.factory.annotation.Autowired private org.springframework.jdbc.core.JdbcTemplate jdbc;
     private PurchasePriceTrendService svc;
     private int seq;
+    private Long userId;
 
     @BeforeEach
     void setUp() {
-        jdbc.execute("SET REFERENTIAL_INTEGRITY FALSE");
+        userId = TradeJpaFixtures.createFactoryUser(em, F);
+        TradeJpaFixtures.createMaterial(em, F, "M1");
+        TradeJpaFixtures.createSupplier(em, F, userId, "S1", "S1");
+        TradeJpaFixtures.createSupplier(em, F, userId, "S2", "S2");
         svc = new PurchasePriceTrendService();
         ReflectionTestUtils.setField(svc, "em", em);
         // 10 月: 盐 100kg@10 + 300kg@20 → 加权 (1000+6000)/400 = 17.5 (简单平均会是 15)
@@ -73,7 +76,7 @@ class PurchasePriceTrendRepositoryQueryValidationTest {
         o.setId("PO-" + (++seq));
         o.setFactoryId(F);
         o.setOrderNumber("PON-" + seq);
-        o.setCreatedBy(1L);
+        o.setCreatedBy(userId);
         o.setSupplierId(supplier);
         o.setOrderDate(date);
         o.setStatus(st);
@@ -106,6 +109,25 @@ class PurchasePriceTrendRepositoryQueryValidationTest {
                 .singleElement().satisfies(r -> assertThat(r.weightedAveragePrice()).isEqualByComparingTo("20"));
         assertThat(svc.trend(F, LocalDate.of(2026, 11, 1), LocalDate.of(2026, 11, 30), "NO-SUCH", null)).isEmpty();
         assertThat(svc.trend("OTHER", LocalDate.of(2026, 10, 1), LocalDate.of(2026, 11, 30), null, null)).isEmpty();
+    }
+
+    @Test
+    void weightsDifferentPackSizesByQuantityInThePriceUnit() {
+        PurchaseOrderItem smallPack = line("M1", "盐", "box", "2", "10");
+        smallPack.setPriceUnit("kg");
+        smallPack.setQuantityToPriceFactor(new BigDecimal("5"));
+        PurchaseOrderItem largePack = line("M1", "盐", "box", "2", "20");
+        largePack.setPriceUnit("kg");
+        largePack.setQuantityToPriceFactor(new BigDecimal("15"));
+        LocalDate day = LocalDate.of(2026, 12, 1);
+        order("S1", PurchaseOrderStatus.COMPLETED, day, smallPack);
+        order("S2", PurchaseOrderStatus.COMPLETED, day, largePack);
+        em.flush();
+
+        assertThat(svc.trend(F, day, day, "M1", null)).singleElement().satisfies(row -> {
+            assertThat(row.totalQuantity()).isEqualByComparingTo("4");
+            assertThat(row.weightedAveragePrice()).isEqualByComparingTo("17.5");
+        });
     }
 
     @Test

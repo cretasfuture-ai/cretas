@@ -36,7 +36,6 @@ class ReceivableItemsRepositoryQueryValidationTest {
 
     @BeforeEach
     void setUp() {
-        repo.deleteAll();
         add("A", "CUS-1", ArApTransactionType.AR_INVOICE, "1000", "400", TODAY.minusDays(10));   // 逾期 10 天
         add("B", "CUS-1", ArApTransactionType.AR_INVOICE, "500", "-50", TODAY.minusDays(5));     // 待收为负, 不逾期
         add("C", "CUS-2", ArApTransactionType.AR_INVOICE, "300", "300", TODAY.plusDays(3));      // 未到期
@@ -58,6 +57,7 @@ class ReceivableItemsRepositoryQueryValidationTest {
         t.setBalanceAfter(BigDecimal.ZERO);
         t.setOutstandingAmount(outstanding == null ? null : new BigDecimal(outstanding));
         t.setTransactionDate(TODAY.minusDays(40));
+        t.setOperatedBy("CUS-1".equals(cp) ? 101L : 102L);
         t.setDueDate(due);
         repo.save(t);
     }
@@ -79,6 +79,16 @@ class ReceivableItemsRepositoryQueryValidationTest {
         assertThat(nos(q("CUS-2", 0, 0, null, null))).containsExactly("C");
         assertThat(nos(q(null, 0, 0, TODAY.minusDays(12), TODAY.minusDays(4)))).containsExactly("A", "B");
         assertThat(q(null, 0, 1, null, null).getTotalElements()).isEqualTo(1);
+    }
+
+    @Test
+    void ownerFilterAlsoAppliesToTheCountQuery() {
+        var scoped = repo.findScopedReceivableItems(F, null, null, null, 1, 0, TODAY,
+                List.of(101L), PageRequest.of(0, 1));
+        assertThat(nos(scoped)).containsExactly("A");
+        assertThat(scoped.getTotalElements()).isEqualTo(1);
+        assertThat(repo.findScopedReceivableItems(F, null, null, null, 1, 0, TODAY,
+                List.of(999L), PageRequest.of(0, 1))).isEmpty();
     }
 
     @Test

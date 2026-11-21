@@ -14,6 +14,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -31,10 +32,10 @@ public class CustomerPriceOverviewService {
     public PageResponse<CustomerPriceOverviewRow> list(String factoryId, String keyword, int page, int size) {
         int p = Math.max(page, 1);
         int s = Math.min(Math.max(size, 1), 200);
-        String kw = keyword == null || keyword.isBlank() ? null : "%" + keyword.trim().toLowerCase() + "%";
+        String kw = keyword == null || keyword.isBlank() ? null : "%" + keyword.trim().toLowerCase(Locale.ROOT) + "%";
 
         String from = " FROM PriceListItem i JOIN i.priceList pl JOIN Customer c ON c.id = pl.customerId "
-                + "LEFT JOIN ProductType pt ON pt.id = i.productTypeId "
+                + "LEFT JOIN ProductType pt ON pt.id = i.productTypeId AND pt.factoryId = :f "
                 + "WHERE pl.factoryId = :f AND pl.customerId IS NOT NULL AND pl.priceType = 'SELLING_PRICE' "
                 + "AND i.productTypeId IS NOT NULL AND c.factoryId = :f"
                 + (kw == null ? "" : " AND (LOWER(c.name) LIKE :kw OR LOWER(i.itemName) LIKE :kw "
@@ -42,7 +43,7 @@ public class CustomerPriceOverviewService {
 
         var countQ = em.createQuery("SELECT COUNT(i)" + from, Long.class).setParameter("f", factoryId);
         var rowsQ = em.createQuery("SELECT pl.customerId, c.name, i.id, pl.id, pl.name, i.productTypeId, pt.code, "
-                + "i.itemName, pt.specification, i.unit, i.standardPrice, pl.effectiveFrom, pl.effectiveTo, pl, i.id"
+                + "i.itemName, pt.specification, i.unit, i.standardPrice, pl.effectiveFrom, pl.effectiveTo, pl"
                 + from + " ORDER BY c.name ASC, i.itemName ASC, i.id ASC", Object[].class).setParameter("f", factoryId);
         if (kw != null) {
             countQ.setParameter("kw", kw);

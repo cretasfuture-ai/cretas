@@ -7,9 +7,14 @@ import com.cretas.aims.dto.inventory.CreatePriceListRequest;
 import com.cretas.aims.dto.inventory.UpdatePriceListRequest;
 import com.cretas.aims.entity.inventory.PriceList;
 import com.cretas.aims.entity.inventory.PriceListItem;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
+import com.cretas.aims.repository.ProductTypeRepository;
+import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.inventory.PriceListItemRepository;
 import com.cretas.aims.repository.inventory.PriceListRepository;
+import com.cretas.aims.security.PriceScope;
+import com.cretas.aims.security.PriceSensitive;
 import com.cretas.aims.service.MobileService;
 import com.cretas.aims.utils.TokenUtils;
 import io.swagger.v3.oas.annotations.Operation;
@@ -20,6 +25,8 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -43,6 +50,8 @@ public class PriceListController {
     private final PriceListRepository priceListRepository;
     private final PriceListItemRepository priceListItemRepository;
     private final MobileService mobileService;
+    private final RawMaterialTypeRepository rawMaterialTypes;
+    private final ProductTypeRepository productTypes;
 
     // 🔴 2026-08-22: 加 procurement:read_write。这一页挂在**采购管理**组下、
     //   管的就是**采购价目表**(F006 现存那条 price_type=PURCHASE_PRICE),
@@ -210,9 +219,9 @@ public class PriceListController {
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String priceListId,
             @Valid @RequestBody UpdatePriceListRequest request) {
-        PriceList priceList = requireFactoryPriceList(factoryId, priceListId);
+        PriceList priceList = requireEditablePriceList(factoryId, priceListId);
         if (request.getEffectiveTo() != null && request.getEffectiveTo().isBefore(request.getEffectiveFrom())) {
-            throw new com.cretas.aims.exception.BusinessException(400, "失效日期不能早于生效日期");
+            throw new BusinessException(400, "失效日期不能早于生效日期");
         }
         priceList.setName(request.getName());
         priceList.setEffectiveFrom(request.getEffectiveFrom());
@@ -232,9 +241,9 @@ public class PriceListController {
             @RequestBody Map<String, Boolean> body) {
         Boolean active = body == null ? null : body.get("active");
         if (active == null) {
-            throw new com.cretas.aims.exception.BusinessException(400, "active 不能为空");
+            throw new BusinessException(400, "active 不能为空");
         }
-        PriceList priceList = requireFactoryPriceList(factoryId, priceListId);
+        PriceList priceList = requireEditablePriceList(factoryId, priceListId);
         priceList.setIsActive(active);
         priceList = priceListRepository.save(priceList);
         log.info("价格表启停: priceListId={}, active={}", priceListId, active);
@@ -248,10 +257,10 @@ public class PriceListController {
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String priceListId,
             @Valid @RequestBody CreatePriceListRequest.PriceItemDTO dto) {
-        requireFactoryPriceList(factoryId, priceListId);
+        requireEditablePriceList(factoryId, priceListId);
         PriceListItem item = new PriceListItem();
         item.setPriceListId(priceListId);
-        applyItem(item, dto);
+        applyItem(factoryId, item, dto);
         return ApiResponse.success("价格条目已新增", priceListItemRepository.save(item));
     }
 
@@ -263,9 +272,9 @@ public class PriceListController {
             @PathVariable @NotBlank String priceListId,
             @PathVariable Long itemId,
             @Valid @RequestBody CreatePriceListRequest.PriceItemDTO dto) {
-        requireFactoryPriceList(factoryId, priceListId);
+        requireEditablePriceList(factoryId, priceListId);
         PriceListItem item = requireItem(priceListId, itemId);
-        applyItem(item, dto);
+        applyItem(factoryId, item, dto);
         return ApiResponse.success("价格条目已更新", priceListItemRepository.save(item));
     }
 
@@ -287,14 +296,33 @@ public class PriceListController {
                 .orElseThrow(() -> new ResourceNotFoundException("价格条目不存在"));
     }
 
-    private void applyItem(PriceListItem item, CreatePriceListRequest.PriceItemDTO dto) {
+    private PriceList requireEditablePriceList(String factoryId, String priceListId) {
+        PriceList list = requireFactoryPriceList(factoryId, priceListId);
+        if ("PURCHASE_PRICE".equals(list.getPriceType())
+                && RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes attributes) {
+            attributes.getRequest().setAttribute(PriceScope.REQUEST_ATTRIBUTE, PriceSensitive.PURCHASE);
+        }
+        return list;
+    }
+
+    private void applyItem(String factoryId, PriceListItem item, CreatePriceListRequest.PriceItemDTO dto) {
+        if (dto.getRemark() != null && dto.getRemark().length() > 500) {
+            throw new BusinessException(400, "条目备注长度不能超过500个字符");
+        }
+        if (dto.getMaterialTypeId() != null
+                && rawMaterialTypes.findByIdAndFactoryId(dto.getMaterialTypeId(), factoryId).isEmpty()) {
+            throw new ResourceNotFoundException("原料不存在");
+        }
+        if (dto.getProductTypeId() != null && !productTypes.existsByIdAndFactoryId(dto.getProductTypeId(), factoryId)) {
+            throw new ResourceNotFoundException("产品不存在");
+        }
         if (dto.getStandardPrice().signum() < 0
                 || (dto.getMinPrice() != null && dto.getMinPrice().signum() < 0)
                 || (dto.getMaxPrice() != null && dto.getMaxPrice().signum() < 0)) {
-            throw new com.cretas.aims.exception.BusinessException(400, "价格不能为负数");
+            throw new BusinessException(400, "价格不能为负数");
         }
         if (dto.getMinPrice() != null && dto.getMaxPrice() != null && dto.getMinPrice().compareTo(dto.getMaxPrice()) > 0) {
-            throw new com.cretas.aims.exception.BusinessException(400, "最低限价不能高于最高限价");
+            throw new BusinessException(400, "最低限价不能高于最高限价");
         }
         item.setMaterialTypeId(dto.getMaterialTypeId());
         item.setProductTypeId(dto.getProductTypeId());
