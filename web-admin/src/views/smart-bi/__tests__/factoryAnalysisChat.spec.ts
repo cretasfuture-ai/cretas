@@ -176,6 +176,8 @@ describe('FactoryAnalysisChat mounted workflow', () => {
     expect(page!.find('[data-testid="factory-analysis-answer"]').text()).toContain('已根据授权数据完成分析');
     expect(page!.find('[data-testid="factory-analysis-turn-scope"]').text()).toContain('工厂F006 · 业务系统 · 全部历史 · 全厂范围');
     expect(page!.findAll('[data-testid="rendered-factory-chart"]')).toHaveLength(1);
+    expect(page!.get('.answer-chart__heading').text()).toContain('折线 · kg');
+    expect(page!.get('.answer-chart__heading').text()).not.toContain('line');
     expect(page!.find('[data-testid="factory-analysis-facts"]').text()).toContain('12 kg');
   });
 

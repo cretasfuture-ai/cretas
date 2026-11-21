@@ -708,7 +708,7 @@ onBeforeUnmount(() => { requestVersion.value += 1; clearChartReadiness(); });
           <div v-if="turn.recommendations?.length" class="answer-tools"><span>本次显示 {{ turn.recommendations.length }} 张真实图表</span><el-button size="small" :loading="exportLoading === 'excel'" :icon="Download" @click="exportAnswer(turn, 'excel')">Excel</el-button><el-button size="small" :loading="exportLoading === 'pdf'" @click="exportAnswer(turn, 'pdf')">PDF</el-button><el-button size="small" :loading="exportLoading === 'ppt'" @click="exportAnswer(turn, 'ppt')">PPT</el-button></div>
           <div v-if="turn.id === activeTurnId && turn.recommendations?.length" class="answer-charts">
             <div v-for="item in turn.recommendations" :key="item.id" class="answer-chart" :data-testid="`factory-chart-card-${item.id}`">
-              <div class="answer-chart__heading"><strong>{{ item.title }}</strong><span>{{ item.metric }} · {{ item.unit }} · {{ item.chart.chartType }}</span></div>
+              <div class="answer-chart__heading"><strong>{{ item.title }}</strong><span>{{ catalogChartTypeLabel(item.chart.chartType) }} · {{ item.unit }}</span></div>
               <FactoryChartCanvas :option="item.chart.echartsOption" @ready="markChartReady(turn, item)" @click="openDetails(item, $event, turn)" />
               <el-button link type="primary" @click="openDetails(item, undefined, turn)">查看原始明细</el-button>
               <p v-if="item.detailStatus" class="detail-status">{{ item.detailStatus.message }}</p>
