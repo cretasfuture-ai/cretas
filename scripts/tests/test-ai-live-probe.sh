@@ -292,4 +292,43 @@ print("cases=%d ok" % len(cases))
 EOF
 ok "cases.json 含 7 条必备话术, pending 只挂在存在的入口上"
 
+echo "E. 客户购买历史结果判据"
+"$PY" -X utf8 - "$PROBE" "$ROOT_DIR/scripts/ai-live-probe/cases.json" <<'EOF' || fail "客户历史结果判据"
+import json
+import runpy
+import sys
+
+check_turn = runpy.run_path(sys.argv[1])["check_turn"]
+with open(sys.argv[2], encoding="utf-8") as cases_file:
+    cases = json.load(cases_file)["cases"]
+case = next(case for case in cases if case["id"] == "clarify_then_pick_1")
+expect = case["turns"][1]["expect"]
+intent = "CUSTOMER_PURCHASE_HISTORY"
+previous = {"data": {"suggestedActions": [
+    {"actionCode": "SELECT_INTENT", "parameters": {"intentCode": intent}},
+    {"actionCode": "SELECT_INTENT", "parameters": {"intentCode": "CUSTOMER_LIST"}},
+]}}
+
+def check(status, message, expectation=expect, **extra):
+    return check_turn(expectation, {"http": 200, "data": {
+        "status": status, "intentCode": intent, "message": message, **extra,
+    }}, previous)
+
+assert not check("NEED_MORE_INFO", "要查哪个客户？")
+assert not check("NEED_CLARIFICATION", "请提供客户名称。")
+assert check("NEED_MORE_INFO", "请说清楚一些。")
+assert check("SUCCESS", "没有购买记录", resultData={"customerId": "fake", "purchaseHistory": []})
+assert any("文案不应含「执行过程中出现异常」" in issue
+           for issue in check("NEED_MORE_INFO", "要查哪个客户？", formattedText="执行过程中出现异常"))
+assert any("文案不应含「执行过程中出现异常」" in issue
+           for issue in check("FAILED", "执行过程中出现异常，请稍后重试。"))
+
+explicit = dict(expect, customer_history_outcome={"customerId": "fixture-customer", "orderNumber": "SO-42"})
+history = {"customerId": "fixture-customer", "purchaseHistory": [{"orderNumber": "SO-42"}]}
+assert not check("SUCCESS", "已查到客户购买历史", explicit, resultData=history)
+assert check("SUCCESS", "已查到客户购买历史", explicit, resultData=dict(history, customerId="other"))
+assert check("SUCCESS", "已查到客户购买历史", explicit, resultData=dict(history, purchaseHistory=[]))
+print("customer_history_outcome: 9 assertions passed")
+EOF
+
 echo "PASS: test-ai-live-probe"
