@@ -292,7 +292,7 @@ async def test_liushanmen_rule_selects_expected_first_family(provider, liushanme
         limits = conversation.limitations_for([raw[item_id] for item_id in selected], catalog, question)
         assert UNAVAILABLE_MESSAGE in limits
         if "单位成本" in question:
-            assert "黑湖数据缺少制造成本，无法计算单位成本" in limits
+            assert "黑湖成本不含制造费用" in limits
 
 
 @pytest.mark.asyncio

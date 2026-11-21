@@ -16,7 +16,7 @@ from smartbi.services.financial.base import _sanitize_for_json
 from smartbi.services.financial.export_conclusions import conclusion_rows as _conclusion_rows
 from smartbi.services.factory_charts.export_guard import ExportGuardRoute, validate_export
 from smartbi.services.factory_charts.details import canonical_period_label
-from smartbi.services.factory_charts import conversation
+from smartbi.services.factory_charts import blacklake_ask, conversation
 from smartbi.services.factory_charts.cost_authorization import is_manufacturing_cost_column, row_product_ids
 
 logger = logging.getLogger(__name__)
@@ -160,7 +160,7 @@ async def factory_recommendations(request: FactoryRecommendationRequest, http_re
     from smartbi_compat._rbac_role import ANALYTICS_READ_ROLES
     from smartbi.api.factory_production_gold import _can_view_cost
     from starlette.concurrency import run_in_threadpool
-    from smartbi.services.factory_charts import engine, sources, ranking, finance_sources, operational_sources, captured_sources, trusted_business_sources, detail_store, details
+    from smartbi.services.factory_charts import blacklake_production, engine, sources, ranking, finance_sources, operational_sources, captured_sources, trusted_business_sources, detail_store, details
 
     factory_id = require_same_factory(http_request, request.factory_id)
     role = getattr(http_request.state, 'role', None)
@@ -280,6 +280,7 @@ async def factory_recommendations(request: FactoryRecommendationRequest, http_re
             raise HTTPException(exc.status_code, exc.detail) from None
     from smartbi.services.factory_charts.selection_groups import default_selection
     label = canonical_period_label(request)
+    report_scope = blacklake_production.report_scope(datasets, scoped_datasets) if request.guided else None
     return _sanitize_for_json({'success': True, 'data': {
         'factoryId': factory_id, 'source': request.source,
         'uploadId': request.upload_id if request.source == 'upload' else None,
@@ -293,6 +294,7 @@ async def factory_recommendations(request: FactoryRecommendationRequest, http_re
         'subjects': subjects,
         'analysisSubject': request.analysis_subject,
         'analysisScopeLabel': scope_label,
+        **({'blacklakeReport': report_scope} if report_scope is not None else {}),
         'unavailable': gaps + extra_gaps,
         'sourceErrors': errors,
     }})
@@ -619,6 +621,45 @@ async def _render_factory_analysis_turn(request: FactoryAnalysisRequest, http_re
                                   recommendations=[], catalog=catalog, facts=[], limitations=[period_error],
                                   context_id=context.context_id, subjects=[],
                                   follow_up_questions=['请明确年份或月份区间', '例如：2025年或2026年8月至10月'])
+    intent = blacklake_ask.recognize(request.question) if not conversation.is_joint_intent(request.question) else None
+    report = recommendation_data.get('blacklakeReport')
+    if intent and report is not None:
+        from smartbi.services.factory_charts.engine import _subject_id
+
+        subject_id = effective_scope.get('analysis_subject')
+        explicit_code = blacklake_ask.explicit_code(request.question)
+        product = next((item['sku'] for item in subjects if item['id'] == subject_id and item.get('sku')), None)
+        if explicit_code and subject_id == _subject_id('id', f'blacklake:{explicit_code}'):
+            product = explicit_code
+        # An exact external code missing from the current period still has a
+        # meaningful answer when the authorized snapshot read succeeded.
+        absent_code = (subject_error == '问题中的产品不在当前工厂授权数据目录中'
+                       and not request.analysis_subject and explicit_code
+                       and not any(item.get('sku') == explicit_code for item in subjects))
+        if (not subject_error and (not subject_id or product)) or absent_code:
+            period = blacklake_ask.period_name(recommendation_data['period'])
+            stages = set() if absent_code else set(report['stages'])
+            answer = blacklake_ask.limited_answer(intent, period, stages, product or (explicit_code if absent_code else None))
+            selected_ids = [] if answer else intent.select(catalog)
+            by_id = conversation._catalog_by_id(recommendation_data['recommendations'])
+            selected = [by_id[item_id] for item_id in selected_ids]
+            if not answer:
+                answer = blacklake_ask.render(request.question, intent, selected, list(by_id.values()), period)
+            status = 'answered' if answer else 'unavailable'
+            answer = answer or f'{period}黑湖没有可用于回答本问题的报工数据。'
+            if intent.kind == 'compare':
+                selected, selected_ids = [], []
+            facts = conversation.facts_for(selected) if intent.metric in {'good', 'defects'} else []
+            conversation.touch_context(context, request.question, selected_ids, scope=scope,
+                                       unresolved_product=bool(absent_code), unresolved_period=False,
+                                       period_error=None)
+            return _analysis_response(
+                recommendation_data, factory_id=factory_id, source=context.source,
+                question=request.question, status=status, answer=answer, selected_ids=selected_ids,
+                recommendations=selected, catalog=catalog, facts=facts, limitations=[],
+                context_id=context.context_id, subjects=subjects, follow_up_questions=[],
+                planner_mode={'mode': 'rule'},
+            )
     if subject_error:
         conversation.touch_context(context, request.question, [], unresolved_product=True,
                                    unresolved_period=False, period_error=None, scope=scope)

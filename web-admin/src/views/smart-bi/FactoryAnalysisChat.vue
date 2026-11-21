@@ -452,7 +452,7 @@ async function sendQuestion(
   detailsTurnKey.value = '';
   const isFollowup = Boolean(contextId.value) && !forceNew;
   const userTurn: ChatTurn = { id: id(), role: 'user', text, question: text };
-  const assistantTurn: ChatTurn = { id: id(), role: 'assistant', text: '正在读取当前授权数据并规划图表…', loading: true, question: text };
+  const assistantTurn: ChatTurn = { id: id(), role: 'assistant', text: '正在查找与问题相关的数据…', loading: true, question: text };
   turns.value.push(userTurn, assistantTurn);
   question.value = '';
   pending.value = true;
@@ -533,7 +533,6 @@ async function sendQuestion(
       },
     };
     activeTurnId.value = data.status === 'answered' && assistantTurn.recommendations.length ? assistantTurn.id : null;
-    if (data.status === 'unavailable') notice.value = 'AI 规划不可用；未展示未经验证的图表或事实。';
   } catch (err) {
     if (version !== requestVersion.value || capturedIdentity !== identityKey.value || capturedScope !== activeScopeKey.value) return;
     assistantTurn.loading = false;
@@ -647,7 +646,7 @@ onBeforeUnmount(() => { requestVersion.value += 1; clearChartReadiness(); });
     <header class="factory-analysis-chat__header">
       <div>
         <h2><el-icon><ChatDotRound /></el-icon> 工厂 AI 问答分析</h2>
-        <p>自由提问，AI 只从当前授权图表目录选择真实分析；数值、单位和来源来自业务数据。</p>
+        <p>可以按日期、产品、工序或计量单位提问。</p>
       </div>
       <el-button :icon="Refresh" :disabled="pending" @click="resetConversation('已开启新分析上下文。')">新分析</el-button>
     </header>
@@ -722,7 +721,7 @@ onBeforeUnmount(() => { requestVersion.value += 1; clearChartReadiness(); });
     </div>
 
     <el-card shadow="never" class="catalog-card">
-      <div class="catalog-header"><strong>当前授权图表目录</strong><span>{{ catalog.length }} 类候选（回答最多 4 个不同分析族）</span><el-button text @click="catalogOpen = !catalogOpen">{{ catalogOpen ? '收起目录' : '展开目录' }}</el-button></div>
+      <div class="catalog-header"><strong>可查看的图表</strong><span>{{ catalog.length }} 项</span><el-button text @click="catalogOpen = !catalogOpen">{{ catalogOpen ? '收起目录' : '展开目录' }}</el-button></div>
       <div v-if="catalogOpen"><el-input v-model="catalogSearch" clearable :prefix-icon="Search" placeholder="搜索分析主题、领域、画法或单位" aria-label="搜索授权图表目录" /><div class="catalog-list"><div v-for="item in filteredCatalog" :key="item.id" class="catalog-item"><strong>{{ item.familyLabel?.trim() || '分析主题未提供' }}</strong><span>{{ item.domain || '领域未提供' }} · {{ catalogChartTypeLabel(item.chartType) }} · {{ item.unit || '单位未提供' }}</span></div><el-empty v-if="!filteredCatalog.length" description="没有匹配的授权候选" :image-size="50" /></div></div>
     </el-card>
 
@@ -751,7 +750,7 @@ onBeforeUnmount(() => { requestVersion.value += 1; clearChartReadiness(); });
 .turn { padding:14px 16px; border:1px solid var(--el-border-color-lighter); border-radius:10px; background:var(--el-bg-color); }
 .turn--user { background:var(--el-fill-color-extra-light); }
 .turn__label { margin-bottom:6px; color:var(--el-text-color-secondary); font-size:12px; font-weight:600; }
-.turn__text { white-space:pre-wrap; line-height:1.65; }
+.turn__text { white-space:pre-wrap; overflow-wrap:anywhere; font-size:16px; line-height:1.55; }
 .clarification-note { margin-top:8px; color:var(--el-color-warning); font-size:13px; }
 .facts { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:8px; margin-top:12px; }
 .fact { display:flex; flex-direction:column; gap:3px; padding:9px; border-radius:6px; background:var(--el-fill-color-light); }

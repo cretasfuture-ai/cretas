@@ -64,7 +64,7 @@ async def load(factory_id, request):
         return None, {"source": SOURCE_LABEL, "message": str(exc)}
     except Exception:
         return None, {"source": SOURCE_LABEL, "message": "黑湖生产数据读取失败，请重试"}
-    if data is None or not data.rows:
+    if data is None:
         return None, None
     collected = data.collected_at.astimezone(timezone.utc).isoformat(timespec="minutes")
     freshness = " · 数据未更新" if data.stale else ""
@@ -82,8 +82,19 @@ async def load(factory_id, request):
             "不良数": float(row["defect_qty"]),
         }
         for row in data.rows
-    ])
+    ], columns=["日期", "产品ID", "产品", "产品编码", "工序", "单位", "良品数", "不良数"])
     return Dataset(frame, source), None
+
+
+def report_scope(datasets, scoped_datasets):
+    """Distinguish a successful empty report from an unavailable source."""
+    prefix = SOURCE_KEY + " · "
+    if not any(dataset.source.startswith(prefix) for dataset in datasets):
+        return None
+    return {"stages": sorted({
+        stage for dataset in scoped_datasets if dataset.source.startswith(prefix)
+        for stage in dataset.frame["工序"] if stage
+    })}
 
 
 def build(dataset):

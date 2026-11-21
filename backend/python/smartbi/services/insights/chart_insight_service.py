@@ -183,7 +183,7 @@ def _comparison_suggestion(
             if round(ratio, 1) > 1:
                 comparison = f"{high_label}的成本是{low_label}的{ratio:.1f}倍"
             elif round((ratio - 1) * 100, 1) > 0:
-                comparison += _fmt_pct((ratio - 1) * 100)
+                comparison = f"{high_label}的成本比{low_label}高{_fmt_pct((ratio - 1) * 100)}"
         return f"{comparison}。可对照这两处的工单明细，核对工单数，以及材料费和人工费哪一项相差更多。"
 
     comparison = f"{low_label}的数量低于{high_label}"
