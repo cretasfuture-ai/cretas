@@ -5,6 +5,7 @@ import com.cretas.aims.entity.enums.ProductionBatchStatus;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.entity.inventory.SalesOrderItem;
+import com.cretas.aims.repository.FactorySettingsRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.inventory.SalesOrderItemRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
@@ -17,11 +18,15 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.lang.reflect.Field;
 import java.math.BigDecimal;
+import java.time.Clock;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
@@ -38,6 +43,9 @@ class ProductionDemandQueryToolTest {
 
     @InjectMocks
     private ProductionDemandQueryTool tool;
+
+    @Mock
+    private FactorySettingsRepository factorySettingsRepository;
 
     @Mock
     private SalesOrderRepository salesOrderRepository;
@@ -60,6 +68,7 @@ class ProductionDemandQueryToolTest {
     @BeforeEach
     void setUp() throws Exception {
         injectObjectMapper(tool);
+        ReflectionTestUtils.setField(tool, "clock", Clock.fixed(Instant.parse("2026-11-20T09:00:00Z"), ZoneOffset.UTC));
     }
 
     @Test

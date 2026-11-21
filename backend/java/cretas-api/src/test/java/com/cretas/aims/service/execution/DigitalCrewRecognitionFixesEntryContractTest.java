@@ -12,6 +12,7 @@ import com.cretas.aims.controller.AIIntentConfigController;
 import com.cretas.aims.controller.DigitalCrewController;
 import com.cretas.aims.dto.intent.IntentMatchResult;
 import com.cretas.aims.dto.skill.SkillDefinition;
+import com.cretas.aims.entity.FactorySettings;
 import com.cretas.aims.entity.ProductionLine;
 import com.cretas.aims.entity.ProductionLineCapacityConfig;
 import com.cretas.aims.entity.User;
@@ -21,6 +22,7 @@ import com.cretas.aims.entity.crew.DigitalCrewDelegationLock;
 import com.cretas.aims.entity.crew.DigitalCrewWorkItem;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.entity.inventory.SalesOrderItem;
+import com.cretas.aims.repository.FactorySettingsRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionLineCapacityConfigRepository;
 import com.cretas.aims.repository.ProductionLineRepository;
@@ -65,7 +67,10 @@ import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Clock;
+import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -318,15 +323,21 @@ class DigitalCrewRecognitionFixesEntryContractTest {
 
     @Test
     void productionDemandQuestionUsesItsBoundSkillInsteadOfTheShiftKeyword() throws Exception {
-        assertProductionDemandReply("", "bp05.capture");
+        assertProductionDemandReply("", "bp05.capture", false);
     }
 
     @Test
     void productionDemandTableSurvivesBraceHeavyProductNames() throws Exception {
-        assertProductionDemandReply("{常温}{原味}{礼盒}{独立装}", "bp05.braces.capture");
+        assertProductionDemandReply("{常温}{原味}{礼盒}{独立装}", "bp05.braces.capture", false);
     }
 
-    private void assertProductionDemandReply(String productSuffix, String captureProperty) throws Exception {
+    @Test
+    void productionDemandPrioritizesOverdueOrdersUsingTheFactoryDate() throws Exception {
+        assertProductionDemandReply("", "bp05.overdue.capture", true);
+    }
+
+    private void assertProductionDemandReply(String productSuffix, String captureProperty, boolean overdueFixture)
+            throws Exception {
         String input = "现在该排什么、排多少？这几个产品排产各要多少人、几个班？";
         String otherInput = "查几个班";
         String code = "PRODUCTION_DEMAND_ANALYSIS";
@@ -353,7 +364,7 @@ class DigitalCrewRecognitionFixesEntryContractTest {
         assertThat(skills.getSkillForFactory(FACTORY, "production-demand-analysis").getTools())
                 .containsExactly("production_demand_query");
 
-        var orders = registerProductionDemandTool(h, mapper, productSuffix);
+        var orders = registerProductionDemandTool(h, mapper, productSuffix, overdueFixture);
         // A factory-configured competing keyword Skill exercises the real priority branch.
         var shiftTool = mock(ToolExecutor.class);
         when(shiftTool.getToolName()).thenReturn("shift_fixture_query");
@@ -419,7 +430,22 @@ class DigitalCrewRecognitionFixesEntryContractTest {
                         .isGreaterThan(toolText.length() / 20L);
             }
             String text = response.path("formattedText").asText();
-            assertThat(text)
+            if (overdueFixture) {
+                assertThat(text).as("工厂已到 11 月 21 日，UTC 及默认工厂时区仍是 11 月 20 日")
+                        .startsWith("有 3 笔待交订单已逾期。建议安排 3 个产品生产。")
+                        .containsSubsequence(
+                                "| 卤鸭 | 30.05 盒 | 班次待估、人数待定（缺该产品按「盒」计的产线小时产能） | 2026-11-17，已逾期 4 天 |",
+                                "| 藤椒掌中宝 | 60 kg | 1 个班、每班 3 人 | 2026-11-20，已逾期 1 天 |",
+                                "| 酱卤牛肉 | 100 kg | 2 个班、每班 3 人 | 2026-11-21 |",
+                                "客户与订单",
+                                "上海连锁餐饮 SO-OLD（2026-11-17，已逾期 4 天）待交 卤鸭 10 盒",
+                                "杭州团餐中心 SO-MIDDLE（2026-11-19，已逾期 2 天）待交 卤鸭 19.05 盒",
+                                "苏州精品商超 SO-RECENT（2026-11-20，已逾期 1 天）待交 卤鸭 1 盒、藤椒掌中宝 60 kg",
+                                "南京食品经销商 SO-TODAY 待交 100 kg（2026-11-21）",
+                                "先联系逾期订单的客户，确认能否改期或先补发一部分，再按交期安排其余订单。")
+                        .doesNotContain("已逾期 0 天");
+            } else {
+                assertThat(text)
                     .as("execute 保留三行排产表")
                     .isEqualTo("""
                             建议安排 3 个产品生产。
@@ -444,7 +470,9 @@ class DigitalCrewRecognitionFixesEntryContractTest {
                             .replace("酱卤牛肉", "酱卤牛肉" + productSuffix)
                             .replace("藤椒掌中宝", "藤椒掌中宝" + productSuffix)
                             .replace("卤鸭", "卤鸭" + productSuffix))
-                    .doesNotContain("*", "...", "个人次班次", "inProgressQuantity", "staffingMissing", "当前系统");
+                    .doesNotContain("已逾期");
+            }
+            assertThat(text).doesNotContain("*", "...", "个人次班次", "inProgressQuantity", "staffingMissing", "当前系统");
             assertThat(response.path("message").asText()).isEqualTo(text);
             verify(h.workdeskSummarizer).apply(any(), org.mockito.ArgumentMatchers.eq(FACTORY));
             org.mockito.Mockito.verifyNoInteractions(summaryClient);
@@ -469,7 +497,8 @@ class DigitalCrewRecognitionFixesEntryContractTest {
     }
 
     private static SalesOrderRepository registerProductionDemandTool(
-            StreamTurnCollectorEntryParityContractTest.Harness h, ObjectMapper mapper, String productSuffix) {
+            StreamTurnCollectorEntryParityContractTest.Harness h, ObjectMapper mapper, String productSuffix,
+            boolean overdueFixture) {
         var orders = mock(SalesOrderRepository.class);
         var items = mock(SalesOrderItemRepository.class);
         var caps = mock(ProductionLineCapacityConfigRepository.class);
@@ -490,8 +519,6 @@ class DigitalCrewRecognitionFixesEntryContractTest {
         var line = new ProductionLine();
         line.setName("熟食线");
         line.setStandardWorkers(3);
-        when(orders.findByFactoryIdAndStatusInOrderByCreatedAtDesc(
-                org.mockito.ArgumentMatchers.eq(FACTORY), any(), any())).thenReturn(List.of(order));
         var chicken = new SalesOrderItem();
         chicken.setProductTypeId("PT-CHICKEN");
         chicken.setProductName("藤椒掌中宝" + productSuffix);
@@ -502,11 +529,33 @@ class DigitalCrewRecognitionFixesEntryContractTest {
         duck.setProductName("卤鸭" + productSuffix);
         duck.setQuantity(new BigDecimal("30.05"));
         duck.setUnit("盒");
-        when(items.findBySalesOrderId(order.getId())).thenReturn(List.of(item, chicken, duck));
+        List<SalesOrder> fixtureOrders;
+        if (overdueFixture) {
+            var today = demandOrder("SO-TODAY", "南京食品经销商", 21);
+            var recent = demandOrder("SO-RECENT", "苏州精品商超", 20);
+            var middle = demandOrder("SO-MIDDLE", "杭州团餐中心", 19);
+            var old = demandOrder("SO-OLD", "上海连锁餐饮", 17);
+            fixtureOrders = List.of(today, recent, middle, old);
+            when(items.findBySalesOrderId(today.getId())).thenReturn(List.of(item));
+            when(items.findBySalesOrderId(recent.getId())).thenReturn(List.of(chicken, duckDemand("1")));
+            when(items.findBySalesOrderId(middle.getId())).thenReturn(List.of(duckDemand("19.05")));
+            when(items.findBySalesOrderId(old.getId())).thenReturn(List.of(duckDemand("10")));
+        } else {
+            fixtureOrders = List.of(order);
+            when(items.findBySalesOrderId(order.getId())).thenReturn(List.of(item, chicken, duck));
+        }
+        when(orders.findByFactoryIdAndStatusInOrderByCreatedAtDesc(
+                org.mockito.ArgumentMatchers.eq(FACTORY), any(), any())).thenReturn(fixtureOrders);
         when(caps.findEffectiveForProduct(org.mockito.ArgumentMatchers.eq(FACTORY),
                 anyString(), any())).thenReturn(List.of(capacity));
         when(lines.findByIdAndFactoryIdAndDeletedAtIsNull("LINE-1", FACTORY)).thenReturn(Optional.of(line));
         var tool = new ProductionDemandQueryTool();
+        var settingsRepository = mock(FactorySettingsRepository.class);
+        var settings = new FactorySettings();
+        settings.setTimezone("Asia/Tokyo");
+        when(settingsRepository.findByFactoryId(FACTORY)).thenReturn(Optional.of(settings));
+        ReflectionTestUtils.setField(tool, "factorySettingsRepository", settingsRepository);
+        ReflectionTestUtils.setField(tool, "clock", Clock.fixed(Instant.parse("2026-11-20T15:30:00Z"), ZoneOffset.UTC));
         ReflectionTestUtils.setField(tool, "salesOrderRepository", orders);
         ReflectionTestUtils.setField(tool, "salesOrderItemRepository", items);
         ReflectionTestUtils.setField(tool, "productionBatchRepository", mock(ProductionBatchRepository.class));
@@ -516,6 +565,24 @@ class DigitalCrewRecognitionFixesEntryContractTest {
         when(h.toolRegistry.getExecutor(tool.getToolName())).thenReturn(Optional.of(tool));
         when(h.toolRegistry.hasExecutor(tool.getToolName())).thenReturn(true);
         return orders;
+    }
+
+    private static SalesOrder demandOrder(String number, String customer, int day) {
+        var order = new SalesOrder();
+        order.setId(number);
+        order.setOrderNumber(number);
+        order.setCustomerName(customer);
+        order.setRequiredDeliveryDate(LocalDate.of(2026, 11, day));
+        return order;
+    }
+
+    private static SalesOrderItem duckDemand(String quantity) {
+        var item = new SalesOrderItem();
+        item.setProductTypeId("PT-DUCK");
+        item.setProductName("卤鸭");
+        item.setQuantity(new BigDecimal(quantity));
+        item.setUnit("盒");
+        return item;
     }
 
     // ------------------------------------------------------------------ 对照: 现在好的两句不能变差
