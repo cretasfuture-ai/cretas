@@ -1,6 +1,11 @@
 package com.cretas.aims.repository;
 
 import com.cretas.aims.integration.DisposablePostgresTargetGuard;
+import com.cretas.aims.dto.yield.ProcessYieldAggDTO;
+import com.cretas.aims.dto.yield.ProcessYieldAggDTO.IncomparableReason;
+import com.cretas.aims.service.processsecret.ProcessSecretAggregateExclusions;
+import com.cretas.aims.service.yield.YieldAnalysisService;
+import com.cretas.aims.service.yield.impl.YieldAnalysisServiceImpl;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -9,6 +14,8 @@ import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -22,6 +29,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.when;
 
 /**
  * 工艺保密: 两条跨批汇总的原生 SQL 在真实 PostgreSQL 上按计划排除 (独立审查第三轮 B、第四轮 M1)。
@@ -31,6 +39,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @DataJpaTest(showSql = false, properties = {"spring.jpa.hibernate.ddl-auto=none", "spring.flyway.enabled=false"})
 @ActiveProfiles("test")
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
+@Import(YieldAnalysisServiceImpl.class)
 @EnabledIfEnvironmentVariable(named = "CRETAS_WORKFLOW_PG_VERIFY", matches = "true")
 class ProcessSecretAggregateExclusionPostgresRepositoryQueryValidationTest {
 
@@ -42,6 +51,8 @@ class ProcessSecretAggregateExclusionPostgresRepositoryQueryValidationTest {
 
     @Autowired private ProductionReportRepository repository;
     @Autowired private JdbcTemplate jdbcTemplate;
+    @Autowired private YieldAnalysisService yieldAnalysis;
+    @MockBean private ProcessSecretAggregateExclusions aggregateExclusions;
 
     @BeforeAll
     static void createIsolatedSchema() throws Exception {
@@ -86,7 +97,8 @@ class ProcessSecretAggregateExclusionPostgresRepositoryQueryValidationTest {
                 + "stage_order INTEGER, start_time TIMESTAMP, created_at TIMESTAMP NOT NULL DEFAULT now(), "
                 + "input_weight NUMERIC(12,3), output_weight NUMERIC(12,3), deleted_at TIMESTAMP)");
         jdbcTemplate.execute("CREATE TABLE work_processes (id VARCHAR(50) PRIMARY KEY, process_name VARCHAR(100), "
-                + "unit VARCHAR(20), output_unit VARCHAR(20), deleted_at TIMESTAMP, factory_id VARCHAR(50))");
+                + "unit VARCHAR(20), output_unit VARCHAR(20), deleted_at TIMESTAMP, factory_id VARCHAR(50), "
+                + "is_active BOOLEAN DEFAULT FALSE, merged_into_id VARCHAR(50))");
         jdbcTemplate.execute("CREATE TABLE work_process_tasks (id BIGINT PRIMARY KEY, factory_id VARCHAR(50) NOT NULL, "
                 + "production_batch_id BIGINT NOT NULL, work_process_id VARCHAR(50) NOT NULL, "
                 + "product_type_id VARCHAR(50) NOT NULL, "
@@ -192,6 +204,17 @@ class ProcessSecretAggregateExclusionPostgresRepositoryQueryValidationTest {
         assertThat(wash.get("input_unit_min")).isEqualTo("kg");
         assertThat(wash.get("output_unit_min")).isEqualTo("kg");
         assertThat(((Number) wash.get("output_unit_known")).intValue()).isEqualTo(1);
+
+        when(aggregateExclusions.forCurrentCaller(f, "yield by-process aggregate"))
+                .thenReturn(ProcessSecretAggregateExclusions.Scope.EMPTY);
+        ProcessYieldAggDTO mixed = findProcess(yieldAnalysis.aggregateByProcess(f, FROM, TO, null), "定量包装");
+        assertThat(mixed.getIncomparableReason()).isEqualTo(IncomparableReason.MIXED_UNITS);
+        assertThat(mixed.isComputable()).isFalse();
+        assertThat(mixed.getConversionRate()).isNull();
+        assertThat(mixed.getKnownInputQuantity()).isNull();
+        assertThat(mixed.getKnownOutputQuantity()).isNull();
+        assertThat(mixed.getInputRecordCount()).isEqualTo(2);
+        assertThat(mixed.getOutputRecordCount()).isEqualTo(2);
     }
 
     @Test
@@ -266,7 +289,7 @@ class ProcessSecretAggregateExclusionPostgresRepositoryQueryValidationTest {
 
     /**
      * 样本 3: 两者都有。同名工序合并成一行; 同一批次既有报工又有环节记录时只算报工 (不重复计数);
-     * 已删除、投入为 0、别厂、保密计划的环节记录都不进。
+     * 已删除、别厂、保密计划的环节记录不进; 投入为 0 只进覆盖统计。
      */
     @Test
     void bothSourcesMergeByProcessNameAndABatchWithReportsIsNeverCountedTwice() {
@@ -282,7 +305,7 @@ class ProcessSecretAggregateExclusionPostgresRepositoryQueryValidationTest {
         stageBatch(f, 323, "plan-ok", "Q-OPEN");
         reportFor(f, 323, 323, "WP-B", "20", "10");
         stageRecord(f, 12, 323, "切片", "SLICING", "999", "1", false);
-        // 应被挡掉的环节记录: 已软删 / 投入 0 (工位累计行) / 保密计划 / 别的工厂的批次
+        // 用已软删、零投入、保密计划、别厂批次区分可见与可算的范围。
         stageBatch(f, 324, "plan-ok", "Q-OPEN");
         stageRecord(f, 13, 324, "切片", "SLICING", "777", "7", true);
         stageRecord(f, 14, 324, "切片", "SLICING", "0", "7", false);
@@ -300,12 +323,121 @@ class ProcessSecretAggregateExclusionPostgresRepositoryQueryValidationTest {
         assertThat(((Number) row.get("batch_count")).intValue()).isEqualTo(3);
         assertThat(((Number) row.get("stage_record_count")).intValue()).isEqualTo(1);
         assertThat(((Number) row.get("input_unit_kinds")).intValue()).isEqualTo(1);
+        assertThat(((Number) row.get("record_count")).intValue()).isEqualTo(4);
+        assertThat((BigDecimal) row.get("known_output")).isEqualByComparingTo("137");
 
         // 日期窗: 环节记录在 2026-11-10, 窗外不进
         assertThat(repository.aggregateYieldByProcess(f, LocalDate.of(2026, 12, 1), TO, "", NONE, List.of("plan-hidden")))
                 .isEmpty();
         // 按产品排除对环节记录同样生效
         assertThat(repository.aggregateYieldByProcess(f, FROM, TO, "", List.of("Q-OPEN"), NONE)).isEmpty();
+    }
+
+    @Test
+    void byProcessShowsIncompleteAndUnconfiguredStagesAndKeepsLegacyRateForCompleteWeights() {
+        String f = "IT-STAGE-COVERAGE";
+        configureProcess(f, "WP-PACKAGE", "包装", true, false, null);
+        configureProcess(f, "WP-DOUGH", "和面", true, false, null);
+        configureProcess(f, "WP-COOLING", "冷却", true, false, null);
+        stageBatch(f, 401, "plan-open", "Q-OPEN");
+        stageRecord(f, 21, 401, "包装", "PACKAGING", "100", "97.42", false);
+        stageRecord(f, 22, 401, "包装", "PACKAGING", "23.123", null, false);
+        stageRecord(f, 23, 401, "和面", "PREPARATION", "12.345", null, false);
+        stageRecord(f, 24, 401, "和面", "PREPARATION", "2.111", null, false);
+        stageRecord(f, 25, 401, "抽样称重", "WEIGHT_CHECK", null, null, false);
+        stageRecord(f, 26, 401, "抽样称重", "WEIGHT_CHECK", null, null, false);
+        when(aggregateExclusions.forCurrentCaller(f, "yield by-process aggregate"))
+                .thenReturn(ProcessSecretAggregateExclusions.Scope.EMPTY);
+
+        List<ProcessYieldAggDTO> rows = yieldAnalysis.aggregateByProcess(f, FROM, TO, "Q-OPEN");
+        assertThat(rows).extracting(ProcessYieldAggDTO::getProcessName)
+                .containsExactlyInAnyOrder("包装", "和面", "抽样称重", "冷却");
+        assertThat(rows).filteredOn(ProcessYieldAggDTO::isComputable)
+                .extracting(ProcessYieldAggDTO::getProcessName).containsExactly("包装");
+
+        ProcessYieldAggDTO pack = findProcess(rows, "包装");
+        assertThat(pack.getInputQuantity()).isEqualByComparingTo("100");
+        assertThat(pack.getOutputQuantity()).isEqualByComparingTo("97.42");
+        assertThat(pack.getConversionRate()).isEqualByComparingTo("97.4");
+        assertThat(pack.getWastageRate()).isEqualByComparingTo("2.6");
+        assertThat(pack.getStageRecordCount()).isEqualTo(1);
+        assertThat(pack.getRecordCount()).isEqualTo(2);
+        assertThat(pack.getKnownInputQuantity()).isEqualByComparingTo("123.123");
+        assertThat(pack.isMissingOutput()).isTrue();
+
+        ProcessYieldAggDTO dough = findProcess(rows, "和面");
+        assertThat(dough.getRecordCount()).isEqualTo(2);
+        assertThat(dough.getInputRecordCount()).isEqualTo(2);
+        assertThat(dough.getOutputRecordCount()).isZero();
+        assertThat(dough.getKnownInputQuantity()).isEqualByComparingTo("14.456");
+        assertThat(dough.getKnownInputUnit()).isEqualTo("kg");
+        assertThat(dough.getKnownOutputQuantity()).isNull();
+        assertThat(dough.isMissingInput()).isFalse();
+        assertThat(dough.isMissingOutput()).isTrue();
+
+        ProcessYieldAggDTO weighing = findProcess(rows, "抽样称重");
+        assertThat(weighing.getRecordCount()).isEqualTo(2);
+        assertThat(weighing.getInputRecordCount()).isZero();
+        assertThat(weighing.getOutputRecordCount()).isZero();
+        assertThat(weighing.getKnownInputQuantity()).isNull();
+        assertThat(weighing.getKnownOutputQuantity()).isNull();
+        assertThat(weighing.isMissingInput()).isTrue();
+        assertThat(weighing.isMissingOutput()).isTrue();
+
+        ProcessYieldAggDTO cooling = findProcess(rows, "冷却");
+        assertThat(cooling.getRecordCount()).isZero();
+        assertThat(cooling.getIncomparableReason()).isEqualTo(IncomparableReason.NO_RECORDS);
+        assertThat(rows).filteredOn(row -> !row.isComputable()).allSatisfy(row -> {
+            assertThat(row.getConversionRate()).isNull();
+            assertThat(row.getWastageRate()).isNull();
+        });
+    }
+
+    @Test
+    void byProcessExcludesInvisibleRecordsFromCoverageAndOnlyPadsEnabledLocalProcesses() {
+        String f = "IT-STAGE-FILTERS";
+        configureProcess(f, "WP-PUBLIC", "公开工序", true, false, null);
+        configureProcess(f, "WP-DELETED", "已删配置", true, true, null);
+        configureProcess(f, "WP-INACTIVE", "停用配置", false, false, null);
+        configureProcess(f, "WP-MERGED", "合并配置", true, false, "WP-PUBLIC");
+        configureProcess("IT-OTHER", "WP-OTHER", "别厂配置", true, false, null);
+        stageBatch(f, 501, "plan-open", "Q-OPEN");
+        stageRecord(f, 31, 501, "公开工序", "PREPARATION", "8", null, false);
+        stageRecord(f, 32, 501, "已删记录", "PREPARATION", null, null, true);
+        stageRecord("IT-OTHER", 33, 501, "别厂记录", "PREPARATION", null, null, false);
+        stageBatch("IT-OTHER", 502, "plan-other-factory", "Q-OPEN");
+        stageRecord(f, 34, 502, "别厂批次", "PREPARATION", null, null, false);
+        stageBatch(f, 503, "plan-secret", "Q-OPEN");
+        stageRecord(f, 35, 503, "保密计划", "PREPARATION", null, null, false);
+        stageBatch(f, 504, "plan-other-product", "Q-OTHER");
+        stageRecord(f, 36, 504, "别种产品", "PREPARATION", null, null, false);
+        stageRecord(f, 37, 501, "窗外记录", "PREPARATION", null, null, false);
+        jdbcTemplate.update("UPDATE processing_stage_records SET start_time = DATE '2026-11-09' WHERE id = 37");
+        stageBatch(f, 505, "plan-report", "Q-OPEN");
+        reportFor(f, 505, 505, "WP-PUBLIC", "20", "10");
+        jdbcTemplate.update("UPDATE production_reports SET report_date = DATE '2026-11-09' WHERE id = 505");
+        stageRecord(f, 38, 505, "报工去重", "PREPARATION", null, null, false);
+        when(aggregateExclusions.forCurrentCaller(f, "yield by-process aggregate"))
+                .thenReturn(new ProcessSecretAggregateExclusions.Scope(List.of(), List.of("plan-secret")));
+
+        LocalDate day = LocalDate.of(2026, 11, 10);
+        List<ProcessYieldAggDTO> rows = yieldAnalysis.aggregateByProcess(f, day, day, "Q-OPEN");
+        assertThat(rows).singleElement().satisfies(row -> {
+            assertThat(row.getProcessName()).isEqualTo("公开工序");
+            assertThat(row.getRecordCount()).isEqualTo(1);
+            assertThat(row.getKnownInputQuantity()).isEqualByComparingTo("8");
+            assertThat(row.isComputable()).isFalse();
+        });
+    }
+
+    private void configureProcess(String factory, String id, String name, boolean active, boolean deleted, String mergedInto) {
+        jdbcTemplate.update("INSERT INTO work_processes VALUES (?, ?, 'kg', 'kg', "
+                        + (deleted ? "now()" : "NULL") + ", ?, ?, ?)",
+                id, name, factory, active, mergedInto);
+    }
+
+    private static ProcessYieldAggDTO findProcess(List<ProcessYieldAggDTO> rows, String name) {
+        return rows.stream().filter(row -> name.equals(row.getProcessName())).findFirst().orElseThrow();
     }
 
     private static String requiredEnv(String name) {

@@ -15,9 +15,11 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 @Service
 @RequiredArgsConstructor
@@ -49,19 +51,36 @@ public class YieldAnalysisServiceImpl implements YieldAnalysisService {
         List<Map<String, Object>> rows = reportRepo.aggregateYieldByProcess(factoryId, start, end, pt,
                 excluded.productTypeIdsOrSentinel(), excluded.planIdsOrSentinel());
         List<ProcessYieldAggDTO> result = new ArrayList<>();
+        Set<String> visibleNames = new HashSet<>();
         for (Map<String, Object> r : rows) {
             BigDecimal totalInput = toBig(r.get("total_input"));
             BigDecimal totalOutput = toBig(r.get("total_output"));
             int reportCount = toInt(r.get("report_count"));
+            int recordCount = toInt(r.get("record_count"));
+            int inputCount = toInt(r.get("input_record_count"));
+            int outputCount = toInt(r.get("output_record_count"));
             // 单位按报工实际所记 (SQL 已退回工序标准、剔除空串与 'unitless' 占位)。
             // 2026-11-12 验收: 只看工序标准单位时, 定量包装报工 kg/袋 → 袋/盒 被判同单位, 转化率 333%~500%。
             Side in = side(r, "input", reportCount);
             Side out = side(r, "output", reportCount);
+            Side knownIn = side(r, "known_input", inputCount);
+            Side knownOut = side(r, "known_output", outputCount);
+            BigDecimal knownInput = knownIn.mixed() ? null : toBig(r.get("known_input"));
+            BigDecimal knownOutput = knownOut.mixed() ? null : toBig(r.get("known_output"));
 
             BigDecimal conversionRate = null;
             BigDecimal wastageRate = null;
             IncomparableReason reason;
-            if (in.mixed() || out.mixed()) {
+            if (reportCount == 0 || totalInput == null || totalOutput == null) {
+                // 新增可见记录不改变原比率分母，也不把缺失的报工数量当 0。
+                if (knownIn.mixed() || knownOut.mixed()) {
+                    reason = IncomparableReason.MIXED_UNITS;
+                } else if (knownInput != null && knownInput.signum() <= 0 && knownOutput != null) {
+                    reason = IncomparableReason.NO_INPUT;
+                } else {
+                    reason = IncomparableReason.MISSING_WEIGHT;
+                }
+            } else if (in.mixed() || out.mixed()) {
                 reason = IncomparableReason.MIXED_UNITS;
             } else if (!in.known() || !out.known()) {
                 // 没有单位就不能断定两侧同单位 —— 不相除, 不出假百分比
@@ -83,21 +102,47 @@ public class YieldAnalysisServiceImpl implements YieldAnalysisService {
                 }
             }
 
+            String processName = displayName(asStr(r.get("process_name")));
+            visibleNames.add(processName);
+            Side displayIn = totalInput == null ? knownIn : in;
+            Side displayOut = totalOutput == null ? knownOut : out;
             result.add(ProcessYieldAggDTO.builder()
-                    .processName(displayName(asStr(r.get("process_name"))))
+                    .processName(processName)
                     // 一侧单位混杂时, 那一侧的合计本身不成立 (0.5 kg + 3 袋), 不给数字
-                    .inputQuantity(in.mixed() ? null : totalInput.setScale(2, RoundingMode.HALF_UP))
-                    .outputQuantity(out.mixed() ? null : totalOutput.setScale(2, RoundingMode.HALF_UP))
+                    .inputQuantity(totalInput == null ? knownInput : in.mixed() ? null : totalInput)
+                    .outputQuantity(totalOutput == null ? knownOutput : out.mixed() ? null : totalOutput)
                     .conversionRate(conversionRate)
                     .wastageRate(wastageRate)
-                    .unit(in.display())
-                    .inputUnit(in.display())
-                    .outputUnit(out.display())
+                    .unit(displayIn.display())
+                    .inputUnit(displayIn.display())
+                    .outputUnit(displayOut.display())
                     .unitComparable(reason == null)
                     .incomparableReason(reason)
-                    .batchCount(toInt(r.get("batch_count")))
+                    .batchCount(toInt(r.get(reportCount == 0 ? "record_batch_count" : "batch_count")))
                     .stageRecordCount(toInt(r.get("stage_record_count")))
+                    .recordCount(recordCount)
+                    .inputRecordCount(inputCount)
+                    .outputRecordCount(outputCount)
+                    .knownInputQuantity(knownInput)
+                    .knownOutputQuantity(knownOutput)
+                    .knownInputUnit(knownIn.display())
+                    .knownOutputUnit(knownOut.display())
+                    .computable(conversionRate != null)
+                    .missingInput(inputCount < recordCount)
+                    .missingOutput(outputCount < recordCount)
                     .build());
+        }
+        for (String name : reportRepo.findEnabledProcessNamesForYield(factoryId)) {
+            String processName = displayName(name);
+            if (visibleNames.add(processName)) {
+                result.add(ProcessYieldAggDTO.builder()
+                        .processName(processName)
+                        .unitComparable(false)
+                        .incomparableReason(IncomparableReason.NO_RECORDS)
+                        .batchCount(0)
+                        .stageRecordCount(0)
+                        .build());
+            }
         }
         return result;
     }
@@ -137,7 +182,7 @@ public class YieldAnalysisServiceImpl implements YieldAnalysisService {
     }
 
     private static BigDecimal toBig(Object v) {
-        if (v == null) return BigDecimal.ZERO;
+        if (v == null) return null;
         if (v instanceof BigDecimal b) return b;
         return new BigDecimal(v.toString());
     }

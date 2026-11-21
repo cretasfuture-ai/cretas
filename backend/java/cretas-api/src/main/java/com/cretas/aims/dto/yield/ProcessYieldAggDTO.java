@@ -23,7 +23,11 @@ public class ProcessYieldAggDTO {
         /** 投入或产出没有登记单位, 无法确认两侧是同一单位。 */
         NO_UNIT,
         /** 投入合计为 0。 */
-        NO_INPUT
+        NO_INPUT,
+        /** 本期有记录，但比率口径所需的投入或产出未登记。 */
+        MISSING_WEIGHT,
+        /** 本期筛选范围内无记录。 */
+        NO_RECORDS
     }
 
     private String processName;
@@ -44,4 +48,17 @@ public class ProcessYieldAggDTO {
     private Integer batchCount;
     /** 合计里来自「加工环节记录」(processing_stage_records) 的条数; 0 表示全部来自报工。前端据此标明来源。 */
     private Integer stageRecordCount;
+    /** 本期可见记录覆盖数，含不进入比率的加工环节记录。 */
+    private int recordCount;
+    private int inputRecordCount;
+    private int outputRecordCount;
+    /** 仅加总非空值。无已知值或单位混杂时为 null。 */
+    private BigDecimal knownInputQuantity;
+    private BigDecimal knownOutputQuantity;
+    private String knownInputUnit;
+    private String knownOutputUnit;
+    private boolean computable;
+    /** 本期至少一条可见记录缺这一侧的数量。无记录时两侧均为 false。 */
+    private boolean missingInput;
+    private boolean missingOutput;
 }

@@ -560,28 +560,43 @@ public interface ProductionReportRepository extends JpaRepository<ProductionRepo
     @Query(value = """
         SELECT
             t.process_name AS process_name,
-            COALESCE(SUM(t.input_quantity), 0) AS total_input,
-            COALESCE(SUM(t.output_quantity), 0) AS total_output,
-            MIN(t.in_unit) AS input_unit_min,
-            MAX(t.in_unit) AS input_unit_max,
-            COUNT(DISTINCT t.in_unit) AS input_unit_kinds,
-            COUNT(t.in_unit) AS input_unit_known,
-            MIN(t.out_unit) AS output_unit_min,
-            MAX(t.out_unit) AS output_unit_max,
-            COUNT(DISTINCT t.out_unit) AS output_unit_kinds,
-            COUNT(t.out_unit) AS output_unit_known,
-            COUNT(*) AS report_count,
-            COUNT(DISTINCT t.batch_id) AS batch_count,
-            COUNT(*) FILTER (WHERE t.src = 'STAGE') AS stage_record_count
+            SUM(CAST(t.input_quantity AS DECIMAL(14,2))) FILTER (WHERE t.rate_eligible) AS total_input,
+            SUM(CAST(t.output_quantity AS DECIMAL(14,2))) FILTER (WHERE t.rate_eligible) AS total_output,
+            MIN(t.in_unit) FILTER (WHERE t.rate_eligible) AS input_unit_min,
+            MAX(t.in_unit) FILTER (WHERE t.rate_eligible) AS input_unit_max,
+            COUNT(DISTINCT t.in_unit) FILTER (WHERE t.rate_eligible) AS input_unit_kinds,
+            COUNT(t.in_unit) FILTER (WHERE t.rate_eligible) AS input_unit_known,
+            MIN(t.out_unit) FILTER (WHERE t.rate_eligible) AS output_unit_min,
+            MAX(t.out_unit) FILTER (WHERE t.rate_eligible) AS output_unit_max,
+            COUNT(DISTINCT t.out_unit) FILTER (WHERE t.rate_eligible) AS output_unit_kinds,
+            COUNT(t.out_unit) FILTER (WHERE t.rate_eligible) AS output_unit_known,
+            COUNT(*) FILTER (WHERE t.rate_eligible) AS report_count,
+            COUNT(DISTINCT t.batch_id) FILTER (WHERE t.rate_eligible) AS batch_count,
+            COUNT(*) FILTER (WHERE t.src = 'STAGE' AND t.rate_eligible) AS stage_record_count,
+            COUNT(*) AS record_count,
+            COUNT(DISTINCT t.batch_id) AS record_batch_count,
+            COUNT(t.input_quantity) AS input_record_count,
+            COUNT(t.output_quantity) AS output_record_count,
+            SUM(t.input_quantity) AS known_input,
+            SUM(t.output_quantity) AS known_output,
+            MIN(t.in_unit) FILTER (WHERE t.input_quantity IS NOT NULL) AS known_input_unit_min,
+            MAX(t.in_unit) FILTER (WHERE t.input_quantity IS NOT NULL) AS known_input_unit_max,
+            COUNT(DISTINCT t.in_unit) FILTER (WHERE t.input_quantity IS NOT NULL) AS known_input_unit_kinds,
+            COUNT(t.in_unit) FILTER (WHERE t.input_quantity IS NOT NULL) AS known_input_unit_known,
+            MIN(t.out_unit) FILTER (WHERE t.output_quantity IS NOT NULL) AS known_output_unit_min,
+            MAX(t.out_unit) FILTER (WHERE t.output_quantity IS NOT NULL) AS known_output_unit_max,
+            COUNT(DISTINCT t.out_unit) FILTER (WHERE t.output_quantity IS NOT NULL) AS known_output_unit_kinds,
+            COUNT(t.out_unit) FILTER (WHERE t.output_quantity IS NOT NULL) AS known_output_unit_known
         FROM (
             SELECT
                 'REPORT' AS src,
+                TRUE AS rate_eligible,
                 wp.id AS wp_id,
                 wp.process_name AS process_name,
                 wpt.process_order AS process_order,
                 pr.batch_id AS batch_id,
-                CAST(pr.input_quantity AS DECIMAL(14,2)) AS input_quantity,
-                CAST(pr.output_quantity AS DECIMAL(14,2)) AS output_quantity,
+                pr.input_quantity AS input_quantity,
+                pr.output_quantity AS output_quantity,
                 COALESCE(
                     CASE WHEN TRIM(pr.input_unit) = '' OR LOWER(TRIM(pr.input_unit)) = 'unitless' THEN NULL ELSE TRIM(pr.input_unit) END,
                     CASE WHEN TRIM(wp.unit) = '' OR LOWER(TRIM(wp.unit)) = 'unitless' THEN NULL ELSE TRIM(wp.unit) END
@@ -608,26 +623,25 @@ public interface ProductionReportRepository extends JpaRepository<ProductionRepo
             UNION ALL
             -- PROTO-STAGE-IO: 加工环节记录 (processing_stage_records, 工位称重 / 手录环节) 兼读。
             -- 去重口径: 批次已有任何 YIELD 报工 (不限日期窗) 就整批只用报工, 该批的环节记录不进 (同一批的同一工序不记两遍);
-            -- 只有没报工的批次才用环节记录。要求投入、产出重量都登记 (投入 0 / 空的工位累计行没有可除的分母, 不进)。
+            -- 只有没报工的批次才用环节记录。缺重量或投入非正的记录进入覆盖统计，但不进入原有比率口径。
             -- 环节记录重量一律 kg。同名工序并入报工那一行 (wp_id 取同厂同名工序), 否则按环节名单独成行。
             SELECT
                 'STAGE' AS src,
+                (sr.input_weight > 0 AND sr.output_weight IS NOT NULL) AS rate_eligible,
                 (SELECT MIN(w2.id) FROM work_processes w2
                   WHERE w2.factory_id = :factoryId AND w2.deleted_at IS NULL
                     AND w2.process_name = COALESCE(NULLIF(TRIM(sr.stage_name), ''), sr.stage_type)) AS wp_id,
                 COALESCE(NULLIF(TRIM(sr.stage_name), ''), sr.stage_type) AS process_name,
                 1000 + COALESCE(sr.stage_order, 0) AS process_order,
                 sr.production_batch_id AS batch_id,
-                CAST(sr.input_weight AS DECIMAL(14,2)) AS input_quantity,
-                CAST(sr.output_weight AS DECIMAL(14,2)) AS output_quantity,
+                sr.input_weight AS input_quantity,
+                sr.output_weight AS output_quantity,
                 'kg' AS in_unit,
                 'kg' AS out_unit
             FROM processing_stage_records sr
             JOIN production_batches pb2 ON pb2.id = sr.production_batch_id AND pb2.factory_id = :factoryId
             WHERE sr.factory_id = :factoryId
               AND sr.deleted_at IS NULL
-              AND sr.input_weight > 0
-              AND sr.output_weight IS NOT NULL
               AND CAST(COALESCE(sr.start_time, sr.created_at) AS DATE) BETWEEN :startDate AND :endDate
               AND (:productTypeId = '' OR pb2.product_type_id = :productTypeId)
               AND pb2.product_type_id NOT IN (:excludedProductTypeIds)
@@ -641,7 +655,7 @@ public interface ProductionReportRepository extends JpaRepository<ProductionRepo
                                 AND COALESCE(pr2.batch_id, wpt2.production_batch_id) = sr.production_batch_id)
         ) t
         GROUP BY t.wp_id, t.process_name
-        ORDER BY MIN(t.process_order)
+        ORDER BY MIN(t.process_order) FILTER (WHERE t.rate_eligible), MIN(t.process_order), t.process_name
         """, nativeQuery = true)
     List<Map<String, Object>> aggregateYieldByProcess(
             @Param("factoryId") String factoryId,
@@ -652,6 +666,16 @@ public interface ProductionReportRepository extends JpaRepository<ProductionRepo
             @Param("excludedProductTypeIds") java.util.Collection<String> excludedProductTypeIds,
             // 牵涉无权保密产品的计划整张不进 (兄弟产出也是这张计划的工艺; 独立审查第四轮 M1)
             @Param("excludedPlanIds") java.util.Collection<String> excludedPlanIds);
+
+    /** 本厂启用工序目录，用于补齐按日期、产品及权限过滤后的空行。 */
+    @Query(value = """
+        SELECT DISTINCT process_name
+        FROM work_processes
+        WHERE factory_id = :factoryId AND is_active = TRUE
+          AND deleted_at IS NULL AND merged_into_id IS NULL
+        ORDER BY process_name
+        """, nativeQuery = true)
+    List<String> findEnabledProcessNamesForYield(@Param("factoryId") String factoryId);
 
     /**
      * D4: 每个工序按批次聚合的自动标准计算样本.

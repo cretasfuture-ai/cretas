@@ -4,13 +4,12 @@ import { useAuthStore } from '@/store/modules/auth';
 import { get } from '@/api/request';
 import { Search, Refresh } from '@element-plus/icons-vue';
 import { balanceProcessLabel } from './balanceProcessLabel';
-import { displayProcessUnit } from '@/utils/processSheetUnits';
 import {
   averageScopeNote,
+  calculationNote,
+  canCalculate,
   formatQuantity,
-  incomparableLabel,
   summaryKpi,
-  type IncomparableReason,
   type ProcessYieldAgg,
 } from './processIoSummary';
 
@@ -20,26 +19,12 @@ const factoryId = computed(() => authStore.factoryId);
 
 // ---------- state ----------
 const loading = ref(false);
-const tableData = ref<ProcessIORow[]>([]);
+const tableData = ref<ProcessYieldAgg[]>([]);
 const dateRange = ref<[string, string] | null>(null);
 const selectedProduct = ref('');
 const productTypes = ref<ProductType[]>([]);
 
 // ---------- types ----------
-interface ProcessIORow {
-  processName: string;
-  processCategory: string;
-  inputQuantity: number | null;
-  outputQuantity: number | null;
-  conversionRate: number | null;
-  wastageRate: number | null;
-  inputUnit: string | null;
-  outputUnit: string | null;
-  incomparableReason: IncomparableReason | null;
-  batchCount: number;
-  stageRecordCount: number;
-}
-
 interface ProductType {
   id: string;
   name: string;
@@ -168,19 +153,13 @@ async function loadData() {
       `/${factoryId.value}/production/yield/by-process`, { params }
     );
     if (response.success && response.data) {
-      tableData.value = (response.data || []).map((r) => ({
-        processName: r.processName,
-        processCategory: '',
-        inputQuantity: r.inputQuantity,
-        outputQuantity: r.outputQuantity,
+      tableData.value = response.data.map((r) => ({
+        ...r,
         conversionRate: r.conversionRate ?? null,
         wastageRate: r.wastageRate ?? null,
         // 旧后端只给 unit (=投入单位, 产出同单位); 新后端分开给, 没有单位为 null
         inputUnit: r.inputUnit !== undefined ? r.inputUnit : (r.unit ?? null),
         outputUnit: r.outputUnit !== undefined ? r.outputUnit : (r.unit ?? null),
-        incomparableReason: r.incomparableReason ?? null,
-        batchCount: r.batchCount,
-        stageRecordCount: r.stageRecordCount ?? 0,
       }));
     } else {
       tableData.value = [];
@@ -254,7 +233,9 @@ function handleReset() {
       <!-- KPI Row -->
       <div class="kpi-row">
         <el-card shadow="hover" class="kpi-card">
-          <div class="kpi-value">{{ kpi.processCount }}</div>
+          <div class="kpi-value" data-testid="kpi-process-count">
+            {{ kpi.processCount }} 道<span class="kpi-count-detail">（{{ kpi.comparableCount }} 道可计算）</span>
+          </div>
           <div class="kpi-label">工序数量</div>
         </el-card>
         <el-card shadow="hover" class="kpi-card">
@@ -302,7 +283,7 @@ function handleReset() {
       <el-table
         :data="tableData"
         v-loading="loading"
-        empty-text="本厂暂无出成率报工数据 — 车间在 App 端逐道报工后此处自动汇总"
+        empty-text="本期暂无可显示的工序"
         stripe
         border
         style="width: 100%"
@@ -310,24 +291,27 @@ function handleReset() {
         <el-table-column label="工序名称" min-width="150" show-overflow-tooltip>
           <template #default="{ row }">
             <span>{{ row.processName }}</span>
-            <el-tag v-if="row.stageRecordCount > 0" size="small" type="info" class="ml-1" data-testid="stage-record-source">
+            <el-tag v-if="(row.stageRecordCount ?? 0) > 0" size="small" type="info" class="ml-1" data-testid="stage-record-source">
               含 {{ row.stageRecordCount }} 条加工环节记录
             </el-tag>
           </template>
         </el-table-column>
         <el-table-column label="投入量" width="150" align="right">
           <template #default="{ row }">
-            {{ formatQuantity(row.inputQuantity, displayProcessUnit(row.inputUnit)) }}
+            {{ row.inputRecordCount === 0 ? '—' : formatQuantity(row.inputQuantity, row.inputUnit) }}
           </template>
         </el-table-column>
         <el-table-column label="产出量" width="150" align="right">
           <template #default="{ row }">
-            {{ formatQuantity(row.outputQuantity, displayProcessUnit(row.outputUnit)) }}
+            {{ row.outputRecordCount === 0 ? '—' : formatQuantity(row.outputQuantity, row.outputUnit) }}
           </template>
         </el-table-column>
-        <el-table-column label="转化率" width="160" align="center">
+        <el-table-column label="转化率" min-width="210" align="center">
           <template #default="{ row }">
-            <span v-if="row.conversionRate == null" class="incomparable">{{ incomparableLabel(row) }}</span>
+            <div v-if="!canCalculate(row)" class="incomparable">
+              <span>无法计算</span>
+              <div>{{ calculationNote(row) }}</div>
+            </div>
             <el-tag v-else :type="getConversionTagType(row.conversionRate)" size="small" effect="light">
               {{ row.conversionRate }}%
             </el-tag>
@@ -335,7 +319,7 @@ function handleReset() {
         </el-table-column>
         <el-table-column label="损耗率" width="160" align="center">
           <template #default="{ row }">
-            <span v-if="row.wastageRate == null" class="incomparable">{{ incomparableLabel(row) || '—' }}</span>
+            <span v-if="!canCalculate(row) || row.wastageRate == null">—</span>
             <el-tag v-else :type="getWastageTagType(row.wastageRate)" size="small" effect="light">
               {{ row.wastageRate }}%
             </el-tag>
@@ -343,7 +327,7 @@ function handleReset() {
         </el-table-column>
         <el-table-column label="转化率进度" min-width="180">
           <template #default="{ row }">
-            <span v-if="row.conversionRate == null">—</span>
+            <span v-if="!canCalculate(row)">—</span>
             <el-progress v-else :percentage="Math.min(row.conversionRate, 100)"
               :color="getConversionColor(row.conversionRate)" :stroke-width="10" :show-text="false" />
           </template>
@@ -366,7 +350,7 @@ function handleReset() {
           &lt;80% 需改进
         </span>
         <span class="legend-item">
-          投入与产出单位不同（如 kg → 盒）或单位不统一的工序不算转化率，也不计入平均
+          平均转化率和损耗率仅统计可计算的工序
         </span>
       </div>
       </el-tab-pane>
@@ -514,6 +498,12 @@ function handleReset() {
   .kpi-label {
     font-size: 13px;
     color: var(--text-color-secondary, var(--cs-muted));
+  }
+
+  .kpi-count-detail {
+    display: inline-block;
+    font-size: 13px;
+    font-weight: 400;
   }
 
   .kpi-note {
