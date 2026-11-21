@@ -4,6 +4,7 @@
     "每条 case 在 entries 列出的入口各跑一遍 (execute = 普通 POST /ai-intents/execute, stream = /execute/stream)。",
     "turns 依次在同一会话里说; sessionId 一律取服务端回的那个 (澄清会话的 id 由服务端生成)。",
     "expect 字段: status_in / intent / ai_mode / message_contains (全部要有) / message_not_contains (一个都不许有) / min_choices (SELECT_INTENT 候选数下限) / same_intent_across_entries (两个入口最终意图必须相同) / same_status_across_entries (两个入口最终状态必须相同, PR-2b /execute 走流式管线后)。",
+    "customer_history_outcome: 未指明客户用 {} (必须追问客户); 已指明客户写入已知的 customerId 和 orderNumber (必须返回对应历史)。",
     "pending: {entry 或 '*': 原因}。这一入口没过记 EXPECTED_PENDING 不算失败; 过了记 PENDING_LIFTED (提示去掉标记), 也不算失败。",
     "⚠️ 走 Luna 的话术 (匹配不上短语表的) 每次上线都会真调一次线上决策模型, 只留必要的那几条。"
   ],
@@ -28,8 +29,8 @@
         {"say": "这个客户的量给我弄一下",
          "expect": {"status_in": ["NEED_CLARIFICATION"], "min_choices": 2, "need_session_id": true}},
         {"say": "1",
-         "expect": {"status_in": ["SUCCESS", "COMPLETED"], "intent_from_choice": 1,
-                    "message_not_contains": ["您是在讨论操作方法"]}}
+         "expect": {"intent_from_choice": 1, "customer_history_outcome": {},
+                    "message_not_contains": ["您是在讨论操作方法", "执行过程中出现异常"]}}
       ]
     },
     {

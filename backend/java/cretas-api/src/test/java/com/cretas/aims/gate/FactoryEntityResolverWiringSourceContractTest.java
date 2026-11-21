@@ -43,6 +43,8 @@ class FactoryEntityResolverWiringSourceContractTest {
             "service/impl/ConversationServiceImpl.java",
             "service/intent/flywheel/FlywheelTextProtector.java",
             "ai/tool/impl/crm/CustomerCrmStatusQueryTool.java",
+            // 历史工具按客户四码授权，候选走客户服务的数据范围校验。
+            "ai/tool/impl/crm/CustomerPurchaseHistoryTool.java",
             "ai/tool/impl/crm/CustomerPriceMemoryQueryTool.java",
             "ai/tool/impl/hr/AttendanceHistoryTool.java",
             "ai/tool/impl/hr/AttendanceStatusTool.java",

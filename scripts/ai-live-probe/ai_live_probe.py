@@ -348,8 +348,28 @@ def check_turn(expect: Dict[str, Any], resp: Dict[str, Any], prev: Optional[Dict
         if not re.search(pattern, message):
             problems.append(f"文案不匹配 /{pattern}/")
     for word in expect.get("message_not_contains", []):
-        if word in message:
+        if word in message or word in str(data.get("formattedText") or ""):
             problems.append(f"文案不应含「{word}」")
+    if "customer_history_outcome" in expect:
+        expected = expect["customer_history_outcome"]
+        if intent != "CUSTOMER_PURCHASE_HISTORY":
+            problems.append(f"客户购买历史结果的意图不符: {intent}")
+        if not expected:
+            if status not in ("NEED_MORE_INFO", "NEED_CLARIFICATION") or not re.search(
+                    r"(?:哪个|哪位|哪家|哪一个)客户|(?:提供|补充|指明|确认)\s*客户(?:名称|名字|编号|\s*ID)",
+                    message, re.IGNORECASE):
+                problems.append("客户未指明时应追问要查哪个客户")
+        else:
+            history = data.get("resultData")
+            history = history if isinstance(history, dict) else {}
+            rows = history.get("purchaseHistory")
+            if (status not in ("SUCCESS", "COMPLETED")
+                    or not expected.get("customerId") or not expected.get("orderNumber")
+                    or history.get("customerId") != expected["customerId"]
+                    or not isinstance(rows, list)
+                    or not any(isinstance(row, dict) and row.get("orderNumber") == expected["orderNumber"]
+                               for row in rows)):
+                problems.append("回复未返回指定客户的预期订单历史")
     if expect.get("min_choices") and len(set(choice_intents(data))) < expect["min_choices"]:
         problems.append(f"澄清候选 {len(set(choice_intents(data)))} 个 < {expect['min_choices']}")
     if expect.get("need_session_id") and not resp.get("session_id"):

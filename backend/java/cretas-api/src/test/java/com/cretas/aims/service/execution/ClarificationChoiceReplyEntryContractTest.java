@@ -7,18 +7,24 @@ import com.cretas.aims.ai.client.DashScopeClient;
 import com.cretas.aims.ai.client.F006BossQuestionClient;
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.ToolRegistry;
+import com.cretas.aims.ai.tool.ToolRbacEnforcer;
 import com.cretas.aims.ai.tool.WriteGuardService;
+import com.cretas.aims.ai.tool.impl.crm.CustomerPurchaseHistoryTool;
 import com.cretas.aims.config.DashScopeConfig;
 import com.cretas.aims.config.IntentKnowledgeBase;
+import com.cretas.aims.controller.AIIntentConfigController;
 import com.cretas.aims.dto.ai.IntentExecuteRequest;
 import com.cretas.aims.dto.ai.IntentExecuteResponse;
 import com.cretas.aims.dto.cache.SemanticCacheHit;
 import com.cretas.aims.dto.intent.IntentMatchResult;
 import com.cretas.aims.entity.Factory;
+import com.cretas.aims.entity.Customer;
 import com.cretas.aims.entity.config.AIIntentConfig;
 import com.cretas.aims.entity.conversation.ConversationSession;
 import com.cretas.aims.entity.enums.FactoryType;
 import com.cretas.aims.repository.AIAnalysisResultRepository;
+import com.cretas.aims.repository.CustomerRepository;
+import com.cretas.aims.repository.FactoryEntityDirectoryRepository;
 import com.cretas.aims.repository.FactoryRepository;
 import com.cretas.aims.repository.config.AIIntentConfigRepository;
 import com.cretas.aims.repository.conversation.ConversationSessionRepository;
@@ -31,23 +37,44 @@ import com.cretas.aims.service.AnalysisRouterService;
 import com.cretas.aims.service.ComplexityRouter;
 import com.cretas.aims.service.ConversationMemoryService;
 import com.cretas.aims.service.IntentSemanticsParser;
+import com.cretas.aims.service.ParameterExtractionLearningService;
 import com.cretas.aims.service.QueryPreprocessorService;
 import com.cretas.aims.service.ResultValidatorService;
 import com.cretas.aims.service.RuleEngineService;
 import com.cretas.aims.service.SemanticCacheService;
+import com.cretas.aims.service.calibration.CorrectionAgentService;
+import com.cretas.aims.service.calibration.ExternalVerifierService;
+import com.cretas.aims.service.calibration.SelfCorrectionService;
+import com.cretas.aims.service.calibration.ToolCallRedundancyService;
+import com.cretas.aims.service.calibration.ToolResultValidatorService;
 import com.cretas.aims.service.impl.ConversationServiceImpl;
+import com.cretas.aims.service.impl.CustomerServiceImpl;
+import com.cretas.aims.service.impl.IntentExecutorServiceImpl;
+import com.cretas.aims.service.entity.FactoryEntityResolver;
+import com.cretas.aims.service.inventory.CounterpartyLedgerSummaryService;
 import com.cretas.aims.service.intent.FrontlineAiWriteGrantService;
 import com.cretas.aims.service.intent.IntentAccessModeFilter;
 import com.cretas.aims.service.intent.IntentConfigManagementService;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.cretas.aims.exception.EntityNotFoundException;
+import com.cretas.aims.mapper.CustomerMapper;
+import com.cretas.aims.utils.JwtUtil;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.http.MediaType;
+import org.springframework.http.converter.StringHttpMessageConverter;
+import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -57,6 +84,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -69,6 +97,10 @@ import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
  * 澄清之后用户回「1」「完成工序」: 两个产品真实入口 (普通 {@link IntentExecutionOrchestrator#execute} 与
@@ -91,6 +123,10 @@ class ClarificationChoiceReplyEntryContractTest {
     private static final String QUESTION = "我要报工，产量100";
     private static final String WRITE = "WORK_PROCESS_TASK_COMPLETE";
     private static final String READ = "INVENTORY_REPORT";
+    private static final String HISTORY = "CUSTOMER_PURCHASE_HISTORY";
+    private static final String CUSTOMER_QUESTION = "这个客户的量给我弄一下";
+    private static final String CUSTOMER_ID = "test-customer-42";
+    private static final String CUSTOMER_NAME = "回归客户食品店";
 
     @ParameterizedTest(name = "{0}: 回复「{1}」")
     @CsvSource({
@@ -149,6 +185,138 @@ class ClarificationChoiceReplyEntryContractTest {
                 .isEqualTo(ConversationSession.SessionStatus.ACTIVE);
     }
 
+    // 两条 HTTP 路径共用真实澄清、分发、工具和客户服务，模型和存储边界用固定测试数据。
+    @ParameterizedTest(name = "{0}: {1}")
+    @CsvSource({
+            "ORDINARY,这个客户", "SSE,这个客户",
+            "ORDINARY,回归客户食品店", "SSE,回归客户食品店",
+            "ORDINARY,test-customer-42", "SSE,test-customer-42",
+            "ORDINARY,''", "SSE,''",
+            "ORDINARY,同名客户", "ORDINARY,foreign-customer", "SSE,回归客户"
+    })
+    void customerHistoryChoiceUsesBothHttpEntries(Entry entry, String reference) throws Exception {
+        var fixture = new CustomerHistoryFixture();
+        boolean resolved = CUSTOMER_ID.equals(reference) || CUSTOMER_NAME.equals(reference);
+        String question = resolved ? "查" + reference + "的购买历史" : CUSTOMER_QUESTION;
+        Harness h = new Harness(entry, fixture.tool, question, reference);
+        IntentExecutionOrchestrator orchestrator = h.ordinary();
+        SseStreamingService pipeline = OrdinaryEntryPipeline.pipeline(orchestrator);
+        try {
+            IntentExecutorServiceImpl facade = new IntentExecutorServiceImpl(orchestrator, pipeline, null, null);
+            ReflectionTestUtils.setField(facade, "streamTurnCollector", new StreamTurnCollector(pipeline, orchestrator));
+            JwtUtil jwt = mock(JwtUtil.class);
+            when(jwt.getUserIdFromToken("test-token")).thenReturn(USER);
+            when(jwt.getRoleFromToken("test-token")).thenReturn(ROLE);
+            MockMvc mvc = MockMvcBuilders.standaloneSetup(
+                    new AIIntentConfigController(h.recognizer, facade, null, null, null, jwt, h.configService))
+                    .setMessageConverters(new StringHttpMessageConverter(StandardCharsets.UTF_8),
+                            new MappingJackson2HttpMessageConverter(HTTP_JSON))
+                    .build();
+            JsonNode clarification = sendHttp(mvc, entry, question, null);
+            assertThat(clarification.path("status").asText()).as(clarification.toString()).isEqualTo("NEED_CLARIFICATION");
+            String session = clarification.path("sessionId").asText();
+            assertThat(session).isNotBlank();
+            assertThat(h.sessions.get(session).getCandidates())
+                    .extracting(ConversationSession.CandidateIntent::getIntentCode).containsExactly(HISTORY, READ);
+
+            JsonNode picked = sendHttp(mvc, entry, "1", session);
+            assertThat(picked.path("intentCode").asText()).as(picked.toString()).isEqualTo(HISTORY);
+            assertThat(picked.toString()).doesNotContain("执行过程中出现异常");
+            if (resolved) {
+                assertThat(picked.path("status").asText()).as(picked.toString()).isEqualTo("SUCCESS");
+                JsonNode data = picked.path("resultData");
+                assertThat(data.path("customerId").asText()).isEqualTo(CUSTOMER_ID);
+                assertThat(data.path("purchaseHistory").path(0).path("orderNumber").asText()).isEqualTo("SO-HISTORY-42");
+                assertThat(data.path("purchaseHistory").path(0).path("quantity").asInt()).isEqualTo(17);
+                verify(fixture.ledger).customerPurchaseHistory(FACTORY, CUSTOMER_ID);
+            } else {
+                assertThat(picked.path("status").asText()).as(picked.toString()).isEqualTo("NEED_MORE_INFO");
+                assertThat(picked.path("message").asText()).contains("要查哪个客户？")
+                        .doesNotContain("foreign-customer", "不可见客户");
+                if ("同名客户".equals(reference)) {
+                    assertThat(picked.path("message").asText()).contains("duplicate-1", "duplicate-2");
+                } else {
+                    assertThat(picked.path("message").asText()).contains(CUSTOMER_NAME);
+                }
+                assertThat(picked.path("resultData").has("purchaseHistory")).isFalse();
+                verifyNoInteractions(fixture.ledger);
+            }
+        } finally {
+            pipeline.destroy();
+        }
+    }
+
+    @Test
+    void serviceStillReportsAnUnknownCustomer() {
+        var fixture = new CustomerHistoryFixture();
+        assertThatThrownBy(() -> fixture.customers.getCustomerPurchaseHistory(FACTORY, "foreign-customer"))
+                .isInstanceOf(EntityNotFoundException.class)
+                .hasMessageContaining("Customer not found with id: foreign-customer");
+        verifyNoInteractions(fixture.ledger);
+    }
+
+    private static final ObjectMapper HTTP_JSON = new ObjectMapper().findAndRegisterModules();
+
+    private static JsonNode sendHttp(MockMvc mvc, Entry entry, String text, String session) throws Exception {
+        String url = "/api/mobile/" + FACTORY + "/ai-intents/execute";
+        var body = HTTP_JSON.createObjectNode().put("userInput", text).put("mode", "READ");
+        if (session != null) body.put("sessionId", session);
+        var requestBuilder = post(entry == Entry.SSE ? url + "/stream" : url)
+                .header("Authorization", "Bearer test-token")
+                .requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE,
+                        new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, USER, FACTORY, ROLE))
+                .contentType(MediaType.APPLICATION_JSON).content(body.toString());
+        var initial = mvc.perform(requestBuilder).andExpect(status().isOk());
+        if (entry == Entry.ORDINARY) {
+            return HTTP_JSON.readTree(initial.andReturn().getResponse()
+                    .getContentAsString(StandardCharsets.UTF_8)).path("data");
+        }
+        var pending = initial.andExpect(request().asyncStarted()).andReturn();
+        pending.getAsyncResult(5000);
+        String events = mvc.perform(asyncDispatch(pending)).andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+        var result = java.util.regex.Pattern.compile("(?m)^event:result\\Rdata:(.+)$").matcher(events);
+        assertThat(result.find()).as(events).isTrue();
+        return HTTP_JSON.readTree(result.group(1));
+    }
+
+    private static final class CustomerHistoryFixture {
+        final CustomerServiceImpl customers;
+        final CounterpartyLedgerSummaryService ledger = mock(CounterpartyLedgerSummaryService.class);
+        final CustomerPurchaseHistoryTool tool = new CustomerPurchaseHistoryTool();
+
+        CustomerHistoryFixture() {
+            CustomerRepository repository = mock(CustomerRepository.class);
+            Customer sample = customer(CUSTOMER_ID, CUSTOMER_NAME);
+            List<Customer> local = List.of(sample, customer("duplicate-1", "同名客户"),
+                    customer("duplicate-2", "同名客户"));
+            for (Customer customer : local) {
+                when(repository.findByIdAndFactoryId(customer.getId(), FACTORY)).thenReturn(Optional.of(customer));
+            }
+            when(repository.findByIdAndFactoryId("foreign-customer", "F-OTHER"))
+                    .thenReturn(Optional.of(customer("foreign-customer", "不可见客户")));
+            when(repository.searchByFiltersPaged(eq(FACTORY), eq(null), eq(null), eq(null), eq(null), any()))
+                    .thenReturn(new PageImpl<>(local));
+            customers = new CustomerServiceImpl(repository, new CustomerMapper(), null);
+            ReflectionTestUtils.setField(customers, "ledgerSummaryService", ledger);
+            when(ledger.customerPurchaseHistory(FACTORY, CUSTOMER_ID)).thenReturn(List.of(
+                    Map.of("orderNumber", "SO-HISTORY-42", "productName", "回归样品", "quantity", 17, "unit", "kg")));
+            FactoryEntityDirectoryRepository directory = mock(FactoryEntityDirectoryRepository.class);
+            when(directory.findCustomerRows(FACTORY)).thenReturn(local.stream()
+                    .map(c -> new Object[]{c.getId(), c.getName(), null, null, null, null, true}).toList());
+            ReflectionTestUtils.setField(tool, "objectMapper", HTTP_JSON);
+            ReflectionTestUtils.setField(tool, "customerService", customers);
+            ReflectionTestUtils.setField(tool, "entityResolver", new FactoryEntityResolver(directory, null));
+        }
+
+        private static Customer customer(String id, String name) {
+            Customer customer = new Customer();
+            customer.setId(id);
+            customer.setName(name);
+            return customer;
+        }
+    }
+
     /** 识别被调用的原话 (不论哪个重载)。 */
     private static List<String> recognitionCalls(Harness h) {
         return org.mockito.Mockito.mockingDetails(h.recognizer).getInvocations().stream()
@@ -167,7 +335,7 @@ class ClarificationChoiceReplyEntryContractTest {
         final IntentPermissionGate permissionGate = mock(IntentPermissionGate.class);
         final SemanticCacheService semanticCache = mock(SemanticCacheService.class);
         final IntentKnowledgeBase knowledgeBase = mock(IntentKnowledgeBase.class);
-        final ToolDispatchService toolDispatch = mock(ToolDispatchService.class);
+        final ToolDispatchService toolDispatch;
         final ToolRegistry toolRegistry = mock(ToolRegistry.class);
         final ConversationServiceImpl conversations;
         final ClarificationCandidateService candidates;
@@ -175,7 +343,16 @@ class ClarificationChoiceReplyEntryContractTest {
         String lastExecutedInput;
 
         Harness(Entry entry) {
+            this(entry, null, QUESTION, null);
+        }
+
+        Harness(Entry entry, CustomerPurchaseHistoryTool historyTool, String question, String reference) {
             this.entry = entry;
+            String firstIntent = historyTool == null ? WRITE : HISTORY;
+            String firstName = historyTool == null ? "完成工序" : "客户购买历史";
+            String firstCategory = historyTool == null ? "PRODUCTION" : "QUERY";
+            String firstToolName = historyTool == null ? "work_process_task_complete" : historyTool.getToolName();
+            toolDispatch = historyTool == null ? mock(ToolDispatchService.class) : historyDispatch(question, reference);
             ConversationSessionRepository repo = inMemory();
             conversations = new ConversationServiceImpl(repo, mock(AIIntentConfigRepository.class), null,
                     mock(DashScopeClient.class));
@@ -194,10 +371,10 @@ class ClarificationChoiceReplyEntryContractTest {
             candidates = new ClarificationCandidateService(configService, permissionGate, accessModeFilter,
                     new WriteGuardService(), grants, toolRegistry, allowAll);
             when(configService.resolveBusinessDomain(FACTORY)).thenReturn("FACTORY");
-            for (String[] c : new String[][]{{WRITE, "完成工序", "PRODUCTION"}, {READ, "库存报表", "QUERY"}}) {
+            for (String[] c : new String[][]{{firstIntent, firstName, firstCategory}, {READ, "库存报表", "QUERY"}}) {
                 AIIntentConfig config = AIIntentConfig.builder().intentCode(c[0]).intentName(c[1]).intentCategory(c[2])
                         .businessType("COMMON").sensitivityLevel("LOW").requiredPermission("any:read")
-                        .toolName(WRITE.equals(c[0]) ? "work_process_task_complete" : null).build();
+                        .toolName(firstIntent.equals(c[0]) ? firstToolName : null).build();
                 config.setIsActive(true);
                 when(configService.getIntentByCode(FACTORY, c[0])).thenReturn(Optional.of(config));
                 when(recognizer.getIntentByCode(FACTORY, c[0])).thenReturn(Optional.of(config));
@@ -207,36 +384,55 @@ class ClarificationChoiceReplyEntryContractTest {
                         .thenReturn(IntentPermissionGate.PermissionCheck.allowed());
             }
             // SSE 选中后走到工具分发: W0 写确认在分发里 (普通入口在编排器里), 这里只记下它收到的请求
-            ToolExecutor tool = mock(ToolExecutor.class);
-            when(tool.getToolName()).thenReturn("work_process_task_complete");
-            when(toolRegistry.getExecutor("work_process_task_complete")).thenReturn(Optional.of(tool));
-            when(toolDispatch.executeWithTool(any(), anyString(), any(), any(), any(), any(), any())).thenAnswer(inv -> {
-                IntentExecuteRequest seen = inv.getArgument(2);
-                lastExecutedInput = seen.getUserInput();
-                return IntentExecuteResponse.builder().intentRecognized(true).intentCode(WRITE)
-                        .status("WRITE_CONFIRM_REQUIRED").build();
-            });
+            if (historyTool != null) {
+                when(toolRegistry.getExecutor(firstToolName)).thenReturn(Optional.of(historyTool));
+            } else {
+                ToolExecutor tool = mock(ToolExecutor.class);
+                when(tool.getToolName()).thenReturn(firstToolName);
+                when(toolRegistry.getExecutor(firstToolName)).thenReturn(Optional.of(tool));
+                when(toolDispatch.executeWithTool(any(), anyString(), any(), any(), any(), any(), any())).thenAnswer(inv -> {
+                    IntentExecuteRequest seen = inv.getArgument(2);
+                    lastExecutedInput = seen.getUserInput();
+                    return IntentExecuteResponse.builder().intentRecognized(true).intentCode(WRITE)
+                            .status("WRITE_CONFIRM_REQUIRED").build();
+                });
+            }
             when(semanticCache.queryCache(anyString(), anyString())).thenReturn(SemanticCacheHit.miss(0L));
             when(knowledgeBase.detectQuestionType(anyString()))
                     .thenReturn(IntentKnowledgeBase.QuestionType.OPERATIONAL_COMMAND);
             // 识别 (Luna 决策) 判歧义: 两个候选、需要确认
             IntentMatchResult ambiguous = IntentMatchResult.builder()
-                    .bestMatch(configService.getIntentByCode(FACTORY, WRITE).orElseThrow())
+                    .bestMatch(configService.getIntentByCode(FACTORY, firstIntent).orElseThrow())
                     .topCandidates(List.of(
-                            IntentMatchResult.CandidateIntent.builder().intentCode(WRITE).intentName("完成工序")
+                            IntentMatchResult.CandidateIntent.builder().intentCode(firstIntent).intentName(firstName)
                                     .confidence(0.5).build(),
                             IntentMatchResult.CandidateIntent.builder().intentCode(READ).intentName("库存报表")
                                     .confidence(0.4).build()))
                     .confidence(0.5).matchMethod(IntentMatchResult.MatchMethod.LLM)
                     .requiresConfirmation(true)
                     .questionType(IntentKnowledgeBase.QuestionType.OPERATIONAL_COMMAND)
-                    .userInput(QUESTION).build();
+                    .userInput(question).build();
             when(recognizer.recognizeIntentWithConfidence(anyString(), anyString(), anyInt(), any(), any(), any(),
                     any(), any())).thenReturn(ambiguous);
             when(recognizer.recognizeIntentWithConfidence(anyString(), anyString(), anyInt(), any(), any(), any(),
                     any(), any(), any())).thenReturn(ambiguous);
             when(recognizer.recognizeIntentWithConfidence(anyString(), anyString(), anyInt(), any(), any(), any(),
                     any(), any(), any(), any())).thenReturn(ambiguous);
+        }
+
+        private ToolDispatchService historyDispatch(String question, String reference) {
+            ParameterExtractionLearningService extraction = mock(ParameterExtractionLearningService.class);
+            when(extraction.extractWithLearnedRules(eq(FACTORY), eq(HISTORY), eq(question), eq(List.of("customerId"))))
+                    .thenReturn(reference.isBlank() ? Map.of() : Map.of("customerId", reference));
+            var dispatch = new ToolDispatchService(toolRegistry, HTTP_JSON, mock(DashScopeClient.class),
+                    mock(ToolCallRedundancyService.class), mock(SelfCorrectionService.class),
+                    mock(CorrectionAgentService.class), mock(ExternalVerifierService.class),
+                    mock(ToolResultValidatorService.class), extraction);
+            ToolRbacEnforcer rbac = mock(ToolRbacEnforcer.class);
+            when(rbac.check(any(), any())).thenReturn(ToolRbacEnforcer.Decision.allow());
+            ReflectionTestUtils.setField(dispatch, "toolRbacEnforcer", rbac);
+            ReflectionTestUtils.setField(dispatch, "writeGuardService", new WriteGuardService());
+            return dispatch;
         }
 
         IntentExecuteResponse send(String input, String sessionId) throws Exception {
