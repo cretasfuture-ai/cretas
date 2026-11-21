@@ -32,7 +32,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
-from common.smartbi_analysis_cache import is_current, request_scope
+from common.smartbi_analysis_cache import AnalysisScope, is_revoked, request_scope
 
 from smartbi.database.connection import get_db_context, is_postgres_enabled
 from smartbi.database.models import SmartBiPgAnalysisResult, SmartBiPgExcelUpload
@@ -69,13 +69,42 @@ def _caller_factory(request: Request) -> str:
     return str(factory_id)
 
 
-def _require_own_upload(db, upload_id: int, factory_id: str) -> None:
-    owned = db.query(SmartBiPgExcelUpload.id).filter(
+def _require_own_upload(db, upload_id: int, factory_id: str, *, lock: bool = False) -> None:
+    query = db.query(SmartBiPgExcelUpload.id).filter(
         SmartBiPgExcelUpload.id == upload_id,
         SmartBiPgExcelUpload.factory_id == factory_id,
-    ).first()
-    if owned is None:
+    )
+    if lock:
+        query = query.with_for_update()
+    if query.first() is None:
         raise HTTPException(status_code=404, detail="upload not found")
+
+
+def require_feedback_upload(upload_id: int, factory_id: str) -> None:
+    if is_postgres_enabled():
+        with get_db_context() as db:
+            _require_own_upload(db, upload_id, factory_id)
+
+
+def revoke_feedback_projection(upload_id: int, scope: AnalysisScope, token: str) -> bool:
+    """Retain a workbook vote when its saved result outlives the shared cache."""
+    if not is_postgres_enabled():
+        return False
+    with get_db_context() as db:
+        _require_own_upload(db, upload_id, scope.factory, lock=True)
+        row = db.query(SmartBiPgAnalysisResult).filter_by(
+            upload_id=upload_id, factory_id=scope.factory, analysis_type="enrichment_cache",
+        ).first()
+        if row is None:
+            return False
+        document = dict(row.analysis_result or {})
+        scoped_ai = dict(document.get("aiByScope") or {})
+        ai = scoped_ai.get(scope.prefix, {})
+        if ai.get("aiCacheToken") != token:
+            return False
+        scoped_ai[scope.prefix] = {**ai, "revokedToken": token}
+        row.analysis_result = {**document, "aiByScope": scoped_ai}
+        return True
 
 
 # ─── GET: Load cached enrichment result ──────────────────────────
@@ -110,20 +139,31 @@ async def get_analysis_cache(upload_id: int, request: Request):
             result = dict(row.analysis_result or {})
             cached_at = row.created_at.isoformat() if row.created_at else None
 
-        token = result.get("aiCacheToken")
-        invalidated = bool(token) and not await is_current(request_scope(request), token)
+        scope = request_scope(request)
+        scoped_ai = result.get("aiByScope") or {}
+        if scoped_ai:
+            ai = scoped_ai.get(scope.prefix, {}) if scope else {}
+            missing = not ai
+        else:
+            # Older documents did not identify the role that generated the AI text.
+            ai = {}
+            missing = bool(result.get("aiAnalysis") or result.get("structuredAI") or result.get("aiCacheToken"))
+        token = ai.get("aiCacheToken")
+        invalidated = bool(token) and (
+            token == ai.get("revokedToken") or await is_revoked(scope, token)
+        )
         return {
             "success": True,
             "cached": True,
             "cachedAt": cached_at,
             "charts": result.get("charts"),
             "kpiSummary": result.get("kpiSummary"),
-            "aiAnalysis": None if invalidated else result.get("aiAnalysis"),
+            "aiAnalysis": None if invalidated else ai.get("aiAnalysis"),
             "aiCacheToken": None if invalidated else token,
-            "structuredAI": None if invalidated else result.get("structuredAI"),
+            "structuredAI": None if invalidated else ai.get("structuredAI"),
             "financialMetrics": result.get("financialMetrics"),
             "chartConfig": result.get("chartConfig"),
-            "_partial": bool(result.get("_partial") or invalidated),
+            "_partial": bool(invalidated or missing or (not scoped_ai and result.get("_partial"))),
         }
 
     except HTTPException:
@@ -157,21 +197,30 @@ async def save_analysis_cache(upload_id: int, body: SaveCacheRequest, request: R
                 payload["chartConfig"] = body.charts[0].get("config")
         if body.kpiSummary:
             payload["kpiSummary"] = body.kpiSummary
-        if body.aiAnalysis:
-            payload["aiAnalysis"] = body.aiAnalysis
-        if body.aiCacheToken:
-            payload["aiCacheToken"] = body.aiCacheToken
-        if body.structuredAI:
-            payload["structuredAI"] = body.structuredAI
+        scope = request_scope(request)
+        ai = body.model_dump(include={"aiAnalysis", "aiCacheToken", "structuredAI"}, exclude_none=True)
         if body.financialMetrics:
             payload["financialMetrics"] = body.financialMetrics
 
         with get_db_context() as db:
-            _require_own_upload(db, upload_id, factory_id)
+            _require_own_upload(db, upload_id, factory_id, lock=True)
             existing = db.query(SmartBiPgAnalysisResult).filter(
                 SmartBiPgAnalysisResult.upload_id == upload_id,
+                SmartBiPgAnalysisResult.factory_id == factory_id,
                 SmartBiPgAnalysisResult.analysis_type == "enrichment_cache"
             ).first()
+            previous = (existing.analysis_result or {}) if existing else {}
+            scoped_ai = dict(previous.get("aiByScope") or {})
+            if scope and ai:
+                revoked_token = scoped_ai.get(scope.prefix, {}).get("revokedToken")
+                if revoked_token:
+                    ai["revokedToken"] = revoked_token
+                scoped_ai[scope.prefix] = ai
+            if scoped_ai:
+                payload["aiByScope"] = scoped_ai
+                # Older versions only read top-level AI fields. Ask them to
+                # enrich again if a rollback encounters this scoped document.
+                payload["_partial"] = True
 
             if existing:
                 existing.analysis_result = payload
@@ -211,9 +260,10 @@ async def delete_analysis_cache(upload_id: int, request: Request):
 
     try:
         with get_db_context() as db:
-            _require_own_upload(db, upload_id, factory_id)
+            _require_own_upload(db, upload_id, factory_id, lock=True)
             deleted = db.query(SmartBiPgAnalysisResult).filter(
                 SmartBiPgAnalysisResult.upload_id == upload_id,
+                SmartBiPgAnalysisResult.factory_id == factory_id,
                 SmartBiPgAnalysisResult.analysis_type == "enrichment_cache"
             ).delete()
             logger.info(f"Deleted {deleted} cache record(s) for upload {upload_id}")
@@ -413,8 +463,10 @@ async def precompute_enrichment_cache_for_upload(
     }
 
     with get_db_context() as db:
+        _require_own_upload(db, upload_id, factory_id, lock=True)
         existing = db.query(SmartBiPgAnalysisResult).filter(
             SmartBiPgAnalysisResult.upload_id == upload_id,
+            SmartBiPgAnalysisResult.factory_id == factory_id,
             SmartBiPgAnalysisResult.analysis_type == "enrichment_cache"
         ).first()
 
@@ -429,7 +481,7 @@ async def precompute_enrichment_cache_for_upload(
                 or existing_payload.get("aiAnalysis")
                 or existing_payload.get("structuredAI")
             )
-            if has_llm_content and not is_existing_partial:
+            if existing_payload.get("aiByScope") or (has_llm_content and not is_existing_partial):
                 logger.info(
                     f"[precompute-cache] upload {upload_id} already has full "
                     "LLM cache, refreshing only kpiSummary in-place"
@@ -437,8 +489,7 @@ async def precompute_enrichment_cache_for_upload(
                 # Refresh just the KPI summary inside the existing payload so
                 # repeat calls keep KPIs in sync with the latest agg_strategy
                 # without dropping LLM artifacts.
-                existing_payload["kpiSummary"] = kpi_summary
-                existing.analysis_result = existing_payload
+                existing.analysis_result = {**existing_payload, "kpiSummary": kpi_summary}
             else:
                 existing.analysis_result = payload
             existing.factory_id = factory_id

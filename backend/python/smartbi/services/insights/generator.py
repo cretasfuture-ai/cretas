@@ -182,7 +182,7 @@ class InsightGenerator:
                             items = [item for item in items if item.get("type") in insight_types]
                         items = items[:max_insights]
                         result.update(insights=items, totalGenerated=len(items))
-                        if any(item.get("source") == "llm" for item in items):
+                        if event.get("completed") and any(item.get("source") == "llm" for item in items):
                             await cached.store(result)
                     event = self._done_event(result, cached.response_fields)
                 yield event
@@ -279,10 +279,12 @@ class InsightGenerator:
 
             system_role = pb.build_cacheable_system_prompt(tier, scenario)
             full_response = ""
+            completion = llm.StreamCompletion()
             _restorer = StreamRestorer(_scope.placeholder_map)  # P0: 流式占位实时还原
             async for chunk in llm.call_llm_stream(
                 prompt, system_role, max_tokens=max_tokens,
                 model_override=self.model_override,
+                completion=completion,
             ):
                 full_response += chunk
                 out = _restorer.push(chunk)
@@ -313,6 +315,7 @@ class InsightGenerator:
             yield {
                 "event": "done",
                 "data": json.dumps(done_result, ensure_ascii=False, default=str),
+                "completed": completion.completed,
             }
 
         except EgressRedactionError as e:
@@ -342,11 +345,13 @@ class InsightGenerator:
     async def _call_llm_stream_text(
         self, prompt: str, system_role: Optional[str] = None,
         max_tokens: int = 3000, temperature: float = 0.4,
+        *, completion: llm.StreamCompletion | None = None,
     ):
         async for chunk in llm.call_llm_stream_text(
             prompt, system_role,
             max_tokens=max_tokens, temperature=temperature,
             model_override=self.model_override,
+            **({"completion": completion} if completion is not None else {}),
         ):
             yield chunk
 

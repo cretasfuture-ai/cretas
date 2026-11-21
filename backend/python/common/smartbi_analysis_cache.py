@@ -23,9 +23,12 @@ logger = logging.getLogger(__name__)
 _VALUES = "{cretas:smartbi:analysis:v1}:values"
 _INDEX = "{cretas:smartbi:analysis:v1}:insertion-order"
 _SEQUENCE = "{cretas:smartbi:analysis:v1}:sequence"
+_REVOKED = "{cretas:smartbi:analysis:v1}:revoked"
 _MAX_ENTRIES = 2048
+_MAX_REVOKED = 8192
 _MAX_RESULT_BYTES = 128 * 1024
 _LEASE_SECONDS = 180
+_MAX_WAIT_SECONDS = 60
 _TOKEN = re.compile(r"([a-f0-9]{64})\.([a-f0-9]{32})\Z")
 
 _ACQUIRE = """
@@ -61,6 +64,9 @@ if record.revision ~= ARGV[2] then return 0 end
 if ARGV[3] ~= '' and record.value.input_hash ~= ARGV[3] then return 0 end
 redis.call('HDEL', KEYS[1], ARGV[1])
 redis.call('ZREM', KEYS[2], ARGV[1])
+redis.call('ZADD', KEYS[3], redis.call('INCR', KEYS[4]), ARGV[1] .. ':' .. ARGV[2])
+local overflow = redis.call('ZCARD', KEYS[3]) - tonumber(ARGV[4])
+if overflow > 0 then redis.call('ZREMRANGEBYRANK', KEYS[3], 0, overflow - 1) end
 return 1
 """
 
@@ -150,16 +156,25 @@ class AnalysisCache:
 
     async def acquire(self, key: AnalysisKey) -> AnalysisEntry:
         revision = uuid4().hex
-        while True:
-            state, *data = await self.redis.eval(
-                _ACQUIRE, 2, _VALUES, key.lock, key.field, revision, _LEASE_SECONDS,
-            )
-            if state == 1:
-                record = json.loads(data[0])
-                return AnalysisEntry(key, record["revision"], record["value"])
-            if state == 2:
-                return AnalysisEntry(key, revision, leased=True)
-            await asyncio.sleep(0.05)
+        clock = asyncio.get_running_loop().time
+        deadline = clock() + _MAX_WAIT_SECONDS
+        try:
+            while clock() < deadline:
+                state, *data = await self.redis.eval(
+                    _ACQUIRE, 2, _VALUES, key.lock, key.field, revision, _LEASE_SECONDS,
+                )
+                if state == 1:
+                    record = json.loads(data[0])
+                    return AnalysisEntry(key, record["revision"], record["value"])
+                if state == 2:
+                    return AnalysisEntry(key, revision, leased=True)
+                await asyncio.sleep(0.05)
+        except asyncio.CancelledError:
+            # Redis may have applied SET NX even though the awaited reply was cancelled.
+            with suppress(RedisError):
+                await self.complete(AnalysisEntry(key, revision, leased=True), None)
+            raise
+        return AnalysisEntry(key)
 
     async def renew_until_released(self, entry: AnalysisEntry) -> None:
         while entry.leased:
@@ -195,7 +210,8 @@ class AnalysisCache:
             return False
         digest, revision = match.groups()
         return bool(await self.redis.eval(
-            _INVALIDATE, 2, _VALUES, _INDEX, AnalysisKey(scope, digest).field, revision, input_hash,
+            _INVALIDATE, 4, _VALUES, _INDEX, _REVOKED, _SEQUENCE,
+            AnalysisKey(scope, digest).field, revision, input_hash, _MAX_REVOKED,
         ))
 
     async def invalidate_chart_hash(self, scope: AnalysisScope, input_hash: str) -> bool:
@@ -219,7 +235,8 @@ class AnalysisCacheUnavailable(RuntimeError):
     """Redis could not acknowledge an invalidation."""
 
 
-async def is_current(scope: AnalysisScope | None, token: str) -> bool:
+async def is_revoked(scope: AnalysisScope | None, token: str) -> bool:
+    """Look up an explicit vote. Missing/evicted values do not revoke a projection."""
     match = _TOKEN.fullmatch(token)
     if scope is None or not match:
         return False
@@ -227,8 +244,8 @@ async def is_current(scope: AnalysisScope | None, token: str) -> bool:
     cache = None
     try:
         cache = get_cache()
-        raw = await cache.redis.hget(_VALUES, AnalysisKey(scope, digest).field)
-        return bool(raw) and json.loads(raw)["revision"] == revision
+        field = AnalysisKey(scope, digest).field
+        return await cache.redis.zscore(_REVOKED, f"{field}:{revision}") is not None
     except (RedisError, ValueError):
         logger.warning("SmartBI analysis cache revision unavailable")
         return False
@@ -270,6 +287,10 @@ class analysis_result:
                     self._renewal = asyncio.create_task(self.cache.renew_until_released(self.entry))
             except (RedisError, ValueError):
                 logger.warning("SmartBI analysis cache read unavailable")
+            except asyncio.CancelledError:
+                if self.cache is not None:
+                    await self.cache.redis.aclose()
+                raise
         return self
 
     @property

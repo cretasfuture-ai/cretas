@@ -126,6 +126,16 @@ jobs:
     #    统一切换(一次改全部已接入的工作流并断言各处一致)。
     #    见 `.claude/rules/ci-runner-routing.md`。
     runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:6.2
+        ports:
+          - 6379/tcp
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     # 2026-09-15: 自托管 job 一律带超时 (正常 2 分钟; 见 rn-gate.yml jest 的 20 小时事故)
     timeout-minutes: 20
     defaults:
@@ -222,6 +232,9 @@ jobs:
         # 而不是变成 YAML 里一长串没人读的 --ignore。
         env:
           RUNNER_ENV: ${{ runner.environment }}
+          SMARTBI_TEST_ANALYSIS_REDIS_URL: redis://127.0.0.1:${{ job.services.redis.ports[6379] }}/0
+          SMARTBI_TEST_REQUIRE_ANALYSIS_REDIS: "1"
+          PYTEST_ADDOPTS: -v
         run: |
           # ⚠️ `|| true`: 清单**全是注释**时 grep 返回 1。当前 GHA 默认 shell 是
           #    `bash -e`(无 pipefail), 管道退出码取自 `tr` 所以侥幸没事 ——

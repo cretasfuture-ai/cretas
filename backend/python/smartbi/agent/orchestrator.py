@@ -560,6 +560,7 @@ class AgentOrchestrator:
         # emit RESTORED (real-name) deltas live via the StreamRestorer.
         full_text_parts = []
         total_tokens = 0
+        completed = False
         try:
             async for chunk in self._call_llm_stream(user_prompt, factory_id):
                 if chunk.get("text"):
@@ -569,6 +570,8 @@ class AgentOrchestrator:
                         yield {"type": "delta", "text": emitted}
                 if chunk.get("tokens"):
                     total_tokens = chunk["tokens"]
+                if chunk.get("completed"):
+                    completed = True
             tail = _restorer.flush()
             if tail:
                 yield {"type": "delta", "text": tail}
@@ -585,7 +588,7 @@ class AgentOrchestrator:
         answer = restore_text("".join(full_text_parts), _scope.placeholder_map).strip()
         if answer:
             post_budget = await self._budget.consume(factory_id, total_tokens)  # noqa: F841
-            if current_data is None:
+            if completed and current_data is None:
                 await self._cache.put(
                     factory_id, q_hash, answer,
                     chart_config=None, tokens=total_tokens, ttl_hours=cache_ttl_hours,
@@ -597,13 +600,14 @@ class AgentOrchestrator:
             # _read_corpus_cache hashes, so write and read-back agree (flywheel
             # grows); data-bearing key → a future hit can only occur while data
             # is unchanged (never serve stale — principle #1).
-            await _capture_insight_distillation(
-                user_prompt, answer, factory_id, total_tokens,
-                teacher_model="router:INSIGHTS",
-            )
+            if completed:
+                await _capture_insight_distillation(
+                    user_prompt, answer, factory_id, total_tokens,
+                    teacher_model="router:INSIGHTS",
+                )
         yield {"type": "done", "tokens": total_tokens,
                "elapsed_ms": int((time.monotonic() - t0) * 1000),
-               **({"completed_answer": answer} if current_data is not None and answer else {})}
+               **({"completed_answer": answer} if completed and current_data is not None and answer else {})}
 
     async def _call_llm_stream(
         self, user_prompt: str, factory_id: Optional[str] = None
@@ -636,7 +640,7 @@ class AgentOrchestrator:
         )
         _llm_caller_var.set("agent_orchestrator_stream")
         _llm_factory_var.set(factory_id)
-        async for event in call_chain_stream(SLOT.INSIGHTS, payload, timeout=60.0):
+        async for event in call_chain_stream(SLOT.INSIGHTS, payload, timeout=60.0, include_completion=True):
             etype = event.get("type")
             if etype == "delta":
                 text = event.get("text")
@@ -646,6 +650,8 @@ class AgentOrchestrator:
                 tokens = event.get("tokens") or 0
                 if tokens:
                     yield {"tokens": int(tokens)}
+            elif etype == "complete":
+                yield {"completed": True}
 
     # ---------- Corpus read-back (serve-from-corpus flywheel) ----------
 

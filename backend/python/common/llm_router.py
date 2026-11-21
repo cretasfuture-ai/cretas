@@ -3363,11 +3363,15 @@ async def call_chain_stream(
     payload: Dict[str, Any],
     chain: Optional[List[str]] = None,
     timeout: float = 45.0,
+    *,
+    include_completion: bool = False,
 ) -> AsyncIterator[Dict[str, Any]]:
     """见 ``_call_chain_stream_attempts``; 与 ``call_chain`` 一样先查好保密产品名, 查不了就不发。"""
     names_token = await prefetch_names_for_request()
     try:
-        async for event in _call_chain_stream_attempts(slot, payload, chain, timeout):
+        async for event in _call_chain_stream_attempts(
+            slot, payload, chain, timeout, include_completion=include_completion,
+        ):
             yield event
     finally:
         try:
@@ -3381,6 +3385,8 @@ async def _call_chain_stream_attempts(
     payload: Dict[str, Any],
     chain: Optional[List[str]] = None,
     timeout: float = 45.0,
+    *,
+    include_completion: bool = False,
 ) -> AsyncIterator[Dict[str, Any]]:
     """Streaming variant of call_chain — yields token deltas with provider fallback.
 
@@ -3545,6 +3551,8 @@ async def _call_chain_stream_attempts(
                 # 发出去的代号 (公司名 / 人名 / 号码 / 保密产品名) 边收边换回真名; 代号可能被拆在两段增量里
                 restorer = StreamRestorer((held_tokens or {}) if is_anthropic else current_egress_tokens())
 
+                finish_reason = None
+                protocol_done = False
                 async for line in resp.aiter_lines():
                     line = line.strip()
                     if not line:
@@ -3558,6 +3566,7 @@ async def _call_chain_stream_attempts(
                         continue
 
                     if data_str == "[DONE]":
+                        protocol_done = True
                         break
                     try:
                         obj = json.loads(data_str)
@@ -3582,7 +3591,10 @@ async def _call_chain_stream_attempts(
                             ready = restorer.push(text)
                             if ready:
                                 yield {"type": "delta", "text": ready}
+                        if obj.get("type") == "message_delta":
+                            finish_reason = (obj.get("delta") or {}).get("stop_reason") or finish_reason
                         if obj.get("type") == "message_stop":
+                            protocol_done = True
                             break
                         continue
 
@@ -3605,6 +3617,7 @@ async def _call_chain_stream_attempts(
 
                     choices = obj.get("choices") or []
                     if choices:
+                        finish_reason = choices[0].get("finish_reason") or finish_reason
                         delta = choices[0].get("delta") or {}
                         content = delta.get("content")
                         if content:
@@ -3676,6 +3689,14 @@ async def _call_chain_stream_attempts(
                 # Successful stream — record CB success and return
                 _cb_record_success(cb_key)
                 _quota_record_success(cb_key)
+                if include_completion:
+                    normal = (
+                        protocol_done and finish_reason in {"end_turn", "stop_sequence"}
+                        if is_anthropic else
+                        finish_reason == "stop" or (protocol_done and finish_reason is None)
+                    )
+                    if normal:
+                        yield {"type": "complete"}
                 return
 
         except (asyncio.TimeoutError, httpx.TimeoutException):

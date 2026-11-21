@@ -43,6 +43,7 @@ from services.insight_dimensions import (
     InsightReport
 )
 from services.insight_generator import InsightGenerator
+from smartbi.services.insights.llm_client import StreamCompletion
 from common.smartbi_analysis_cache import analysis_result, cached_response, fingerprint, request_scope, result_key
 
 # Cache
@@ -3279,6 +3280,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
             _llm_start = time.time()
             _LLM_SOFT_TIMEOUT_S = 25.0
             _llm_truncated = False
+            completion = StreamCompletion()
             _silent_timeout = False
 
             # Apr 28 2026: max_tokens 400 → 380. Initial reduction to 320
@@ -3288,7 +3290,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
             # while still capping rambling models at ~50% of prior 800-token
             # ceiling.
             async for chunk in insight_gen._call_llm_stream_text(
-                prompt, system_role, max_tokens=380, temperature=0.2
+                prompt, system_role, max_tokens=380, temperature=0.2, completion=completion,
             ):
                 if await http_request.is_disconnected():
                     logger.info("[stream] Client disconnected, stopping")
@@ -3586,7 +3588,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
             # generator closes (anchored in _PENDING_BG_TASKS).
             if (use_legacy_cache and request.allow_tenant_data_fallback
                     and not chat_session_parent and _session_factory_id
-                    and full_text and not _llm_truncated):
+                    and full_text and completion.completed and not _llm_truncated):
                 try:
                     from smartbi.services.llm_answer_cache import LlmAnswerCache as _LAC
                     from smartbi.services.query_normalizer import normalize_for_match
@@ -3643,7 +3645,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
             # materialized_cache / llm_answer_cache / capability_short_circuit)
             # return earlier and never reach here. Fire-and-forget — the helper
             # swallows all exceptions and never delays the stream.
-            if full_text and not _llm_truncated:
+            if full_text and completion.completed and not _llm_truncated:
                 await _capture_qa_distillation(
                     request.effective_query, full_text, http_request
                 )
@@ -3663,7 +3665,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                 "warning": _guard_warning,
                 "answer_replaced": _answer_replaced,
             }
-            if full_text.strip() and not _llm_truncated and not _guard_warning:
+            if full_text.strip() and completion.completed and not _llm_truncated and not _guard_warning:
                 await cached.store({key: value for key, value in final.items() if key != "log_id"})
             yield _sse_event("done", {**final, **cached.response_fields,
                                      "processingTimeMs": int((time.time() - start_time) * 1000)})
@@ -3715,13 +3717,14 @@ async def _stream_llm_response(
         else:
             insight_gen = InsightGenerator()
             chunks = []
+            completion = StreamCompletion()
             async for chunk in insight_gen._call_llm_stream_text(
-                user_prompt, system_prompt, max_tokens=max_tokens, temperature=temperature
+                user_prompt, system_prompt, max_tokens=max_tokens, temperature=temperature, completion=completion,
             ):
                 chunks.append(chunk)
                 yield chunk
             text = "".join(chunks)
-            if text.strip():
+            if text.strip() and completion.completed:
                 await cached.store({"text": text})
         if cache_fields is not None:
             cache_fields.update(cached.response_fields)

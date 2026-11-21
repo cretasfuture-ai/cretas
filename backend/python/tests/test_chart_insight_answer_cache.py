@@ -193,6 +193,63 @@ async def test_lease_is_renewed_until_the_model_completes(entry, analysis_cache,
     assert answer(second) == {**answer(first), "cacheHit": True}
 
 
+async def test_analysis_lease_wait_has_deadline_without_stealing(analysis_cache, monkeypatch):
+    if isinstance(analysis_cache, MemoryCache):
+        pytest.skip("lease timeout requires Redis")
+    monkeypatch.setattr(storage, "_MAX_WAIT_SECONDS", 0.05)
+    key = storage.result_key(storage.AnalysisScope(FACTORY, "operator"), "lease", 1,
+                             prompt_version="v1", model_version="v1")
+    cache = storage.get_cache()
+    try:
+        owner = await cache.acquire(key)
+        async with storage.analysis_result(key) as waiting:
+            assert waiting.response_fields == {"cacheHit": False}
+            await waiting.store({"answer": "uncached"})
+        assert await analysis_cache.get(key.lock) == owner.revision.encode()
+        assert await cache.complete(owner, {"answer": "owner"})
+    finally:
+        await cache.redis.aclose()
+    async with storage.analysis_result(key) as reused:
+        assert reused.entry.value == {"answer": "owner"}
+
+
+async def test_cancelled_acquire_releases_lease_even_if_redis_already_applied_it(analysis_cache, monkeypatch):
+    if isinstance(analysis_cache, MemoryCache):
+        pytest.skip("acquire cancellation requires Redis")
+    key = storage.result_key(storage.AnalysisScope(FACTORY, "operator"), "lease", 2,
+                             prompt_version="v1", model_version="v1")
+    cache = storage.get_cache()
+    applied, closed = asyncio.Event(), asyncio.Event()
+    original_eval, original_close = cache.redis.eval, cache.redis.aclose
+
+    async def pause_after_eval(script, *args):
+        result = await original_eval(script, *args)
+        if script == storage._ACQUIRE:
+            applied.set()
+            await asyncio.Future()
+        return result
+
+    async def observe_close():
+        await original_close()
+        closed.set()
+
+    monkeypatch.setattr(cache.redis, "eval", pause_after_eval)
+    monkeypatch.setattr(cache.redis, "aclose", observe_close)
+    monkeypatch.setattr(storage, "get_cache", lambda: cache)
+
+    async def enter():
+        async with storage.analysis_result(key):
+            pytest.fail("Cancelled acquire reached the generator")
+
+    task = asyncio.create_task(enter())
+    await asyncio.wait_for(applied.wait(), 2)
+    assert await analysis_cache.exists(key.lock)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert closed.is_set() and not await analysis_cache.exists(key.lock)
+
+
 async def test_concurrent_cold_start_uses_one_service_cache(entry, monkeypatch):
     from smartbi import config
     from smartbi.agent import budget_tracker

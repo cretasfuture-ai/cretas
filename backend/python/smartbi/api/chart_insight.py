@@ -351,6 +351,7 @@ class InsightFeedbackRequest(BaseModel):
 
 class AnalysisFeedbackRequest(BaseModel):
     cache_token: str = Field(pattern=r"^[a-f0-9]{64}\.[a-f0-9]{32}$")
+    upload_id: Optional[int] = Field(default=None, gt=0)
 
 
 @router.post("/analysis-feedback")
@@ -359,10 +360,16 @@ async def analysis_feedback(request: Request, body: AnalysisFeedbackRequest):
     scope = request_scope(request)
     if scope is None:
         return JSONResponse(status_code=401, content={"success": False, "code": "UNAUTHORIZED"})
+    if body.upload_id is not None:
+        from .analysis_cache import require_feedback_upload, revoke_feedback_projection
+
+        require_feedback_upload(body.upload_id, scope.factory)
     try:
         removed = await invalidate(scope, body.cache_token)
     except AnalysisCacheUnavailable:
         return JSONResponse(status_code=503, content={"success": False, "code": "CACHE_UNAVAILABLE"})
+    if body.upload_id is not None:
+        removed = revoke_feedback_projection(body.upload_id, scope, body.cache_token) or removed
     if not removed:
         return JSONResponse(status_code=404, content={"success": False, "code": "ANALYSIS_NOT_FOUND"})
     return {"success": True, "data": {"invalidated": True}}

@@ -1,7 +1,6 @@
 """Isolated test backend for public SmartBI cache contracts."""
 import asyncio
 import copy
-import json
 import os
 from uuid import uuid4
 
@@ -15,16 +14,14 @@ class MemoryCache:
     def __init__(self):
         self.values = {}
         self.pending = {}
+        self.revoked = set()
         self.redis = self
 
     async def aclose(self):
         pass
 
-    async def hget(self, _name, field):
-        if field in self.values:
-            revision, value = self.values[field]
-            return json.dumps({"revision": revision, "value": value})
-        return None
+    async def zscore(self, _name, token):
+        return 1 if token in self.revoked else None
 
     async def renew_until_released(self, entry):
         pass
@@ -55,6 +52,7 @@ class MemoryCache:
         if not entry or entry[0] != revision or (input_hash and entry[1].get("input_hash") != input_hash):
             return False
         del self.values[field]
+        self.revoked.add(f"{field}:{revision}")
         return True
 
     async def invalidate_chart_hash(self, scope, input_hash):
@@ -68,6 +66,8 @@ async def analysis_cache(monkeypatch):
     """Exercise the production client when a private Redis URL is supplied."""
     url = os.getenv("SMARTBI_TEST_ANALYSIS_REDIS_URL")
     if not url:
+        if os.getenv("SMARTBI_TEST_REQUIRE_ANALYSIS_REDIS") == "1":
+            pytest.fail("Python Gate must supply SMARTBI_TEST_ANALYSIS_REDIS_URL to run production Lua")
         cache = MemoryCache()
         monkeypatch.setattr(storage, "get_cache", lambda: cache)
         yield cache
@@ -75,7 +75,7 @@ async def analysis_cache(monkeypatch):
 
     namespace = uuid4().hex
     keys = {name: f"{{cretas:smartbi:analysis:v1}}:pytest:{namespace}:{name}" for name in (
-        "_VALUES", "_INDEX", "_SEQUENCE",
+        "_VALUES", "_INDEX", "_SEQUENCE", "_REVOKED",
     )}
     for name, value in keys.items():
         monkeypatch.setattr(storage, name, value)

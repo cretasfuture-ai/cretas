@@ -174,11 +174,12 @@ def downvote(case, target, answer):
     assert status == 200 and json.loads(raw)["success"] and calls == 0, (case, status, raw)
 
 
+@pytest.mark.timeout(180)
 async def test_route_across_workers_restart_and_negative_feedback(analysis_cache):
     if isinstance(analysis_cache, MemoryCache):
         pytest.skip("set SMARTBI_TEST_ANALYSIS_REDIS_URL to a private Redis for process evidence")
     url = os.environ["SMARTBI_TEST_ANALYSIS_REDIS_URL"]
-    namespace = {name: getattr(storage, name) for name in ("_VALUES", "_INDEX", "_SEQUENCE")}
+    namespace = {name: getattr(storage, name) for name in ("_VALUES", "_INDEX", "_SEQUENCE", "_REVOKED")}
 
     initial = {}
     failures = []
@@ -243,7 +244,7 @@ async def test_feedback_tokens_are_tenant_role_and_revision_bound(analysis_cache
     if isinstance(analysis_cache, MemoryCache):
         pytest.skip("set SMARTBI_TEST_ANALYSIS_REDIS_URL to a private Redis for process evidence")
     url = os.environ["SMARTBI_TEST_ANALYSIS_REDIS_URL"]
-    namespace = {name: getattr(storage, name) for name in ("_VALUES", "_INDEX", "_SEQUENCE")}
+    namespace = {name: getattr(storage, name) for name in ("_VALUES", "_INDEX", "_SEQUENCE", "_REVOKED")}
     with worker(url, namespace) as handle:
         result, _, _ = analysis_response("financial-analysis", handle)
         path = "/api/smartbi/analysis-feedback"
@@ -255,3 +256,22 @@ async def test_feedback_tokens_are_tenant_role_and_revision_bound(analysis_cache
         assert analysis_response("financial-analysis", handle)[1] == 1
         assert request(handle, "POST", path, body)[0] == 404
         assert analysis_response("financial-analysis", handle)[1] == 0
+
+
+@pytest.mark.timeout(180)
+async def test_partial_upstream_stream_never_enters_analysis_cache(analysis_cache):
+    if isinstance(analysis_cache, MemoryCache):
+        pytest.skip("set SMARTBI_TEST_ANALYSIS_REDIS_URL to a private Redis for streaming evidence")
+    url = os.environ["SMARTBI_TEST_ANALYSIS_REDIS_URL"]
+    namespace = {name: getattr(storage, name) for name in ("_VALUES", "_INDEX", "_SEQUENCE", "_REVOKED")}
+    with worker(url, namespace) as handle:
+        for case in ("chat-insight-sse", "drill-down-sse", "dashboard-sse", "insight-sse"):
+            method, path, body, _ = CASES[case]
+            for failure in ("provider-timeout", "provider-error", "provider-eof", "provider-length"):
+                status, partial, calls, _ = request(handle, method, path, body(100), generation=failure)
+                assert status == 200 and calls > 0 and failure in partial, (case, failure, partial)
+                assert '"cacheToken"' not in partial and '"cacheHit": false' in partial, (case, failure, partial)
+            fresh, calls, content = analysis_response(case, handle, generation="provider-complete")
+            assert calls == 1 and not fresh["cacheHit"], (case, calls)
+            warm, calls, reused = analysis_response(case, handle, generation="provider-complete")
+            assert calls == 0 and warm["cacheHit"] and reused == content, (case, calls)

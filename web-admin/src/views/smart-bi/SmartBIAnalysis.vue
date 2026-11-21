@@ -845,7 +845,7 @@ async function sendSheetAnalysisFeedback(sheet: SheetResult) {
   if (!token || sheetFeedbackPending.value.has(sheet.sheetIndex)) return;
   sheetFeedbackPending.value.add(sheet.sheetIndex);
   try {
-    if (await markAnalysisUnhelpful(token)) {
+    if (await markAnalysisUnhelpful(token, sheet.uploadId)) {
       if (sheet.flowResult?.aiCacheToken === token) sheet.flowResult.aiCacheToken = undefined;
       ElMessage.success('感谢反馈，下次查看时会重新生成分析');
     } else {

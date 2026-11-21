@@ -20,6 +20,7 @@ def serve(channel, url, redis_keys, signing_key):
 
 async def _serve(channel, redis_keys, signing_key):
     import pandas as pd
+    import httpx
     from fastapi import FastAPI
     from httpx import ASGITransport, AsyncClient
 
@@ -48,6 +49,7 @@ async def _serve(channel, redis_keys, signing_key):
     for name, value in redis_keys.items():
         setattr(analysis_result_cache, name, value)
     state = SimpleNamespace(calls=0, data=100, generation="初次结论", path="", saved=None)
+    upstream_modes = {"provider-timeout", "provider-error", "provider-eof", "provider-length", "provider-complete"}
     settings = config.get_settings().model_copy(update={
         "llm_api_key": "fixture", "llm_base_url": "http://fixture.invalid", "llm_insight_model": "fixture",
         "llm_model": "fixture", "use_llm_first": True,
@@ -96,6 +98,31 @@ async def _serve(channel, redis_keys, signing_key):
     def insight_json():
         return json.dumps({"insights": [{"type": "summary", "text": text()}]}, ensure_ascii=False)
 
+    class ProviderResponse:
+        status_code = 200
+
+        async def aiter_lines(self):
+            content = insight_json() if state.path.startswith("/api/insight/") else text()
+            yield "data: " + json.dumps({"choices": [{"delta": {"content": content}}]}, ensure_ascii=False)
+            if state.generation == "provider-timeout":
+                raise httpx.ReadTimeout("fixture upstream timed out after sending a chunk")
+            if state.generation == "provider-error":
+                yield 'data: {"error":{"code":"fixture","message":"fixture SSE error"}}'
+            elif state.generation != "provider-eof":
+                reason = "length" if state.generation == "provider-length" else "stop"
+                yield "data: " + json.dumps({"choices": [{"delta": {}, "finish_reason": reason}]})
+                yield "data: [DONE]"
+
+    class Provider:
+        @asynccontextmanager
+        async def stream(self, *_args, **_kwargs):
+            yield ProviderResponse()
+
+    provider = Provider()
+    real_structured_stream = llm_client.call_llm_stream
+    real_plain_stream = llm_client.call_llm_stream_text
+    real_dashboard_stream = orchestrator.AgentOrchestrator._call_llm_stream
+
     async def raw_model(*args, **kwargs):
         if "/materialize/" in state.path:
             return json.dumps({"insights": {"fixture": text()}}, ensure_ascii=False)
@@ -105,10 +132,20 @@ async def _serve(channel, redis_keys, signing_key):
         return insight_json()
 
     async def structured_stream(*args, **kwargs):
+        if state.generation in upstream_modes:
+            async for chunk in real_structured_stream(*args, **kwargs):
+                yield chunk
+            return
         yield insight_json()
+        kwargs["completion"].completed = True
 
     async def plain_stream(*args, **kwargs):
+        if state.generation in upstream_modes:
+            async for chunk in real_plain_stream(*args, **kwargs):
+                yield chunk
+            return
         yield text()
+        kwargs["completion"].completed = True
 
     async def plain_answer(*args, **kwargs):
         return text()
@@ -165,7 +202,12 @@ async def _serve(channel, redis_keys, signing_key):
         return text(), 15, "fixture"
 
     async def dashboard_stream(*args, **kwargs):
+        if state.generation in upstream_modes:
+            async for event in real_dashboard_stream(*args, **kwargs):
+                yield event
+            return
         yield {"text": text(), "tokens": 15}
+        yield {"completed": True}
 
     async def synthesis_model(*args, **kwargs):
         return text(), 15
@@ -233,6 +275,14 @@ async def _serve(channel, redis_keys, signing_key):
                 "recommendations": candidates, "subjects": []}}
 
     llm_router.call_chain = route_model
+    llm_router.get_llm_http_client = lambda: provider
+    llm_router._client_for = lambda _account: provider
+    llm_router._refuse_reason = lambda *_: None
+    llm_router._provider_config = lambda _account: ("http://fixture.invalid", "fixture")
+    llm_router.prefetch_names_for_request = noop
+    llm_router.reset_prefetched_names = lambda _token: None
+    for slot in (llm_router.SLOT.CHAT, llm_router.SLOT.INSIGHTS):
+        llm_router.SLOT_MODELS[slot] = [("openai", "gpt-4.1-mini")]
     for client in (llm_client, llm_alias):
         client.call_llm = raw_model
         client.call_llm_stream = structured_stream
