@@ -28,6 +28,10 @@ public interface PurchaseRequisitionRepository extends JpaRepository<PurchaseReq
     Page<PurchaseRequisition> findByFactoryIdAndRequesterIdOrderByCreatedAtDesc(
             String factoryId, Long requesterId, Pageable pageable);
 
+    /** 「我的 + 状态」两个条件同时生效 (原型缺口 G2). */
+    Page<PurchaseRequisition> findByFactoryIdAndStatusAndRequesterIdOrderByCreatedAtDesc(
+            String factoryId, PurchaseRequisitionStatus status, Long requesterId, Pageable pageable);
+
     Optional<PurchaseRequisition> findByFactoryIdAndRequisitionNumber(String factoryId, String requisitionNumber);
 
     /**

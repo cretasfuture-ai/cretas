@@ -1,0 +1,155 @@
+package com.cretas.aims.controller.inventory;
+
+import com.cretas.aims.service.inventory.TradeJpaQueryTestSupport;
+
+import com.cretas.aims.dto.inventory.CreatePriceListRequest;
+import com.cretas.aims.dto.inventory.UpdatePriceListRequest;
+import com.cretas.aims.entity.Factory;
+import com.cretas.aims.entity.inventory.PriceList;
+import com.cretas.aims.entity.inventory.PriceListItem;
+import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.exception.ResourceNotFoundException;
+import com.cretas.aims.repository.inventory.PriceListItemRepository;
+import com.cretas.aims.repository.inventory.PriceListRepository;
+import com.cretas.aims.repository.ProductTypeRepository;
+import com.cretas.aims.repository.RawMaterialTypeRepository;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.domain.EntityScan;
+import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
+import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
+import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
+import org.springframework.http.MediaType;
+import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.util.Map;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+/** 价格表更新 / 启停 / 条目增删改 (G5): 真实 JPA Context + 真实 Repository. */
+@DataJpaTest(showSql = false, properties = {"spring.flyway.enabled=false"})
+@ActiveProfiles("test")
+@AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
+@EntityScan(basePackages = "com.cretas.aims.entity")
+@EnableJpaRepositories(basePackages = "com.cretas.aims.repository")
+class PriceListControllerUpdateRepositoryQueryValidationTest extends TradeJpaQueryTestSupport {
+
+    private static final String F = "IT-PL";
+    @Autowired private PriceListRepository lists;
+    @PersistenceContext private EntityManager em;
+    @Autowired private PriceListItemRepository items;
+    @Autowired private RawMaterialTypeRepository rawMaterialTypes;
+    @Autowired private ProductTypeRepository productTypes;
+    private PriceListController controller;
+    private String listId;
+
+    @BeforeEach
+    void setUp() {
+        Factory factory = new Factory();
+        factory.setId(F);
+        factory.setName(F);
+        em.persist(factory);
+        controller = new PriceListController(lists, items, null, rawMaterialTypes, productTypes);
+        PriceList pl = new PriceList();
+        pl.setFactoryId(F);
+        pl.setName("原名");
+        pl.setPriceType("PURCHASE_PRICE");
+        pl.setEffectiveFrom(LocalDate.of(2026, 1, 1));
+        listId = lists.saveAndFlush(pl).getId();
+    }
+
+    private static CreatePriceListRequest.PriceItemDTO dto(String price) {
+        CreatePriceListRequest.PriceItemDTO d = new CreatePriceListRequest.PriceItemDTO();
+        d.setItemName("盐");
+        d.setUnit("kg");
+        d.setStandardPrice(new BigDecimal(price));
+        return d;
+    }
+
+    @Test
+    void headerUpdateAndActiveToggleAreSaved() throws Exception {
+        MockMvcBuilders.standaloneSetup(controller).build()
+                .perform(put("/api/mobile/{factoryId}/price-lists/{id}", F, listId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"name":"新名","effectiveFrom":"2026-02-01","effectiveTo":"2026-12-31","remark":"备注"}
+                                """))
+                .andExpect(status().isOk());
+        lists.flush();
+        em.clear();
+        assertThat(lists.findById(listId).orElseThrow().getName()).isEqualTo("新名");
+        controller.setActive(F, listId, Map.of("active", false));
+        lists.flush();
+        em.clear();
+
+        PriceList saved = lists.findById(listId).orElseThrow();
+        assertThat(saved.getName()).isEqualTo("新名");
+        assertThat(saved.getEffectiveTo()).isEqualTo(LocalDate.of(2026, 12, 31));
+        assertThat(saved.getIsActive()).isFalse();
+        assertThat(saved.getPriceType()).isEqualTo("PURCHASE_PRICE"); // 类型不可改
+    }
+
+    @Test
+    void invalidDateRangeAndOtherFactoryRejected() {
+        assertThat(lists.findByIdAndFactoryId(listId, "OTHER")).isEmpty();
+        assertThatThrownBy(() -> controller.updatePriceList(F, listId,
+                new UpdatePriceListRequest("x", LocalDate.of(2026, 5, 1), LocalDate.of(2026, 4, 1), null)))
+                .isInstanceOf(BusinessException.class);
+        assertThatThrownBy(() -> controller.setActive("OTHER", listId, Map.of("active", false)))
+                .isInstanceOf(ResourceNotFoundException.class);
+        assertThatThrownBy(() -> controller.setActive(F, listId, Map.of()))
+                .isInstanceOf(BusinessException.class);
+    }
+
+    @Test
+    void itemAddUpdateDelete() {
+        PriceListItem added = controller.addItem(F, listId, dto("10")).getData();
+        items.flush();
+        assertThat(items.findByPriceListId(listId)).hasSize(1);
+
+        controller.updateItem(F, listId, added.getId(), dto("12.5"));
+        items.flush();
+        assertThat(items.findById(added.getId()).orElseThrow().getStandardPrice()).isEqualByComparingTo("12.5");
+
+        controller.deleteItem(F, listId, added.getId());
+        items.flush();
+        assertThat(items.findByPriceListId(listId)).isEmpty();
+    }
+
+    @Test
+    void itemOfAnotherListOrBadPricesRejected() {
+        PriceList other = new PriceList();
+        other.setFactoryId(F);
+        other.setName("别的");
+        other.setPriceType("PURCHASE_PRICE");
+        other.setEffectiveFrom(LocalDate.of(2026, 1, 1));
+        String otherId = lists.saveAndFlush(other).getId();
+        PriceListItem itm = controller.addItem(F, otherId, dto("1")).getData();
+
+        assertThat(items.findByIdAndPriceListIdAndPriceList_FactoryId(itm.getId(), otherId, F)).isPresent();
+        assertThat(items.findByIdAndPriceListIdAndPriceList_FactoryId(itm.getId(), listId, F)).isEmpty();
+        assertThat(items.findByIdAndPriceListIdAndPriceList_FactoryId(itm.getId(), otherId, "OTHER")).isEmpty();
+        assertThatThrownBy(() -> controller.deleteItem(F, listId, itm.getId()))
+                .isInstanceOf(ResourceNotFoundException.class);
+        assertThatThrownBy(() -> controller.updateItem("OTHER", otherId, itm.getId(), dto("2")))
+                .isInstanceOf(ResourceNotFoundException.class);
+        CreatePriceListRequest.PriceItemDTO bad = dto("5");
+        bad.setMinPrice(new BigDecimal("9"));
+        bad.setMaxPrice(new BigDecimal("8"));
+        assertThatThrownBy(() -> controller.addItem(F, listId, bad)).isInstanceOf(BusinessException.class);
+        assertThatThrownBy(() -> controller.addItem(F, listId, dto("-1"))).isInstanceOf(BusinessException.class);
+        CreatePriceListRequest.PriceItemDTO invalidReference = dto("5");
+        invalidReference.setProductTypeId("NO-SUCH-PRODUCT");
+        assertThatThrownBy(() -> controller.addItem(F, listId, invalidReference))
+                .isInstanceOf(ResourceNotFoundException.class);
+    }
+}

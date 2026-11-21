@@ -39,6 +39,10 @@ public interface VehicleRepository extends JpaRepository<Vehicle, String> {
     @Query("SELECT v FROM Vehicle v WHERE v.factoryId = :factoryId AND v.plateNumber = :plateNumber AND v.deletedAt IS NULL")
     Optional<Vehicle> findByFactoryIdAndPlateNumber(@Param("factoryId") String factoryId, @Param("plateNumber") String plateNumber);
 
+    /** 车牌大小写不敏感、忽略首尾空白的查重 (历史数据可能混合大小写, 故返回 List). */
+    @Query("SELECT v FROM Vehicle v WHERE v.factoryId = :factoryId AND UPPER(TRIM(v.plateNumber)) = :plate AND v.deletedAt IS NULL")
+    List<Vehicle> findAllByFactoryIdAndNormalizedPlate(@Param("factoryId") String factoryId, @Param("plate") String plate);
+
     /**
      * 根据ID和工厂ID查询（确保租户隔离）
      */

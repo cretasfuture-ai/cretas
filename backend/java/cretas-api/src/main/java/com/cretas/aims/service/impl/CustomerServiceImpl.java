@@ -52,6 +52,9 @@ public class CustomerServiceImpl implements CustomerService {
     @org.springframework.beans.factory.annotation.Autowired
     private com.cretas.aims.repository.CustomerSalesUserHistoryRepository salesUserHistoryRepository;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.inventory.CounterpartyLedgerSummaryService ledgerSummaryService;
+
     /** Sprint 6 W2-B: 数据权限解析器 (optional — 模块未部署时 fallback ALL behavior). */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private DataScopeResolver dataScopeResolver;
@@ -385,18 +388,25 @@ public class CustomerServiceImpl implements CustomerService {
         statistics.put("creditAvailable", creditLimit.subtract(currentBalance));
 
         statistics.put("isActive", customer.getIsActive());
-        // TODO: 添加订单统计、购买历史统计等信息
-        statistics.put("totalOrders", 0);
-        statistics.put("totalSales", BigDecimal.ZERO);
-        statistics.put("averageOrderValue", BigDecimal.ZERO);
-        statistics.put("lastOrderDate", null);
+        if (ledgerSummaryService == null) {
+            throw new com.cretas.aims.exception.BusinessException(503, "账本汇总服务不可用");
+        }
+        Map<String, Object> ledger = ledgerSummaryService.customerSummary(factoryId, customerId);
+        statistics.putAll(ledger);
+        // 兼容旧键
+        statistics.put("totalOrders", ledger.get("committedOrderCount"));
+        statistics.put("totalSales", ledger.get("contractAmount"));
         return statistics;
     }
 
     @Override
     public List<Map<String, Object>> getCustomerPurchaseHistory(String factoryId, String customerId) {
-        // TODO: 从订单表中获取购买历史
-        List<Map<String, Object>> history = new ArrayList<>();
+        customerRepository.findByIdAndFactoryId(customerId, factoryId)
+                .orElseThrow(() -> new com.cretas.aims.exception.EntityNotFoundException("Customer", customerId));
+        if (ledgerSummaryService == null) {
+            throw new com.cretas.aims.exception.BusinessException(503, "购买历史服务不可用");
+        }
+        List<Map<String, Object>> history = ledgerSummaryService.customerPurchaseHistory(factoryId, customerId);
         return history;
     }
 

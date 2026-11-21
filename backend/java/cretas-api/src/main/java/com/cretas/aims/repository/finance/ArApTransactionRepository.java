@@ -197,6 +197,49 @@ public interface ArApTransactionRepository extends JpaRepository<ArApTransaction
             @Param("factoryId") String factoryId,
             @Param("salesOrderId") String salesOrderId);
 
+    /** 应收单清单 (不限归属范围: 调用方已确认全厂可见). */
+    @Query(value = "SELECT t.* FROM ar_ap_transactions t WHERE t.factory_id=:factoryId AND t.deleted_at IS NULL AND t.transaction_type='AR_INVOICE' "
+            + "AND (CAST(:counterpartyId AS text) IS NULL OR t.counterparty_id=CAST(:counterpartyId AS text)) "
+            + "AND (CAST(:dueFrom AS date) IS NULL OR t.due_date >= CAST(:dueFrom AS date)) "
+            + "AND (CAST(:dueTo AS date) IS NULL OR t.due_date <= CAST(:dueTo AS date)) "
+            + "AND (:unsettledOnly = 0 OR t.outstanding_amount > 0) "
+            + "AND (:overdueOnly = 0 OR (t.outstanding_amount > 0 AND t.due_date IS NOT NULL AND t.due_date < :today)) "
+            + "ORDER BY t.due_date ASC, t.created_at ASC, t.id ASC",
+            countQuery = "SELECT COUNT(*) FROM ar_ap_transactions t WHERE t.factory_id=:factoryId AND t.deleted_at IS NULL AND t.transaction_type='AR_INVOICE' "
+            + "AND (CAST(:counterpartyId AS text) IS NULL OR t.counterparty_id=CAST(:counterpartyId AS text)) "
+            + "AND (CAST(:dueFrom AS date) IS NULL OR t.due_date >= CAST(:dueFrom AS date)) "
+            + "AND (CAST(:dueTo AS date) IS NULL OR t.due_date <= CAST(:dueTo AS date)) "
+            + "AND (:unsettledOnly = 0 OR t.outstanding_amount > 0) "
+            + "AND (:overdueOnly = 0 OR (t.outstanding_amount > 0 AND t.due_date IS NOT NULL AND t.due_date < :today))",
+            nativeQuery = true)
+    Page<ArApTransaction> findReceivableItems(@Param("factoryId") String factoryId,
+            @Param("counterpartyId") String counterpartyId, @Param("dueFrom") LocalDate dueFrom,
+            @Param("dueTo") LocalDate dueTo, @Param("unsettledOnly") int unsettledOnly,
+            @Param("overdueOnly") int overdueOnly, @Param("today") LocalDate today, Pageable pageable);
+
+    /** 应收单清单 (按财务归属范围收窄). */
+    @Query(value = "SELECT t.* FROM ar_ap_transactions t WHERE t.factory_id=:factoryId AND t.deleted_at IS NULL AND t.transaction_type='AR_INVOICE' "
+            + "AND (CAST(:counterpartyId AS text) IS NULL OR t.counterparty_id=CAST(:counterpartyId AS text)) "
+            + "AND (CAST(:dueFrom AS date) IS NULL OR t.due_date >= CAST(:dueFrom AS date)) "
+            + "AND (CAST(:dueTo AS date) IS NULL OR t.due_date <= CAST(:dueTo AS date)) "
+            + "AND (:unsettledOnly = 0 OR t.outstanding_amount > 0) "
+            + "AND (:overdueOnly = 0 OR (t.outstanding_amount > 0 AND t.due_date IS NOT NULL AND t.due_date < :today)) "
+            + "AND " + FinanceOwnershipSql.AR_AP_OWNER_T + " IN (:owners) "
+            + "ORDER BY t.due_date ASC, t.created_at ASC, t.id ASC",
+            countQuery = "SELECT COUNT(*) FROM ar_ap_transactions t WHERE t.factory_id=:factoryId AND t.deleted_at IS NULL AND t.transaction_type='AR_INVOICE' "
+            + "AND (CAST(:counterpartyId AS text) IS NULL OR t.counterparty_id=CAST(:counterpartyId AS text)) "
+            + "AND (CAST(:dueFrom AS date) IS NULL OR t.due_date >= CAST(:dueFrom AS date)) "
+            + "AND (CAST(:dueTo AS date) IS NULL OR t.due_date <= CAST(:dueTo AS date)) "
+            + "AND (:unsettledOnly = 0 OR t.outstanding_amount > 0) "
+            + "AND (:overdueOnly = 0 OR (t.outstanding_amount > 0 AND t.due_date IS NOT NULL AND t.due_date < :today)) "
+            + "AND " + FinanceOwnershipSql.AR_AP_OWNER_T + " IN (:owners)",
+            nativeQuery = true)
+    Page<ArApTransaction> findScopedReceivableItems(@Param("factoryId") String factoryId,
+            @Param("counterpartyId") String counterpartyId, @Param("dueFrom") LocalDate dueFrom,
+            @Param("dueTo") LocalDate dueTo, @Param("unsettledOnly") int unsettledOnly,
+            @Param("overdueOnly") int overdueOnly, @Param("today") LocalDate today,
+            @Param("owners") List<Long> owners, Pageable pageable);
+
     Page<ArApTransaction> findByFactoryIdOrderByTransactionDateDesc(String factoryId, Pageable pageable);
 
     Page<ArApTransaction> findByFactoryIdAndCounterpartyTypeOrderByTransactionDateDesc(

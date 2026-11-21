@@ -49,6 +49,12 @@ public class VehicleDTO {
     private BigDecimal capacity;
 
     /**
+     * 车辆载重 (吨) = capacity(kg) / 1000。入参时可只传吨 (capacity 缺省则按 吨×1000 折成 kg);
+     * 两者都传且不一致返回 400; 返回时总是由 capacity 推出, 没有 capacity 则为 null。
+     */
+    private BigDecimal capacityTons;
+
+    /**
      * 当前装载量 (kg)
      */
     private BigDecimal currentLoad;

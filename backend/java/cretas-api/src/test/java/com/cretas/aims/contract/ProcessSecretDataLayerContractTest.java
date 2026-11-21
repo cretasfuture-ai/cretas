@@ -115,7 +115,8 @@ class ProcessSecretDataLayerContractTest {
             "overheadCostRatio", "overrideSamplingRatio", "overtimeRate", "overtimeRateMultiplier",
             "packagingConversionFactorSnapshot", "paddingRatio", "passRate", "penetrationScore",
             "percentage", "pieceRateAmount", "pieceRateWage", "pmCompletionRate", "powerUsage", "precisionRate",
-            "priceVarianceRate", "productivityRate", "progressPercent", "qualityPassRate", "qualityRate",
+            // 采购单价相对参考价的偏离只反映交易定价，字段另受采购价权限保护。
+            "priceDeviationPct", "priceVarianceRate", "productivityRate", "progressPercent", "qualityPassRate", "qualityRate",
             "quotedLaborCostPerKg", "recallRate", "residualTolerancePercent", "rewardRate",
             "salesOverShipRateProperty", "samplePercentage", "sampleRate", "samplingRatio",
             "saturatedFatPerServing", "sharedUnitCost", "skillGrowthRate",

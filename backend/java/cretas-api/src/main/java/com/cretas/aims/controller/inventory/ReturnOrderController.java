@@ -40,6 +40,9 @@ public class ReturnOrderController {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.inventory.impl.PurchaseReturnCapacityService purchaseReturnCapacityService;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.inventory.ReturnOrderListEnricher returnOrderListEnricher;
+
     @PostMapping
     @Operation(summary = "创建退货单")
     public ApiResponse<ReturnOrder> createReturnOrder(
@@ -62,6 +65,9 @@ public class ReturnOrderController {
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size) {
         PageResponse<ReturnOrder> result = returnOrderService.getReturnOrders(factoryId, returnType, status, page, size);
+        if (returnOrderListEnricher != null) {
+            returnOrderListEnricher.enrich(factoryId, result.getContent());
+        }
         return ApiResponse.success("查询成功", result);
     }
 

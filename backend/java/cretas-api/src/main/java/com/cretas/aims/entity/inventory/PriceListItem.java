@@ -1,6 +1,7 @@
 package com.cretas.aims.entity.inventory;
 
 import com.cretas.aims.entity.BaseEntity;
+import com.cretas.aims.security.PriceSensitive;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import lombok.*;
 
@@ -54,14 +55,17 @@ public class PriceListItem extends BaseEntity {
     private String unit;
 
     /** 标准单价 */
+    @PriceSensitive
     @Column(name = "standard_price", nullable = false, precision = 15, scale = 4)
     private BigDecimal standardPrice;
 
     /** 最低限价 */
+    @PriceSensitive
     @Column(name = "min_price", precision = 15, scale = 4)
     private BigDecimal minPrice;
 
     /** 最高限价 */
+    @PriceSensitive
     @Column(name = "max_price", precision = 15, scale = 4)
     private BigDecimal maxPrice;
 

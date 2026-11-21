@@ -1191,6 +1191,26 @@ public class ArApServiceImpl implements ArApService {
     // ==================== 查询 ====================
 
     @Override
+    public PageResponse<ArApTransaction> getReceivableItems(String factoryId, String counterpartyId,
+                                                             boolean overdueOnly, boolean unsettledOnly,
+                                                             LocalDate dueFrom, LocalDate dueTo,
+                                                             int page, int size) {
+        PageRequest pageRequest = PageRequest.of(page - 1, size);
+        String cp = counterpartyId == null || counterpartyId.isBlank() ? null : counterpartyId;
+        List<Long> owners = scopeOwners(factoryId);
+        Page<ArApTransaction> result;
+        if (owners != null) {
+            if (owners.isEmpty()) return PageResponse.of(List.of(), page, size, 0L);
+            result = transactionRepository.findScopedReceivableItems(factoryId, cp, dueFrom, dueTo,
+                    unsettledOnly ? 1 : 0, overdueOnly ? 1 : 0, LocalDate.now(), owners, pageRequest);
+        } else {
+            result = transactionRepository.findReceivableItems(factoryId, cp, dueFrom, dueTo,
+                    unsettledOnly ? 1 : 0, overdueOnly ? 1 : 0, LocalDate.now(), pageRequest);
+        }
+        return PageResponse.of(result.getContent(), page, size, result.getTotalElements());
+    }
+
+    @Override
     public PageResponse<ArApTransaction> getTransactions(String factoryId,
                                                           CounterpartyType counterpartyType,
                                                           String counterpartyId,

@@ -10,8 +10,8 @@ import org.springframework.stereotype.Component;
  * 价格可见性的唯一判定点 (S5-12)。
  *
  * <p>规格 = {@link PriceSensitive#permission()} / {@link PriceScope#value()} 的取值:
- * 一个或多个权限码, {@code |} 分隔, 任一满足即可见。procurement:read / finance:read 只看配置
- * (L2 工厂覆盖 → L1 平台默认; 都没有行时只认采购 / 财务岗, 不落硬编码兜底矩阵),
+ * 一个或多个权限码, {@code |} 分隔, 任一满足即可见。采购、销售和财务读走配置
+ * (L2 工厂覆盖 → L1 平台默认; 采购和财务保留无配置时的原有口径),
  * 在权限配置界面里改得动; 其它权限码照常 {@link PermissionService#hasPermission}。
  *
  * <p>判定出错一律按不可见处理 (fail closed)。
@@ -34,13 +34,16 @@ public class PriceVisibility {
     /** 同上, finance:read 未配置时只有财务岗。 */
     static final java.util.Set<String> FINANCE_FALLBACK_ROLES = java.util.Set.of("finance_manager");
 
-    /** 采购 / 财务读走「只看配置」的判定, 其它权限码照常 hasPermission。 */
+    /** 采购 / 销售 / 财务读走配置判定, 其它权限码照常 hasPermission。 */
     private boolean check(User user, String code) {
         if ("procurement:read".equals(code)) {
             return permissionService.hasConfiguredPermission(user, code, PROCUREMENT_FALLBACK_ROLES);
         }
-        if ("finance:read".equals(code)) {
+        if (PriceSensitive.FINANCE.equals(code)) {
             return permissionService.hasConfiguredPermission(user, code, FINANCE_FALLBACK_ROLES);
+        }
+        if (PriceSensitive.SALES.equals(code)) {
+            return permissionService.hasConfiguredPermission(user, code, java.util.Set.of());
         }
         return permissionService.hasPermission(user, code);
     }

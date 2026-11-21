@@ -294,7 +294,11 @@ public class PurchaseRequisitionServiceImpl implements PurchaseRequisitionServic
                                                    Long requesterId, int page, int size) {
         PageRequest pageRequest = PageRequest.of(page - 1, size, Sort.by(Sort.Direction.DESC, "createdAt"));
         Page<PurchaseRequisition> result;
-        if (status != null) {
+        if (status != null && requesterId != null) {
+            // 「我的 + 状态」必须同时生效, 否则选了状态后会列出全厂的单
+            result = requisitionRepository.findByFactoryIdAndStatusAndRequesterIdOrderByCreatedAtDesc(
+                    factoryId, status, requesterId, pageRequest);
+        } else if (status != null) {
             result = requisitionRepository.findByFactoryIdAndStatusOrderByCreatedAtDesc(factoryId, status, pageRequest);
         } else if (requesterId != null) {
             result = requisitionRepository.findByFactoryIdAndRequesterIdOrderByCreatedAtDesc(factoryId, requesterId, pageRequest);

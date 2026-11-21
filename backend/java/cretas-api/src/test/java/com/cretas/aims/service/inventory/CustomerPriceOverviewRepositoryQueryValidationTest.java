@@ -1,0 +1,210 @@
+package com.cretas.aims.service.inventory;
+
+import com.cretas.aims.controller.sales.CustomerPriceOverviewController;
+import com.cretas.aims.dto.common.PageResponse;
+import com.cretas.aims.dto.inventory.CustomerPriceOverviewRow;
+import com.cretas.aims.entity.Customer;
+import com.cretas.aims.entity.CustomerPriceHistory;
+import com.cretas.aims.entity.ProductType;
+import com.cretas.aims.entity.User;
+import com.cretas.aims.entity.enums.SalesOrderStatus;
+import com.cretas.aims.entity.inventory.PriceList;
+import com.cretas.aims.entity.inventory.PriceListItem;
+import com.cretas.aims.entity.inventory.SalesOrder;
+import com.cretas.aims.exception.GlobalExceptionHandler;
+import com.cretas.aims.repository.RoleDefinitionRepository;
+import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.utils.FactoryAccessValidator;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.domain.EntityScan;
+import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
+import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
+import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
+import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+
+import java.math.BigDecimal;
+import java.time.LocalDate;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+/** 跨客户的客户价目表 + 最近/平均成交价 (G7): 真实 JPA Context, 真实 JPQL (含实体 JOIN ON). */
+@DataJpaTest(showSql = false, properties = {"spring.flyway.enabled=false"})
+@ActiveProfiles("test")
+@AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
+@EntityScan(basePackages = "com.cretas.aims.entity")
+@EnableJpaRepositories(basePackages = "com.cretas.aims.repository")
+class CustomerPriceOverviewRepositoryQueryValidationTest extends TradeJpaQueryTestSupport {
+
+    private static final String F = "IT-CPO";
+    @Autowired private UserRepository users;
+    @Autowired private RoleDefinitionRepository roles;
+    @PersistenceContext private EntityManager em;
+    private CustomerPriceOverviewService svc;
+    private int seq;
+    private Long userId;
+
+    @BeforeEach
+    void setUp() {
+        svc = new CustomerPriceOverviewService();
+        ReflectionTestUtils.setField(svc, "em", em);
+
+        userId = TradeJpaFixtures.createFactoryUser(em, F);
+        TradeJpaFixtures.createCustomer(em, F, userId, "C1", "甲客户");
+        TradeJpaFixtures.createCustomer(em, F, userId, "C2", "乙客户");
+        product("P1", "SKU1", "面包", "310g*42袋/箱");
+        product("P2", "SKU2", "蛋糕", null);
+        priceList("C1", "SELLING_PRICE", "P1", "10");
+        priceList("C1", "SELLING_PRICE", "P2", "20");
+        priceList("C2", "SELLING_PRICE", "P1", "11");
+        priceList(null, "SELLING_PRICE", "P1", "99");      // 全局价目, 不属于任何客户
+        priceList("C1", "PURCHASE_PRICE", "P1", "1");       // 采购价目, 不能出现
+        history("C1", "P1", "9", LocalDate.of(2026, 10, 1));
+        history("C1", "P1", "13", LocalDate.of(2026, 11, 1));
+        em.flush();
+    }
+
+    private void product(String id, String code, String name, String spec) {
+        ProductType p = new ProductType();
+        p.setId(id);
+        p.setFactoryId(F);
+        p.setCode(code);
+        p.setName(name);
+        p.setUnit("个");
+        p.setSpecification(spec);
+        em.persist(p);
+    }
+
+    private void priceList(String customerId, String type, String productId, String price) {
+        PriceList pl = new PriceList();
+        pl.setId("PL-" + (++seq));
+        pl.setFactoryId(F);
+        pl.setName("表" + seq);
+        pl.setCustomerId(customerId);
+        pl.setPriceType(type);
+        pl.setEffectiveFrom(LocalDate.of(2026, 1, 1));
+        em.persist(pl);
+        PriceListItem it = new PriceListItem();
+        it.setPriceListId(pl.getId());
+        it.setProductTypeId(productId);
+        it.setItemName("P1".equals(productId) ? "面包" : "蛋糕");
+        it.setUnit("个");
+        it.setStandardPrice(new BigDecimal(price));
+        em.persist(it);
+    }
+
+    private void history(String customer, String product, String price, LocalDate date) {
+        history(customer, product, price, date, "SO-" + (++seq));
+    }
+
+    private void history(String customer, String product, String price, LocalDate date, String orderId) {
+        CustomerPriceHistory h = new CustomerPriceHistory();
+        h.setFactoryId(F);
+        h.setCustomerId(customer);
+        h.setProductTypeId(product);
+        h.setUnitPrice(new BigDecimal(price));
+        h.setSourceSalesOrderId(orderId);
+        h.setOrderDate(date);
+        em.persist(h);
+    }
+
+    @Test
+    void httpScopesCustomersCountsAndTheSourceOrdersOfTradedPrices() throws Exception {
+        String role = "sales_manager";
+        em.find(User.class, userId).setRoleCode(role);
+        Long other = TradeJpaFixtures.createUser(em, F, "overview-other", role);
+        em.find(Customer.class, "C2").setCreatedBy(other);
+        trade(userId, "12", LocalDate.of(2026, 11, 4));
+        trade(other, "88", LocalDate.of(2026, 11, 5));
+        em.flush();
+
+        var scope = TradeJpaFixtures.scopedHttp(users, roles, F, role);
+        var controller = new CustomerPriceOverviewController(svc, new FactoryAccessValidator(users), scope.scope());
+        var mvc = MockMvcBuilders.standaloneSetup(controller)
+                .addInterceptors(scope.interceptor()).setControllerAdvice(new GlobalExceptionHandler()).build();
+        String path = "/api/mobile/" + F + "/customer-prices";
+
+        mvc.perform(scope.asUser(get(path).param("keyword", "SKU1").param("size", "1"), userId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.totalElements").value(1))
+                .andExpect(jsonPath("$.data.content.length()").value(1))
+                .andExpect(jsonPath("$.data.content[0].customerId").value("C1"))
+                .andExpect(jsonPath("$.data.content[0].standardPrice").value(10.0))
+                .andExpect(jsonPath("$.data.content[0].latestTradedPrice").value(12.0))
+                .andExpect(jsonPath("$.data.content[0].averageTradedPrice").value(12.0))
+                .andExpect(jsonPath("$.data.content[0].tradedCount").value(1));
+        mvc.perform(scope.asUser(get(path).param("keyword", "SKU1").param("page", "2").param("size", "1"), userId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.totalElements").value(1))
+                .andExpect(jsonPath("$.data.content.length()").value(0));
+        mvc.perform(scope.asUser(get(path).param("keyword", "乙"), userId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.totalElements").value(0))
+                .andExpect(jsonPath("$.data.content.length()").value(0));
+        mvc.perform(scope.asUser(get(path).param("keyword", "乙"), other))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.totalElements").value(1))
+                .andExpect(jsonPath("$.data.content[0].customerId").value("C2"));
+    }
+
+    private void trade(Long owner, String price, LocalDate date) {
+        String id = "CPO-SO-" + (++seq);
+        SalesOrder order = new SalesOrder();
+        order.setId(id);
+        order.setFactoryId(F);
+        order.setOrderNumber(id);
+        order.setCreatedBy(owner);
+        order.setCustomerId("C1");
+        order.setCustomerName("甲客户");
+        order.setOrderDate(date);
+        order.setStatus(SalesOrderStatus.CONFIRMED);
+        order.setTotalAmount(new BigDecimal(price));
+        em.persist(order);
+        history("C1", "P1", price, date, id);
+    }
+
+    @Test
+    void listsOnlyCustomerSellingPricesWithTradedPricesAndSpec() {
+        PageResponse<CustomerPriceOverviewRow> page = svc.list(F, null, 1, 50, null);
+
+        assertThat(page.getTotalElements()).isEqualTo(3); // 全局价目与采购价目都不在
+        CustomerPriceOverviewRow c1p1 = page.getContent().stream()
+                .filter(r -> r.getCustomerId().equals("C1") && r.getProductTypeId().equals("P1")).findFirst().orElseThrow();
+        assertThat(c1p1.getCustomerName()).isEqualTo("甲客户");
+        assertThat(c1p1.getProductCode()).isEqualTo("SKU1");
+        assertThat(c1p1.getSpecification()).isEqualTo("310g*42袋/箱");
+        assertThat(c1p1.getStandardPrice()).isEqualByComparingTo("10");
+        assertThat(c1p1.getLatestTradedPrice()).isEqualByComparingTo("13");
+        assertThat(c1p1.getLatestTradedDate()).isEqualTo(LocalDate.of(2026, 11, 1));
+        assertThat(c1p1.getAverageTradedPrice()).isEqualByComparingTo("11");
+        assertThat(c1p1.getTradedCount()).isEqualTo(2);
+        assertThat(c1p1.isEffective()).isTrue();
+    }
+
+    @Test
+    void neverTradedPairHasNullTradedPricesNotZero() {
+        CustomerPriceOverviewRow r = svc.list(F, null, 1, 50, null).getContent().stream()
+                .filter(x -> x.getCustomerId().equals("C2")).findFirst().orElseThrow();
+        assertThat(r.getLatestTradedPrice()).isNull();
+        assertThat(r.getAverageTradedPrice()).isNull();
+        assertThat(r.getTradedCount()).isZero();
+    }
+
+    @Test
+    void keywordFiltersAndPagingAndFactoryIsolation() {
+        assertThat(svc.list(F, "乙", 1, 50, null).getTotalElements()).isEqualTo(1);
+        assertThat(svc.list(F, "sku2", 1, 50, null).getTotalElements()).isEqualTo(1);
+        PageResponse<CustomerPriceOverviewRow> p2 = svc.list(F, null, 2, 2, null);
+        assertThat(p2.getContent()).hasSize(1);
+        assertThat(p2.getTotalElements()).isEqualTo(3);
+        assertThat(svc.list("OTHER-FACTORY", null, 1, 50, null).getTotalElements()).isZero();
+    }
+}

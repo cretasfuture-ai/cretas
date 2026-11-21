@@ -4,11 +4,17 @@ import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.inventory.CreatePriceListRequest;
+import com.cretas.aims.dto.inventory.UpdatePriceListRequest;
 import com.cretas.aims.entity.inventory.PriceList;
 import com.cretas.aims.entity.inventory.PriceListItem;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
+import com.cretas.aims.repository.ProductTypeRepository;
+import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.inventory.PriceListItemRepository;
 import com.cretas.aims.repository.inventory.PriceListRepository;
+import com.cretas.aims.security.PriceScope;
+import com.cretas.aims.security.PriceSensitive;
 import com.cretas.aims.service.MobileService;
 import com.cretas.aims.utils.TokenUtils;
 import io.swagger.v3.oas.annotations.Operation;
@@ -19,6 +25,8 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -42,6 +50,8 @@ public class PriceListController {
     private final PriceListRepository priceListRepository;
     private final PriceListItemRepository priceListItemRepository;
     private final MobileService mobileService;
+    private final RawMaterialTypeRepository rawMaterialTypes;
+    private final ProductTypeRepository productTypes;
 
     // 🔴 2026-08-22: 加 procurement:read_write。这一页挂在**采购管理**组下、
     //   管的就是**采购价目表**(F006 现存那条 price_type=PURCHASE_PRICE),
@@ -202,8 +212,129 @@ public class PriceListController {
         return ApiResponse.success("价格表删除成功", null);
     }
 
+    @RequirePermission({"sales:read_write", "finance:read_write", "procurement:read_write"})
+    @PutMapping("/{priceListId}")
+    @Operation(summary = "更新价格表表头(名称/生效期/备注)")
+    public ApiResponse<PriceList> updatePriceList(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String priceListId,
+            @Valid @RequestBody UpdatePriceListRequest request) {
+        PriceList priceList = requireEditablePriceList(factoryId, priceListId);
+        if (request.getEffectiveTo() != null && request.getEffectiveTo().isBefore(request.getEffectiveFrom())) {
+            throw new BusinessException(400, "失效日期不能早于生效日期");
+        }
+        priceList.setName(request.getName());
+        priceList.setEffectiveFrom(request.getEffectiveFrom());
+        priceList.setEffectiveTo(request.getEffectiveTo());
+        priceList.setRemark(request.getRemark());
+        priceList = priceListRepository.save(priceList);
+        log.info("更新价格表: priceListId={}", priceListId);
+        return ApiResponse.success("价格表更新成功", priceList);
+    }
+
+    @RequirePermission({"sales:read_write", "finance:read_write", "procurement:read_write"})
+    @PatchMapping("/{priceListId}/active")
+    @Operation(summary = "启用/停用价格表")
+    public ApiResponse<PriceList> setActive(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String priceListId,
+            @RequestBody Map<String, Boolean> body) {
+        Boolean active = body == null ? null : body.get("active");
+        if (active == null) {
+            throw new BusinessException(400, "active 不能为空");
+        }
+        PriceList priceList = requireEditablePriceList(factoryId, priceListId);
+        priceList.setIsActive(active);
+        priceList = priceListRepository.save(priceList);
+        log.info("价格表启停: priceListId={}, active={}", priceListId, active);
+        return ApiResponse.success(active ? "价格表已启用" : "价格表已停用", priceList);
+    }
+
+    @RequirePermission({"sales:read_write", "finance:read_write", "procurement:read_write"})
+    @PostMapping("/{priceListId}/items")
+    @Operation(summary = "新增价格条目")
+    public ApiResponse<PriceListItem> addItem(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String priceListId,
+            @Valid @RequestBody CreatePriceListRequest.PriceItemDTO dto) {
+        requireEditablePriceList(factoryId, priceListId);
+        PriceListItem item = new PriceListItem();
+        item.setPriceListId(priceListId);
+        applyItem(factoryId, item, dto);
+        return ApiResponse.success("价格条目已新增", priceListItemRepository.save(item));
+    }
+
+    @RequirePermission({"sales:read_write", "finance:read_write", "procurement:read_write"})
+    @PutMapping("/{priceListId}/items/{itemId}")
+    @Operation(summary = "修改价格条目")
+    public ApiResponse<PriceListItem> updateItem(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String priceListId,
+            @PathVariable Long itemId,
+            @Valid @RequestBody CreatePriceListRequest.PriceItemDTO dto) {
+        requireEditablePriceList(factoryId, priceListId);
+        PriceListItem item = requireItem(factoryId, priceListId, itemId);
+        applyItem(factoryId, item, dto);
+        return ApiResponse.success("价格条目已更新", priceListItemRepository.save(item));
+    }
+
+    @RequirePermission({"sales:read_write", "finance:read_write", "procurement:read_write"})
+    @DeleteMapping("/{priceListId}/items/{itemId}")
+    @Operation(summary = "删除价格条目")
+    public ApiResponse<Void> deleteItem(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String priceListId,
+            @PathVariable Long itemId) {
+        requireFactoryPriceList(factoryId, priceListId);
+        priceListItemRepository.delete(requireItem(factoryId, priceListId, itemId));
+        return ApiResponse.success("价格条目已删除", null);
+    }
+
+    private PriceListItem requireItem(String factoryId, String priceListId, Long itemId) {
+        return priceListItemRepository.findByIdAndPriceListIdAndPriceList_FactoryId(itemId, priceListId, factoryId)
+                .orElseThrow(() -> new ResourceNotFoundException("价格条目不存在"));
+    }
+
+    private PriceList requireEditablePriceList(String factoryId, String priceListId) {
+        PriceList list = requireFactoryPriceList(factoryId, priceListId);
+        if ("PURCHASE_PRICE".equals(list.getPriceType())
+                && RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes attributes) {
+            attributes.getRequest().setAttribute(PriceScope.REQUEST_ATTRIBUTE, PriceSensitive.PURCHASE);
+        }
+        return list;
+    }
+
+    private void applyItem(String factoryId, PriceListItem item, CreatePriceListRequest.PriceItemDTO dto) {
+        if (dto.getRemark() != null && dto.getRemark().length() > 500) {
+            throw new BusinessException(400, "条目备注长度不能超过500个字符");
+        }
+        if (dto.getMaterialTypeId() != null
+                && rawMaterialTypes.findByIdAndFactoryId(dto.getMaterialTypeId(), factoryId).isEmpty()) {
+            throw new ResourceNotFoundException("原料不存在");
+        }
+        if (dto.getProductTypeId() != null && !productTypes.existsByIdAndFactoryId(dto.getProductTypeId(), factoryId)) {
+            throw new ResourceNotFoundException("产品不存在");
+        }
+        if (dto.getStandardPrice().signum() < 0
+                || (dto.getMinPrice() != null && dto.getMinPrice().signum() < 0)
+                || (dto.getMaxPrice() != null && dto.getMaxPrice().signum() < 0)) {
+            throw new BusinessException(400, "价格不能为负数");
+        }
+        if (dto.getMinPrice() != null && dto.getMaxPrice() != null && dto.getMinPrice().compareTo(dto.getMaxPrice()) > 0) {
+            throw new BusinessException(400, "最低限价不能高于最高限价");
+        }
+        item.setMaterialTypeId(dto.getMaterialTypeId());
+        item.setProductTypeId(dto.getProductTypeId());
+        item.setItemName(dto.getItemName());
+        item.setUnit(dto.getUnit());
+        item.setStandardPrice(dto.getStandardPrice());
+        item.setMinPrice(dto.getMinPrice());
+        item.setMaxPrice(dto.getMaxPrice());
+        item.setRemark(dto.getRemark());
+    }
+
     private PriceList requireFactoryPriceList(String factoryId, String priceListId) {
-        return priceListRepository.findById(priceListId)
+        return priceListRepository.findByIdAndFactoryId(priceListId, factoryId)
                 .filter(priceList -> factoryId.equals(priceList.getFactoryId()))
                 .orElseThrow(() -> new ResourceNotFoundException("价格表不存在"));
     }
