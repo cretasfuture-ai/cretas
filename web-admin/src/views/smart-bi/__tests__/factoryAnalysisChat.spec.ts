@@ -102,6 +102,24 @@ async function mountChat() {
 }
 
 describe('FactoryAnalysisChat mounted workflow', () => {
+  it('shows the scope guidance and keeps a verified empty snapshot answer in the conversation', async () => {
+    const question = '11 月产品 C P2026100002 的每日成品入库量怎样？';
+    const answer = '11 月产品 C P2026100002 在黑湖快照里没有成品入库/出料记录。';
+    h.post.mockResolvedValue(response({
+      answer, question, selectedIds: [], recommendations: [], facts: [],
+      limitations: [], followUpQuestions: [],
+    }));
+    const page = await mountChat();
+    expect(page!.text()).toContain('可以按日期、产品、工序或计量单位提问。');
+    expect(page!.text()).not.toContain('AI 只从');
+    await page!.get('[data-testid="factory-analysis-input"]').setValue(question);
+    await page!.get('form.composer').trigger('submit');
+    await flushPromises();
+    expect(page!.get('[data-testid="factory-analysis-answer"]').text()).toBe(answer);
+    expect(page!.find('[data-testid="rendered-factory-chart"]').exists()).toBe(false);
+    expect(page!.text()).not.toContain('AI 规划不可用');
+  });
+
   it('keeps the explicitly selected three reports in first questions and original detail refresh scopes', async () => {
     h.route.query = { source: 'upload', upload_id: '101', inspection_upload_id: '102', cost_upload_id: '103' };
     h.uploads.mockResolvedValue({ success: true, data: [101, 102, 103].map((id, index) => ({ id, fileName: '验收.xlsx', sheetName: ['生产', '质检', '成本'][index] })) });
@@ -158,6 +176,8 @@ describe('FactoryAnalysisChat mounted workflow', () => {
     expect(page!.find('[data-testid="factory-analysis-answer"]').text()).toContain('已根据授权数据完成分析');
     expect(page!.find('[data-testid="factory-analysis-turn-scope"]').text()).toContain('工厂F006 · 业务系统 · 全部历史 · 全厂范围');
     expect(page!.findAll('[data-testid="rendered-factory-chart"]')).toHaveLength(1);
+    expect(page!.get('.answer-chart__heading').text()).toContain('折线 · kg');
+    expect(page!.get('.answer-chart__heading').text()).not.toContain('line');
     expect(page!.find('[data-testid="factory-analysis-facts"]').text()).toContain('12 kg');
   });
 

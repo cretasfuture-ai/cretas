@@ -25,6 +25,7 @@ from typing import Any, Mapping, Optional, Sequence
 
 from fastapi import HTTPException
 
+from .blacklake_ask import UNIT_COST_LIMIT as _BLACKLAKE_UNIT_COST_GAP
 from .planner_catalog import catalog_limit, rule_selection, shortlist
 
 logger = logging.getLogger(__name__)
@@ -40,7 +41,6 @@ PLANNER_DEADLINE_SECONDS = 20.0
 BACKGROUND_PLANNER_DEADLINE_SECONDS = 60.0
 _PLAN_CACHE: OrderedDict[tuple[str, str], tuple[float, tuple[str, ...], dict[str, str]]] = OrderedDict()
 _planner_monotonic = time.monotonic
-_BLACKLAKE_UNIT_COST_GAP = "黑湖数据缺少制造成本，无法计算单位成本"
 _cache_monotonic = time.monotonic
 
 
