@@ -709,7 +709,8 @@ onBeforeUnmount(() => { requestVersion.value += 1; clearChartReadiness(); });
           <div v-if="turn.id === activeTurnId && turn.recommendations?.length" class="answer-charts">
             <div v-for="item in turn.recommendations" :key="item.id" class="answer-chart" :data-testid="`factory-chart-card-${item.id}`">
               <div class="answer-chart__heading"><strong>{{ item.title }}</strong><span>{{ catalogChartTypeLabel(item.chart.chartType) }} · {{ item.unit }}</span></div>
-              <FactoryChartCanvas :option="item.chart.echartsOption" @ready="markChartReady(turn, item)" @click="openDetails(item, $event, turn)" />
+              <FactoryChartCanvas :option="item.chart.echartsOption" full-category-labels
+                @ready="markChartReady(turn, item)" @click="openDetails(item, $event, turn)" />
               <el-button link type="primary" @click="openDetails(item, undefined, turn)">查看原始明细</el-button>
               <p v-if="item.detailStatus" class="detail-status">{{ item.detailStatus.message }}</p>
             </div>
@@ -759,7 +760,7 @@ onBeforeUnmount(() => { requestVersion.value += 1; clearChartReadiness(); });
 .limitations ul, .turn :deep(.el-alert ul) { margin:5px 0 0; padding-left:18px; }
 .answer-tools { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin:12px 0; color:var(--el-text-color-secondary); font-size:12px; }
 .answer-charts { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-top:10px; }
-.answer-chart { padding:10px; border:1px solid var(--el-border-color-lighter); border-radius:8px; }
+.answer-chart { min-width:0; padding:10px; border:1px solid var(--el-border-color-lighter); border-radius:8px; }
 .answer-chart__heading { display:flex; justify-content:space-between; gap:8px; margin-bottom:6px; }.answer-chart__heading span { color:var(--el-text-color-secondary); font-size:12px; }
 .followups { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
 .catalog-header { display:flex; align-items:center; flex-wrap:wrap; gap:10px; }.catalog-header span { color:var(--el-text-color-secondary); font-size:12px; }.catalog-header .el-button { margin-left:auto; }

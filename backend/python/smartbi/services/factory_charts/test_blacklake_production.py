@@ -1,6 +1,6 @@
 """Exercise Blacklake report quantities through the factory catalogue and ask routes."""
 from datetime import date, datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 import json
 import os
 from pathlib import Path
@@ -115,7 +115,7 @@ async def test_blacklake_rule_plan_reaches_factory_analysis_response(blacklake_a
         assert first["id"] == data["selectedIds"][0]
         assert first["analysis"]["familyId"] == "blacklake-production.finished.good"
         assert data["facts"][0]["value"] == "16" and data["facts"][0]["unit"] == "KG"
-        assert "2026-11-18 12.5 KG；2026-11-19 3.5 KG" in data["answer"]
+        assert "2026-11-18 12.50 KG；2026-11-19 3.50 KG" in data["answer"]
     else:
         assert data["recommendations"] == data["facts"] == []
         if "单位成本" in opening:
@@ -289,6 +289,7 @@ async def test_blacklake_question_answers_at_http_entry(blacklake_app, monkeypat
         _report("2026-11-13", "other", "其他产品", "成品入库", "包", 5, 0),
         _report("2026-11-15", "other", "其他产品", "成品入库", "袋", 4, 0),
         _report("2026-11-15", "other", "其他产品", "出料", "箱", 3, 0),
+        _report("2026-11-17", "A", "甲", "成品入库", "KG", 7150.387, 0),
         _report("2026-11-16", "other", "其他产品", "砍排修油", "KG", 81649.247, 1864.5),
         _report("2026-11-16", "other", "其他产品", "砍排修油", "盒", 14867.902, 604.5),
         _report("2026-11-16", "other", "其他产品", "贴盒签", "盒", 0, 0),
@@ -301,16 +302,19 @@ async def test_blacklake_question_answers_at_http_entry(blacklake_app, monkeypat
     _check_answer(data, n)
     answer = data["answer"]
     checks = {
-        1: ("按 4 种单位", "2026-11-18 12.5 KG", "2026-11-15 4 袋"),
-        2: ("其他产品 · other 23 盒", "甲 · A 12.5 KG"),
-        4: ("按 5 种单位", "砍排修油 81,649.247 KG", "出料 3 箱"),
-        5: ("按 5 种单位", "砍排修油 1,864.5 KG", "砍排修油 604.5 盒"),
+        1: ("按 4 种单位", "2026-11-17 7,150.39 KG；2026-11-18 12.50 KG", "2026-11-15 4 袋"),
+        2: ("其他产品 · other 23 盒", "甲 · A 7,162.89 KG"),
+        4: ("按 5 种单位", "砍排修油 81,649.25 KG", "出料 3 箱"),
+        5: ("按 5 种单位", "砍排修油 1,864.50 KG", "砍排修油 605 盒"),
         6: ("按 5 种单位", "砍排修油 2.233%", "砍排修油 3.907%", "贴盒签 无可计算的报工量"),
-        7: ("2026-11-18 7.407%", "2026-11-19 12.5%", "2026-11-12 0%"),
+        7: ("2026-11-17 0%", "2026-11-18 7.407%", "2026-11-19 12.5%", "2026-11-12 0%"),
         9: ("2026-11-12、2026-11-13", "0 盒"),
     }
     for text in checks.get(n, ()):
         assert text in answer
+    if n == 1:
+        kg = next(chart for chart in data["recommendations"] if chart["unit"] == "KG")
+        assert {"label": "2026-11-17", "value": 7150.387} in kg["tableData"]
     if n in {4, 5, 6}:
         assert len(data["recommendations"]) == 5  # More than the generic planner's four-chart cap.
 
@@ -341,8 +345,8 @@ async def test_product_questions_use_current_rows_and_only_compare_matching_unit
     ])
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         daily, comparison, rate = [await _ask(client, _QUESTIONS[n - 1]) for n in (3, 8, 10)]
-    assert "2026-11-12 9 KG；2026-11-13 30 KG" in daily["answer"]
-    assert comparison["answer"] == "按 KG 计，出料良品量比成品入库多报 10 KG。"
+    assert "2026-11-12 9.00 KG；2026-11-13 30.00 KG" in daily["answer"]
+    assert comparison["answer"] == "按 KG 计，出料良品量比成品入库多报 10.00 KG。"
     assert rate["answer"] == "11 月成品入库总体不良率：按 KG 计为 2.5%。"
 
 
@@ -374,6 +378,12 @@ def _replay_snapshot(expected):
                       row["unit"], row["good_qty"], row["defect_qty"])
 
 
+def _expected_quantity(value, unit):
+    quantum = Decimal("0.01") if unit == "KG" else Decimal("1")
+    rounded = Decimal(str(value)).quantize(quantum, rounding=ROUND_HALF_UP)
+    return f"{rounded:,f} {unit}"
+
+
 @pytest.mark.asyncio
 @pytest.mark.skipif(not os.getenv("BLACKLAKE_ASK_EXPECTED"), reason="requires the local organizer snapshot export")
 async def test_offline_dispatch_snapshot_replay(blacklake_app):
@@ -393,22 +403,25 @@ async def test_offline_dispatch_snapshot_replay(blacklake_app):
                 assert f"共 {len(partitions)} 个分项" in answer
                 for row in partitions:
                     value = row[{4: "good", 5: "defect", 6: "defect_rate"}[n]]
-                    unit = "%" if n == 6 else f" {row['unit']}"
-                    reading = f"{value:,.3f}".rstrip("0").rstrip(".") + unit if value is not None else "无可计算的报工量"
+                    if n != 6:
+                        reading = _expected_quantity(value, row["unit"])
+                    elif value is None:
+                        reading = "无可计算的报工量"
+                    else:
+                        reading = f"{value:.3f}".rstrip("0").rstrip(".") + "%"
                     assert f"{row['process_name']} {reading}" in unit_lines[row["unit"]]
             if n in {1, 7}:
                 for row in expected["warehouse_daily_nov"]:
-                    qty = row["good"]
-                    reading = f"{qty:,.3f}".rstrip("0").rstrip(".") + f" {row['unit']}" if n == 1 else "0%"
+                    reading = _expected_quantity(row["good"], row["unit"]) if n == 1 else "0%"
                     assert f"{row['report_date']} {reading}" in unit_lines[row["unit"]]
             if n == 2:
                 for row in expected["warehouse_top_products_nov"]:
-                    qty = f"{row['good']:,.3f}".rstrip("0").rstrip(".")
-                    assert f"{row['product_name']} · {row['product_code']} {qty} {row['unit']}" in unit_lines[row["unit"]]
+                    reading = _expected_quantity(row["good"], row["unit"])
+                    assert f"{row['product_name']} · {row['product_code']} {reading}" in unit_lines[row["unit"]]
             if n == 9:
                 assert "2026-11-12" in answer and "0 盒" in answer
             results.append({"n": n, "after": answer, "pass": True})
-            if n in {3, 6}:
+            if n in {1, 2, 3, 4, 5, 6}:
                 preview[n] = data
     if path := os.getenv("BLACKLAKE_ASK_REPLAY"):
         Path(path).write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
