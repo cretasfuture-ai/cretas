@@ -1,4 +1,10 @@
 <script setup lang="ts">
+import { CompatDatePicker, CompatDialog, CompatForm, CompatFormItem, CompatOption, CompatSelect, CompatTable, CompatTableColumn } from '@/components/compat';
+import { useCompatMessages } from '@/components/compat/messages';
+const { ElMessage, ElMessageBox } = useCompatMessages();
+import { useT } from '@/i18n-pilot/useT';
+const { t } = useT();
+
 import { useAiEntryLink } from '@/composables/useAiEntryLink';
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue';
 import { SALES_PIN_MIN_WIDTH, salesColumnPinning } from './salesColumnPinning';
@@ -10,7 +16,7 @@ import { usePermissionStore } from '@/store/modules/permission';
 import { PAYABLE_STATUSES } from './salesOrderBillableStatus';
 import { useBusinessMode } from '@/composables/useBusinessMode';
 import { get, post, put, del } from '@/api/request';
-import { ElMessage, ElMessageBox } from 'element-plus';
+
 import { showSingletonNotification } from '@/utils/singletonNotification';
 import { Plus } from '@element-plus/icons-vue';
 import CsDateField from '@/components/cs/CsDateField.vue';
@@ -154,22 +160,22 @@ const {
 } = useBusinessTableColumns({
   storageKey: 'cretas:sales-orders:visible-columns:v2',
   columns: () => [
-    { key: 'processingMode', label: '加工方式' },
-    { key: 'materialSupply', label: '物料供应' },
-    { key: 'salesperson', label: '业务员' },
-    { key: 'orderDate', label: '下单日期' },
+    { key: 'processingMode', label: t('sales.orders_list.label_c0c2e0296560') },
+    { key: 'materialSupply', label: t('sales.orders_list.label_f2ae9e6b4870') },
+    { key: 'salesperson', label: t('sales.orders_list.label_5403222964c4') },
+    { key: 'orderDate', label: t('sales.orders_list.label_c0fe7b93ff48') },
     ...(canViewPrice.value
       ? [
-          { key: 'totalAmount', label: '总金额' },
-          { key: 'shippingFee', label: '运费' },
-          { key: 'discountAmount', label: '折扣' },
-          { key: 'commissionPreview', label: '提成（预估）' },
-          { key: 'commissionRate', label: '提成率' },
+          { key: 'totalAmount', label: t('sales.orders_list.label_89ba45487097') },
+          { key: 'shippingFee', label: t('sales.orders_list.label_03b328540b0c') },
+          { key: 'discountAmount', label: t('sales.orders_list.label_ec11d9abcf5a') },
+          { key: 'commissionPreview', label: t('sales.orders_list.label_43781b5b1816') },
+          { key: 'commissionRate', label: t('sales.orders_list.label_2597bfa1614b') },
         ]
       : []),
-    { key: 'invoiceStatus', label: '开票状态' },
-    { key: 'productSummary', label: '产品' },
-    { key: 'attachments', label: '附件' },
+    { key: 'invoiceStatus', label: t('sales.orders_list.label_568d56759cba') },
+    { key: 'productSummary', label: t('sales.orders_list.label_aea82737cc01') },
+    { key: 'attachments', label: t('sales.orders_list.label_c7225dbf105e') },
   ],
   defaults: SALES_DEFAULT_COLUMNS,
   max: 6,
@@ -224,16 +230,16 @@ function rowActionsFor(row: TableRow) {
   const secondaryActions: RowAction[] = [];
 
   if (status === 'DRAFT') {
-    secondaryActions.push({ id: 'edit', icon: '✎', label: '编辑订单', aiHint: '修改这张销售订单' });
+    secondaryActions.push({ id: 'edit', icon: '✎', label: t('sales.orders_list.label_549bc603de67'), aiHint: '修改这张销售订单' });
   }
   if (['DRAFT', 'CONFIRMED'].includes(status) || (status === 'FINANCE_APPROVED' && canCancelApproved.value)) {
     secondaryActions.push({
-      id: 'cancel', icon: '×', label: '取消订单', danger: true,
+      id: 'cancel', icon: '×', label: t('sales.orders_list.label_0428aab4b444'), danger: true,
       requiresConfirm: true, aiHint: '取消这张销售订单',
     });
   }
   if (PAYABLE_STATUSES.includes(status)) {
-    secondaryActions.push({ id: 'quick-payment', icon: '¥', label: '登记收款', priceRelated: true });
+    secondaryActions.push({ id: 'quick-payment', icon: '¥', label: t('sales.orders_list.label_8a5cfc88d629'), priceRelated: true });
   }
 
   const primaryId = salesOrderPrimaryActionOf(row);
@@ -279,11 +285,11 @@ const returnDialogItems = computed(() => {
 });
 function openReturnDialog(row: TableRow): void {
   if (!Array.isArray(row.items) || row.items.length === 0) {
-    ElMessage.warning('订单无明细, 无法发起退货. 请打开订单详情确认.');
+    ElMessage.warning(t('sales.orders_list.message_fdf9af86031e'));
     return;
   }
   if (!row.customerId) {
-    ElMessage.warning('该订单缺少客户信息, 无法发起退货.');
+    ElMessage.warning(t('sales.orders_list.message_3c540c377cf0'));
     return;
   }
   returnDialogRow.value = row;
@@ -342,8 +348,8 @@ async function handleCopyOrder(row: TableRow): Promise<void> {
   try {
     await ElMessageBox.confirm(
       `确认复制销售单 ${orderNumber} 为新草稿？复制内容包含客户、品项和价格，不复制审批/发货/收款状态。`,
-      '复制销售单',
-      { confirmButtonText: '复制', cancelButtonText: '取消', type: 'info' }
+      t('sales.orders_list.message_94d759c83ef4'),
+      { confirmButtonText: t('sales.orders_list.confirmbuttontext_63d90d977348'), cancelButtonText: t('sales.orders_list.cancelbuttontext_2cd0f3be8738'), type: 'info' }
     );
   } catch {
     return; // 用户取消
@@ -362,8 +368,8 @@ async function handleDeleteOrder(row: TableRow): Promise<void> {
   try {
     await ElMessageBox.confirm(
       `确认删除草稿销售单 ${orderNumber}？此操作不可恢复。`,
-      '删除草稿',
-      { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' }
+      t('sales.orders_list.message_1dfe58237bbf'),
+      { confirmButtonText: t('sales.orders_list.confirmbuttontext_2f9daa828907'), cancelButtonText: t('sales.orders_list.cancelbuttontext_2cd0f3be8738'), type: 'warning' }
     );
   } catch {
     return; // 用户取消
@@ -686,7 +692,7 @@ async function loadSuppliedMaterialOptions() {
         : [];
   } catch {
     suppliedMaterialOptions.value = [];
-    ElMessage.error('客供物料分类加载失败，请刷新后重试');
+    ElMessage.error(t('sales.orders_list.message_daa47b5030d0'));
   }
 }
 
@@ -785,8 +791,8 @@ async function loadWarehouses() {
   } catch { warehouseList.value = []; }
 }
 const LEGACY_WAREHOUSE_OPTIONS = [
-  { label: '总仓 (WH-LOG)', value: 'WH-LOG' },
-  { label: '线边仓 (WH-WKS)', value: 'WH-WKS' },
+  { label: t('sales.orders_list.label_e6d4fe7765f6'), value: 'WH-LOG' },
+  { label: t('sales.orders_list.label_b152432ec5be'), value: 'WH-WKS' },
 ];
 const warehouseSelectOptions = computed(() => {
   if (!warehouseList.value.length) return LEGACY_WAREHOUSE_OPTIONS;
@@ -946,35 +952,35 @@ const lifecycleItems = computed<{ label: string; value: SalesOrderLifecycle }[]>
   lifecycleTabs.map((tab) => ({ label: `${tab.label}（${lifecycleTabCount(tab.key)}）`, value: tab.key })),
 );
 const SHIPMENT_FILTER_ITEMS: { label: string; value: SalesOrderShipmentState }[] = [
-  { label: '全部出库状态', value: 'all' },
-  { label: '未出库', value: 'UNSHIPPED' },
-  { label: '部分出库', value: 'PARTIAL' },
-  { label: '已出库', value: 'SHIPPED' },
+  { label: t('sales.orders_list.label_117c2289a030'), value: 'all' },
+  { label: t('sales.orders_list.label_4fb381a37768'), value: 'UNSHIPPED' },
+  { label: t('sales.orders_list.label_1d53c5ee4419'), value: 'PARTIAL' },
+  { label: t('sales.orders_list.label_64467b42acf7'), value: 'SHIPPED' },
 ];
 const PAYMENT_FILTER_ITEMS: { label: string; value: SalesOrderPaymentState }[] = [
-  { label: '全部收款状态', value: 'all' },
-  { label: '未收款', value: 'UNPAID' },
-  { label: '部分收款', value: 'PARTIAL' },
-  { label: '已收款', value: 'PAID' },
+  { label: t('sales.orders_list.label_59120819b760'), value: 'all' },
+  { label: t('sales.orders_list.label_a787653501cb'), value: 'UNPAID' },
+  { label: t('sales.orders_list.label_31751632667a'), value: 'PARTIAL' },
+  { label: t('sales.orders_list.label_47bdb46b0bb1'), value: 'PAID' },
 ];
 const PAGE_SIZE_ITEMS: { label: string; value: number }[] = [10, 20, 50].map((n) => ({ label: `${n} 条/页`, value: n }));
 const DELIVERY_METHOD_ITEMS = [
-  { label: '物流配送', value: 'LOGISTICS' },
-  { label: '自送', value: 'SELF_DELIVERY' },
-  { label: '客户自提', value: 'SELF_PICKUP' },
+  { label: t('sales.orders_list.label_a9f48dcc47d2'), value: 'LOGISTICS' },
+  { label: t('sales.orders_list.label_06a9874bf767'), value: 'SELF_DELIVERY' },
+  { label: t('sales.orders_list.label_c7dc8c393179'), value: 'SELF_PICKUP' },
 ];
 const PAYMENT_METHOD_ITEMS: SelectItem[] = [
-  { label: '银行转账', value: 'BANK_TRANSFER' },
-  { label: '现金', value: 'CASH' },
-  { label: '支票', value: 'CHECK' },
+  { label: t('sales.orders_list.label_597b930d5c89'), value: 'BANK_TRANSFER' },
+  { label: t('sales.orders_list.label_118f18e68405'), value: 'CASH' },
+  { label: t('sales.orders_list.label_5bc99e270d61'), value: 'CHECK' },
 ];
 
 // 原 el-table 表头筛选 → 工具栏下拉: 只筛当前已加载的这一页, 不改分页总数 (与旧行为一致)。
 const columnFilters = ref({ processingMode: 'all', materialSupplyMode: 'all', invoiceStatus: 'all', status: 'all' });
-const processingModeFilterItems: SelectItem[] = [{ label: '全部加工方式', value: 'all' }, ...processingModeFilters.map((f) => ({ label: f.text, value: f.value }))];
-const materialSupplyFilterItems: SelectItem[] = [{ label: '全部物料供应', value: 'all' }, ...materialSupplyModeFilters.map((f) => ({ label: f.text, value: f.value }))];
-const invoiceStatusFilterItems: SelectItem[] = [{ label: '全部开票状态', value: 'all' }, ...invoiceStatusFilters.map((f) => ({ label: f.text, value: f.value }))];
-const orderStatusFilterItems: SelectItem[] = [{ label: '全部订单状态', value: 'all' }, ...salesStatusFilters.map((f) => ({ label: f.text, value: f.value }))];
+const processingModeFilterItems: SelectItem[] = [{ label: t('sales.orders_list.label_bc42eb1fd3c0'), value: 'all' }, ...processingModeFilters.map((f) => ({ label: f.text, value: f.value }))];
+const materialSupplyFilterItems: SelectItem[] = [{ label: t('sales.orders_list.label_4a26d97a1862'), value: 'all' }, ...materialSupplyModeFilters.map((f) => ({ label: f.text, value: f.value }))];
+const invoiceStatusFilterItems: SelectItem[] = [{ label: t('sales.orders_list.label_656549bf3ef5'), value: 'all' }, ...invoiceStatusFilters.map((f) => ({ label: f.text, value: f.value }))];
+const orderStatusFilterItems: SelectItem[] = [{ label: t('sales.orders_list.label_a283d9166be0'), value: 'all' }, ...salesStatusFilters.map((f) => ({ label: f.text, value: f.value }))];
 const visibleRows = computed<TableRow[]>(() => {
   const f = columnFilters.value;
   return displayedTableData.value.filter((row) =>
@@ -1309,7 +1315,7 @@ async function loadPackagingSpecs(item: OrderItem, productId: string) {
       || item.productTypeId !== productId) return;
     item.packagingSpecs = [];
     item.packagingLoadError = true;
-    ElMessage({ message: '包装规格加载失败，请重试后再创建订单', type: 'error', duration: 0, showClose: true });
+    ElMessage({ message: t('sales.orders_list.message_f9e0d0e38f26'), type: 'error', duration: 0, showClose: true });
   }
 }
 
@@ -1589,33 +1595,33 @@ function toOrderItemPayload(items: OrderItem[]): Array<Record<string, unknown>> 
 }
 
 async function handleCreate() {
-  if (!form.value.customerId) return ElMessage.warning('请选择客户');
+  if (!form.value.customerId) return ElMessage.warning(t('sales.orders_list.message_4dbaecc55e14'));
   const supplyContractError = supplyContractValidationError(form.value);
   if (supplyContractError) return ElMessage.warning(supplyContractError);
   const suppliedMaterialError = suppliedMaterialsValidationError(form.value, form.value.suppliedMaterials);
   if (suppliedMaterialError) return ElMessage.warning(suppliedMaterialError);
   // T130 Feature A — 只校验/提交"已选产品"的行, 忽略末尾自动空行 (不再因尾部空行报"请为所有明细选择产品").
   const selectedItems = getSubmittableItems();
-  if (selectedItems.length === 0) return ElMessage.warning('请至少添加一个订单明细');
+  if (selectedItems.length === 0) return ElMessage.warning(t('sales.orders_list.message_b957291ca008'));
   // 数量校验: 已选产品行不允许0或负数 (有产品但数量空 → 报错, 不静默丢弃)
-  if (selectedItems.some((i) => !i.quantity || Number(i.quantity) <= 0)) return ElMessage.warning('产品数量必须大于0');
+  if (selectedItems.some((i) => !i.quantity || Number(i.quantity) <= 0)) return ElMessage.warning(t('sales.orders_list.message_7bc48fdbfe81'));
   // 单位校验
-  if (selectedItems.some((i) => !i.unit)) return ElMessage.warning('请填写所有明细的单位');
+  if (selectedItems.some((i) => !i.unit)) return ElMessage.warning(t('sales.orders_list.message_166b103cb567'));
   if (selectedItems.some((i) => i.packagingLoadError)) {
-    return ElMessage.warning('包装规格加载失败，请重试后再创建订单');
+    return ElMessage.warning(t('sales.orders_list.message_f9e0d0e38f26'));
   }
   const incompatiblePackaging = selectedItems.find((i) => packagingSelectionError(i));
   if (incompatiblePackaging) {
     return ElMessage.warning(packagingSelectionError(incompatiblePackaging) || '包装规格与下单单位不一致');
   }
   if (selectedItems.some((i) => requiresPackagingSelection(i) && !i.packagingSpecId)) {
-    return ElMessage.warning('存在多种装箱规格，请为对应产品选择本次使用的箱规');
+    return ElMessage.warning(t('sales.orders_list.message_5c4e0324e352'));
   }
   // 销售单价校验
-  if (selectedItems.some((i) => i.unitPrice == null || Number(i.unitPrice) <= 0)) return ElMessage.warning('销售单价必须大于 0');
+  if (selectedItems.some((i) => i.unitPrice == null || Number(i.unitPrice) <= 0)) return ElMessage.warning(t('sales.orders_list.message_d16ac340d4d3'));
   // SKU 重复校验 (只看已选行)
   const productIds = selectedItems.map((i) => i.productTypeId).filter(Boolean);
-  if (new Set(productIds).size !== productIds.length) return ElMessage.warning('同一订单不能添加重复的产品');
+  if (new Set(productIds).size !== productIds.length) return ElMessage.warning(t('sales.orders_list.message_58edb4b12141'));
   try {
     // 提交体只带已选行, 末尾空行永不发后端.
     const res = await post(`/${factoryId.value}/sales/orders`, {
@@ -1623,7 +1629,7 @@ async function handleCreate() {
       suppliedMaterials: suppliedMaterialsPayload(),
       items: toOrderItemPayload(selectedItems),
     });
-    if (res.success) { ElMessage.success('创建成功'); dialogVisible.value = false; loadData(); }
+    if (res.success) { ElMessage.success(t('sales.orders_list.message_1ab62884f4ee')); dialogVisible.value = false; loadData(); }
     else { ElMessage.error(res.message || '创建失败'); }
   } catch (e: unknown) {
     // 2026-05-22 hotfix (Steve P0): 409 dedup / 乐观锁 was being silently swallowed.
@@ -1654,18 +1660,18 @@ async function handleAction(orderId: string, action: string) {
     return;
   }
   const map: Record<string, { label: string; url: string }> = {
-    confirm: { label: '确认', url: `/${factoryId.value}/sales/orders/${orderId}/confirm` },
-    cancel: { label: '取消', url: `/${factoryId.value}/sales/orders/${orderId}/cancel` },
+    confirm: { label: t('sales.orders_list.label_36f33adaf094'), url: `/${factoryId.value}/sales/orders/${orderId}/confirm` },
+    cancel: { label: t('sales.orders_list.label_2cd0f3be8738'), url: `/${factoryId.value}/sales/orders/${orderId}/cancel` },
     // R23-Pre3: FINANCE_REJECTED → resubmit for finance review (backend already
     // supports CONFIRMED || FINANCE_REJECTED → PENDING_FINANCE_REVIEW transition).
-    resubmit: { label: '重新提交', url: `/${factoryId.value}/sales/orders/${orderId}/submit-for-review` },
+    resubmit: { label: t('sales.orders_list.label_24130c41807c'), url: `/${factoryId.value}/sales/orders/${orderId}/submit-for-review` },
     // T131 Part 1 — CONFIRMED/FINANCE_REJECTED 单次提交 OA 审批（与 resubmit 同端点，文案不同）。
-    'submit-for-review': { label: '提交 OA 审批', url: `/${factoryId.value}/sales/orders/${orderId}/submit-for-review` },
+    'submit-for-review': { label: t('sales.orders_list.label_34be9e568933'), url: `/${factoryId.value}/sales/orders/${orderId}/submit-for-review` },
   };
   const a = map[action];
   if (!a) return;
   try {
-    await ElMessageBox.confirm(`确认${a.label}此${label('salesOrder')}？`, '操作确认');
+    await ElMessageBox.confirm(`确认${a.label}此${label('salesOrder')}？`, t('sales.orders_list.message_eb3355268f3b'));
     const res = await post(a.url);
     if (res.success) { ElMessage.success(`${a.label}成功`); loadData(); }
     else { ElMessage.error(res.message || `${a.label}失败`); }
@@ -1776,9 +1782,9 @@ async function handleSubmitForReviewRow(row: TableRow): Promise<void> {
     ? `确认提交销售订单 ${orderNumber} 并进入 OA 路由？\n\n${approvalDecisionHint(row)}`
     : `确认将销售订单 ${orderNumber} 重新提交 OA 审批？\n\n${approvalDecisionHint(row)}`;
   try {
-    await ElMessageBox.confirm(confirmMsg, '提交审批判定', {
-      confirmButtonText: '提交并判定',
-      cancelButtonText: '取消',
+    await ElMessageBox.confirm(confirmMsg, t('sales.orders_list.message_207dc7a06c50'), {
+      confirmButtonText: t('sales.orders_list.confirmbuttontext_ae83498038a9'),
+      cancelButtonText: t('sales.orders_list.cancelbuttontext_2cd0f3be8738'),
       type: 'info',
     });
   } catch {
@@ -1824,7 +1830,7 @@ async function confirmBatch(actionLabel: string, rows: TableRow[]): Promise<bool
   try {
     await ElMessageBox.confirm(`确认对 ${preview}${tail} 执行「${actionLabel}」？${approvalPreview}`, `批量${actionLabel}`, {
       confirmButtonText: shouldShowApprovalPreview ? '提交并判定' : '执行',
-      cancelButtonText: '取消',
+      cancelButtonText: t('sales.orders_list.cancelbuttontext_2cd0f3be8738'),
       type: 'warning',
     });
     return true;
@@ -1837,7 +1843,7 @@ async function confirmBatch(actionLabel: string, rows: TableRow[]): Promise<bool
 async function handleBatchSubmitForReview(): Promise<void> {
   const eligible = selectedRows.value.filter((r) => BATCH_SUBMIT_STATUSES.includes(String(r.status || '')));
   if (eligible.length === 0) {
-    ElMessage.warning('选中订单中没有可提交审批判定的 (需为草稿/已确认/已驳回)');
+    ElMessage.warning(t('sales.orders_list.message_3fecd052fffd'));
     return;
   }
   if (!(await confirmBatch('提交审批判定', eligible))) return;
@@ -1879,13 +1885,13 @@ async function handleBatchSubmitForReview(): Promise<void> {
       msg += '已确认订单可直接「提交 OA 审批」重试，无需重走确认。';
     }
     showSingletonNotification({
-      title: '批量提交 OA 审批结果',
+      title: t('sales.orders_list.title_60e304b796ea'),
       message: msg,
       type: failed > 0 ? 'warning' : 'success',
       duration: 0,
     });
     if (failedList.length > 0) {
-      void ElMessageBox.alert(failedList.join('\n'), '失败明细', { confirmButtonText: '知道了' });
+      void ElMessageBox.alert(failedList.join('\n'), t('sales.orders_list.message_217536155b3b'), { confirmButtonText: t('sales.orders_list.confirmbuttontext_de32e20193ad') });
     }
   } finally {
     await loadData();
@@ -1928,7 +1934,7 @@ async function runBatchSimple(
       duration: 0,
     });
     if (failedList.length > 0) {
-      void ElMessageBox.alert(failedList.join('\n'), '失败明细', { confirmButtonText: '知道了' });
+      void ElMessageBox.alert(failedList.join('\n'), t('sales.orders_list.message_217536155b3b'), { confirmButtonText: t('sales.orders_list.confirmbuttontext_de32e20193ad') });
     }
   } finally {
     await loadData();
@@ -1950,7 +1956,7 @@ async function handleBatchCancel(): Promise<void> {
     BATCH_CANCEL_STATUSES.includes(String(r.status || ''))
   );
   if (eligible.length === 0) {
-    ElMessage.warning('选中订单中没有可取消的');
+    ElMessage.warning(t('sales.orders_list.message_cc1bd8622040'));
     return;
   }
   openCancelDialog(eligible.map((r) => String(r.id)));
@@ -1984,11 +1990,11 @@ const resolvedCancelReason = computed<string>(() =>
 
 async function submitCancel(): Promise<void> {
   if (!cancelReasonCode.value) {
-    ElMessage.warning('请选择取消原因');
+    ElMessage.warning(t('sales.orders_list.message_59e5542fcb33'));
     return;
   }
   if (cancelReasonCode.value === '其他' && !cancelReasonOther.value.trim()) {
-    ElMessage.warning('请填写"其他"原因');
+    ElMessage.warning(t('sales.orders_list.message_63018e37873b'));
     return;
   }
   const ids = pendingCancelIds.value;
@@ -2014,7 +2020,7 @@ async function submitCancel(): Promise<void> {
       const success = results.filter((r) => r.status === 'fulfilled').length;
       const failed = results.length - success;
       showSingletonNotification({
-        title: '批量取消结果',
+        title: t('sales.orders_list.title_ba0edd4f8dea'),
         message: `成功 ${success} 条，失败 ${failed} 条。`,
         type: failed > 0 ? 'warning' : 'success',
         duration: failed > 0 ? 0 : 4500,
@@ -2039,7 +2045,7 @@ const createOptionsLoading = ref(false);
 
 async function handleEdit(row: TableRow) {
   const orderId = String(row.id || '');
-  if (!orderId) return ElMessage.error('订单身份缺失，无法编辑');
+  if (!orderId) return ElMessage.error(t('sales.orders_list.message_e9376400ac29'));
   const detailResponse = await get(`/${factoryId.value}/sales/orders/${orderId}`);
   if (!detailResponse.success || !detailResponse.data) {
     return ElMessage.error(detailResponse.message || '订单详情加载失败，未进入编辑');
@@ -2141,33 +2147,33 @@ async function handleSave() {
   if (deliveryDatePicker.value?.validate() === false) return;
   if (editingOrderId.value) {
     // Update existing order
-    if (!form.value.customerId) return ElMessage.warning('请选择客户');
+    if (!form.value.customerId) return ElMessage.warning(t('sales.orders_list.message_4dbaecc55e14'));
     const supplyContractError = supplyContractValidationError(form.value);
     if (supplyContractError) return ElMessage.warning(supplyContractError);
     const suppliedMaterialError = suppliedMaterialsValidationError(form.value, form.value.suppliedMaterials);
     if (suppliedMaterialError) return ElMessage.warning(suppliedMaterialError);
     // T130 Feature A — 编辑提交同样剔除末尾空行, 并对已选行做与创建一致的校验.
     const selectedItems = getSubmittableItems();
-    if (selectedItems.length === 0) return ElMessage.warning('请至少添加一个订单明细');
-    if (selectedItems.some((i) => !i.quantity || Number(i.quantity) <= 0)) return ElMessage.warning('产品数量必须大于0');
-    if (selectedItems.some((i) => !i.unit)) return ElMessage.warning('请填写所有明细的单位');
+    if (selectedItems.length === 0) return ElMessage.warning(t('sales.orders_list.message_b957291ca008'));
+    if (selectedItems.some((i) => !i.quantity || Number(i.quantity) <= 0)) return ElMessage.warning(t('sales.orders_list.message_7bc48fdbfe81'));
+    if (selectedItems.some((i) => !i.unit)) return ElMessage.warning(t('sales.orders_list.message_166b103cb567'));
     const incompatiblePackaging = selectedItems.find((i) => packagingSelectionError(i));
     if (incompatiblePackaging) {
       return ElMessage.warning(packagingSelectionError(incompatiblePackaging) || '包装规格与下单单位不一致');
     }
     if (selectedItems.some((i) => requiresPackagingSelection(i) && !i.packagingSpecId)) {
-      return ElMessage.warning('存在多种装箱规格，请为对应产品选择本次使用的箱规');
+      return ElMessage.warning(t('sales.orders_list.message_5c4e0324e352'));
     }
-    if (selectedItems.some((i) => i.unitPrice == null || Number(i.unitPrice) <= 0)) return ElMessage.warning('销售单价必须大于 0');
+    if (selectedItems.some((i) => i.unitPrice == null || Number(i.unitPrice) <= 0)) return ElMessage.warning(t('sales.orders_list.message_d16ac340d4d3'));
     const editProductIds = selectedItems.map((i) => i.productTypeId).filter(Boolean);
-    if (new Set(editProductIds).size !== editProductIds.length) return ElMessage.warning('同一订单不能添加重复的产品');
+    if (new Set(editProductIds).size !== editProductIds.length) return ElMessage.warning(t('sales.orders_list.message_58edb4b12141'));
     try {
       const res = await put(`/${factoryId.value}/sales/orders/${editingOrderId.value}`, {
         ...form.value,
         suppliedMaterials: suppliedMaterialsPayload(),
         items: toOrderItemPayload(selectedItems),
       });
-      if (res.success) { ElMessage.success('保存成功'); dialogVisible.value = false; editingOrderId.value = null; loadData(); }
+      if (res.success) { ElMessage.success(t('sales.orders_list.message_e05ddf992cc5')); dialogVisible.value = false; editingOrderId.value = null; loadData(); }
       else { ElMessage.error(res.message || '保存失败'); }
     } catch (err) {
       // R24 P2 follow-up: only optimistic-lock dialog when no actionHint (vanilla 409).
@@ -2177,9 +2183,9 @@ async function handleSave() {
       if (e?.status === 409 && !e.actionHint) {
         try {
           await ElMessageBox.confirm(
-            '此订单已被其他用户修改。点击"确定"将刷新列表并放弃当前编辑。',
-            '并发编辑冲突',
-            { type: 'warning', confirmButtonText: '刷新列表', cancelButtonText: '取消' }
+            t('sales.orders_list.message_f28b69a37c4c'),
+            t('sales.orders_list.message_f38a7d8a0c52'),
+            { type: 'warning', confirmButtonText: t('sales.orders_list.confirmbuttontext_e28be7098db1'), cancelButtonText: t('sales.orders_list.cancelbuttontext_2cd0f3be8738') }
           );
           dialogVisible.value = false; editingOrderId.value = null; loadData();
         } catch { /* user cancelled */ }
@@ -2336,7 +2342,7 @@ async function handleQuickDelivery(row: TableRow) {
   // 单价被遮/缺失时不带 unitPrice (见 deliveryPricePayload.ts), ⛔ 不发假 0。
   const items: TableRow[] = buildQuickDeliveryItems(row.items as TableRow[] | undefined);
   if (items.length === 0) {
-    return ElMessage.warning('订单缺少产品信息，无法快速出库');
+    return ElMessage.warning(t('sales.orders_list.message_2e0cc47717f9'));
   }
   deliveryForm.value = {
     salesOrderId: row.id,
@@ -2356,8 +2362,8 @@ async function handleQuickDelivery(row: TableRow) {
 }
 
 async function submitQuickDelivery() {
-  if (!deliveryForm.value.customerId) return ElMessage.warning('缺少客户信息');
-  if (!deliveryForm.value.deliveryDate) return ElMessage.warning('请选择发货日期');
+  if (!deliveryForm.value.customerId) return ElMessage.warning(t('sales.orders_list.message_f1c06070bceb'));
+  if (!deliveryForm.value.deliveryDate) return ElMessage.warning(t('sales.orders_list.message_c557dc1348d5'));
   try {
     // 母单创建接口 (CreateDeliveryRequest) 不认识 deliveryMethod/trackingNumber 之外的字段;
     // 显式列出要发的字段, 不要把整个 deliveryForm.value 原样丢过去 (避免 UI-only 字段漂进请求体)。
@@ -2370,7 +2376,7 @@ async function submitQuickDelivery() {
     });
     if (res.success) {
       // Issue #740: 文案改为"发货单已创建"明示后续等仓库 confirm
-      ElMessage.success('发货单已创建, 等待仓库确认实发数量');
+      ElMessage.success(t('sales.orders_list.message_df8fe95421bd'));
       // 缺陷40 (#492 follow-up, 硬约束 8): list 页与 detail.vue 共用同一个「全量自动建子单」
       // helper —— list 页没有显式的全量/分批单选, 用户没把任何一行数量改小 (isFullQuickDeliveryPlan)
       // 就视为一次性全量发货。信息不足 (选了物流配送却没填公司/运单号) 时不阻断母单已创建成功,
@@ -2402,7 +2408,7 @@ async function submitQuickDelivery() {
           }).catch(() => false)
           : false;
         if (!created) {
-          ElMessage.warning('母发货单已创建，但未能自动建立全量子发运单，请在发货记录中重试');
+          ElMessage.warning(t('sales.orders_list.message_afa12c25372c'));
         }
       }
       deliveryDialogVisible.value = false;
@@ -2437,11 +2443,11 @@ async function handleQuickPayment(row: TableRow) {
 }
 
 async function submitQuickPayment() {
-  if (!paymentForm.value.counterpartyId) return ElMessage.warning('缺少客户信息');
+  if (!paymentForm.value.counterpartyId) return ElMessage.warning(t('sales.orders_list.message_f1c06070bceb'));
   try {
     const res = await post(`/${factoryId.value}/finance/receivable/payment`, paymentForm.value);
     if (res.success) {
-      ElMessage.success('收款成功');
+      ElMessage.success(t('sales.orders_list.message_eb6b51eb2599'));
       paymentDialogVisible.value = false;
       loadData();
     } else {
@@ -2456,7 +2462,7 @@ async function submitQuickPayment() {
  */
 function handleMergePurchase() {
   if (selectedRows.value.length === 0) {
-    ElMessage.warning('请先勾选至少一张销售订单');
+    ElMessage.warning(t('sales.orders_list.message_3187ec2b3493'));
     return;
   }
   mergePurchaseSos.value = selectedRows.value.map((r) => ({
@@ -2474,15 +2480,15 @@ function handleMergePurchase() {
        when Silver empty (manufacturing tenants). -->
   <section v-show="goldSummary" class="cs-card gold-pos-summary">
     <header class="cs-card-head">
-      <span>POS 交易概览</span>
+      <span>{{ t('sales.orders_list.text_bfc0b7bd102d') }}</span>
       <UBadge color="success" variant="soft">Gold · finance_summary</UBadge>
       <span v-if="goldSummaryRangeLabel" class="gold-range">{{ goldSummaryRangeLabel }}</span>
     </header>
     <dl v-if="goldSummary" class="cs-card-body gold-stats">
-      <div><dt>总营收</dt><dd class="num">¥{{ Number(goldSummary.totalRevenue ?? 0).toFixed(2) }}</dd></div>
-      <div><dt>POS 账单数</dt><dd class="num">{{ goldSummary.billCount }}</dd></div>
-      <div><dt>客单价</dt><dd class="num">¥{{ Number(goldSummary.avgBillValue ?? 0).toFixed(2) }}</dd></div>
-      <div><dt>门店数</dt><dd class="num">{{ goldSummary.storeCount }}</dd></div>
+      <div><dt>{{ t('sales.orders_list.text_0cd72d69cc8b') }}</dt><dd class="num">¥{{ Number(goldSummary.totalRevenue ?? 0).toFixed(2) }}</dd></div>
+      <div><dt>{{ t('sales.orders_list.text_2684dcf311a3') }}</dt><dd class="num">{{ goldSummary.billCount }}</dd></div>
+      <div><dt>{{ t('sales.orders_list.text_9d5fa8f1509d') }}</dt><dd class="num">¥{{ Number(goldSummary.avgBillValue ?? 0).toFixed(2) }}</dd></div>
+      <div><dt>{{ t('sales.orders_list.text_4d507e3382e3') }}</dt><dd class="num">{{ goldSummary.storeCount }}</dd></div>
     </dl>
   </section>
 
@@ -2493,7 +2499,7 @@ function handleMergePurchase() {
     variant="subtle"
     icon="i-lucide-info"
     class="restaurant-alert"
-    title="餐饮门店的 POS 账单已在上方「POS 交易概览」汇总。销售订单 (B2B) 本页下方通常为空,如有企业订餐/团购/外送合同才需新建。"
+    :title="t('sales.orders_list.title_ed8123963b63')"
   />
 
   <CanvasAwareWrapper module-code="sales_order">
@@ -2502,7 +2508,7 @@ function handleMergePurchase() {
     <WorkflowBar
       :nodes="workflowStats?.nodes ?? []"
       :loading="workflowLoading"
-      title="销售工作流"
+      :title="t('sales.orders_list.title_7ff671bcbf3a')"
       :ai-trigger-enabled="true"
       @node-click="handleWorkflowNodeClick"
       @ai-trigger="aiEntryVisible = true"
@@ -2516,12 +2522,12 @@ function handleMergePurchase() {
     />
     <section class="cs-card page-card">
       <header class="cs-card-head">
-        <h2 class="page-title">{{ label('salesOrder') }}管理</h2>
-        <span class="data-count">共 {{ visibleOrderTotal }} 条记录</span>
+        <h2 class="page-title">{{ label('salesOrder') }}{{ t('sales.orders_list.text_bb6d995724f4') }}</h2>
+        <span class="data-count">{{ t('sales.orders_list.text_76e547a8fa54') }} {{ visibleOrderTotal }} {{ t('sales.orders_list.text_6016bf63b0ff') }}</span>
         <span class="head-spacer" />
-        <UButton v-if="canWrite" color="success" variant="soft" icon="i-lucide-message-circle" @click="aiEntryVisible = true">AI录入</UButton>
+        <UButton v-if="canWrite" color="success" variant="soft" icon="i-lucide-message-circle" @click="aiEntryVisible = true">{{ t('sales.orders_list.action_43f57b81b263') }}</UButton>
         <!-- Full-page create entry; legacy source contract: @click="openCreateDialog" remains available for compatibility. -->
-        <UButton v-if="canWrite" icon="i-lucide-plus" @click="router.push('/sales/orders/new')">新建{{ label('salesOrder') }}</UButton>
+        <UButton v-if="canWrite" icon="i-lucide-plus" @click="router.push('/sales/orders/new')">{{ t('sales.orders_list.action_50ef2f4cf6a4') }}{{ label('salesOrder') }}</UButton>
       </header>
 
       <div class="cs-card-body">
@@ -2530,36 +2536,36 @@ function handleMergePurchase() {
         <USelectMenu
           v-model="activeLifecycle"
           class="sales-lifecycle-select"
-          aria-label="订单状态"
+          :aria-label="t('sales.orders_list.aria_label_dd27be078659')"
           :items="lifecycleItems"
           value-key="value"
           :search-input="false"
           @update:model-value="handleLifecycleTabChange"
         />
-        <span class="count-scope-note" title="分页数字来自当前已加载的同一批订单，不会把出库和收款重复计入生命周期。">
-          <UIcon name="i-lucide-circle-help" /> 计数口径
+        <span class="count-scope-note" :title="t('sales.orders_list.title_657108e78245')">
+          <UIcon name="i-lucide-circle-help" /> {{ t('sales.orders_list.text_aeca2e2d5f6c') }}
         </span>
       </div>
 
       <div class="search-bar">
         <!-- Apr 20 Bug BR-07 fix: 加 keyword 搜索 (订单号/客户名) -->
-        <UInput v-model="searchKeyword" icon="i-lucide-search" placeholder="搜索 订单号/客户" class="w-60" data-testid="sales-order-keyword" @keyup.enter="loadData">
+        <UInput v-model="searchKeyword" icon="i-lucide-search" :placeholder="t('sales.orders_list.placeholder_35ab9e7c5284')" class="w-60" data-testid="sales-order-keyword" @keyup.enter="loadData">
           <template v-if="searchKeyword" #trailing>
-            <UButton color="neutral" variant="link" size="xs" icon="i-lucide-x" aria-label="清空" @click="searchKeyword = ''; loadData()" />
+            <UButton color="neutral" variant="link" size="xs" icon="i-lucide-x" :aria-label="t('sales.orders_list.aria_label_1ef3de06b32e')" @click="searchKeyword = ''; loadData()" />
           </template>
         </UInput>
-        <USelectMenu v-model="shipmentFilter" :items="SHIPMENT_FILTER_ITEMS" value-key="value" :search-input="false" aria-label="出库状态" class="w-36" @update:model-value="handleLifecycleTabChange" />
-        <USelectMenu v-model="paymentFilter" :items="PAYMENT_FILTER_ITEMS" value-key="value" :search-input="false" aria-label="收款状态" class="w-36" @update:model-value="handleLifecycleTabChange" />
+        <USelectMenu v-model="shipmentFilter" :items="SHIPMENT_FILTER_ITEMS" value-key="value" :search-input="false" :aria-label="t('sales.orders_list.aria_label_8773900415a5')" class="w-36" @update:model-value="handleLifecycleTabChange" />
+        <USelectMenu v-model="paymentFilter" :items="PAYMENT_FILTER_ITEMS" value-key="value" :search-input="false" :aria-label="t('sales.orders_list.aria_label_935b420fa94c')" class="w-36" @update:model-value="handleLifecycleTabChange" />
         <!-- 原表头筛选 (加工方式/物料供应/开票状态/订单状态) 搬到这里: 仍只筛当前已加载这一页, 不影响分页总数 -->
-        <USelectMenu v-if="salesColumnVisible('processingMode')" v-model="columnFilters.processingMode" :items="processingModeFilterItems" value-key="value" :search-input="false" aria-label="加工方式" class="w-36" data-testid="sales-filter-processing-mode" />
-        <USelectMenu v-if="salesColumnVisible('materialSupply')" v-model="columnFilters.materialSupplyMode" :items="materialSupplyFilterItems" value-key="value" :search-input="false" aria-label="物料供应" class="w-36" data-testid="sales-filter-material-supply" />
-        <USelectMenu v-if="salesColumnVisible('invoiceStatus')" v-model="columnFilters.invoiceStatus" :items="invoiceStatusFilterItems" value-key="value" :search-input="false" aria-label="开票状态" class="w-36" data-testid="sales-filter-invoice-status" />
-        <USelectMenu v-model="columnFilters.status" :items="orderStatusFilterItems" value-key="value" :search-input="false" aria-label="订单状态筛选" class="w-36" data-testid="sales-filter-status" />
-        <UButton icon="i-lucide-search" @click="loadData">搜索</UButton>
-        <UButton color="neutral" variant="outline" icon="i-lucide-rotate-ccw" @click="handleRefresh">重置</UButton>
+        <USelectMenu v-if="salesColumnVisible('processingMode')" v-model="columnFilters.processingMode" :items="processingModeFilterItems" value-key="value" :search-input="false" :aria-label="t('sales.orders_list.aria_label_c0c2e0296560')" class="w-36" data-testid="sales-filter-processing-mode" />
+        <USelectMenu v-if="salesColumnVisible('materialSupply')" v-model="columnFilters.materialSupplyMode" :items="materialSupplyFilterItems" value-key="value" :search-input="false" :aria-label="t('sales.orders_list.aria_label_f2ae9e6b4870')" class="w-36" data-testid="sales-filter-material-supply" />
+        <USelectMenu v-if="salesColumnVisible('invoiceStatus')" v-model="columnFilters.invoiceStatus" :items="invoiceStatusFilterItems" value-key="value" :search-input="false" :aria-label="t('sales.orders_list.aria_label_568d56759cba')" class="w-36" data-testid="sales-filter-invoice-status" />
+        <USelectMenu v-model="columnFilters.status" :items="orderStatusFilterItems" value-key="value" :search-input="false" :aria-label="t('sales.orders_list.aria_label_0e9d13c9ab8f')" class="w-36" data-testid="sales-filter-status" />
+        <UButton icon="i-lucide-search" @click="loadData">{{ t('sales.orders_list.action_44ce7ae909bb') }}</UButton>
+        <UButton color="neutral" variant="outline" icon="i-lucide-rotate-ccw" @click="handleRefresh">{{ t('sales.orders_list.action_cb5d682bac3d') }}</UButton>
         <UBadge v-if="statusFilter" color="neutral" variant="soft" class="status-filter-badge">
-          流程概览筛选：{{ statusMap[statusFilter]?.text || '未知状态' }}
-          <UButton color="neutral" variant="link" size="xs" icon="i-lucide-x" aria-label="清除流程概览筛选" @click="statusFilter = ''; loadData()" />
+          {{ t('sales.orders_list.text_5b23502e5684') }}{{ statusMap[statusFilter]?.text || t('sales.orders_list.text_ec0d9bdb00a4') }}
+          <UButton color="neutral" variant="link" size="xs" icon="i-lucide-x" :aria-label="t('sales.orders_list.aria_label_75e2f41719b1')" @click="statusFilter = ''; loadData()" />
         </UBadge>
         <UButton
           v-if="viewMode === 'table' && canWrite"
@@ -2567,7 +2573,7 @@ function handleMergePurchase() {
           :variant="salesBatchMode ? 'soft' : 'outline'"
           @click="toggleSalesBatchMode"
         >
-          {{ salesBatchMode ? '退出批量' : '批量操作' }}
+          {{ salesBatchMode ? t('sales.orders_list.text_571e8b9e66f2') : t('sales.orders_list.text_10c9416459ad') }}
         </UButton>
         <ListColumnSelector
           v-if="viewMode === 'table'"
@@ -2591,40 +2597,40 @@ function handleMergePurchase() {
       <div v-if="viewMode === 'table' && salesBatchMode" class="bulk-bar">
         <span class="bulk-bar-count">
           <template v-if="selectedRows.length > 0">
-            已选 <strong>{{ selectedRows.length }}</strong> 条
+            {{ t('sales.orders_list.text_7ecf1cde6486') }} <strong>{{ selectedRows.length }}</strong> {{ t('sales.orders_list.text_f004f1d84cf9') }}
           </template>
-          <template v-else>请勾选要批量处理的订单</template>
+          <template v-else>{{ t('sales.orders_list.text_5f708c18dd84') }}</template>
         </span>
         <UButton
           size="sm"
           :disabled="!hasBatchSubmittable || batchLoading"
           :loading="batchLoading"
           @click="handleBatchSubmitForReview"
-        >批量提交 OA 审批</UButton>
+        >{{ t('sales.orders_list.action_a32d6fede8f5') }}</UButton>
         <UButton
           size="sm" color="success"
           :disabled="!hasBatchConfirmable || batchLoading"
           :loading="batchLoading"
           @click="handleBatchConfirm"
-        >批量确认</UButton>
+        >{{ t('sales.orders_list.action_f809a4cd00b6') }}</UButton>
         <UButton
           size="sm" color="warning"
           :disabled="!hasBatchCancellable || batchLoading"
           :loading="batchLoading"
           @click="handleBatchCancel"
-        >批量取消</UButton>
+        >{{ t('sales.orders_list.action_f8f22d664183') }}</UButton>
         <UButton
           size="sm" color="error"
           :disabled="!hasBatchDeletable || batchLoading"
           :loading="batchLoading"
           @click="handleBatchDelete"
-        >批量删除</UButton>
+        >{{ t('sales.orders_list.action_ddae7a0fc554') }}</UButton>
         <!-- 转录行3650 — 多 SO 合并采购 (勾选多张 → 合并成一张采购单, 跨 SO 按物料聚合). -->
         <UButton
           size="sm" variant="outline"
           :disabled="batchLoading"
           @click="handleMergePurchase"
-        >合并采购 ({{ selectedRows.length }})</UButton>
+        >{{ t('sales.orders_list.action_61f6ad2d62e2') }}{{ selectedRows.length }})</UButton>
       </div>
 
       <GridView
@@ -2659,7 +2665,7 @@ function handleMergePurchase() {
         class="cs-table wide-table business-list-table"
         data-testid="sales-order-table"
       >
-        <template #empty>暂无数据</template>
+        <template #empty>{{ t('sales.orders_list.text_497c85690c4c') }}</template>
         <!-- 可排序列的表头: 点击切换 升序 → 降序 → 取消 -->
         <template v-for="key in SORTABLE_COLUMN_IDS" :key="key" #[`${key}-header`]="{ column }">
           <button type="button" class="sort-th" @click="column.toggleSorting(column.getIsSorted() === 'asc')">
@@ -2669,47 +2675,47 @@ function handleMergePurchase() {
         </template>
         <!-- T131 Part 3 — 多选列 (selectable 判据 = canSelectRow: 写权限 + 至少能进入某个批量操作的状态). -->
         <template #select-header>
-          <UCheckbox :model-value="allSelectableChecked" :disabled="!selectableRows.length" aria-label="全选当前页可选订单" @update:model-value="toggleAllSelectable(!!$event)" />
+          <UCheckbox :model-value="allSelectableChecked" :disabled="!selectableRows.length" :aria-label="t('sales.orders_list.aria_label_e0df56954a71')" @update:model-value="toggleAllSelectable(!!$event)" />
         </template>
         <template #select-cell="{ row }">
           <UCheckbox :model-value="isRowChecked(row.original)" :disabled="!canSelectRow(row.original)" :aria-label="`选择订单 ${row.original.orderNumber || ''}`" @update:model-value="toggleRowChecked(row.original, !!$event)" />
         </template>
         <template #expand-cell="{ row }">
-          <UButton color="neutral" variant="ghost" size="xs" :icon="row.getIsExpanded() ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" :aria-label="row.getIsExpanded() ? '收起订单明细' : '展开订单明细'" data-testid="sales-order-expand" @click="row.toggleExpanded()" />
+          <UButton color="neutral" variant="ghost" size="xs" :icon="row.getIsExpanded() ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" :aria-label="row.getIsExpanded() ? t('sales.orders_list.aria_label_6f482e798651') : t('sales.orders_list.aria_label_c431df9d83c3')" data-testid="sales-order-expand" @click="row.toggleExpanded()" />
         </template>
         <template #expanded="{ row }">
           <div class="order-trace-panel">
             <section class="trace-section trace-items">
-              <div class="trace-section-title">订单明细</div>
+              <div class="trace-section-title">{{ t('sales.orders_list.text_e98c02fb0c07') }}</div>
               <template v-if="orderItemsFor(row.original).length">
                 <div v-for="item in orderItemsFor(row.original).slice(0, 4)" :key="String(item.id || item.productTypeId)" class="trace-item-line">
-                  <span>{{ item.productName || item.productTypeName || item.productTypeId || '未命名产品' }}</span>
+                  <span>{{ item.productName || item.productTypeName || item.productTypeId || t('sales.orders_list.text_ea97d46ea6fd') }}</span>
                   <strong>{{ Number(item.quantity || 0) }} {{ displayUnit(item.unit || '') }}</strong>
                 </div>
-                <div v-if="orderItemsFor(row.original).length > 4" class="trace-more">另有 {{ orderItemsFor(row.original).length - 4 }} 项，进入详情查看</div>
+                <div v-if="orderItemsFor(row.original).length > 4" class="trace-more">{{ t('sales.orders_list.text_268ec6902063') }} {{ orderItemsFor(row.original).length - 4 }} {{ t('sales.orders_list.text_9a16c3fe1876') }}</div>
               </template>
-              <UEmpty v-else icon="i-lucide-package" description="列表未返回明细，可进入订单详情查看" />
+              <UEmpty v-else icon="i-lucide-package" :description="t('sales.orders_list.description_6aa96214c650')" />
             </section>
             <section class="trace-section">
-              <div class="trace-section-title">出库履约</div>
+              <div class="trace-section-title">{{ t('sales.orders_list.text_2a2000215e42') }}</div>
               <UBadge :color="badgeColor(shipmentStateTagType(row.original))" variant="soft">{{ shipmentStateLabel(row.original) }}</UBadge>
               <div v-if="canViewPrice" class="trace-metric">
-                已出库 {{ formatAmount(row.original.actualShippedAmount || 0) }} / 订单 {{ formatAmount(row.original.totalAmount || 0) }}
+                {{ t('sales.orders_list.text_64467b42acf7') }} {{ formatAmount(row.original.actualShippedAmount || 0) }} {{ t('sales.orders_list.text_81cb52014253') }} {{ formatAmount(row.original.totalAmount || 0) }}
               </div>
-              <div class="trace-hint">销售创建发货单，仓储确认实发并扣减库存。</div>
+              <div class="trace-hint">{{ t('sales.orders_list.text_e5d5407ea687') }}</div>
             </section>
             <section class="trace-section">
-              <div class="trace-section-title">收款进度</div>
+              <div class="trace-section-title">{{ t('sales.orders_list.text_d9c69c6a7b87') }}</div>
               <UBadge :color="badgeColor(paymentStateTagType(row.original))" variant="soft">{{ paymentStateLabel(row.original) }}</UBadge>
               <div v-if="canViewPrice" class="trace-metric">
-                已收 {{ formatAmount(row.original.paidAmount || 0) }} / 应收 {{ formatAmount(row.original.totalAmount || 0) }}
+                {{ t('sales.orders_list.text_d1c248c2c30e') }} {{ formatAmount(row.original.paidAmount || 0) }} {{ t('sales.orders_list.text_f14fa3abaf92') }} {{ formatAmount(row.original.totalAmount || 0) }}
               </div>
-              <div class="trace-hint">收款状态独立追踪，不改变订单生命周期分类。</div>
+              <div class="trace-hint">{{ t('sales.orders_list.text_2036ea0ef0c7') }}</div>
             </section>
           </div>
         </template>
         <template #customer-cell="{ row }"><span class="cell-ellipsis" :title="customerNameOf(row.original)">{{ customerNameOf(row.original) }}</span></template>
-        <template #productSummary-header><span>产品</span></template>
+        <template #productSummary-header><span>{{ t('sales.orders_list.text_aea82737cc01') }}</span></template>
         <template #productSummary-cell="{ row }">
           <!-- 完整明细放 title (原生提示, 不用 UTooltip: 它未包 UApp 会整页渲染失败) -->
           <span class="product-summary-trigger" tabindex="0" role="note" :aria-label="`${row.original.orderNumber || ''}的完整产品明细`" :title="productDetailTitle(row.original)">{{ productSummaryFor(row.original) }}</span>
@@ -2742,7 +2748,7 @@ function handleMergePurchase() {
             :color="row.original.invoiceStatus === 'FULLY_INVOICED' ? 'success' : row.original.invoiceStatus === 'PARTIAL_INVOICED' ? 'warning' : 'neutral'"
             variant="soft"
           >
-            {{ row.original.invoiceStatus === 'FULLY_INVOICED' ? '已开票' : row.original.invoiceStatus === 'PARTIAL_INVOICED' ? '部分开票' : '未开票' }}
+            {{ row.original.invoiceStatus === 'FULLY_INVOICED' ? t('sales.orders_list.text_6dcfa5deeb48') : row.original.invoiceStatus === 'PARTIAL_INVOICED' ? t('sales.orders_list.text_5e328cbfaf08') : t('sales.orders_list.text_199ce577ba63') }}
           </UBadge>
           <span v-else class="price-masked">—</span>
         </template>
@@ -2756,7 +2762,7 @@ function handleMergePurchase() {
           <span v-else class="price-masked">—</span>
         </template>
         <template #status-cell="{ row }">
-          <UBadge :color="orderStatusColor(row.original.status)" variant="soft">{{ statusMap[row.original.status]?.text || '未知状态' }}</UBadge>
+          <UBadge :color="orderStatusColor(row.original.status)" variant="soft">{{ statusMap[row.original.status]?.text || t('sales.orders_list.text_ec0d9bdb00a4') }}</UBadge>
         </template>
         <template #shipment-cell="{ row }">
           <UBadge :color="badgeColor(shipmentStateTagType(row.original))" variant="soft">{{ shipmentStateLabel(row.original) }}</UBadge>
@@ -2770,7 +2776,7 @@ function handleMergePurchase() {
           EntityType=SALES_ORDER 由 useLinkChipCounts composable 锁定.
         -->
         <template #attachments-header>
-          <span class="attach-th" title="文件: 通用文档 (PDF / Word / Excel / OTHER)；图片: 照片 / 视频；合同: 销售合同 / 法律文件。点详情查看附件清单">附件 <UIcon name="i-lucide-circle-help" class="attach-hint" /></span>
+          <span class="attach-th" :title="t('sales.orders_list.title_b0746b3ad290')">{{ t('sales.orders_list.text_c7225dbf105e') }} <UIcon name="i-lucide-circle-help" class="attach-hint" /></span>
         </template>
         <template #attachments-cell="{ row }"><LinkChipCell :counts="linkCountsFor(row.original.id)" /></template>
         <template #actions-cell="{ row }">
@@ -2781,7 +2787,7 @@ function handleMergePurchase() {
               :disabled="submittingIds.has(row.original.id)"
               @click="handlePrimaryAction(row.original)"
             >{{ primaryActionLabel(row.original) }}</UButton>
-            <UButton variant="link" size="xs" @click="goDetail(row.original.id)">详情</UButton>
+            <UButton variant="link" size="xs" @click="goDetail(row.original.id)">{{ t('sales.orders_list.action_979a332955c8') }}</UButton>
             <RowActionMenu
               :actions="rowActionsFor(row.original)"
               button-label="更多"
@@ -2800,8 +2806,8 @@ function handleMergePurchase() {
       />
 
       <div class="pagination-wrapper">
-        <span class="pager-total">共 {{ visibleOrderTotal }} 条</span>
-        <USelectMenu v-model="pagination.size" :items="PAGE_SIZE_ITEMS" value-key="value" :search-input="false" aria-label="每页条数" class="w-28" @update:model-value="handleSizeChange" />
+        <span class="pager-total">{{ t('sales.orders_list.text_76e547a8fa54') }} {{ visibleOrderTotal }} {{ t('sales.orders_list.text_f004f1d84cf9') }}</span>
+        <USelectMenu v-model="pagination.size" :items="PAGE_SIZE_ITEMS" value-key="value" :search-input="false" :aria-label="t('sales.orders_list.aria_label_940a168911ad')" class="w-28" @update:model-value="handleSizeChange" />
         <UPagination :page="pagination.page" :items-per-page="pagination.size" :total="visibleOrderTotal" show-edges :sibling-count="1" @update:page="handlePageChange" />
       </div>
       </div>
@@ -2811,33 +2817,33 @@ function handleMergePurchase() {
       Issue #740: 销售创建发货单对话框 (不扣库存, 等仓库 confirm).
       标题改为"创建发货单" + 提示文案让销售员明白此步只是创建任务单.
     -->
-    <UModal v-model:open="deliveryDialogVisible" title="创建发货单" description="销售创建发货任务单，不扣库存" :ui="{ content: 'max-w-[560px]', description: 'sr-only', footer: 'justify-end' }">
+    <UModal v-model:open="deliveryDialogVisible" :title="t('sales.orders_list.title_ab39e50b7364')" :description="t('sales.orders_list.description_07ef6fb5fe3b')" :ui="{ content: 'max-w-[560px]', description: 'sr-only', footer: 'justify-end' }">
       <template #body>
         <div class="form-stack">
           <UAlert
             color="info"
             variant="subtle"
             icon="i-lucide-info"
-            title="销售创建发货单 (任务单, 不扣库存), 仓库收到后填写实际发货数量并扣库存. 若本次覆盖订单剩余全部数量, 会自动建立一张全量子发运单 (缺陷40)."
+            :title="t('sales.orders_list.title_277d2656a27f')"
           />
-          <UFormField label="发货日期" required>
+          <UFormField :label="t('sales.orders_list.label_2b0ce35a1d5b')" required>
             <CsDateField v-model="deliveryForm.deliveryDate" />
           </UFormField>
-          <UFormField label="发货地址">
-            <UInput v-model="deliveryForm.deliveryAddress" placeholder="收货地址 (默认取销售订单)" class="w-full" />
+          <UFormField :label="t('sales.orders_list.label_a68ea437cfad')">
+            <UInput v-model="deliveryForm.deliveryAddress" :placeholder="t('sales.orders_list.placeholder_7b66611ac9e7')" class="w-full" />
           </UFormField>
-          <UFormField label="配送方式">
+          <UFormField :label="t('sales.orders_list.label_956d2286e3cd')">
             <URadioGroup v-model="deliveryForm.deliveryMethod" orientation="horizontal" :items="DELIVERY_METHOD_ITEMS" />
           </UFormField>
-          <UFormField v-if="deliveryForm.deliveryMethod === 'LOGISTICS'" label="物流公司">
-            <UInput v-model="deliveryForm.logisticsCompany" placeholder="如：顺丰冷链 (可选, 仓库 confirm 时也可补填)" class="w-full" />
+          <UFormField v-if="deliveryForm.deliveryMethod === 'LOGISTICS'" :label="t('sales.orders_list.label_0173a4bad64a')">
+            <UInput v-model="deliveryForm.logisticsCompany" :placeholder="t('sales.orders_list.placeholder_24d412c087c8')" class="w-full" />
           </UFormField>
-          <UFormField v-if="deliveryForm.deliveryMethod === 'LOGISTICS'" label="运单号">
-            <UInput v-model="deliveryForm.trackingNumber" placeholder="填写物流运单号 (留空时仍能建母单, 但不会自动建全量子发运单)" class="w-full" />
+          <UFormField v-if="deliveryForm.deliveryMethod === 'LOGISTICS'" :label="t('sales.orders_list.label_606ec929a533')">
+            <UInput v-model="deliveryForm.trackingNumber" :placeholder="t('sales.orders_list.placeholder_6a844a251739')" class="w-full" />
           </UFormField>
-          <UFormField label="计划发货数量">
+          <UFormField :label="t('sales.orders_list.label_cc5a105be7a6')">
             <div v-for="(item, idx) in deliveryForm.items" :key="idx" class="delivery-qty-row">
-              {{ Number(idx) + 1 }}. {{ item.productName || '产品' }} —
+              {{ Number(idx) + 1 }}. {{ item.productName || t('sales.orders_list.text_aea82737cc01') }} —
               <!--
                 🔴 2026-08-13 真机 E2E 抓到的死结: 这里原本是 :min="1"。
                 数字输入框会把模型值【向上钳到 min】—— 0.5kg 的订单行一打开
@@ -2858,74 +2864,74 @@ function handleMergePurchase() {
                 class="w-36" :step-snapping="false" /> {{ displayUnit(item.unit) }}
             </div>
           </UFormField>
-          <UFormField label="备注">
+          <UFormField :label="t('sales.orders_list.label_daede9881787')">
             <UTextarea v-model="deliveryForm.remark" :rows="2" class="w-full" />
           </UFormField>
         </div>
       </template>
       <template #footer>
-        <UButton color="neutral" variant="outline" @click="deliveryDialogVisible = false">取消</UButton>
-        <UButton @click="submitQuickDelivery">创建发货单</UButton>
+        <UButton color="neutral" variant="outline" @click="deliveryDialogVisible = false">{{ t('sales.orders_list.action_2cd0f3be8738') }}</UButton>
+        <UButton @click="submitQuickDelivery">{{ t('sales.orders_list.action_ab39e50b7364') }}</UButton>
       </template>
     </UModal>
 
     <!-- 收款对话框 -->
-    <UModal v-model:open="paymentDialogVisible" title="快速收款" description="登记一笔收款" :ui="{ content: 'max-w-[440px]', description: 'sr-only', footer: 'justify-end' }">
+    <UModal v-model:open="paymentDialogVisible" :title="t('sales.orders_list.title_0d45119d49d0')" :description="t('sales.orders_list.description_af55d89984ca')" :ui="{ content: 'max-w-[440px]', description: 'sr-only', footer: 'justify-end' }">
       <template #body>
         <div class="form-stack">
-          <UFormField label="收款金额">
+          <UFormField :label="t('sales.orders_list.label_0d75a1dcf8ca')">
             <UInputNumber v-model="paymentForm.amount" :min="0" :format-options="{ minimumFractionDigits: 2, maximumFractionDigits: 2 }" :increment="false" :decrement="false" class="w-full" :step-snapping="false" />
           </UFormField>
-          <UFormField label="收款方式">
+          <UFormField :label="t('sales.orders_list.label_ac7e13f62645')">
             <USelectMenu v-model="paymentForm.paymentMethod" :items="PAYMENT_METHOD_ITEMS" value-key="value" :search-input="false" class="w-full" />
           </UFormField>
-          <UFormField label="备注">
+          <UFormField :label="t('sales.orders_list.label_daede9881787')">
             <UTextarea v-model="paymentForm.notes" :rows="2" class="w-full" />
           </UFormField>
         </div>
       </template>
       <template #footer>
-        <UButton color="neutral" variant="outline" @click="paymentDialogVisible = false">取消</UButton>
-        <UButton @click="submitQuickPayment">确认收款</UButton>
+        <UButton color="neutral" variant="outline" @click="paymentDialogVisible = false">{{ t('sales.orders_list.action_2cd0f3be8738') }}</UButton>
+        <UButton @click="submitQuickPayment">{{ t('sales.orders_list.action_479742b9a30c') }}</UButton>
       </template>
     </UModal>
 
     <!-- 新建/编辑订单: 高密度行内编辑明细 + Element 专有子组件 (CanvasDynamicFields / OrderDeliveryDatePicker / el-upload), 整弹层保留 Element, 不与 Nuxt UI 混用 -->
-    <el-dialog v-model="dialogVisible" :title="editingOrderId ? `编辑${label('salesOrder')}` : `新建${label('salesOrder')}`" width="80%" destroy-on-close>
+    <CompatDialog v-model="dialogVisible" :title="editingOrderId ? `编辑${label('salesOrder')}` : `新建${label('salesOrder')}`" width="80%" destroy-on-close>
       <el-alert
         v-if="createOptionsLoading && !editingOrderId"
         class="create-options-loading"
         type="info"
         :closable="false"
         show-icon
-        title="表单已打开，正在加载客户、产品和仓库选项…"
+        :title="t('sales.orders_list.title_f107f034f5dd')"
       />
-      <el-form :model="form" label-width="100px">
-        <el-form-item :label="label('customer')" required>
+      <CompatForm :model="form" label-width="100px">
+        <CompatFormItem :label="label('customer')" required>
           <!-- T130 Feature B — 选客户后智能预填业务员 (归属业务员 → 当前用户). -->
-          <el-select v-model="form.customerId" placeholder="请选择" filterable style="width: 100%" @change="onCustomerSelect">
-            <el-option v-for="c in customers" :key="c.id" :label="c.name" :value="c.id" />
-          </el-select>
-        </el-form-item>
+          <CompatSelect v-model="form.customerId" :placeholder="t('sales.orders_list.placeholder_da590a8fe3ce')" filterable style="width: 100%" @change="onCustomerSelect">
+            <CompatOption v-for="c in customers" :key="c.id" :label="c.name" :value="c.id" />
+          </CompatSelect>
+        </CompatFormItem>
         <el-row :gutter="16">
           <el-col :span="12">
-            <el-form-item label="加工方式" required>
-              <el-select v-model="form.processingMode" placeholder="请选择加工方式" style="width: 100%" @change="onProcessingModeChange">
-                <el-option v-for="option in SALES_PROCESSING_MODE_OPTIONS" :key="option.value" :label="option.label" :value="option.value" />
-              </el-select>
-            </el-form-item>
+            <CompatFormItem :label="t('sales.orders_list.label_c0c2e0296560')" required>
+              <CompatSelect v-model="form.processingMode" :placeholder="t('sales.orders_list.placeholder_6b0e4a8de571')" style="width: 100%" @change="onProcessingModeChange">
+                <CompatOption v-for="option in SALES_PROCESSING_MODE_OPTIONS" :key="option.value" :label="option.label" :value="option.value" />
+              </CompatSelect>
+            </CompatFormItem>
           </el-col>
           <el-col :span="12">
-            <el-form-item label="物料供应方式" required>
-              <el-select v-model="form.materialSupplyMode" placeholder="请选择物料供应方式" style="width: 100%" @change="onMaterialSupplyModeChange">
-                <el-option
+            <CompatFormItem :label="t('sales.orders_list.label_ef3b104bcc1e')" required>
+              <CompatSelect v-model="form.materialSupplyMode" :placeholder="t('sales.orders_list.placeholder_5d12450b3356')" style="width: 100%" @change="onMaterialSupplyModeChange">
+                <CompatOption
                   v-for="option in MATERIAL_SUPPLY_MODE_OPTIONS"
                   :key="option.value"
                   :label="option.label"
                   :value="option.value"
                   :disabled="option.value === 'CUSTOMER_SUPPLIED' && form.processingMode === 'STANDARD_SALE'"
                 />
-              </el-select>
+              </CompatSelect>
               <!--
                 ⛔ 2026-08-06 客户反馈: 「有个原料入库的问题, 客户自带料他入库能搞得快捷入库吗?」
                 功能其实一直都在(选「客户自带物料」→ 下方出现明细块 → 审批后进
@@ -2933,15 +2939,14 @@ function handleMergePurchase() {
                 `CMR-%` 0 行, 从没被用过。所以这里要把去处说出来, 而不是只说约束。
               -->
               <div class="form-help-text">
-                客户自带物料仅适用于代加工。选它之后，下方会出现「客户自带物料」明细块登记预计送来的料；
-                订单审批后进入<strong>仓储 → 原料入库与批次 → 待收货/待入库任务</strong>收货，不必走采购流程。
+                {{ t('sales.orders_list.text_ec55a276690d') }}<strong>{{ t('sales.orders_list.text_a754abede482') }}</strong>{{ t('sales.orders_list.text_c680af678191') }}
               </div>
-            </el-form-item>
+            </CompatFormItem>
           </el-col>
         </el-row>
-        <el-form-item
+        <CompatFormItem
           v-if="form.processingMode === 'TOLL_PROCESSING' && form.materialSupplyMode === 'CUSTOMER_SUPPLIED'"
-          label="客户库存来源"
+          :label="t('sales.orders_list.label_54f518572524')"
           required
         >
           <el-radio-group
@@ -2964,12 +2969,12 @@ function handleMergePurchase() {
             type="info"
             :closable="false"
             show-icon
-            title="财审后系统只预留该客户名下、尚未绑定其他销售订单的成品；不足时不会占用公司库存。"
+            :title="t('sales.orders_list.title_70f8972d6ebc')"
           />
-        </el-form-item>
-        <el-form-item
+        </CompatFormItem>
+        <CompatFormItem
           v-if="form.processingMode === 'TOLL_PROCESSING' && form.materialSupplyMode === 'CUSTOMER_SUPPLIED' && form.customerStockFulfillmentMode === 'ORDER_DRIVEN'"
-          label="客户自带物料"
+          :label="t('sales.orders_list.label_ec4b35d0c541')"
           required
         >
           <div class="supplied-material-editor">
@@ -2977,73 +2982,73 @@ function handleMergePurchase() {
               type="warning"
               :closable="false"
               show-icon
-              title="这里只登记客户预计送来的物料；确认订单后由仓储统一页面执行实收，不会在销售侧直接增加库存。"
+              :title="t('sales.orders_list.title_fb4bb49164d5')"
             />
-            <el-table :data="form.suppliedMaterials" border empty-text="请添加客户自带物料需求">
-              <el-table-column label="物料分类 / 名称 *" min-width="250">
+            <CompatTable :data="form.suppliedMaterials" border :empty-text="t('sales.orders_list.empty_text_4b6addab8591')">
+              <CompatTableColumn :label="t('sales.orders_list.label_18f8bc0df92d')" min-width="250">
                 <template #default="{ row }">
-                  <el-select v-model="row.materialTypeId" filterable placeholder="选择客供物料" style="width: 100%" @change="onSuppliedMaterialSelect(row)">
-                    <el-option
+                  <CompatSelect v-model="row.materialTypeId" filterable :placeholder="t('sales.orders_list.placeholder_3d4966c35d94')" style="width: 100%" @change="onSuppliedMaterialSelect(row)">
+                    <CompatOption
                       v-for="material in suppliedMaterialOptions"
                       :key="material.id"
                       :label="`${material.name} (${material.code || '无编码'}) · ${suppliedMaterialCategory(material)}`"
                       :value="String(material.id)"
                     />
-                  </el-select>
+                  </CompatSelect>
                 </template>
-              </el-table-column>
-              <el-table-column label="预计数量 *" width="180">
+              </CompatTableColumn>
+              <CompatTableColumn :label="t('sales.orders_list.label_b14f8e201e77')" width="180">
                 <template #default="{ row }">
                   <el-input-number v-model="row.expectedQuantity" :min="0.0001" :precision="4" :controls="false" style="width: 112px" />
-                  <span class="supplied-unit">{{ displayUnit(row.unit) || '未配置' }}</span>
+                  <span class="supplied-unit">{{ displayUnit(row.unit) || t('sales.orders_list.text_80a57e03f071') }}</span>
                 </template>
-              </el-table-column>
-              <el-table-column label="预计到货 *" width="220">
-                <template #default="{ row }"><el-date-picker v-model="row.expectedArrivalAt" type="datetime" value-format="YYYY-MM-DDTHH:mm:ss" format="YYYY-MM-DD HH:mm" style="width: 190px" /></template>
-              </el-table-column>
-              <el-table-column label="目标仓库 *" min-width="190">
+              </CompatTableColumn>
+              <CompatTableColumn :label="t('sales.orders_list.label_7be3a09d9bba')" width="220">
+                <template #default="{ row }"><CompatDatePicker v-model="row.expectedArrivalAt" type="datetime" value-format="YYYY-MM-DDTHH:mm:ss" format="YYYY-MM-DD HH:mm" style="width: 190px" /></template>
+              </CompatTableColumn>
+              <CompatTableColumn :label="t('sales.orders_list.label_f36e3e4c50b6')" min-width="190">
                 <template #default="{ row }">
-                  <el-select v-model="row.targetWarehouseId" filterable placeholder="选择仓库" style="width: 100%">
-                    <el-option v-for="warehouse in warehouseList" :key="warehouse.id" :label="`${warehouse.name} (${warehouse.code})`" :value="String(warehouse.id)" />
-                  </el-select>
+                  <CompatSelect v-model="row.targetWarehouseId" filterable :placeholder="t('sales.orders_list.placeholder_1c25426ef7e8')" style="width: 100%">
+                    <CompatOption v-for="warehouse in warehouseList" :key="warehouse.id" :label="`${warehouse.name} (${warehouse.code})`" :value="String(warehouse.id)" />
+                  </CompatSelect>
                 </template>
-              </el-table-column>
-              <el-table-column label="操作" width="80">
-                <template #default="{ $index }"><el-button type="danger" link @click="removeSuppliedMaterial($index)">移除</el-button></template>
-              </el-table-column>
-            </el-table>
-            <el-button :icon="Plus" class="supplied-material-add" @click="addSuppliedMaterial">添加客户自带物料</el-button>
+              </CompatTableColumn>
+              <CompatTableColumn :label="t('sales.orders_list.label_ed31fbb483ee')" width="80">
+                <template #default="{ $index }"><UButton color="error" variant="link" @click="removeSuppliedMaterial($index)">{{ t('sales.orders_list.action_6135d4159e89') }}</UButton></template>
+              </CompatTableColumn>
+            </CompatTable>
+            <el-button :icon="Plus" class="supplied-material-add" @click="addSuppliedMaterial">{{ t('sales.orders_list.action_2f4ee699973a') }}</el-button>
           </div>
-        </el-form-item>
-        <el-form-item label="交货日期"><OrderDeliveryDatePicker ref="deliveryDatePicker" v-model="form.requiredDeliveryDate" /></el-form-item>
-        <el-form-item label="交货地址"><el-input v-model="form.deliveryAddress" /></el-form-item>
-        <el-form-item label="业务员">
+        </CompatFormItem>
+        <CompatFormItem :label="t('sales.orders_list.label_baa39a8e6fc5')"><OrderDeliveryDatePicker ref="deliveryDatePicker" v-model="form.requiredDeliveryDate" /></CompatFormItem>
+        <CompatFormItem :label="t('sales.orders_list.label_f74ba5c54ab2')"><UInput v-model="form.deliveryAddress" /></CompatFormItem>
+        <CompatFormItem :label="t('sales.orders_list.label_5403222964c4')">
           <!-- T130 Feature B — 用户手动改业务员 → touched=true, 不再被客户切换自动覆盖. -->
-          <el-select v-model="form.salesperson" placeholder="请选择业务员" filterable allow-create style="width: 100%" @change="salespersonTouched = true">
+          <el-select v-model="form.salesperson" :placeholder="t('sales.orders_list.placeholder_c94dca033f38')" filterable allow-create style="width: 100%" @change="salespersonTouched = true">
             <el-option v-for="emp in salesEmployees" :key="emp.id" :label="emp.fullName" :value="emp.fullName" />
           </el-select>
-        </el-form-item>
-        <el-form-item label="含运费">
-          <el-switch v-model="form.shippingIncluded" />
-          <el-input-number v-if="form.shippingIncluded" v-model="form.shippingFee" :min="0" :precision="2" placeholder="运费金额" style="width: 180px; margin-left: 12px" />
-        </el-form-item>
-        <el-form-item label="其他费用">
+        </CompatFormItem>
+        <CompatFormItem :label="t('sales.orders_list.label_69b328b3368b')">
+          <USwitch v-model="form.shippingIncluded" />
+          <el-input-number v-if="form.shippingIncluded" v-model="form.shippingFee" :min="0" :precision="2" :placeholder="t('sales.orders_list.placeholder_f3217ab9150f')" style="width: 180px; margin-left: 12px" />
+        </CompatFormItem>
+        <CompatFormItem :label="t('sales.orders_list.label_053741ae1fb0')">
           <div style="width: 100%">
             <div v-for="(fee, idx) in form.extraFees" :key="idx" style="display: flex; gap: 8px; margin-bottom: 6px">
-              <el-input v-model="fee.name" placeholder="费用名称 (如装卸费)" style="width: 200px" />
-              <el-input-number v-model="fee.amount" :min="0" :precision="2" placeholder="金额" style="width: 140px" />
-              <el-input v-model="fee.remark" placeholder="备注" style="flex: 1" />
-              <el-button type="danger" link @click="removeExtraFee(idx)">删除</el-button>
+              <UInput v-model="fee.name" :placeholder="t('sales.orders_list.placeholder_91ebc0bd6827')" style="width: 200px" />
+              <el-input-number v-model="fee.amount" :min="0" :precision="2" :placeholder="t('sales.orders_list.placeholder_ffc624300de8')" style="width: 140px" />
+              <UInput v-model="fee.remark" :placeholder="t('sales.orders_list.placeholder_daede9881787')" style="flex: 1" />
+              <UButton color="error" variant="link" @click="removeExtraFee(idx)">{{ t('sales.orders_list.action_2f9daa828907') }}</UButton>
             </div>
-            <el-button size="small" @click="addExtraFee">+ 添加费用项</el-button>
+            <UButton color="neutral" variant="outline" size="sm" @click="addExtraFee">{{ t('sales.orders_list.action_0d5b2a8f3371') }}</UButton>
           </div>
-        </el-form-item>
-        <el-form-item label="备注"><el-input v-model="form.remark" type="textarea" :rows="2" /></el-form-item>
-        <el-form-item label="预订合同">
+        </CompatFormItem>
+        <CompatFormItem :label="t('sales.orders_list.label_daede9881787')"><el-input v-model="form.remark" type="textarea" :rows="2" /></CompatFormItem>
+        <CompatFormItem :label="t('sales.orders_list.label_a23e92ae6ae8')">
           <!-- P1-7 合同附件上传 (v1 §2.4.3, 客户 2257s) -->
           <div v-if="form.contractFileUrl" style="display:flex;gap:8px;align-items:center">
-            <el-tag type="success" size="small">已上传: {{ form.contractFileName }}</el-tag>
-            <el-button size="small" type="danger" link @click="clearContract">移除</el-button>
+            <UBadge variant="soft" color="success" size="sm">{{ t('sales.orders_list.text_20c4f069405e') }} {{ form.contractFileName }}</UBadge>
+            <UButton size="sm" color="error" variant="link" @click="clearContract">{{ t('sales.orders_list.action_6135d4159e89') }}</UButton>
           </div>
           <el-upload
             v-else
@@ -3053,11 +3058,11 @@ function handleMergePurchase() {
             :show-file-list="false"
             accept=".pdf,.jpg,.jpeg,.png,.doc,.docx"
           >
-            <el-button size="small">上传合同 (PDF/图片/Word, ≤20MB)</el-button>
+            <UButton color="neutral" variant="outline" size="sm">{{ t('sales.orders_list.action_a35024215263') }}</UButton>
           </el-upload>
-        </el-form-item>
+        </CompatFormItem>
         <CanvasDynamicFields v-model="form.customFields" module-code="sales_order" />
-        <el-divider>{{ label('product') }}明细</el-divider>
+        <USeparator>{{ label('product') }}{{ t('sales.orders_list.text_206ea896472e') }}</USeparator>
         <!--
           ⛔ 2026-08-06 客户在这里搜「五花」只搜到成品 SKU, 以为是缺陷。
           Steve 拍板: **销售订单卖的是成品** —— 品名下拉只列成品/半成品(product-types),
@@ -3065,37 +3070,37 @@ function handleMergePurchase() {
           用户只能反复搜。把口径和两个去处写出来。
         -->
         <div class="form-help-text order-items-scope-hint">
-          这里只登记<strong>卖给客户的成品/半成品</strong>；搜不到的品项请先到「生产管理 → SKU 管理」建 SKU。
+          {{ t('sales.orders_list.text_b37a786fc1d1') }}<strong>{{ t('sales.orders_list.text_0a2152e69e98') }}</strong>{{ t('sales.orders_list.text_5daf9a9b68f7') }}
           <template v-if="form.processingMode === 'TOLL_PROCESSING'">
-            客户送来加工的<strong>物料</strong>不在这里 —— 把上方「物料供应方式」改成<strong>客户自带物料</strong>，会出现专门的登记块。
+            {{ t('sales.orders_list.text_039b50d92853') }}<strong>{{ t('sales.orders_list.text_6446454e8e36') }}</strong>{{ t('sales.orders_list.text_e93866f4b1bf') }}<strong>{{ t('sales.orders_list.text_ec4b35d0c541') }}</strong>{{ t('sales.orders_list.text_df0cf4bbff70') }}
           </template>
         </div>
-        <div class="order-items-scroll" role="region" aria-label="产品明细，可横向滚动查看全部字段" tabindex="0">
+        <div class="order-items-scroll" role="region" :aria-label="t('sales.orders_list.aria_label_b957615a2dd0')" tabindex="0">
           <div class="order-items-grid">
         <div class="item-row item-header">
-          <span class="sticky-col sticky-product" style="width: 200px">品名</span>
-          <span class="sticky-col sticky-spec" style="width: 120px">规格</span>
-          <span class="sticky-col sticky-quantity" style="width: 130px">下单数量</span>
-          <span class="sticky-col sticky-unit" style="width: 80px">单位</span>
-          <span style="width: 150px">包装规格</span>
+          <span class="sticky-col sticky-product" style="width: 200px">{{ t('sales.orders_list.text_7d432cf3863b') }}</span>
+          <span class="sticky-col sticky-spec" style="width: 120px">{{ t('sales.orders_list.text_381879e1e191') }}</span>
+          <span class="sticky-col sticky-quantity" style="width: 130px">{{ t('sales.orders_list.text_7404fd5c4fa8') }}</span>
+          <span class="sticky-col sticky-unit" style="width: 80px">{{ t('sales.orders_list.text_80b19d68b149') }}</span>
+          <span style="width: 150px">{{ t('sales.orders_list.text_64a1c7faddfb') }}</span>
           <!-- 🔒 2026-09-02 Owner 裁定("一般…都是含税报价…他填的指的是含税报价"): 含税单价
                才是录入项; 未税单价/含税小计派生只读, 用户填含税+税率, 后两列自动显示. -->
-          <span style="width: 130px">含税单价</span>
-          <span style="width: 130px">单价 (未税)</span>
-          <span style="width: 130px">含税小计</span>
-          <span style="width: 130px">箱数</span>
-          <span style="width: 90px" title="税率 (开票 G1 按此分组): 9=原料, 13=加工, 6=服务">税率(%)</span>
+          <span style="width: 130px">{{ t('sales.orders_list.text_b1c9b1474367') }}</span>
+          <span style="width: 130px">{{ t('sales.orders_list.text_5eabef94bff7') }}</span>
+          <span style="width: 130px">{{ t('sales.orders_list.text_ea10a3e60eb1') }}</span>
+          <span style="width: 130px">{{ t('sales.orders_list.text_e9722902ed67') }}</span>
+          <span style="width: 90px" :title="t('sales.orders_list.title_6d529c3bd047')">{{ t('sales.orders_list.text_b6d5aef1f6a5') }}</span>
           <!-- T4-D1 (issue #525): 来源仓库 — F006 客户反馈 "成品会调回总仓, 总仓再安排发货".
                Customer wants to record per-line source warehouse (WH-LOG 总仓 / WH-WKS 线边仓). -->
-          <span style="width: 110px">来源仓库</span>
-          <span style="width: 40px">操作</span>
+          <span style="width: 110px">{{ t('sales.orders_list.text_f43284b82073') }}</span>
+          <span style="width: 40px">{{ t('sales.orders_list.text_ed31fbb483ee') }}</span>
         </div>
         <div v-for="(item, idx) in form.items" :key="idx" class="item-row">
-          <el-select v-model="item.productTypeId" class="sticky-col sticky-product" placeholder="选择产品" filterable clearable style="width: 200px" @change="(v: string) => onProductSelect(item, v)">
-            <el-option v-for="p in sellableOptions" :key="p.id" :label="productOptionLabel(p)" :value="p.id" />
-          </el-select>
+          <CompatSelect v-model="item.productTypeId" class="sticky-col sticky-product" :placeholder="t('sales.orders_list.placeholder_8c2224e3daf9')" filterable clearable style="width: 200px" @change="(v: string) => onProductSelect(item, v)">
+            <CompatOption v-for="p in sellableOptions" :key="p.id" :label="productOptionLabel(p)" :value="p.id" />
+          </CompatSelect>
           <!-- T130 Feature D — 规格只读: 取产品字典 specification/packageSpec, 抄码品由 onProductSelect 识别. -->
-          <el-input :model-value="specDisplay(item)" class="sticky-col sticky-spec" placeholder="规格" style="width: 120px" disabled />
+          <el-input :model-value="specDisplay(item)" class="sticky-col sticky-spec" :placeholder="t('sales.orders_list.placeholder_381879e1e191')" style="width: 120px" disabled />
           <!-- T130 Feature D6 — 下单数量纳入 Tab 链; Tab/Shift+Tab 跨行跳, 末行 Tab → 创建按钮. -->
           <el-input-number
             v-model="item.quantity"
@@ -3107,29 +3112,29 @@ function handleMergePurchase() {
             @keydown.tab="(e: KeyboardEvent) => handleQuantityTab(e, idx)"
           />
           <!-- T130 Feature D — 单位下拉: 份 + (产品配箱规才给 箱). NO allow-create. 默认 份. -->
-          <el-select v-model="item.unit" class="sticky-col sticky-unit" filterable style="width: 80px" @change="() => onOrderUnitChange(item)">
-            <el-option v-for="u in unitOptions(item)" :key="u" :label="displayUnit(u)" :value="u" />
-          </el-select>
+          <CompatSelect v-model="item.unit" class="sticky-col sticky-unit" filterable style="width: 80px" @change="() => onOrderUnitChange(item)">
+            <CompatOption v-for="u in unitOptions(item)" :key="u" :label="displayUnit(u)" :value="u" />
+          </CompatSelect>
           <div v-if="item.packagingLoadError" style="width: 150px; text-align: center;">
-            <el-button type="danger" link size="small" @click="loadPackagingSpecs(item, item.productTypeId)">
-              箱规加载失败，重试
-            </el-button>
+            <UButton color="error" variant="link" size="sm" @click="loadPackagingSpecs(item, item.productTypeId)">
+              {{ t('sales.orders_list.action_48f52f6837bc') }}
+            </UButton>
           </div>
-          <el-select
+          <CompatSelect
             v-else-if="packagingOptions(item).length > 0"
             v-model="item.packagingSpecId"
-            :placeholder="requiresPackagingSelection(item) ? '请选择箱规' : '默认箱规'"
+            :placeholder="requiresPackagingSelection(item) ? t('sales.orders_list.placeholder_fa38c8132dd4') : t('sales.orders_list.placeholder_41ec051701e5')"
             style="width: 150px"
             @change="() => calcBox(item)"
           >
-            <el-option
+            <CompatOption
               v-for="spec in packagingOptions(item)"
               :key="spec.id"
               :label="packagingOptionLabel(spec)"
               :value="spec.id"
             />
-          </el-select>
-          <el-text v-else type="info" size="small" style="width: 150px; text-align: center;">不涉及</el-text>
+          </CompatSelect>
+          <el-text v-else type="info" size="small" style="width: 150px; text-align: center;">{{ t('sales.orders_list.text_3be3e5c41625') }}</el-text>
           <!-- Sprint 4 W2 S-PRICE-1 R1: taxIncludedUnitPrice + 上次成交价 hint chip (一键采纳) -->
           <!-- Issue #793: 客户协议价 hint (CUSTOMER 自动覆盖, GLOBAL 仅提示) -->
           <!-- 🔒 2026-09-02: 两个 hint 的原始数字口径是未税 (price-lists/lookup 的
@@ -3160,7 +3165,7 @@ function handleMergePurchase() {
                 class="contract-price-chip"
                 @click="applyContractPriceHint(item)"
               >
-                {{ item.contractPriceHint.source === 'CUSTOMER' ? '协议' : '统一' }} ¥{{ contractHintTaxIncludedPrice(item).toFixed(2) }}
+                {{ item.contractPriceHint.source === 'CUSTOMER' ? t('sales.orders_list.text_ab2f31f30acf') : t('sales.orders_list.text_a1108b489091') }} ¥{{ contractHintTaxIncludedPrice(item).toFixed(2) }}
               </el-tag>
             </el-tooltip>
             <el-tooltip
@@ -3204,57 +3209,57 @@ function handleMergePurchase() {
           </el-tooltip>
           <!-- P1-3 R2 fix: el-tag 替换 inline-styled div, 跟随 Element Plus 主题 -->
           <!-- T130 Feature D — 箱数只读 (由数量×箱规自动计算, 非第二销售单位); 抄码品/未配置箱规分别提示. -->
-          <el-tag v-if="isAbacaItem(item)" type="warning" effect="light" size="default" style="width: 130px; text-align: center;">抄码品</el-tag>
+          <UBadge v-if="isAbacaItem(item)" color="warning" variant="soft" size="md" style="width: 130px; text-align: center;">{{ t('sales.orders_list.text_22e46bca11ea') }}</UBadge>
           <!-- T136: 未配置箱规 → 权限门控跳转 (fool-proof Rule 5). 有 system 权限显示「去配置」按钮，无权限仅显文案 -->
           <div v-else-if="isBoxUnconfigured(item)" style="width: 130px; line-height: 1.4;">
-            <el-text type="warning" size="small">未配置箱规</el-text>
-            <el-button
+            <el-text type="warning" size="small">{{ t('sales.orders_list.text_26d75e8562bb') }}</el-text>
+            <UButton
               v-if="canAccessProducts"
-              link
-              type="primary"
-              size="small"
+              variant="link"
+              color="primary"
+              size="sm"
               style="padding: 0; font-size: 12px;"
               @click.stop="goConfigureProduct(item.productTypeId as string | undefined)"
-            >去配置</el-button>
+            >{{ t('sales.orders_list.action_c4791f28d54f') }}</UButton>
           </div>
           <el-tooltip v-else content="由数量与箱规自动计算，非第二销售单位" placement="top">
-            <el-input-number v-model="item.boxQuantity" :min="0" :precision="2" disabled style="width: 130px" placeholder="箱" />
+            <el-input-number v-model="item.boxQuantity" :min="0" :precision="2" disabled style="width: 130px" :placeholder="t('sales.orders_list.placeholder_702dff992262')" />
           </el-tooltip>
           <!-- 🔒 2026-09-02: 税率变了, 未税单价 (item.unitPrice, 提交/毛利红线校验用)
                必须跟着重算 —— @change 触发 recalculateUnitPrice, 与含税单价输入框的
                @update:model-value 走同一个反算函数。 -->
-          <el-select v-model="item.taxRate" placeholder="税率" style="width: 90px" size="default" @change="() => recalculateUnitPrice(item)">
-            <el-option :value="0" label="0% 免税" />
-            <el-option :value="3" label="3% 小规模" />
-            <el-option :value="6" label="6% 服务" />
-            <el-option :value="9" label="9% 原料" />
-            <el-option :value="13" label="13% 加工" />
-          </el-select>
+          <CompatSelect v-model="item.taxRate" :placeholder="t('sales.orders_list.placeholder_9401d14fdcb4')" style="width: 90px" size="default" @change="() => recalculateUnitPrice(item)">
+            <CompatOption :value="0" :label="t('sales.orders_list.label_696c9cf2abe1')" />
+            <CompatOption :value="3" :label="t('sales.orders_list.label_c03dd516f358')" />
+            <CompatOption :value="6" :label="t('sales.orders_list.label_b94cf751ef60')" />
+            <CompatOption :value="9" :label="t('sales.orders_list.label_918a0817d803')" />
+            <CompatOption :value="13" :label="t('sales.orders_list.label_5670283c5929')" />
+          </CompatSelect>
           <!-- T4-D1 (issue #525): 来源仓库 select.
                2026-07-02 fix: options come from the real warehouse list (DB name
                authoritative) instead of hardcoded 总仓/线边仓 — falls back to the
                legacy 2 options only if the list fails to load. -->
           <!-- T130 Feature C — 用户选仓库即记忆 (按操作员), 下次新行预填. -->
-          <el-select v-model="item.sourceWarehouseCode" placeholder="选择" clearable style="width: 110px" size="default" @change="(v: string) => rememberWarehouse(v)">
-            <el-option
+          <CompatSelect v-model="item.sourceWarehouseCode" :placeholder="t('sales.orders_list.placeholder_c11330b85234')" clearable style="width: 110px" size="default" @change="(v: string) => rememberWarehouse(v)">
+            <CompatOption
               v-for="opt in warehouseSelectOptions"
               :key="opt.value"
               :label="opt.label"
               :value="opt.value"
             />
-          </el-select>
-          <el-button type="danger" link @click="removeItem(idx)" :disabled="form.items.length <= 1">删除</el-button>
+          </CompatSelect>
+          <UButton color="error" variant="link" @click="removeItem(idx)" :disabled="form.items.length <= 1">{{ t('sales.orders_list.action_2f9daa828907') }}</UButton>
         </div>
-        <el-button style="width: 100%; margin-top: 8px" @click="addItem">+ 添加行</el-button>
+        <UButton color="neutral" variant="outline" style="width: 100%; margin-top: 8px" @click="addItem">{{ t('sales.orders_list.action_a27f5e856e12') }}</UButton>
           </div>
         </div>
-      </el-form>
+      </CompatForm>
       <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
+        <UButton color="neutral" variant="outline" @click="dialogVisible = false">{{ t('sales.orders_list.action_2cd0f3be8738') }}</UButton>
         <!-- T130 Feature D6 — 末行下单数量 Tab 跳到此按钮. -->
-        <el-button ref="submitButtonRef" type="primary" @click="handleSave">{{ editingOrderId ? '保存' : '创建' }}</el-button>
+        <UButton ref="submitButtonRef" color="primary" @click="handleSave">{{ editingOrderId ? t('sales.orders_list.text_a3030bf8f16d') : t('sales.orders_list.text_cde2cd071d25') }}</UButton>
       </template>
-    </el-dialog>
+    </CompatDialog>
 
     <!-- AI 对话录入 -->
     <AiEntryDrawer
@@ -3311,8 +3316,8 @@ function handleMergePurchase() {
     <!-- E-FP-2 取消原因采集 dialog (fool-proof Rule 3): 标准原因 dropdown + "其他"展 textarea -->
     <UModal
       v-model:open="cancelDialogVisible"
-      :title="pendingCancelIds.length > 1 ? `批量取消 ${pendingCancelIds.length} 个销售订单` : '取消销售订单'"
-      description="选择取消原因后确认取消"
+      :title="pendingCancelIds.length > 1 ? `批量取消 ${pendingCancelIds.length} 个销售订单` : t('sales.orders_list.title_9c9665fe6a57')"
+      :description="t('sales.orders_list.description_50d0d183fe01')"
       :ui="{ content: 'max-w-[480px]', description: 'sr-only', footer: 'justify-end' }"
     >
       <template #body>
@@ -3322,24 +3327,24 @@ function handleMergePurchase() {
             color="warning"
             variant="subtle"
             icon="i-lucide-triangle-alert"
-            title="订单已经财务批准：取消后会一并取消它自动生成的生产计划和未开工的排程；已开工、已发货或已有收款的订单不能这样取消。本厂需在「业务阈值」开启 sales.order.cancel_after_approval，且你有对应权限。"
+            :title="t('sales.orders_list.title_bcb9d8266a0f')"
           />
-          <UFormField label="取消原因" required>
-            <USelectMenu v-model="cancelReasonCode" :items="CANCEL_REASONS" :search-input="false" placeholder="请选择取消原因" class="w-full" />
+          <UFormField :label="t('sales.orders_list.label_b73005b16d22')" required>
+            <USelectMenu v-model="cancelReasonCode" :items="CANCEL_REASONS" :search-input="false" :placeholder="t('sales.orders_list.placeholder_59e5542fcb33')" class="w-full" />
           </UFormField>
-          <UFormField v-if="cancelReasonCode === '其他'" label="补充说明" required>
-            <UTextarea v-model="cancelReasonOther" :rows="2" placeholder="请填写具体取消原因" :maxlength="200" class="w-full" />
+          <UFormField v-if="cancelReasonCode === '其他'" :label="t('sales.orders_list.label_6f3ebd2d3e87')" required>
+            <UTextarea v-model="cancelReasonOther" :rows="2" :placeholder="t('sales.orders_list.placeholder_f8f660b70738')" :maxlength="200" class="w-full" />
           </UFormField>
         </div>
       </template>
       <template #footer>
-        <UButton color="neutral" variant="outline" @click="cancelDialogVisible = false">返回</UButton>
+        <UButton color="neutral" variant="outline" @click="cancelDialogVisible = false">{{ t('sales.orders_list.action_572cf45ba436') }}</UButton>
         <UButton
           color="error"
           :loading="cancelSubmitting"
           :disabled="!cancelReasonCode || (cancelReasonCode === '其他' && !cancelReasonOther.trim())"
           @click="submitCancel"
-        >确认取消</UButton>
+        >{{ t('sales.orders_list.action_b741efb628be') }}</UButton>
       </template>
     </UModal>
   </div>

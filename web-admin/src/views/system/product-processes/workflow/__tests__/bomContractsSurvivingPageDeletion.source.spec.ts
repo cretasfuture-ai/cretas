@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { sourceWithChinese } from '@/i18n-pilot/sourceForTests';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -20,7 +21,7 @@ import { describe, expect, it } from 'vitest';
  */
 const readSource = (path: string) => readFileSync(resolve(process.cwd(), path), 'utf8');
 
-const materialTypeSource = readSource('src/views/warehouse/material-types/list.vue');
+const materialTypeSource = sourceWithChinese(readSource('src/views/warehouse/material-types/list.vue'));
 const routerSource = readSource('src/router/index.ts');
 const bomCostDtoSource = readSource(
   '../backend/java/cretas-api/src/main/java/com/cretas/aims/dto/bom/BomCostSummaryDTO.java',
@@ -40,7 +41,7 @@ describe('BOM 页删除后仍然成立的契约(载体不是那个页面)', () =
    * 参考价填了就必须 > 0(未知价格要留空, 不许垫 0 —— 垫 0 会让成本算出假答案)。
    */
   it('物料档案的计税与参考价契约(原 BOM spec 后半段)', () => {
-    expect(materialTypeSource).toContain('<el-form-item label="计税方式" required>');
+    expect(materialTypeSource).toMatch(/<(?:el-form-item|CompatFormItem) label="计税方式" required>/);
     expect(materialTypeSource).toContain(
       "v-if=\"form.taxTreatment === 'TAXABLE'\" label=\"采购税率\" required",
     );

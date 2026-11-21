@@ -9,6 +9,10 @@ vi.mock('@/store/modules/permission', () => ({ usePermissionStore: () => ({ canW
 vi.mock('@/composables/useBusinessMode', () => ({ useBusinessMode: () => ({ label: (value: string) => value }) }));
 vi.mock('vue-router', () => ({ useRoute: () => ({ path: '/sales/orders', query: {} }), useRouter: () => ({ push: vi.fn(), replace: vi.fn() }) }));
 vi.mock('element-plus', () => ({ ElMessage: Object.assign(vi.fn(), { warning: vi.fn(), success: vi.fn(), error: vi.fn() }), ElMessageBox: { confirm: vi.fn().mockResolvedValue('confirm') } }));
+vi.mock('@/components/compat/messages', async () => {
+  const { ElMessage, ElMessageBox } = await import('element-plus');
+  return { useCompatMessages: () => ({ ElMessage, ElMessageBox }) };
+});
 
 import SalesOrderList from '../list.vue';
 
@@ -43,6 +47,7 @@ describe('sales AI entry starts a new order after editing', () => {
   it('clears editing identity and old fees, then the real create button POSTs instead of PUTting the old order', async () => {
     const wrapper = shallowMount(SalesOrderList, { global: { stubs: {
       CanvasAwareWrapper: pass, ElDialog: dialog, ElForm: pass, ElFormItem: pass, ElButton: button, OrderDeliveryDatePicker: datePicker,
+      CompatDialog: dialog, CompatForm: pass, CompatFormItem: pass, UButton: button, UCard: pass,
       ElTable: defineComponent({ template: '<div />' }), ElTableColumn: defineComponent({ template: '<div />' }),
     } } });
     await flushPromises();

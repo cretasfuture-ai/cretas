@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { sourceWithChinese } from '@/i18n-pilot/sourceForTests';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -31,10 +32,10 @@ import { describe, expect, it } from 'vitest';
  * 别再把「包材的采购参考价」说成选填 —— 无论是 placeholder、字段说明,
  * 还是提交前的校验文案。
  */
-const source = readFileSync(
+const source = sourceWithChinese(readFileSync(
   resolve(__dirname, '..', 'list.vue'),
   'utf8',
-);
+));
 
 /** 剥注释 —— 注释里引用了旧文案(在讲这个缺陷), 不剥会自己命中自己。 */
 const code = source

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { sourceWithChinese } from '@/i18n-pilot/sourceForTests';
 import { resolve } from 'node:path';
 import {
   customerMaterialReceivingStatusLabel,
@@ -13,7 +14,7 @@ import {
   warehouseReceivingRoute,
 } from '../salesOrderSupplyContract';
 
-const listSource = readFileSync(resolve(import.meta.dirname, '../list.vue'), 'utf8');
+const listSource = sourceWithChinese(readFileSync(resolve(import.meta.dirname, '../list.vue'), 'utf8'));
 const detailSource = readFileSync(resolve(import.meta.dirname, '../detail.vue'), 'utf8');
 const newSource = readFileSync(resolve(import.meta.dirname, '../new.vue'), 'utf8');
 

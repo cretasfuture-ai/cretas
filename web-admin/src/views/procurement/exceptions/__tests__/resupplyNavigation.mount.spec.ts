@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import ElementPlus from 'element-plus'
+import { nuxtPilotStubs } from '@/components/compat/testStubs'
 import { defineComponent, h } from 'vue'
 
 const io = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), push: vi.fn(), confirm: vi.fn(), message: vi.fn(), warehouse: true }))
@@ -9,13 +10,14 @@ vi.mock('@/api/request', () => ({ get: io.get, post: io.post }))
 vi.mock('@/store/modules/auth', () => ({ useAuthStore: () => ({ factoryId: 'TEST', user: { id: 1 }, currentRole: 'factory_super_admin' }) }))
 vi.mock('@/store/modules/permission', () => ({ usePermissionStore: () => ({ canWrite: () => true, canAccess: () => io.warehouse }) }))
 vi.mock('element-plus', async (original) => ({ ...await original<typeof import('element-plus')>(), ElMessage: io.message, ElMessageBox: { confirm: io.confirm } }))
+vi.mock('@/components/compat/messages', () => ({ useCompatMessages: () => ({ ElMessage: io.message, ElMessageBox: { confirm: io.confirm } }) }))
 import Exceptions from '../list.vue'
 
 const row = { id: 'exception-1', exceptionNumber: 'EX-1', purchaseOrderId: 'po-original', supplierId: 'supplier-1', materialName: '面粉', exceptionType: 'UNDER_RECEIVE', exceptionQty: 2, unit: '箱', status: 'RESOLVED', decision: 'REQUEST_RESUPPLY', ownerUserId: 1, returnOrderId: null }
 function open(data = row) {
   io.get.mockResolvedValue({ success: true, data: { content: [data], totalElements: 1 } })
   const dialog = defineComponent({ props: { modelValue: Boolean }, setup: (props, { slots }) => () => props.modelValue ? h('section', [slots.default?.(), slots.footer?.()]) : null })
-  return mount(Exceptions, { global: { plugins: [ElementPlus], stubs: { ElDialog: dialog } } })
+  return mount(Exceptions, { global: { plugins: [ElementPlus], stubs: { ...nuxtPilotStubs, ElDialog: dialog } } })
 }
 async function click(wrapper: ReturnType<typeof open>, label: string) {
   const button = wrapper.findAll('button,a').find(b => b.text().trim() === label)
@@ -52,7 +54,7 @@ describe('补货决定继续原采购单收货', () => {
     io.post.mockResolvedValue({ success: true, data: row })
     const wrapper = open({ ...row, status: 'PENDING', decision: '' }); await flushPromises()
     await click(wrapper, '处理')
-    wrapper.findAllComponents({ name: 'ElSelect' }).at(-1)!.vm.$emit('update:modelValue', 'REQUEST_RESUPPLY')
+    await wrapper.get('select[placeholder="请选择处理方式"]').setValue('REQUEST_RESUPPLY')
     await flushPromises(); await click(wrapper, '确认处理'); await flushPromises()
     expect(io.post).toHaveBeenCalledExactlyOnceWith('/TEST/purchase-exceptions/exception-1/decide', { decision: 'REQUEST_RESUPPLY', notes: null })
     expect(io.confirm).toHaveBeenCalledOnce()
@@ -62,7 +64,7 @@ describe('补货决定继续原采购单收货', () => {
   it('决定失败时保留表单，不提示成功或导航', async () => {
     io.post.mockRejectedValue({ response: { data: { message: '异常单已处理' } } })
     const wrapper = open({ ...row, status: 'PENDING', decision: '' }); await flushPromises(); await click(wrapper, '处理')
-    wrapper.findAllComponents({ name: 'ElSelect' }).at(-1)!.vm.$emit('update:modelValue', 'REQUEST_RESUPPLY')
+    await wrapper.get('select[placeholder="请选择处理方式"]').setValue('REQUEST_RESUPPLY')
     await flushPromises(); await click(wrapper, '确认处理'); await flushPromises()
     expect(io.post).toHaveBeenCalledOnce()
     expect(io.push).not.toHaveBeenCalled(); expect(io.confirm).not.toHaveBeenCalled()

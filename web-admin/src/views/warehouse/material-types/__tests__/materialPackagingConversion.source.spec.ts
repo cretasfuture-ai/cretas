@@ -1,20 +1,21 @@
 import { readFileSync } from 'node:fs';
+import { sourceWithChinese } from '@/i18n-pilot/sourceForTests';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-const source = readFileSync(
+const source = sourceWithChinese(readFileSync(
   resolve(process.cwd(), 'src/views/warehouse/material-types/list.vue'),
   'utf8',
-);
+));
 
 describe('raw material purchase packaging conversion', () => {
   it('places the conversion editor directly below the inventory unit', () => {
-    const inventoryUnitIndex = source.indexOf('<el-form-item label="入库计量单位" required>');
-    const packagingConversionIndex = source.indexOf(
-      '<el-form-item v-if="form.unit" label="包装换算">',
+    const inventoryUnitIndex = source.search(/<(?:el-form-item|CompatFormItem) label="入库计量单位" required>/);
+    const packagingConversionIndex = source.search(
+      /<(?:el-form-item|CompatFormItem) v-if="form\.unit" label="包装换算">/,
     );
-    const storageTypeIndex = source.indexOf(
-      '<el-form-item v-if="!isPackagingMaterial" label="储存类型" required>',
+    const storageTypeIndex = source.search(
+      /<(?:el-form-item|CompatFormItem) v-if="!isPackagingMaterial" label="储存类型" required>/,
     );
 
     expect(inventoryUnitIndex).toBeGreaterThan(-1);

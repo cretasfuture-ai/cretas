@@ -1,7 +1,13 @@
 <script setup lang="ts">
+import { CompatAlert, CompatDatePicker, CompatForm, CompatFormItem, CompatOption, CompatSelect } from '@/components/compat';
+import { useCompatMessages } from '@/components/compat/messages';
+const { ElMessage } = useCompatMessages();
+import { useT } from '@/i18n-pilot/useT';
+const { t } = useT();
+
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
-import { ElMessage } from 'element-plus';
+
 import { useAuthStore } from '@/store/modules/auth';
 import { get } from '@/api/request';
 import {
@@ -217,7 +223,7 @@ async function submitPreview(): Promise<void> {
     || (grantId.value && ['PENDING', 'UNKNOWN', 'EXECUTING', 'RECOVERY_ERROR'].includes(recoveryState.value))
     || !factoryId.value || !recoveryReady.value || recoveryLoading.value) return;
   if (!form.value.supplierId || !form.value.materialTypeId || !form.value.quantity || !form.value.unitPrice || !form.value.amountCap) {
-    ElMessage.warning('请完整填写供应商、物料、数量、未税单价和含税预算');
+    ElMessage.warning(t('procurement.ai_purchase_index.message_900a980336c9'));
     return;
   }
   loading.value = true;
@@ -301,7 +307,7 @@ async function authorizeLater(): Promise<void> {
     recoveryVersion.value = outcome.version ?? null;
     previewResponse.value = null;
     blockedReason.value = '已授权稍后执行，请先执行或撤销当前授权。';
-    ElMessage.success('已授权稍后执行，授权有效期内可从本页恢复');
+    ElMessage.success(t('procurement.ai_purchase_index.message_0beb0fc62ff7'));
   } catch (error) {
     if (!isCurrent(scope, run)) return;
     recoveryState.value = 'UNKNOWN';
@@ -410,52 +416,52 @@ onBeforeUnmount(() => { mounted = false; generation += 1; });
 
 <template>
   <div class="page-container">
-    <div class="page-header"><div><h2>AI 受控采购</h2><p>只创建采购草稿，采购提交与财务审批沿用现有独立 OA 流程。</p></div></div>
-    <el-alert v-if="recoveryLoading" title="正在读取上次采购状态…" type="info" :closable="false" />
-    <el-alert v-if="blockedReason" :title="blockedReason" type="warning" :closable="false" class="state-alert" />
-    <div v-if="draftOrderId" class="recovery-actions"><el-button link type="primary" @click="router.push(`/procurement/orders/${encodeURIComponent(draftOrderId)}`)">查看采购订单</el-button><el-button type="success" @click="acknowledgeDraft">已核对，开始新采购</el-button></div>
-    <div v-else-if="recoveryState === 'FAILED'" class="recovery-actions"><el-button @click="acknowledgeDraft">已核对失败，开始新采购</el-button></div>
+    <div class="page-header"><div><h2>{{ t('procurement.ai_purchase_index.text_6f367e368a2f') }}</h2><p>{{ t('procurement.ai_purchase_index.text_ffcf01f4dab5') }}</p></div></div>
+    <CompatAlert v-if="recoveryLoading" :title="t('procurement.ai_purchase_index.title_f81d293acb67')" color="info" :close="false" />
+    <CompatAlert v-if="blockedReason" :title="blockedReason" color="warning" :close="false" class="state-alert" />
+    <div v-if="draftOrderId" class="recovery-actions"><UButton variant="link" color="primary" @click="router.push(`/procurement/orders/${encodeURIComponent(draftOrderId)}`)">{{ t('procurement.ai_purchase_index.action_a434a48d1fce') }}</UButton><UButton color="success" @click="acknowledgeDraft">{{ t('procurement.ai_purchase_index.action_09494dcdf6fb') }}</UButton></div>
+    <div v-else-if="recoveryState === 'FAILED'" class="recovery-actions"><UButton color="neutral" variant="outline" @click="acknowledgeDraft">{{ t('procurement.ai_purchase_index.action_936c6e259a76') }}</UButton></div>
     <div v-else-if="grantId && !previewResponse && recoveryState === 'PENDING'" class="recovery-actions">
-      <el-button v-if="!timerBinding && !timerUncertain" type="primary" :disabled="recoveryVersion == null || timerInFlight" :loading="deferredInFlight" @click="executeLater">执行已授权采购</el-button><el-button type="danger" :loading="cancelInFlight" @click="cancelPreview">撤销当前授权</el-button><el-button v-if="timerBinding || timerUncertain || recoveryVersion == null" :loading="recoveryLoading" @click="refreshRecovery">刷新授权状态</el-button><span v-if="recoveryVersion == null" class="state-hint">授权版本尚未恢复，暂不能执行；可尝试撤销并由服务器核对状态</span>
-      <section v-if="!timerBinding && !timerUncertain" aria-label="一次定时采购">
-        <label for="purchase-timer-at">执行时间（本机时区，提交时换算为UTC；须在本次授权有效期内）</label>
+      <UButton v-if="!timerBinding && !timerUncertain" color="primary" :disabled="recoveryVersion == null || timerInFlight" :loading="deferredInFlight" @click="executeLater">{{ t('procurement.ai_purchase_index.action_621f6e8a3d55') }}</UButton><UButton color="error" :loading="cancelInFlight" @click="cancelPreview">{{ t('procurement.ai_purchase_index.action_cd695e010e1f') }}</UButton><UButton color="neutral" variant="outline" v-if="timerBinding || timerUncertain || recoveryVersion == null" :loading="recoveryLoading" @click="refreshRecovery">{{ t('procurement.ai_purchase_index.action_f9870fade6c7') }}</UButton><span v-if="recoveryVersion == null" class="state-hint">{{ t('procurement.ai_purchase_index.text_205da0dc660a') }}</span>
+      <section v-if="!timerBinding && !timerUncertain" :aria-label="t('procurement.ai_purchase_index.aria_label_64d862004290')">
+        <label for="purchase-timer-at">{{ t('procurement.ai_purchase_index.text_69b08e273626') }}</label>
         <input id="purchase-timer-at" v-model="timerExecuteAt" type="datetime-local" step="1" :disabled="timerInFlight || recoveryVersion == null" />
-        <el-button :disabled="!timerExecuteAt || recoveryVersion == null || deferredInFlight || timerInFlight" @click="schedulePurchase">设置一次定时执行</el-button>
+        <UButton color="neutral" variant="outline" :disabled="!timerExecuteAt || recoveryVersion == null || deferredInFlight || timerInFlight" @click="schedulePurchase">{{ t('procurement.ai_purchase_index.action_e72241a4422e') }}</UButton>
       </section>
     </div>
-    <section v-if="timerBinding" aria-label="采购定时绑定与结果">
-      <p>定时任务 {{ timerBinding.taskId }} · 执行时间 {{ timerBinding.executeAt }} · 授权到期 {{ timerBinding.expiresAt }}</p>
-      <p>服务器时间 {{ timerBinding.serverNow }} · 时区 {{ timerBinding.serverZone }}</p>
-      <p>执行状态 {{ timerBinding.state }} · {{ timerBinding.failureReason }}</p>
+    <section v-if="timerBinding" :aria-label="t('procurement.ai_purchase_index.aria_label_fe81b4b03a25')">
+      <p>{{ t('procurement.ai_purchase_index.text_3c39e9bde120') }} {{ timerBinding.taskId }} {{ t('procurement.ai_purchase_index.text_27c7390016dd') }} {{ timerBinding.executeAt }} {{ t('procurement.ai_purchase_index.text_8f9b944945d0') }} {{ timerBinding.expiresAt }}</p>
+      <p>{{ t('procurement.ai_purchase_index.text_8d2859df5921') }} {{ timerBinding.serverNow }} {{ t('procurement.ai_purchase_index.text_644bc8684d0b') }} {{ timerBinding.serverZone }}</p>
+      <p>{{ t('procurement.ai_purchase_index.text_1b7f6d458fc7') }} {{ timerBinding.state }} · {{ timerBinding.failureReason }}</p>
       <pre v-if="timerBinding.approvedSnapshot">{{ timerBinding.approvedSnapshot }}</pre>
-      <p v-if="timerBinding.state === 'UNKNOWN'">结果待持久记录核对，禁止重新执行或重复安排。</p>
-      <el-button v-if="timerBinding.state === 'UNKNOWN'" :loading="timerInFlight" @click="reconcileTimer">核对定时执行结果（不重试）</el-button>
-      <el-button v-if="timerBinding.state === 'PENDING'" :loading="timerInFlight" @click="reconcileTimer">核对已错过的定时任务（不执行）</el-button>
-      <el-button :loading="recoveryLoading" @click="refreshRecovery">刷新定时结果</el-button>
-      <el-button v-if="['REVOKED', 'EXPIRED'].includes(recoveryState) && ['REFUSED', 'SUCCEEDED'].includes(timerBinding.state)" @click="acknowledgeDraft">已核对定时结果，开始新采购</el-button>
+      <p v-if="timerBinding.state === 'UNKNOWN'">{{ t('procurement.ai_purchase_index.text_1552ee060142') }}</p>
+      <UButton color="neutral" variant="outline" v-if="timerBinding.state === 'UNKNOWN'" :loading="timerInFlight" @click="reconcileTimer">{{ t('procurement.ai_purchase_index.action_62c29c103017') }}</UButton>
+      <UButton color="neutral" variant="outline" v-if="timerBinding.state === 'PENDING'" :loading="timerInFlight" @click="reconcileTimer">{{ t('procurement.ai_purchase_index.action_3f737191bcd2') }}</UButton>
+      <UButton color="neutral" variant="outline" :loading="recoveryLoading" @click="refreshRecovery">{{ t('procurement.ai_purchase_index.action_c31b7e884942') }}</UButton>
+      <UButton color="neutral" variant="outline" v-if="['REVOKED', 'EXPIRED'].includes(recoveryState) && ['REFUSED', 'SUCCEEDED'].includes(timerBinding.state)" @click="acknowledgeDraft">{{ t('procurement.ai_purchase_index.action_f4237172baae') }}</UButton>
     </section>
-    <div v-else-if="grantId && ['UNKNOWN', 'EXECUTING', 'RECOVERY_ERROR'].includes(recoveryState)" class="recovery-actions"><el-button type="warning" :loading="recoveryLoading" @click="refreshRecovery">刷新授权状态</el-button></div>
-    <div v-if="grantId && timerUncertain" class="recovery-actions"><el-button :loading="recoveryLoading" @click="refreshRecovery">刷新定时绑定状态</el-button><span>定时绑定结果未核对，保留当前参考，禁止重复安排或执行。</span></div>
-    <el-card shadow="never" class="content-card">
-      <el-form label-position="top" class="purchase-form">
-      <el-form-item label="供应商"><el-select v-model="form.supplierId" filterable :disabled="!recoveryReady || previewed || Boolean(blockedReason)" placeholder="选择供应商"><el-option v-for="item in suppliers" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item>
-        <el-form-item label="原料"><el-select v-model="form.materialTypeId" filterable :disabled="!recoveryReady || previewed || Boolean(blockedReason)" placeholder="选择原料"><el-option v-for="item in materials" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item>
-        <el-form-item label="数量（kg）"><el-input v-model="form.quantity" type="number" :disabled="!recoveryReady || previewed || Boolean(blockedReason)" /></el-form-item>
-        <el-form-item label="未税单价（CNY/kg）"><el-input v-model="form.unitPrice" type="number" :disabled="!recoveryReady || previewed || Boolean(blockedReason)" /></el-form-item>
-        <el-form-item label="税率"><el-select v-model="form.taxRate" :disabled="!recoveryReady || previewed || Boolean(blockedReason)"><el-option label="0%" value="0" /><el-option label="13%" value="13" /></el-select></el-form-item>
-        <el-form-item label="含税预算上限（CNY）"><el-input v-model="form.amountCap" type="number" :disabled="!recoveryReady || previewed || Boolean(blockedReason)" /></el-form-item>
-        <el-form-item label="预计交付日期"><el-date-picker v-model="form.expectedDeliveryDate" type="date" value-format="YYYY-MM-DD" :disabled="!recoveryReady || previewed || Boolean(blockedReason)" /></el-form-item>
-        <el-form-item label="备注"><el-input v-model="form.remark" type="textarea" :disabled="!recoveryReady || previewed || Boolean(blockedReason)" /></el-form-item>
-      </el-form>
-      <div class="snapshot" aria-label="金额预览"><span>供应商：{{ supplierName }}</span><span>原料：{{ materialName }}</span><span>未税：{{ amountText.net }} CNY</span><span>税额：{{ amountText.tax }} CNY</span><strong>含税合计：{{ amountText.gross }} CNY</strong></div>
-      <div class="actions"><el-button type="primary" :loading="loading" :disabled="!recoveryReady || previewed || Boolean(blockedReason)" @click="submitPreview">生成预览</el-button></div>
-    </el-card>
+    <div v-else-if="grantId && ['UNKNOWN', 'EXECUTING', 'RECOVERY_ERROR'].includes(recoveryState)" class="recovery-actions"><UButton color="warning" :loading="recoveryLoading" @click="refreshRecovery">{{ t('procurement.ai_purchase_index.action_f9870fade6c7') }}</UButton></div>
+    <div v-if="grantId && timerUncertain" class="recovery-actions"><UButton color="neutral" variant="outline" :loading="recoveryLoading" @click="refreshRecovery">{{ t('procurement.ai_purchase_index.action_3b20c383e437') }}</UButton><span>{{ t('procurement.ai_purchase_index.text_3d180ba044b5') }}</span></div>
+    <UCard  class="content-card">
+      <CompatForm label-position="top" class="purchase-form">
+      <CompatFormItem :label="t('procurement.ai_purchase_index.label_033ed5945254')"><CompatSelect v-model="form.supplierId" filterable :disabled="!recoveryReady || previewed || Boolean(blockedReason)" :placeholder="t('procurement.ai_purchase_index.placeholder_a0106ac4aa3d')"><CompatOption v-for="item in suppliers" :key="item.id" :label="item.name" :value="item.id" /></CompatSelect></CompatFormItem>
+        <CompatFormItem :label="t('procurement.ai_purchase_index.label_e63280c7ebcc')"><CompatSelect v-model="form.materialTypeId" filterable :disabled="!recoveryReady || previewed || Boolean(blockedReason)" :placeholder="t('procurement.ai_purchase_index.placeholder_4686e83b3f8a')"><CompatOption v-for="item in materials" :key="item.id" :label="item.name" :value="item.id" /></CompatSelect></CompatFormItem>
+        <CompatFormItem :label="t('procurement.ai_purchase_index.label_4ca33c040687')"><UInput v-model="form.quantity" type="number" :disabled="!recoveryReady || previewed || Boolean(blockedReason)" /></CompatFormItem>
+        <CompatFormItem :label="t('procurement.ai_purchase_index.label_30a91dc43c1d')"><UInput v-model="form.unitPrice" type="number" :disabled="!recoveryReady || previewed || Boolean(blockedReason)" /></CompatFormItem>
+        <CompatFormItem :label="t('procurement.ai_purchase_index.label_9401d14fdcb4')"><CompatSelect v-model="form.taxRate" :disabled="!recoveryReady || previewed || Boolean(blockedReason)"><CompatOption label="0%" value="0" /><CompatOption label="13%" value="13" /></CompatSelect></CompatFormItem>
+        <CompatFormItem :label="t('procurement.ai_purchase_index.label_c2fe0a2fa65d')"><UInput v-model="form.amountCap" type="number" :disabled="!recoveryReady || previewed || Boolean(blockedReason)" /></CompatFormItem>
+        <CompatFormItem :label="t('procurement.ai_purchase_index.label_43b604ae06d6')"><CompatDatePicker v-model="form.expectedDeliveryDate" type="date" value-format="YYYY-MM-DD" :disabled="!recoveryReady || previewed || Boolean(blockedReason)" /></CompatFormItem>
+        <CompatFormItem :label="t('procurement.ai_purchase_index.label_daede9881787')"><el-input v-model="form.remark" type="textarea" :disabled="!recoveryReady || previewed || Boolean(blockedReason)" /></CompatFormItem>
+      </CompatForm>
+      <div class="snapshot" :aria-label="t('procurement.ai_purchase_index.aria_label_007b9237263c')"><span>{{ t('procurement.ai_purchase_index.text_51b7df601832') }}{{ supplierName }}</span><span>{{ t('procurement.ai_purchase_index.text_af6d15773688') }}{{ materialName }}</span><span>{{ t('procurement.ai_purchase_index.text_3a55379b7d5d') }}{{ amountText.net }} CNY</span><span>{{ t('procurement.ai_purchase_index.text_8426cec51e56') }}{{ amountText.tax }} CNY</span><strong>{{ t('procurement.ai_purchase_index.text_6ca6138fb2ae') }}{{ amountText.gross }} CNY</strong></div>
+      <div class="actions"><UButton color="primary" :loading="loading" :disabled="!recoveryReady || previewed || Boolean(blockedReason)" @click="submitPreview">{{ t('procurement.ai_purchase_index.action_59044824da36') }}</UButton></div>
+    </UCard>
     <AiOperationCard v-if="previewResponse" :response="previewResponse" :factory-id="factoryId" :cancel-handler="cancelPreview" @confirmed="handleConfirmed" @uncertain="handleUncertain" @recovered="handleRecovered" />
-    <div v-if="previewResponse" class="deferred-actions"><el-button type="warning" :loading="deferredInFlight" @click="authorizeLater">仅授权，稍后执行</el-button></div>
-    <el-card v-if="previewResponse && canonicalRows.length" shadow="never" class="snapshot-card">
-      <h3>已锁定的服务器采购快照</h3>
+    <div v-if="previewResponse" class="deferred-actions"><UButton color="warning" :loading="deferredInFlight" @click="authorizeLater">{{ t('procurement.ai_purchase_index.action_1a4c84b81811') }}</UButton></div>
+    <UCard v-if="previewResponse && canonicalRows.length"  class="snapshot-card">
+      <h3>{{ t('procurement.ai_purchase_index.text_8466501a3347') }}</h3>
       <div class="canonical-grid"><template v-for="row in canonicalRows" :key="row[0]"><span>{{ row[0] }}</span><strong>{{ row[1] }}</strong></template></div>
-    </el-card>
+    </UCard>
   </div>
 </template>
 

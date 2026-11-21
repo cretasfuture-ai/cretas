@@ -1,8 +1,9 @@
 import { readFileSync } from 'node:fs';
+import { sourceWithChinese } from '@/i18n-pilot/sourceForTests';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-const listSource = readFileSync(resolve(__dirname, '..', 'list.vue'), 'utf8');
+const listSource = sourceWithChinese(readFileSync(resolve(__dirname, '..', 'list.vue'), 'utf8'));
 const detailSource = readFileSync(resolve(__dirname, '..', 'detail.vue'), 'utf8');
 
 describe('purchase order supplier and execution boundaries', () => {

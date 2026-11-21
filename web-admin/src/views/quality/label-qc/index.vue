@@ -1,6 +1,12 @@
 <script setup lang="ts">
+import { CompatPagination, CompatTable, CompatTableColumn } from '@/components/compat';
+import { useCompatMessages } from '@/components/compat/messages';
+const { ElMessage, ElMessageBox } = useCompatMessages();
+import { useT } from '@/i18n-pilot/useT';
+const { t } = useT();
+
 import { computed, onMounted, ref } from 'vue';
-import { ElMessage, ElMessageBox } from 'element-plus';
+
 import type { ElTable } from 'element-plus';
 import {
   Aim,
@@ -93,7 +99,7 @@ const canReview = computed(() => {
 
 async function load() {
   if (!factoryId.value) {
-    ElMessage.warning('缺少工厂登录上下文，请重新登录');
+    ElMessage.warning(t('quality.label_qc_index.message_4e5a6d0c6d20'));
     return;
   }
   queueTableRef.value?.clearSelection();
@@ -188,11 +194,11 @@ async function submitReview(payload: LabelQcReviewRequest, keyboardConfirmed = f
     try {
       await ElMessageBox.confirm(
         `即将提交 ${payload.photos.length} 张照片的人工真值。提交后仍需技术管理员确认，才会进入训练集。`,
-        '确认完成整单审核',
+        t('quality.label_qc_index.message_5b5d9b438757'),
         {
           type: 'warning',
-          confirmButtonText: '确认提交',
-          cancelButtonText: '继续检查',
+          confirmButtonText: t('quality.label_qc_index.confirmbuttontext_9ebe36f8cf23'),
+          cancelButtonText: t('quality.label_qc_index.cancelbuttontext_9d4a1e91691b'),
         },
       );
     } catch {
@@ -236,7 +242,7 @@ async function submitReview(payload: LabelQcReviewRequest, keyboardConfirmed = f
     submitting.value = false;
   }
 
-  ElMessage.success('本批审核已提交，正在刷新待审队列');
+  ElMessage.success(t('quality.label_qc_index.message_44ac0bd649f6'));
   try {
     await load();
 
@@ -249,11 +255,11 @@ async function submitReview(payload: LabelQcReviewRequest, keyboardConfirmed = f
       await openReview(next);
     } else {
       drawerVisible.value = false;
-      ElMessage.success('人工审核已完成，待审队列已清空');
+      ElMessage.success(t('quality.label_qc_index.message_88f9fb861b34'));
     }
   } catch {
     drawerVisible.value = false;
-    ElMessage.warning('本批已提交成功，但待审列表刷新失败；请刷新页面后继续审核');
+    ElMessage.warning(t('quality.label_qc_index.message_df1734713da6'));
   }
 }
 
@@ -261,12 +267,12 @@ async function archiveTask(row: LabelQcTaskSummary) {
   if (!factoryId.value) return;
   try {
     await ElMessageBox.confirm(
-      '归档不会删除照片和标注，之后可以在“归档记录”中恢复。',
-      '确认归档这条任务？',
+      t('quality.label_qc_index.message_8a31ff1d02e7'),
+      t('quality.label_qc_index.message_10919ca358da'),
       {
         type: 'warning',
-        confirmButtonText: '确认归档',
-        cancelButtonText: '取消',
+        confirmButtonText: t('quality.label_qc_index.confirmbuttontext_7850c90df42f'),
+        cancelButtonText: t('quality.label_qc_index.cancelbuttontext_2cd0f3be8738'),
       },
     );
   } catch {
@@ -276,7 +282,7 @@ async function archiveTask(row: LabelQcTaskSummary) {
   try {
     const response = await archiveLabelQcTask(factoryId.value, row.id);
     if (response.success) {
-      ElMessage.success('已归档，照片和人工标注均已保留');
+      ElMessage.success(t('quality.label_qc_index.message_86c27d331a6c'));
       await load();
     }
   } finally {
@@ -290,7 +296,7 @@ async function restoreTask(row: LabelQcTaskSummary) {
   try {
     const response = await restoreLabelQcTask(factoryId.value, row.id);
     if (response.success) {
-      ElMessage.success('已恢复到“已审核整理”');
+      ElMessage.success(t('quality.label_qc_index.message_396e8265a73a'));
       await load();
     }
   } finally {
@@ -342,11 +348,11 @@ async function backupSelectedTasks() {
           ? '照片较多，打包需要几分钟，期间请不要关闭或刷新页面。'
           : ''
       }`,
-      '确认批量下载照片？',
+      t('quality.label_qc_index.message_14c78ee55527'),
       {
         type: 'info',
-        confirmButtonText: '开始下载',
-        cancelButtonText: '取消',
+        confirmButtonText: t('quality.label_qc_index.confirmbuttontext_541961415c3d'),
+        cancelButtonText: t('quality.label_qc_index.cancelbuttontext_2cd0f3be8738'),
       },
     );
   } catch {
@@ -399,7 +405,7 @@ async function decideTraining(row: LabelQcTaskSummary, approved: boolean) {
       {
         type: approved ? 'warning' : 'info',
         confirmButtonText: approved ? '确认批准' : '确认拒绝',
-        cancelButtonText: '取消',
+        cancelButtonText: t('quality.label_qc_index.cancelbuttontext_2cd0f3be8738'),
       },
     );
   } catch {
@@ -427,7 +433,7 @@ async function retryAnalysis(row: LabelQcTaskSummary): Promise<boolean> {
   try {
     const response = await retryLabelQcTask(factoryId.value, row.id);
     if (response.success) {
-      ElMessage.success('已重新进入 AI 初筛队列');
+      ElMessage.success(t('quality.label_qc_index.message_c82ddcdfcbc4'));
       await load();
       return true;
     }
@@ -442,12 +448,12 @@ async function retryCurrentTask() {
   if (reviewDirty.value) {
     try {
       await ElMessageBox.confirm(
-        '重新执行 AI 初筛会放弃当前尚未提交的人工标注。',
-        '确认重新初筛？',
+        t('quality.label_qc_index.message_1f9c2efaf0d2'),
+        t('quality.label_qc_index.message_26a6d3f192ac'),
         {
           type: 'warning',
-          confirmButtonText: '放弃草稿并重试',
-          cancelButtonText: '继续审核',
+          confirmButtonText: t('quality.label_qc_index.confirmbuttontext_b87ed9187213'),
+          cancelButtonText: t('quality.label_qc_index.cancelbuttontext_8e663277881e'),
         },
       );
     } catch {
@@ -478,12 +484,12 @@ async function handleReviewBeforeClose(done: () => void): Promise<void> {
   }
   try {
     await ElMessageBox.confirm(
-      '当前还有未提交的人工标注，关闭后本次修改会丢失。',
-      '放弃未提交草稿？',
+      t('quality.label_qc_index.message_975bcc0968d6'),
+      t('quality.label_qc_index.message_950ddcf51b1c'),
       {
         type: 'warning',
-        confirmButtonText: '放弃草稿',
-        cancelButtonText: '继续审核',
+        confirmButtonText: t('quality.label_qc_index.confirmbuttontext_70403791a994'),
+        cancelButtonText: t('quality.label_qc_index.cancelbuttontext_8e663277881e'),
         distinguishCancelAndClose: true,
       },
     );
@@ -520,8 +526,8 @@ onMounted(load);
     <header class="page-header">
       <div>
         <div class="eyebrow">QUALITY CONTROL · HUMAN IN THE LOOP</div>
-        <h1>包装标签拍检</h1>
-        <p>客户只处理 AI 风险与无法判断照片；平台训练选样独立进行，人工确认后才形成训练真值。</p>
+        <h1>{{ t('quality.label_qc_index.text_14d81ce3dd48') }}</h1>
+        <p>{{ t('quality.label_qc_index.text_bb0b10ea7902') }}</p>
       </div>
       <div class="header-actions">
         <el-button
@@ -529,31 +535,31 @@ onMounted(load);
           :icon="Download"
           @click="exportTrainingData"
         >
-          导出已批准训练集
+          {{ t('quality.label_qc_index.action_90384af131b5') }}
         </el-button>
-        <el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
+        <el-button :icon="Refresh" :loading="loading" @click="load">{{ t('quality.label_qc_index.action_aee887434131') }}</el-button>
       </div>
     </header>
 
-    <section class="summary-grid" aria-label="任务统计">
+    <section class="summary-grid" :aria-label="t('quality.label_qc_index.aria_label_5a7b0f327a64')">
       <article class="summary-card urgent">
         <div class="summary-icon"><Warning /></div>
         <div>
-          <span>待人工审核</span>
+          <span>{{ t('quality.label_qc_index.text_8fb733f15296') }}</span>
           <strong>{{ counts.NEEDS_REVIEW ?? 0 }}</strong>
         </div>
       </article>
       <article class="summary-card">
         <div class="summary-icon"><Aim /></div>
         <div>
-          <span>AI 初筛中</span>
+          <span>{{ t('quality.label_qc_index.text_ec6a0355d92f') }}</span>
           <strong>{{ (counts.QUEUED ?? 0) + (counts.ANALYZING ?? 0) }}</strong>
         </div>
       </article>
       <article class="summary-card success">
         <div class="summary-icon"><Check /></div>
         <div>
-          <span>已完成</span>
+          <span>{{ t('quality.label_qc_index.text_f28461bb49c8') }}</span>
           <strong>{{ (counts.AUTO_PASSED ?? 0) + (counts.REVIEWED ?? 0) }}</strong>
         </div>
       </article>
@@ -563,15 +569,15 @@ onMounted(load);
       <div class="queue-toolbar">
         <div>
           <h2>
-            {{ queueMode === 'REVIEW' ? '审核队列' : queueMode === 'MANAGE' ? '已完成记录' : '归档记录' }}
+            {{ queueMode === 'REVIEW' ? t('quality.label_qc_index.text_49a3a4c80ab6') : queueMode === 'MANAGE' ? t('quality.label_qc_index.text_6ec165b14cb2') : t('quality.label_qc_index.text_cc65c17d4edc') }}
           </h2>
           <span>
             {{
               queueMode === 'REVIEW'
-                ? '默认只看需要处理的任务'
+                ? t('quality.label_qc_index.text_31f2be419fdb')
                 : queueMode === 'MANAGE'
-                  ? '查看 AI 自动完成与人工审核记录；只有人工真值可以批准训练'
-                  : '归档不删除，可随时恢复'
+                  ? t('quality.label_qc_index.text_6be177ad19a3')
+                  : t('quality.label_qc_index.text_5e1722f7b6d7')
             }}
           </span>
         </div>
@@ -581,9 +587,9 @@ onMounted(load);
             size="large"
             @change="changeQueueMode"
           >
-            <el-radio-button value="REVIEW">待人工审核</el-radio-button>
-            <el-radio-button value="MANAGE">已完成记录</el-radio-button>
-            <el-radio-button value="ARCHIVED">归档记录</el-radio-button>
+            <el-radio-button value="REVIEW">{{ t('quality.label_qc_index.text_8fb733f15296') }}</el-radio-button>
+            <el-radio-button value="MANAGE">{{ t('quality.label_qc_index.text_6ec165b14cb2') }}</el-radio-button>
+            <el-radio-button value="ARCHIVED">{{ t('quality.label_qc_index.text_cc65c17d4edc') }}</el-radio-button>
           </el-radio-group>
           <el-date-picker
             v-model="productionDateRange"
@@ -592,8 +598,8 @@ onMounted(load);
             clearable
             value-format="YYYY-MM-DD"
             range-separator="至"
-            start-placeholder="生产日期起"
-            end-placeholder="生产日期止"
+            :start-placeholder="t('quality.label_qc_index.start_placeholder_422eac7d8c2d')"
+            :end-placeholder="t('quality.label_qc_index.end_placeholder_dd45fc11025f')"
             style="width: 280px"
             @change="changeFilter"
           />
@@ -603,7 +609,7 @@ onMounted(load);
             multiple
             collapse-tags
             collapse-tags-tooltip
-            placeholder="处理状态"
+            :placeholder="t('quality.label_qc_index.placeholder_d5e74de3449e')"
             style="width: 240px"
             @change="changeFilter"
           >
@@ -619,12 +625,12 @@ onMounted(load);
 
       <div v-if="queueMode !== 'REVIEW'" class="bulk-backup-bar">
         <div>
-          <strong>批量照片备份</strong>
+          <strong>{{ t('quality.label_qc_index.text_1717d5f9a905') }}</strong>
           <span>
             {{
               selectedPhotoTasks.length
                 ? `已选 ${selectedPhotoTasks.length} 批，共 ${selectedPhotoCount} 张照片`
-                : '勾选一批或多批已审核任务，可一次下载一个 ZIP'
+                : t('quality.label_qc_index.text_48d93d1f5de0')
             }}
           </span>
         </div>
@@ -635,11 +641,11 @@ onMounted(load);
           :loading="bulkBackupLoading"
           @click="backupSelectedTasks"
         >
-          批量下载照片
+          {{ t('quality.label_qc_index.action_de86bbf0a2f2') }}
         </el-button>
       </div>
 
-      <el-table
+      <CompatTable
         ref="queueTableRef"
         v-loading="loading || bulkBackupLoading"
         :data="rows"
@@ -647,38 +653,38 @@ onMounted(load);
         class="queue-table"
         @selection-change="handlePhotoSelectionChange"
       >
-        <el-table-column
+        <CompatTableColumn
           v-if="queueMode !== 'REVIEW'"
           type="selection"
           width="48"
           align="center"
           :selectable="canSelectForPhotoBackup"
         />
-        <el-table-column label="SKU / 批次" min-width="210">
+        <CompatTableColumn :label="t('quality.label_qc_index.label_73905c19fd48')" min-width="210">
           <template #default="{ row }">
             <div class="sku-cell">
               <strong>{{ row.skuName }}</strong>
-              <span>{{ row.skuCode }} · {{ row.batchNumber || '未填写批次' }}</span>
+              <span>{{ row.skuCode }} · {{ row.batchNumber || t('quality.label_qc_index.text_fa21ec82ce7b') }}</span>
             </div>
           </template>
-        </el-table-column>
-        <el-table-column prop="productionDate" label="生产日期" width="105" />
-        <el-table-column label="照片 / AI 疑点" width="120">
+        </CompatTableColumn>
+        <CompatTableColumn prop="productionDate" :label="t('quality.label_qc_index.label_5f7ee6022bd9')" width="105" />
+        <CompatTableColumn :label="t('quality.label_qc_index.label_81bb3938a8be')" width="120">
           <template #default="{ row }">
-            <span>{{ row.photoCount }} 张 / </span>
-            <strong class="candidate-count">{{ row.aiCandidateCount }} 处</strong>
+            <span>{{ row.photoCount }} {{ t('quality.label_qc_index.text_2c4761ebecea') }} </span>
+            <strong class="candidate-count">{{ row.aiCandidateCount }} {{ t('quality.label_qc_index.text_34ee554a469c') }}</strong>
           </template>
-        </el-table-column>
-        <el-table-column label="状态" width="95">
+        </CompatTableColumn>
+        <CompatTableColumn :label="t('quality.label_qc_index.label_6320b4a8722a')" width="95">
           <template #default="{ row }">
             <el-tag :type="statusType(row.status)" effect="light">
               {{ statusText(row.status) }}
             </el-tag>
           </template>
-        </el-table-column>
-        <el-table-column
+        </CompatTableColumn>
+        <CompatTableColumn
           v-if="queueMode !== 'REVIEW'"
-          label="训练确认"
+          :label="t('quality.label_qc_index.label_eb90338f3237')"
           width="110"
         >
           <template #default="{ row }">
@@ -696,23 +702,23 @@ onMounted(load);
             >
               {{
                 row.status === 'AUTO_PASSED'
-                  ? '非人工真值'
+                  ? t('quality.label_qc_index.text_83cdce6f6201')
                   : row.trainingStatus === 'APPROVED'
-                  ? '已批准'
+                  ? t('quality.label_qc_index.text_b42cb548c1d4')
                   : row.trainingStatus === 'REJECTED'
-                    ? '已拒绝'
-                    : '待技术确认'
+                    ? t('quality.label_qc_index.text_f098218a3032')
+                    : t('quality.label_qc_index.text_e8b405734d47')
               }}
             </el-tag>
           </template>
-        </el-table-column>
-        <el-table-column prop="createdAt" label="提交时间" min-width="145">
+        </CompatTableColumn>
+        <CompatTableColumn prop="createdAt" :label="t('quality.label_qc_index.label_6bc352ca0ce0')" min-width="145">
           <template #default="{ row }">
             {{ new Date(row.createdAt).toLocaleString() }}
           </template>
-        </el-table-column>
-        <el-table-column
-          label="操作"
+        </CompatTableColumn>
+        <CompatTableColumn
+          :label="t('quality.label_qc_index.label_ed31fbb483ee')"
           :width="queueMode === 'REVIEW' ? 210 : 330"
           fixed="right"
         >
@@ -723,9 +729,9 @@ onMounted(load);
               :icon="EditPen"
               @click="openReview(row)"
             >
-              人工审核
+              {{ t('quality.label_qc_index.action_cee45f307836') }}
             </el-button>
-            <el-button v-else text @click="openReview(row)">查看</el-button>
+            <UButton color="neutral" v-else variant="ghost" @click="openReview(row)">{{ t('quality.label_qc_index.action_db8db0530432') }}</UButton>
             <el-button
               v-if="row.status === 'ANALYSIS_FAILED'"
               text
@@ -733,67 +739,67 @@ onMounted(load);
               :loading="retryingTaskId === row.id"
               @click="retryAnalysis(row)"
             >
-              重试 AI
+              {{ t('quality.label_qc_index.action_40e2ca01d094') }}
             </el-button>
             <template v-if="row.status === 'REVIEWED'">
-              <el-button
-                text
+              <UButton color="neutral"
+                variant="ghost"
                 :loading="actionTaskId === row.id"
                 :disabled="bulkBackupLoading"
                 @click="backupTask(row)"
               >
-                下载照片备份
-              </el-button>
-              <el-button
+                {{ t('quality.label_qc_index.action_3af3392516a7') }}
+              </UButton>
+              <UButton
                 v-if="queueMode !== 'ARCHIVED'"
-                text
-                type="warning"
+                variant="ghost"
+                color="warning"
                 :loading="actionTaskId === row.id"
                 @click="archiveTask(row)"
               >
-                归档
-              </el-button>
-              <el-button
+                {{ t('quality.label_qc_index.action_5292ab1a36c5') }}
+              </UButton>
+              <UButton
                 v-else
-                text
-                type="primary"
+                variant="ghost"
+                color="primary"
                 :loading="actionTaskId === row.id"
                 @click="restoreTask(row)"
               >
-                恢复
-              </el-button>
-              <el-button
+                {{ t('quality.label_qc_index.action_e0534b8a4e46') }}
+              </UButton>
+              <UButton
                 v-if="canManageTraining && row.trainingStatus !== 'APPROVED'"
-                text
-                type="success"
+                variant="ghost"
+                color="success"
                 :loading="actionTaskId === row.id"
                 @click="decideTraining(row, true)"
               >
-                批准训练
-              </el-button>
-              <el-button
+                {{ t('quality.label_qc_index.action_c683ddb5a268') }}
+              </UButton>
+              <UButton
                 v-if="canManageTraining && row.trainingStatus !== 'REJECTED'"
-                text
-                type="danger"
+                variant="ghost"
+                color="error"
                 :loading="actionTaskId === row.id"
                 @click="decideTraining(row, false)"
               >
-                拒绝训练
-              </el-button>
+                {{ t('quality.label_qc_index.action_8332bc871364') }}
+              </UButton>
             </template>
           </template>
-        </el-table-column>
+        </CompatTableColumn>
         <template #empty>
           <div class="empty-state">
             <Check />
-            <strong>当前筛选下没有待处理任务</strong>
-            <span>手机端新提交的照片会自动进入这里。</span>
+            <strong>{{ t('quality.label_qc_index.text_e6bb20a080e6') }}</strong>
+            <span>{{ t('quality.label_qc_index.text_250cff123338') }}</span>
           </div>
         </template>
-      </el-table>
+      </CompatTable>
 
       <div class="pagination-row">
-        <el-pagination
+        <CompatPagination
           background
           layout="total, sizes, prev, pager, next, jumper"
           :total="pagination.total"
@@ -818,12 +824,12 @@ onMounted(load);
       <template #header>
         <div class="drawer-heading">
           <div>
-            <strong>逐张人工审核</strong>
-            <span>只处理模型筛出的缺标、重复/错配和不确定疑点；高置信正常照片自动跳过</span>
+            <strong>{{ t('quality.label_qc_index.text_15a6c37ddc32') }}</strong>
+            <span>{{ t('quality.label_qc_index.text_a26313397d81') }}</span>
           </div>
           <div class="drawer-statuses">
-            <div v-if="reviewDirty" class="draft-status">● 未提交草稿</div>
-            <div class="review-rule">宁可多报 · 不可漏报</div>
+            <div v-if="reviewDirty" class="draft-status">{{ t('quality.label_qc_index.text_aa38cbb293e4') }}</div>
+            <div class="review-rule">{{ t('quality.label_qc_index.text_896f13d464a1') }}</div>
           </div>
         </div>
       </template>

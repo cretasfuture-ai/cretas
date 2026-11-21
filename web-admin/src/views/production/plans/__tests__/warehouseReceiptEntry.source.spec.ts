@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { sourceWithChinese } from '@/i18n-pilot/sourceForTests';
 
 /**
  * 「仓库确认入库」必须有入口 —— 否则整条生产链的最后一段走不通。
@@ -37,10 +38,10 @@ describe('仓库确认入库的入口', () => {
 
     /** 剥注释 —— 本文件与被测文件的注释都会引用这些串做说明。 */
     function code(src: string): string {
-        return src
+        return sourceWithChinese(src
             .replace(/<!--[\s\S]*?-->/g, '')
             .replace(/\/\*[\s\S]*?\*\//g, '')
-            .replace(/^\s*\/\/.*$/gm, '');
+            .replace(/^\s*\/\/.*$/gm, ''));
     }
 
     it('阳性对照: 源码读得到, handler 与弹窗都在', () => {
@@ -92,9 +93,9 @@ describe('仓库确认入库的入口', () => {
         expect(operations, '没切到操作列, 断言无效').not.toBe('');
 
         // 操作列里不许再出现旧写法(标签恰为「确认入库」)
-        expect(operations).not.toContain('>确认入库</el-button>');
+        expect(operations).not.toMatch(/>确认入库<\/(el-button|UButton)>/);
         // 新入口用「仓库确认入库」, 与 nextStepText 的措辞一致
-        expect(operations).toContain('>仓库确认入库</el-button>');
+        expect(operations).toMatch(/>仓库确认入库<\/(el-button|UButton)>/);
         expect(c).toContain("return '仓库确认入库'");
     });
 });

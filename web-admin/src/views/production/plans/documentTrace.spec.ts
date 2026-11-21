@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { sourceWithChinese } from '@/i18n-pilot/sourceForTests';
 import { resolve } from 'node:path';
 import { documentTraceTarget, traceDocumentLabel } from './documentTrace';
 
-const pageSource = readFileSync(resolve(__dirname, 'list.vue'), 'utf8');
+const pageSource = sourceWithChinese(readFileSync(resolve(__dirname, 'list.vue'), 'utf8'));
 const apiSource = readFileSync(resolve(__dirname, '../../../api/productionPlan.ts'), 'utf8');
 
 describe('production document trace navigation', () => {

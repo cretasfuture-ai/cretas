@@ -1,11 +1,12 @@
 import { readFileSync } from 'node:fs';
+import { sourceWithChinese } from '@/i18n-pilot/sourceForTests';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-const source = readFileSync(
+const source = sourceWithChinese(readFileSync(
   resolve(process.cwd(), 'src/views/warehouse/material-types/list.vue'),
   'utf8',
-);
+));
 
 describe('material type short-code and taxonomy source contract', () => {
   it('always offers basic material types independently from the optional taxonomy tree', () => {
@@ -53,7 +54,7 @@ describe('material type short-code and taxonomy source contract', () => {
 
   it('exposes only the single short material code and removes all dual-code UI', () => {
     expect(source).toContain('return String(row.code ||');
-    expect(source).toContain('<el-table-column label="料号"');
+    expect(source).toMatch(/<(?:el-table-column|CompatTableColumn) label="料号"/);
     expect(source).toContain('placeholder="搜索原料名称 / 料号"');
     expect(source).not.toContain('businessCode');
     expect(source).not.toContain('历史兼容编码');

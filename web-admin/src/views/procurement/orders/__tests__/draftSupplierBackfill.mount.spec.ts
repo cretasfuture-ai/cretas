@@ -71,6 +71,11 @@ interface FormItem {
   priceSource?: string | null;
   taxRate?: number | null;
 }
+
+vi.mock('@/components/compat/messages', async () => {
+  const { ElMessage, ElMessageBox } = await import('element-plus');
+  return { useCompatMessages: () => ({ ElMessage, ElMessageBox }) };
+});
 interface Vm {
   handleAiFill: (params: Record<string, unknown>) => Promise<void>;
   openEditDialog: (id: string) => Promise<void>;
@@ -146,11 +151,15 @@ function mountList() {
     global: {
       stubs: {
         ElDialog: DialogStub,
+        CompatDialog: DialogStub,
         ElTable: ElTableStub,
         ElTableColumn: ElTableColumnStub,
         ElForm: PassThrough('ElForm'),
         ElFormItem: PassThrough('ElFormItem'),
         ElCard: PassThrough('ElCard'),
+        CompatForm: PassThrough('CompatForm'),
+        CompatFormItem: PassThrough('CompatFormItem'),
+        UCard: PassThrough('UCard'),
         CanvasAwareWrapper: PassThrough('CanvasAwareWrapper'),
       },
     },

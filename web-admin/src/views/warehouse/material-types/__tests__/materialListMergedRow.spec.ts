@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
 import ElementPlus from 'element-plus';
+import { nuxtPilotStubs } from '@/components/compat/testStubs';
 import List from '../list.vue';
 
 const h = vi.hoisted(() => ({
@@ -40,6 +41,7 @@ async function mountList() {
     global: {
       plugins: [ElementPlus],
       stubs: {
+        ...nuxtPilotStubs,
         teleport: true,
         MaterialAliasDialog: true,
         MaterialMergeDialog: true,

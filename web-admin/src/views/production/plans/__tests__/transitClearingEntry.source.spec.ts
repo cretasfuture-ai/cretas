@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { sourceWithChinese } from '@/i18n-pilot/sourceForTests';
 
 /**
  * 「中转挂账清账」必须有入口 —— 否则结算链的最后一段走不通。
@@ -35,10 +36,10 @@ describe('production plan list — 中转挂账清账入口', () => {
 
     /** 剥注释 —— 本文件与被测文件的注释都会引用这些串做说明。 */
     function code(src: string): string {
-        return src
+        return sourceWithChinese(src
             .replace(/<!--[\s\S]*?-->/g, '')
             .replace(/\/\*[\s\S]*?\*\//g, '')
-            .replace(/^\s*\/\/.*$/gm, '');
+            .replace(/^\s*\/\/.*$/gm, ''));
     }
 
     it('阳性对照: handler、弹窗与清账 API 调用都在源码里', () => {
@@ -84,6 +85,6 @@ describe('production plan list — 中转挂账清账入口', () => {
         const opStart = c.lastIndexOf('<el-table-column', opLabel);
         const operations = c.slice(opStart, c.indexOf('</el-table>', opStart));
         expect(operations, '没切到操作列, 断言无效').not.toBe('');
-        expect(operations).toContain('>中转挂账清账</el-button>');
+        expect(operations).toMatch(/>中转挂账清账<\/(el-button|UButton)>/);
     });
 });

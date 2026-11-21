@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { sourceWithChinese } from '@/i18n-pilot/sourceForTests';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -42,9 +43,9 @@ describe('procurement order PDF buttons', () => {
   });
 
   it('list shortcut always downloads the external supplier PDF', () => {
-    const source = readView('list.vue');
+    const source = sourceWithChinese(readView('list.vue'));
 
     expect(source).toContain('params: { external: true }');
-    expect(source).toContain('handleDownloadPdf(row)">对外供货单</el-button>');
+    expect(source).toMatch(/handleDownloadPdf\(row\)">对外供货单<\/(el-button|UButton)>/);
   });
 });

@@ -1,4 +1,10 @@
 <script setup lang="ts">
+import { CompatAlert, CompatDatePicker, CompatDescriptions, CompatDescriptionsItem, CompatDialog, CompatForm, CompatFormItem, CompatOption, CompatPagination, CompatSelect, CompatTable, CompatTableColumn } from '@/components/compat';
+import { useCompatMessages } from '@/components/compat/messages';
+const { ElMessage, ElMessageBox } = useCompatMessages();
+import { useT } from '@/i18n-pilot/useT';
+const { t } = useT();
+
 import { ref, computed, onMounted, nextTick, watch } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import { pickSettlementEligibleWarehouses, summarizeStockByWarehouse } from './rawWarehousePicker';
@@ -10,7 +16,7 @@ import { usePermissionStore } from '@/store/modules/permission';
 import { useProductionPlanCustomerReadAccess } from './productionPlanCustomerReadAccess';
 import type { ProductionPlanCustomerOption } from './productionPlanCustomerSelection';
 import { get, post, put } from '@/api/request';
-import { ElMessage, ElMessageBox, ElSelect } from 'element-plus';
+import { ElSelect } from 'element-plus';
 import { pickPrefilled, readReadinessPrefill } from '@/views/factory-readiness/readinessPrefill';
 import {
   DEFAULT_OVER_RECEIVE_RULE,
@@ -196,20 +202,20 @@ const {
 } = useBusinessTableColumns({
   storageKey: 'cretas:production-plans:visible-columns:v1',
   columns: () => [
-    { key: 'customer', label: '客户' },
-    { key: 'process', label: '工序' },
-    { key: 'batchDate', label: '批次日期' },
-    { key: 'plannedQuantity', label: '计划成品' },
-    { key: 'actualQuantity', label: '实际数量' },
-    { key: 'plannedDate', label: '计划日期' },
-    { key: 'inventoryStatus', label: '入库状态' },
-    { key: 'materialReference', label: '原料参考' },
-    { key: 'nextStep', label: '下一步' },
-    { key: 'workers', label: '预计工人' },
-    { key: 'supervisor', label: '指派主管' },
-    { key: 'source', label: '来源' },
-    { key: 'reportMode', label: '报工模式' },
-    { key: 'createdAt', label: '创建时间' },
+    { key: 'customer', label: t('production.plans_list.label_ad4af312dbc2') },
+    { key: 'process', label: t('production.plans_list.label_648cd106a0b7') },
+    { key: 'batchDate', label: t('production.plans_list.label_4ab95394a48e') },
+    { key: 'plannedQuantity', label: t('production.plans_list.label_79c31e394ad1') },
+    { key: 'actualQuantity', label: t('production.plans_list.label_dbf1981b4fdb') },
+    { key: 'plannedDate', label: t('production.plans_list.label_011247215d19') },
+    { key: 'inventoryStatus', label: t('production.plans_list.label_a54c13487c75') },
+    { key: 'materialReference', label: t('production.plans_list.label_407a177f0d11') },
+    { key: 'nextStep', label: t('production.plans_list.label_acfc4e74a650') },
+    { key: 'workers', label: t('production.plans_list.label_7dd57ce90957') },
+    { key: 'supervisor', label: t('production.plans_list.label_8f4fdba6fb72') },
+    { key: 'source', label: t('production.plans_list.label_a488e93d69cc') },
+    { key: 'reportMode', label: t('production.plans_list.label_32ac10e7e9ae') },
+    { key: 'createdAt', label: t('production.plans_list.label_07ec86e0f1d4') },
   ],
   defaults: ['batchDate', 'plannedQuantity', 'actualQuantity', 'plannedDate', 'materialReference', 'nextStep'],
   max: productionColumnMax,
@@ -449,7 +455,7 @@ type ProductionDocumentCommand =
 
 function handleProductionDocumentCommand(command: ProductionDocumentCommand, row: TableRow) {
   if (!canPrintPlanDocuments(String(row.status || ''))) {
-    ElMessage.warning('计划尚未形成可打印快照，暂不能查看生产单据');
+    ElMessage.warning(t('production.plans_list.message_e2bbf9412240'));
     return;
   }
   if (command === 'document-pack') {
@@ -500,12 +506,12 @@ function handleTraceAndCostCommand(command: TraceAndCostCommand, row: TableRow) 
     return;
   }
   if (String(row.status || '').toUpperCase() !== 'COMPLETED') {
-    ElMessage.info('计划结单并形成完工批次后才能进行成品出厂核算；当前可先查看「生产计划汇总」');
+    ElMessage.info(t('production.plans_list.message_8641705852fa'));
     return;
   }
   const orderNumberOrId = sourceOrderBusinessNumber(row) || String(row.sourceOrderId || '').trim();
   if (!orderNumberOrId) {
-    ElMessage.warning('该计划未关联销售订单，无法按订单打开成品出厂核算');
+    ElMessage.warning(t('production.plans_list.message_0182abc884f5'));
     return;
   }
   void router.push({
@@ -724,7 +730,7 @@ function handleProductionActionCommand(command: ProductionActionCommand, row: Ta
       void handleCancel(row);
       break;
     default:
-      ElMessage.error('无法识别的生产计划操作，已停止执行');
+      ElMessage.error(t('production.plans_list.message_adbaddeb4e8e'));
   }
 }
 
@@ -842,15 +848,15 @@ async function submitSecondaryPlan() {
   if (!factoryId.value) return;
   const form = secondaryForm.value;
   if (!form.wipId) {
-    ElMessage.warning('请选择源半成品 WIP');
+    ElMessage.warning(t('production.plans_list.message_1686d8866413'));
     return;
   }
   if (form.quantity <= 0) {
-    ElMessage.warning('计划加工数量必须大于 0');
+    ElMessage.warning(t('production.plans_list.message_218063ec8988'));
     return;
   }
   if (!form.productTypeId) {
-    ElMessage.warning('请选择目标产品类型');
+    ElMessage.warning(t('production.plans_list.message_7c7a6ba5ffd9'));
     return;
   }
   const wip = selectedWip.value;
@@ -872,7 +878,7 @@ async function submitSecondaryPlan() {
       plannedDate: form.plannedDate || undefined,
     });
     if (res.success) {
-      ElMessage.success('独立再加工/返工计划创建成功');
+      ElMessage.success(t('production.plans_list.message_0a4d1f428845'));
       secondaryDialogVisible.value = false;
       loadData();
     } else {
@@ -1175,7 +1181,7 @@ async function loadMaterialAdvisories(rows: TableRow[]) {
   });
   materialAdvisoryMap.value = next;
   if (failed) {
-    ElMessage({ message: '部分生产计划原料预警加载失败，请刷新后重试', type: 'error', duration: 0, showClose: true });
+    ElMessage({ message: t('production.plans_list.message_4c1cafa09e3c'), type: 'error', duration: 0, showClose: true });
   }
 }
 
@@ -1392,7 +1398,7 @@ async function applyResolvedWorkflowCandidate(candidate: WorkflowResolutionCandi
     planForm.value.productTypeId = '';
     hasActiveWorkflow.value = false;
     productWorkProcessList.value = [];
-    ElMessage.error('该 Workflow 缺少生产计划绑定信息，请联系管理员重新发布');
+    ElMessage.error(t('production.plans_list.message_3a9dad51dbf7'));
     return;
   }
   planForm.value.productTypeId = bindingProductTypeId;
@@ -1422,7 +1428,7 @@ async function confirmWorkflowCandidateSelection() {
     (item) => item.workflowId === pendingCandidateWorkflowId.value,
   );
   if (!candidate) {
-    ElMessage.warning('请选择一条生产工序路线');
+    ElMessage.warning(t('production.plans_list.message_674fd2581546'));
     return;
   }
   const completeOutputs = workflowCandidateOutputIds(candidate);
@@ -1438,7 +1444,7 @@ async function confirmWorkflowCandidateSelection() {
     };
     workflowCandidateDialogVisible.value = false;
     planForm.value.targetFinishedGoodIds = completeOutputs;
-    ElMessage.success('已把该 Workflow 的额外联产成品加入本计划');
+    ElMessage.success(t('production.plans_list.message_60b787dd8aba'));
     return;
   }
   confirmingWorkflowCandidate.value = true;
@@ -1653,7 +1659,7 @@ async function maybeOpenFromReadiness(): Promise<boolean> {
   handleCreate();
   await loadProductTypes();
   if (!pickPrefilled(productTypes.value, prefill.productTypeId)) {
-    ElMessage.warning('就绪页指定的成品已不在可选范围，请手动选择');
+    ElMessage.warning(t('production.plans_list.message_e919d0761c9b'));
   } else {
     planForm.value.productTypeId = String(prefill.productTypeId);
     handleProductChange(String(prefill.productTypeId));
@@ -1683,7 +1689,7 @@ async function maybeReopenFromQuery() {
 
 async function submitPlan() {
   if (!planForm.value.plannedDate) {
-    ElMessage.warning('请选择计划生产日');
+    ElMessage.warning(t('production.plans_list.message_4cd57edb4325'));
     return;
   }
   if (!factoryId.value) return;
@@ -1695,15 +1701,15 @@ async function submitPlan() {
       // 防呆: 红框锚定 + 自动聚焦空字段 + sticky 可关闭错误提示 (不是 3 秒自动消失的 toast)。
       sourceOrderIdError.value = true;
       void nextTick(() => sourceOrderSelectRef.value?.focus());
-      ElMessage({ message: '请选择来源销售订单', type: 'error', duration: 0, showClose: true });
+      ElMessage({ message: t('production.plans_list.message_c802f7260f7a'), type: 'error', duration: 0, showClose: true });
       return;
     }
     if (!planForm.value.sourceOrderItemIds || planForm.value.sourceOrderItemIds.length === 0) {
-      ElMessage.warning('请至少保留一个产品行 (在「产品行」多选中至少选 1 项)');
+      ElMessage.warning(t('production.plans_list.message_9c66a18999f9'));
       return;
     }
     if (!planForm.value.batchDate) {
-      ElMessage.warning('请选择批次日期');
+      ElMessage.warning(t('production.plans_list.message_12b4d83680a7'));
       return;
     }
     dialogLoading.value = true;
@@ -1754,11 +1760,11 @@ async function submitPlan() {
         }
         await ElMessageBox.confirm(
           duplicate.response?.data?.message || duplicate.message || '近期存在内容相同的生产计划，仍要继续创建吗？',
-          '发现可能重复的计划',
+          t('production.plans_list.message_6af3054656fe'),
           {
             type: 'warning',
-            confirmButtonText: '确认仍要创建',
-            cancelButtonText: '返回检查',
+            confirmButtonText: t('production.plans_list.confirmbuttontext_165bfed05e6b'),
+            cancelButtonText: t('production.plans_list.cancelbuttontext_84eef12f27a4'),
             distinguishCancelAndClose: true,
           },
         );
@@ -1785,7 +1791,7 @@ async function submitPlan() {
 
   // 非 SO 来源：完全匹配优先；无完全匹配时允许最小联产超集并要求确认完整产出。
   if (planForm.value.targetFinishedGoodIds.length === 0) {
-    ElMessage.warning('请选择生产成品');
+    ElMessage.warning(t('production.plans_list.message_4ac660bdcdf9'));
     return;
   }
   if (nonSoSubmitBlocked.value) {
@@ -1797,12 +1803,12 @@ async function submitPlan() {
           ? '未找到覆盖该产品的工序 Workflow，请前往 Workflow 配置'
           : '未找到共享的工序 Workflow，请分开创建生产计划');
     } else {
-      ElMessage.warning('检测到多个可用 Workflow，请先选择本计划使用的版本');
+      ElMessage.warning(t('production.plans_list.message_25c17fc65350'));
     }
     return;
   }
   if (!planForm.value.productTypeId || !resolvedWorkflowCandidate.value) {
-    ElMessage.warning('请选择生产计划使用的 Workflow');
+    ElMessage.warning(t('production.plans_list.message_2862d71a4a31'));
     return;
   }
   // 存货生产按实际报工/小结确认产量，计划数量仅作可选参考；其他来源继续严格要求正数。
@@ -1811,7 +1817,7 @@ async function submitPlan() {
     !Number.isFinite(planForm.value.plannedQuantity)
     || Number(planForm.value.plannedQuantity) <= 0
   )) {
-    ElMessage.warning('请输入计划数量');
+    ElMessage.warning(t('production.plans_list.message_c11365d8764e'));
     return;
   }
   dialogLoading.value = true;
@@ -1860,11 +1866,11 @@ async function submitPlan() {
       }
       await ElMessageBox.confirm(
         duplicate.response?.data?.message || duplicate.message || '近期存在内容相同的生产计划，仍要继续创建吗？',
-        '发现可能重复的计划',
+        t('production.plans_list.message_6af3054656fe'),
         {
           type: 'warning',
-          confirmButtonText: '确认仍要创建',
-          cancelButtonText: '返回检查',
+          confirmButtonText: t('production.plans_list.confirmbuttontext_165bfed05e6b'),
+          cancelButtonText: t('production.plans_list.cancelbuttontext_84eef12f27a4'),
           distinguishCancelAndClose: true,
         },
       );
@@ -1890,8 +1896,8 @@ async function submitPlan() {
       resetWorkflowResolutionState();
       ElMessageBox.alert(
         err.message || '所选 Workflow 已被切换或失效，请重新选择',
-        '工序版本已变化',
-        { confirmButtonText: '重新解析', type: 'warning' },
+        t('production.plans_list.message_4cc14707b3f1'),
+        { confirmButtonText: t('production.plans_list.confirmbuttontext_52332b5bd714'), type: 'warning' },
       ).then(() => {
         void resolveTargetFinishedGoods(planForm.value.targetFinishedGoodIds.slice());
       }).catch(() => { /* 用户关闭，保持提交阻塞 */ });
@@ -1900,8 +1906,8 @@ async function submitPlan() {
         err.message || (planForm.value.targetFinishedGoodIds.length === 1
           ? '未找到覆盖该产品的工序 Workflow，请前往 Workflow 配置'
           : '未找到共享的工序 Workflow，请分开创建生产计划'),
-        '工序图未覆盖',
-        { confirmButtonText: '去产品工艺画布', cancelButtonText: '取消', type: 'warning' }
+        t('production.plans_list.message_cffe26226a5e'),
+        { confirmButtonText: t('production.plans_list.confirmbuttontext_2195342e2da0'), cancelButtonText: t('production.plans_list.cancelbuttontext_2cd0f3be8738'), type: 'warning' }
       ).then(() => {
         goToWorkflowConfig(planForm.value.targetFinishedGoodIds);
       }).catch(() => { /* 用户取消, 静默 */ });
@@ -1917,11 +1923,11 @@ async function submitPlan() {
 async function handleStart(row: TableRow) {
   if (actionLoading.value) return;
   try {
-    await ElMessageBox.confirm('确定开始此生产计划?', '提示', { type: 'warning' });
+    await ElMessageBox.confirm(t('production.plans_list.message_01ad7eab1416'), t('production.plans_list.message_f56c6c82203b'), { type: 'warning' });
     actionLoading.value = true;
     const response = await post(`/${factoryId.value}/production-plans/${row.id}/start`, undefined, SHORTAGE_HANDLED);
     if (response.success) {
-      ElMessage.success('已开始生产');
+      ElMessage.success(t('production.plans_list.message_e15a89c1dbfa'));
       loadData();
     } else {
       ElMessage.error(response.message || '操作失败');
@@ -1956,11 +1962,11 @@ async function askForceStartReason(detail?: string): Promise<string | null> {
     const r = await ElMessageBox.prompt(
       (detail ? `${detail}\n\n` : '')
         + '这个计划关联的缺料还没解决。确需先开工，请写明原因（会记入「缺料异常」的处理记录）。',
-      '缺料未解决，强制开工',
+      t('production.plans_list.message_eac9e9af1715'),
       {
         inputValidator: (v: string) => (v && v.trim().length > 0) || '原因不能为空',
-        confirmButtonText: '强制开工',
-        cancelButtonText: '先不开工',
+        confirmButtonText: t('production.plans_list.confirmbuttontext_3c6bdfd8a51d'),
+        cancelButtonText: t('production.plans_list.cancelbuttontext_73dc65e0b4ef'),
         type: 'warning',
       },
     );
@@ -1993,7 +1999,7 @@ async function forceStart(row: TableRow, detail?: string) {
   try {
     const response = await post(`/${factoryId.value}/production-plans/${row.id}/start`, { forceStartReason: reason });
     if (response.success) {
-      ElMessage.success('已强制开始生产，原因已记入缺料异常');
+      ElMessage.success(t('production.plans_list.message_8dc911e41419'));
       loadData();
     } else {
       ElMessage.error(response.message || '操作失败');
@@ -2081,7 +2087,7 @@ async function maybeOpenProcessEntryFromQuery() {
     if (res.success && res.data) {
       openProcessEntry(res.data);
     } else {
-      ElMessage.error('未找到对应生产计划，请在下方列表手动查找并点击"逐道录入"');
+      ElMessage.error(t('production.plans_list.message_058c479fd70b'));
     }
   } catch {
     // Interceptor already shows sticky toast for ApiError.
@@ -2184,11 +2190,11 @@ function extractMaterialBatchRows(payload: unknown): MaterialBatchOption[] {
 }
 
 const SETTLEMENT_VARIANCE_REASON_OPTIONS = [
-  { value: '现场称重差异', label: '现场称重差异' },
-  { value: '原料状态差异', label: '原料状态差异' },
-  { value: '临时调整产量', label: '临时调整产量' },
-  { value: '客户/销售变更', label: '客户/销售变更' },
-  { value: '其他', label: '其他（请补充说明）' },
+  { value: '现场称重差异', label: t('production.plans_list.label_38123951fa67') },
+  { value: '原料状态差异', label: t('production.plans_list.label_d280d6358e84') },
+  { value: '临时调整产量', label: t('production.plans_list.label_b9114ffc26cc') },
+  { value: '客户/销售变更', label: t('production.plans_list.label_c180f93beca7') },
+  { value: '其他', label: t('production.plans_list.label_a871e12fcc51') },
 ];
 const completeDialogVisible = ref(false);
 const completeRow = ref<TableRow | null>(null);
@@ -2564,7 +2570,7 @@ async function ensureSettlementEligibleWarehouses(): Promise<FactoryWarehouseOpt
   const warehouses = res.data.filter(isFactoryWarehouseOption);
   const eligible = pickSettlementEligibleWarehouses(warehouses);
   if (eligible.length === 0) {
-    ElMessage({ message: '未找到原料仓/物流仓/生产仓，不能核对生产原料领用', type: 'error', duration: 0, showClose: true });
+    ElMessage({ message: t('production.plans_list.message_db514a5e5ffd'), type: 'error', duration: 0, showClose: true });
     return [];
   }
   settlementEligibleWarehouses.value = eligible;
@@ -2627,13 +2633,13 @@ async function loadSettlementInventoryOptions(row: TableRow) {
         .filter((batch) => !!batch.warehouseId && eligibleWarehouseIds.has(batch.warehouseId));
     } else {
       materialBatchOptions.value = [];
-      ElMessage({ message: '原料可用批次加载失败，请刷新后重试', type: 'error', duration: 0, showClose: true });
+      ElMessage({ message: t('production.plans_list.message_0022ca25bf9c'), type: 'error', duration: 0, showClose: true });
     }
     if (wipRes.status === 'fulfilled' && wipRes.value.success && Array.isArray(wipRes.value.data)) {
       wipList.value = wipRes.value.data.filter((wip) => Number(wip.availableQuantity || 0) > 0);
     } else {
       wipList.value = [];
-      ElMessage({ message: '半成品可用库存加载失败，请刷新后重试', type: 'error', duration: 0, showClose: true });
+      ElMessage({ message: t('production.plans_list.message_6b8dd063f174'), type: 'error', duration: 0, showClose: true });
     }
     // 防呆 Rule 1: BOM 预过滤加载失败时不阻塞结单 —— 回退为不限制显示全部批次，
     // 后端结单提交守卫仍会 409 兜底校验 BOM (defense in depth)，只是失去"预先显示边界"的效果。
@@ -2643,7 +2649,7 @@ async function loadSettlementInventoryOptions(row: TableRow) {
       settlementBomEligibility.value = null;
       if (planId) {
         ElMessage({
-          message: '原料 BOM 预过滤加载失败，暂显示全部批次；提交时仍会校验 BOM，请核对无误后再提交。',
+          message: t('production.plans_list.message_ce279c94993f'),
           type: 'warning',
           duration: 0,
           showClose: true,
@@ -2801,7 +2807,7 @@ async function applySettlementPrefill(row: TableRow) {
   } catch (error: unknown) {
     settlementPrefillIssues.value = [{
       code: 'PREFILL_ERROR',
-      message: '自动预填加载异常，请手工录入结单数据。',
+      message: t('production.plans_list.message_4a41dca50c4c'),
       severity: 'BLOCKER',
     }];
     console.error('[结单预填失败]', error);
@@ -2942,23 +2948,23 @@ async function submitComplete() {
 
 // ==================== 仓库确认入库 dialog (6.12 中转仓) ====================
 const RECEIPT_VARIANCE_REASON_OPTIONS = [
-  { value: '仓库实收短少', label: '仓库实收短少' },
-  { value: '生产少交', label: '生产少交' },
-  { value: '称重误差', label: '称重误差' },
-  { value: '破损/返工待处理', label: '破损/返工待处理' },
-  { value: '其他', label: '其他（请补充说明）' },
+  { value: '仓库实收短少', label: t('production.plans_list.label_cdbf06e8e17c') },
+  { value: '生产少交', label: t('production.plans_list.label_cced89629fd4') },
+  { value: '称重误差', label: t('production.plans_list.label_b9fe24807cf7') },
+  { value: '破损/返工待处理', label: t('production.plans_list.label_1c52dde3d99a') },
+  { value: '其他', label: t('production.plans_list.label_a871e12fcc51') },
 ];
 const RECEIPT_RESPONSIBILITY_OPTIONS = [
-  { value: 'PRODUCTION', label: '生产侧处理' },
-  { value: 'WAREHOUSE', label: '仓库侧处理' },
-  { value: 'WEIGHING_ERROR', label: '称重误差' },
+  { value: 'PRODUCTION', label: t('production.plans_list.label_67ddf0744ca4') },
+  { value: 'WAREHOUSE', label: t('production.plans_list.label_c99c1e62d011') },
+  { value: 'WEIGHING_ERROR', label: t('production.plans_list.label_b9fe24807cf7') },
 ];
 const CLEARING_REASON_OPTIONS = [
-  { value: '生产侧已处理', label: '生产侧已补产/承担差异' },
-  { value: '仓库侧已处理', label: '仓库侧已盘点/承担差异' },
-  { value: '称重误差已复核', label: '称重误差已复核' },
-  { value: '财务已确认差异', label: '财务已确认差异' },
-  { value: '其他', label: '其他（请补充说明）' },
+  { value: '生产侧已处理', label: t('production.plans_list.label_62adc1a24339') },
+  { value: '仓库侧已处理', label: t('production.plans_list.label_3bb2f0e914e3') },
+  { value: '称重误差已复核', label: t('production.plans_list.label_0b0ac357e615') },
+  { value: '财务已确认差异', label: t('production.plans_list.label_10fd9dd7f25b') },
+  { value: '其他', label: t('production.plans_list.label_a871e12fcc51') },
 ];
 const receiptDialogVisible = ref(false);
 const receiptLoading = ref(false);
@@ -3049,9 +3055,9 @@ async function handleRecalculateSettledCost(row: TableRow) {
   const planId = String(row.id || '');
   if (!planId || !factoryId.value) return;
   await ElMessageBox.confirm(
-    '系统将只读取本计划实际领用与已配置估值，重新计算并同步结单产出、成品批次和回料成本；不会使用手填成品成本。确认继续？',
-    '重算已结单成本',
-    { type: 'warning', confirmButtonText: '确认重算', cancelButtonText: '取消' },
+    t('production.plans_list.message_edd7ceb5fb7c'),
+    t('production.plans_list.message_10382eb89660'),
+    { type: 'warning', confirmButtonText: t('production.plans_list.confirmbuttontext_62481d7e7a11'), cancelButtonText: t('production.plans_list.cancelbuttontext_2cd0f3be8738') },
   );
   costRecalculatingPlanId.value = planId;
   try {
@@ -3212,7 +3218,7 @@ async function handleWarehouseReceipt(row: TableRow) {
     // ⛔ 没有仓库确认单时不要打开一个空对话框 —— 如实说清为什么, 而不是让用户对着空表单。
     if (isNotSettledPayload(res.data)) {
       ElMessage({
-        message: '本计划没有待确认的仓库入库单；存货生产的成品在「小结」时就已入库。',
+        message: t('production.plans_list.message_1cb23bcb1c53'),
         type: 'info',
         duration: 0,
         showClose: true,
@@ -3318,7 +3324,7 @@ async function handleTransitClearing(row: TableRow) {
     // 同上: 没有结单行就没有中转挂账, ⛔ 不要落到「当前状态为 undefined」那句话上。
     if (isNotSettledPayload(res.data)) {
       ElMessage({
-        message: '本计划没有仓库确认单，也就没有待清账的中转挂账。',
+        message: t('production.plans_list.message_db8b82a03125'),
         type: 'info',
         duration: 0,
         showClose: true,
@@ -3384,11 +3390,11 @@ async function submitTransitClearing() {
 // ==================== 取消原因 dialog (#743) ====================
 // 快捷下拉 + 自定义补充, 替代纯 textarea
 const CANCEL_REASON_OPTIONS = [
-  { value: '客户撤单', label: '客户撤单' },
-  { value: '原料缺货', label: '原料缺货' },
-  { value: '质量问题', label: '质量问题' },
-  { value: '排程冲突', label: '排程冲突' },
-  { value: '其他', label: '其他（请补充说明）' },
+  { value: '客户撤单', label: t('production.plans_list.label_ca6c3519dc81') },
+  { value: '原料缺货', label: t('production.plans_list.label_cfc2a6ce9529') },
+  { value: '质量问题', label: t('production.plans_list.label_0f22786cfc73') },
+  { value: '排程冲突', label: t('production.plans_list.label_5dceecd8b1ae') },
+  { value: '其他', label: t('production.plans_list.label_a871e12fcc51') },
 ];
 const cancelDialogVisible = ref(false);
 const cancelRow = ref<TableRow | null>(null);
@@ -3416,14 +3422,14 @@ async function submitCancel() {
   if (!cancelRow.value) return;
   const opt = cancelForm.value.reasonOption;
   if (!opt) {
-    ElMessage.warning('请选择取消原因');
+    ElMessage.warning(t('production.plans_list.message_59e5542fcb33'));
     return;
   }
   let reason = opt;
   if (opt === '其他') {
     const other = (cancelForm.value.otherReason || '').trim();
     if (!other) {
-      ElMessage.warning('请补充取消原因');
+      ElMessage.warning(t('production.plans_list.message_cce33ca648e3'));
       return;
     }
     reason = `其他: ${other}`;
@@ -3432,7 +3438,7 @@ async function submitCancel() {
   try {
     const response = await post(`/${factoryId.value}/production-plans/${cancelRow.value.id}/cancel?reason=${encodeURIComponent(reason)}`);
     if (response.success) {
-      ElMessage.success('计划已取消');
+      ElMessage.success(t('production.plans_list.message_393d64e96681'));
       cancelDialogVisible.value = false;
       loadData();
     } else {
@@ -3509,8 +3515,8 @@ async function handleEditPlan(row: TableRow) {
   // Rule 1 (防呆): 先用列表已有的行数据快速判断, 不等网络往返就能挡掉明显不可编辑的行。
   const scope = planEditScope(row);
   if (scope === null) {
-    ElMessageBox.alert(blockedEditMessage(status, rowLocked, row.lockReason ? String(row.lockReason) : undefined), '不可编辑', {
-      confirmButtonText: '我知道了',
+    ElMessageBox.alert(blockedEditMessage(status, rowLocked, row.lockReason ? String(row.lockReason) : undefined), t('production.plans_list.message_6a45521e14f6'), {
+      confirmButtonText: t('production.plans_list.confirmbuttontext_348f1cf1243e'),
     }).catch(() => { /* dismiss */ });
     return;
   }
@@ -3532,8 +3538,8 @@ async function handleEditPlan(row: TableRow) {
     if (freshScope === null) {
       ElMessageBox.alert(
         blockedEditMessage(freshStatus, freshLocked, plan.lockReason ? String(plan.lockReason) : undefined),
-        '不可编辑',
-        { confirmButtonText: '我知道了' }
+        t('production.plans_list.message_6a45521e14f6'),
+        { confirmButtonText: t('production.plans_list.confirmbuttontext_348f1cf1243e') }
       ).catch(() => { /* dismiss */ });
       return;
     }
@@ -3577,7 +3583,7 @@ async function submitEditPlan() {
         },
       );
       if (response.success) {
-        ElMessage.success('排产信息已更新');
+        ElMessage.success(t('production.plans_list.message_d6a6a47e0eec'));
         editDialogVisible.value = false;
         loadData();
       } else {
@@ -3591,11 +3597,11 @@ async function submitEditPlan() {
     return;
   }
   if (!editForm.value.plannedDate) {
-    ElMessage.warning('请选择计划生产日');
+    ElMessage.warning(t('production.plans_list.message_4cd57edb4325'));
     return;
   }
   if (!editForm.value.plannedQuantity && editingPlanDetail.sourceType !== 'SAFETY_STOCK') {
-    ElMessage.warning('请输入计划数量');
+    ElMessage.warning(t('production.plans_list.message_c11365d8764e'));
     return;
   }
   editDialogLoading.value = true;
@@ -3634,7 +3640,7 @@ async function submitEditPlan() {
     };
     const response = await put(`/${factoryId.value}/production-plans/${editingPlanId.value}`, payload);
     if (response.success) {
-      ElMessage.success('生产计划已更新');
+      ElMessage.success(t('production.plans_list.message_383f9a32cd4f'));
       editDialogVisible.value = false;
       loadData();
     } else {
@@ -3655,8 +3661,8 @@ async function handleCopyPlan(row: TableRow): Promise<void> {
   try {
     await ElMessageBox.confirm(
       `确认复制生产计划 ${planNumber} 为新草稿？复制内容包含产品、数量、日期和成本预估，不复制实际值/审批/锁定状态。`,
-      '复制生产计划',
-      { confirmButtonText: '复制', cancelButtonText: '取消', type: 'info' }
+      t('production.plans_list.message_401937123a39'),
+      { confirmButtonText: t('production.plans_list.confirmbuttontext_63d90d977348'), cancelButtonText: t('production.plans_list.cancelbuttontext_2cd0f3be8738'), type: 'info' }
     );
   } catch {
     return; // 用户取消
@@ -3688,8 +3694,8 @@ async function handleRepinAuthority(row: TableRow) {
   try {
     await ElMessageBox.confirm(
       `把「${planNumberLabel}」更新到当前生效的工艺版本与配方？仅未开工的计划可以更新；已投料/已报工的计划会被后端拒绝并保持原样。`,
-      '更新到当前配方',
-      { type: 'warning', confirmButtonText: '更新', cancelButtonText: '取消' }
+      t('production.plans_list.message_d081b003835b'),
+      { type: 'warning', confirmButtonText: t('production.plans_list.confirmbuttontext_3055a035f0eb'), cancelButtonText: t('production.plans_list.cancelbuttontext_2cd0f3be8738') }
     )
   } catch {
     return
@@ -3719,11 +3725,11 @@ async function handleInterimSettle(row: TableRow) {
   try {
     const promptResult = await ElMessageBox.prompt(
       `小结「${planLabel}」将按当前已录入数量扣减已投入原料并产出半成品/成品入库，计划继续挂起。确认执行？`,
-      '确认小结',
+      t('production.plans_list.message_da701d8a08fc'),
       {
         type: 'warning',
-        confirmButtonText: '确认小结',
-        cancelButtonText: '取消',
+        confirmButtonText: t('production.plans_list.confirmbuttontext_da701d8a08fc'),
+        cancelButtonText: t('production.plans_list.cancelbuttontext_2cd0f3be8738'),
         inputPlaceholder: '填写本次小结备注（选填，最多500字）',
         inputValidator: (value: string) => value.trim().length <= 500 || '小结备注不能超过500个字符',
       }
@@ -3766,11 +3772,11 @@ async function handleReverseInterimSettle(row: TableRow) {
   try {
     const { value } = await ElMessageBox.prompt(
       `申请撤销「${planLabel}」的最近一次小结。撤销需审批，通过后才逆转入库并还回消耗（误结的逐道行恢复可编辑）；仅限小结后24小时内。请填写撤销原因：`,
-      '撤销小结-申请',
+      t('production.plans_list.message_220f14c4c9d7'),
       {
         type: 'warning',
-        confirmButtonText: '提交申请',
-        cancelButtonText: '取消',
+        confirmButtonText: t('production.plans_list.confirmbuttontext_9cc5e4d81ec2'),
+        cancelButtonText: t('production.plans_list.cancelbuttontext_2cd0f3be8738'),
         inputPlaceholder: '如：产量录错 / 批次选错',
         inputValidator: (v: string) => (v && v.trim() ? true : '请填写撤销原因'),
       }
@@ -3845,8 +3851,8 @@ async function handleApproveReversal(reqRow: InterimSettleReversalRequest) {
 async function handleRejectReversal(reqRow: InterimSettleReversalRequest) {
   let reason = '';
   try {
-    const { value } = await ElMessageBox.prompt('请填写驳回原因：', '驳回撤销申请', {
-      confirmButtonText: '驳回', cancelButtonText: '取消',
+    const { value } = await ElMessageBox.prompt(t('production.plans_list.message_1fa8eafb4592'), t('production.plans_list.message_f7d7443f0094'), {
+      confirmButtonText: t('production.plans_list.confirmbuttontext_089e6ed3f55f'), cancelButtonText: t('production.plans_list.cancelbuttontext_2cd0f3be8738'),
       inputValidator: (v: string) => (v && v.trim() ? true : '请填写驳回原因'),
     });
     reason = (value || '').trim();
@@ -3880,8 +3886,8 @@ async function handleStopProduction(row: TableRow) {
   try {
     await ElMessageBox.confirm(
       `停产「${planLabel}」?停产后计划关闭，不可再小结。`,
-      '确认停产',
-      { type: 'warning', confirmButtonText: '停产', cancelButtonText: '取消' }
+      t('production.plans_list.message_d13744a4c074'),
+      { type: 'warning', confirmButtonText: t('production.plans_list.confirmbuttontext_37a9ba378c9f'), cancelButtonText: t('production.plans_list.cancelbuttontext_2cd0f3be8738') }
     );
   } catch {
     return; // 用户取消
@@ -3916,8 +3922,8 @@ async function handleCreateBatch(row: TableRow) {
       `• 原料不足只做预警，不阻断转批次或结单。\n` +
       `• 需要仓库备料时可先生成调拨单，但不是开工前置条件。\n` +
       `• 转批次后会自动创建批次和工序任务，现场可在 APP 报工；最终仍由文员核对实际产量、领用和工时后结单。`,
-      '转为批次',
-      { type: 'warning', confirmButtonText: '确认转换', cancelButtonText: '取消' }
+      t('production.plans_list.message_b14b74f16e53'),
+      { type: 'warning', confirmButtonText: t('production.plans_list.confirmbuttontext_dc9ae8c72ab6'), cancelButtonText: t('production.plans_list.cancelbuttontext_2cd0f3be8738') }
     );
     actionLoading.value = true;
     const response = await postCreateBatch(row);
@@ -3943,8 +3949,8 @@ async function handleGenerateTransfer(row: TableRow) {
   try {
     await ElMessageBox.confirm(
       `确定为计划 "${row.planNumber}" 创建备料调拨草稿？\n\n系统会根据 BOM 配方计算所需原辅料及包材；创建后可在调拨详情调整数量，再提交统一 OA 审批。`,
-      '生成调拨单',
-      { type: 'info', confirmButtonText: '生成', cancelButtonText: '取消' }
+      t('production.plans_list.message_4712399e10b3'),
+      { type: 'info', confirmButtonText: t('production.plans_list.confirmbuttontext_1ad1463fe16f'), cancelButtonText: t('production.plans_list.cancelbuttontext_2cd0f3be8738') }
     );
     actionLoading.value = true;
     const response = await post(`/${factoryId.value}/production-plans/${row.id}/generate-transfer`);
@@ -3966,8 +3972,8 @@ async function handleGenerateTransfer(row: TableRow) {
       if (msg.includes('BOM') || msg.includes('bom') || msg.includes('配方')) {
         ElMessageBox.confirm(
           `${msg}\n\n是否前往配置该产品的BOM配方？`,
-          '缺少BOM配置',
-          { type: 'warning', confirmButtonText: '去配置BOM', cancelButtonText: '取消' }
+          t('production.plans_list.message_8170af081ac5'),
+          { type: 'warning', confirmButtonText: t('production.plans_list.confirmbuttontext_59710d83f9bc'), cancelButtonText: t('production.plans_list.cancelbuttontext_2cd0f3be8738') }
         ).then(() => {
           router.push('/production/bom');
         }).catch(() => { /* user cancelled */ });
@@ -4229,7 +4235,7 @@ async function loadReferenceData() {
     }
   } catch (e: any) {
     console.warn('Failed to load reference data:', e);
-    if (!e?.actionHint) ElMessage.error('加载参考数据失败');
+    if (!e?.actionHint) ElMessage.error(t('production.plans_list.message_c940365a6808'));
   }
 }
 
@@ -4248,7 +4254,7 @@ async function handleDownloadTemplate() {
     a.download = 'production-plan-template.xlsx';
     a.click();
     URL.revokeObjectURL(url);
-    ElMessage.success('模板下载成功');
+    ElMessage.success(t('production.plans_list.message_98f984d8f02c'));
   } catch (e: any) {
     // Interceptor shows specific toast; dedupe fallback
     console.error('[失败]', e);
@@ -4260,7 +4266,7 @@ async function handleImportFile(uploadFile: { raw?: File }) {
 
   const file = uploadFile.raw;
   if (file.size > 10 * 1024 * 1024) {
-    ElMessage.warning('文件大小不能超过10MB');
+    ElMessage.warning(t('production.plans_list.message_c82cc48eb707'));
     return;
   }
 
@@ -4277,8 +4283,8 @@ async function handleImportFile(uploadFile: { raw?: File }) {
         : '';
       ElMessageBox.alert(
         `总计: ${r.totalCount} 条\n成功: ${r.successCount} 条\n失败: ${r.failureCount} 条` + failureInfo,
-        '导入结果',
-        { confirmButtonText: '确定', callback: () => loadData() }
+        t('production.plans_list.message_e4039a1684cb'),
+        { confirmButtonText: t('production.plans_list.confirmbuttontext_fac2a67ad878'), callback: () => loadData() }
       );
     }
   } catch (e: unknown) {
@@ -4304,7 +4310,7 @@ async function handleExport() {
     a.download = `生产计划_${toDateString(new Date())}.xlsx`;
     a.click();
     URL.revokeObjectURL(url);
-    ElMessage.success('导出成功');
+    ElMessage.success(t('production.plans_list.message_5603e0105824'));
   } catch (e: any) {
     // Interceptor shows specific toast; dedupe fallback
     console.error('[失败]', e);
@@ -4331,9 +4337,9 @@ function isPlanFormDirty(): boolean {
 async function handleDialogClose() {
   if (isPlanFormDirty()) {
     try {
-      await ElMessageBox.confirm('有未保存内容，确定关闭？', '提示', {
-        confirmButtonText: '确定关闭',
-        cancelButtonText: '继续编辑',
+      await ElMessageBox.confirm(t('production.plans_list.message_e096c0566603'), t('production.plans_list.message_f56c6c82203b'), {
+        confirmButtonText: t('production.plans_list.confirmbuttontext_6be15072fb5a'),
+        cancelButtonText: t('production.plans_list.cancelbuttontext_fd4b9e3b6c68'),
         type: 'warning',
       });
     } catch {
@@ -4397,17 +4403,17 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
     <WorkflowBar
       :nodes="workflowStats?.nodes ?? []"
       :loading="workflowLoading"
-      title="生产计划状态"
+      :title="t('production.plans_list.title_7936b39fdfd9')"
       :ai-trigger-enabled="true"
       @node-click="handleWorkflowNodeClick"
       @ai-trigger="aiEntryVisible = true"
     />
-    <el-card class="page-card" shadow="never">
+    <UCard class="page-card" >
       <template #header>
         <div class="card-header">
           <div class="header-left">
-            <span class="page-title">生产计划管理</span>
-            <span class="data-count">共 {{ pagination.total }} 条记录</span>
+            <span class="page-title">{{ t('production.plans_list.text_7f75c8c59ed2') }}</span>
+            <span class="data-count">{{ t('production.plans_list.text_76e547a8fa54') }} {{ pagination.total }} {{ t('production.plans_list.text_6016bf63b0ff') }}</span>
           </div>
           <div class="header-right">
             <input
@@ -4419,13 +4425,13 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             >
             <el-dropdown trigger="click" @command="handleDataCommand">
               <el-button :icon="Download">
-                导入/导出<el-icon class="el-icon--right"><ArrowDown /></el-icon>
+                {{ t('production.plans_list.action_1e875ae1f22f') }}<span class="el-icon--right"><ArrowDown /></span>
               </el-button>
               <template #dropdown>
                 <el-dropdown-menu>
-                  <el-dropdown-item command="template">下载导入模板</el-dropdown-item>
-                  <el-dropdown-item v-if="canWrite" command="import">导入 Excel</el-dropdown-item>
-                  <el-dropdown-item command="export">导出授权范围</el-dropdown-item>
+                  <el-dropdown-item command="template">{{ t('production.plans_list.text_38c9b17b2e1c') }}</el-dropdown-item>
+                  <el-dropdown-item v-if="canWrite" command="import">{{ t('production.plans_list.text_b7fde3468e34') }}</el-dropdown-item>
+                  <el-dropdown-item command="export">{{ t('production.plans_list.text_74523ee77314') }}</el-dropdown-item>
                 </el-dropdown-menu>
               </template>
             </el-dropdown>
@@ -4436,28 +4442,28 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
               @command="handleBatchCommand"
             >
               <el-button type="info" :icon="Printer">
-                批量操作 ({{ selectedPlans.length }})<el-icon class="el-icon--right"><ArrowDown /></el-icon>
+                {{ t('production.plans_list.action_c16ea1167b2f') }}{{ selectedPlans.length }})<span class="el-icon--right"><ArrowDown /></span>
               </el-button>
               <template #dropdown>
                 <el-dropdown-menu>
                   <el-dropdown-item command="print-work-orders">
-                    合并下载所选生产工单
+                    {{ t('production.plans_list.text_938f21ea2113') }}
                   </el-dropdown-item>
                 </el-dropdown-menu>
               </template>
             </el-dropdown>
             <el-button v-if="canWrite" type="success" :icon="ChatDotRound" @click="aiEntryVisible = true" style="margin-left: 8px;">
-              AI对话创建
+              {{ t('production.plans_list.action_8fc27d018366') }}
             </el-button>
             <el-button v-if="canWrite" type="warning" :icon="Plus" @click="handleCreateSecondary" style="margin-left: 8px;">
-              独立再加工/返工
+              {{ t('production.plans_list.action_c863e40ebcc5') }}
             </el-button>
-            <el-button v-if="canWrite" type="warning" plain @click="openReversalApproval" style="margin-left: 8px;"
-              title="审批待处理的撤销小结申请（财务经理/工厂超管）">
-              撤销审批
-            </el-button>
+            <UButton v-if="canWrite" color="warning" variant="outline" @click="openReversalApproval" style="margin-left: 8px;"
+              :title="t('production.plans_list.title_7968cac02ecd')">
+              {{ t('production.plans_list.action_e975f9f0b213') }}
+            </UButton>
             <el-button data-testid="production-plan-open-create" v-if="canWrite" type="primary" :icon="Plus" @click="handleCreate" style="margin-left: 8px;">
-              新建计划
+              {{ t('production.plans_list.action_87bb612bfa59') }}
             </el-button>
           </div>
         </div>
@@ -4466,34 +4472,34 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
       <div class="search-bar">
         <el-input
           v-model="searchForm.keyword"
-          placeholder="搜索计划编号/产品名称"
+          :placeholder="t('production.plans_list.placeholder_83692df06975')"
           :prefix-icon="Search"
           clearable
           style="width: 280px"
           @keyup.enter="handleSearch"
         />
-        <el-select v-model="searchForm.status" placeholder="全部状态" clearable style="width: 150px">
+        <CompatSelect v-model="searchForm.status" :placeholder="t('production.plans_list.placeholder_0a379c1e7398')" clearable style="width: 150px">
           <!-- Rule 1 (fool-proof-design): "全部" 必须是显式可选项, 不能只靠 clearable 的隐藏 x 图标才能回到不限状态
                —— 否则搜索一个已完成/已取消的计划号, 默认"未完成"筛选下静默 0 结果, 用户以为查不到 -->
-          <el-option label="全部" value="" />
-          <el-option label="未完成" value="UNFINISHED" />
-          <el-option label="草稿" value="PREPARED" />
-          <el-option label="待执行" value="PLANNED" />
-          <el-option label="待执行 (PENDING)" value="PENDING" />
-          <el-option label="进行中" value="IN_PROGRESS" />
-          <el-option label="暂停" value="PAUSED" />
-          <el-option label="已结单" value="COMPLETED" />
-          <el-option label="已取消" value="CANCELLED" />
-        </el-select>
-        <el-button type="primary" :icon="Search" @click="handleSearch">搜索</el-button>
-        <el-button :icon="Refresh" @click="handleRefresh">重置</el-button>
+          <CompatOption :label="t('production.plans_list.label_5c55a67935af')" value="" />
+          <CompatOption :label="t('production.plans_list.label_6707de42c29d')" value="UNFINISHED" />
+          <CompatOption :label="t('production.plans_list.label_2a2fd29bd27a')" value="PREPARED" />
+          <CompatOption :label="t('production.plans_list.label_637da5612300')" value="PLANNED" />
+          <CompatOption :label="t('production.plans_list.label_fdbb297c4fe6')" value="PENDING" />
+          <CompatOption :label="t('production.plans_list.label_dc9591e56d50')" value="IN_PROGRESS" />
+          <CompatOption :label="t('production.plans_list.label_8d12fc0d4eb2')" value="PAUSED" />
+          <CompatOption :label="t('production.plans_list.label_8c09bfd463a1')" value="COMPLETED" />
+          <CompatOption :label="t('production.plans_list.label_a37778f17c5f')" value="CANCELLED" />
+        </CompatSelect>
+        <el-button type="primary" :icon="Search" @click="handleSearch">{{ t('production.plans_list.action_44ce7ae909bb') }}</el-button>
+        <el-button :icon="Refresh" @click="handleRefresh">{{ t('production.plans_list.action_cb5d682bac3d') }}</el-button>
         <el-button
           :type="productionBatchMode ? 'primary' : 'default'"
           plain
           :icon="Printer"
           @click="toggleProductionBatchMode"
         >
-          {{ productionBatchMode ? '退出批量打印' : '批量打印' }}
+          {{ productionBatchMode ? t('production.plans_list.text_e4015df34b5b') : t('production.plans_list.text_9fc37904e840') }}
         </el-button>
         <ListColumnSelector
           v-model="productionVisibleColumnKeys"
@@ -4519,19 +4525,19 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
         @selection-change="handleSelectionChange"
       >
         <el-table-column v-if="productionBatchMode" type="selection" width="45" />
-        <el-table-column prop="planNumber" label="计划编号" width="160" sortable>
+        <el-table-column prop="planNumber" :label="t('production.plans_list.label_c68a7f735afe')" width="160" sortable>
           <template #default="{ row }">
-            <el-button
-              type="primary"
-              link
-              size="small"
+            <UButton
+              color="primary"
+              variant="link"
+              size="sm"
               class="plan-number-link"
-              title="查看生产计划详情"
+              :title="t('production.plans_list.title_95e2d37cc442')"
               @click="handleViewPlan(row)"
-            >{{ row.planNumber || row.id }}</el-button>
+            >{{ row.planNumber || row.id }}</UButton>
           </template>
         </el-table-column>
-        <el-table-column prop="productTypeName" label="生产成品" min-width="240" sortable>
+        <el-table-column prop="productTypeName" :label="t('production.plans_list.label_f6469fb8876c')" min-width="240" sortable>
           <template #default="{ row }">
             <div class="plan-product-cell">
               <span class="plan-product-name">{{ planFinishedProductNames(row).join('、') }}</span>
@@ -4542,13 +4548,13 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
                 @show="ensureRowWorkflowPreview(row)"
               >
                 <template #reference>
-                  <el-button
+                  <UButton
                     class="workflow-preview-trigger"
-                    type="primary"
-                    link
-                    size="small"
-                    aria-label="预览工序路线"
-                  >工序图</el-button>
+                    color="primary"
+                    variant="link"
+                    size="sm"
+                    :aria-label="t('production.plans_list.aria_label_1f59eb7105b7')"
+                  >{{ t('production.plans_list.action_14d84871122a') }}</UButton>
                 </template>
                 <div v-loading="rowWorkflowPreviews[String(row.id || '')]?.loading" class="plan-workflow-preview">
                   <WorkflowRoutePreview
@@ -4558,7 +4564,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
                   />
                   <el-empty
                     v-else-if="!rowWorkflowPreviews[String(row.id || '')]?.loading"
-                    :description="rowWorkflowPreviews[String(row.id || '')]?.error || '悬停后加载工序路线'"
+                    :description="rowWorkflowPreviews[String(row.id || '')]?.error || t('production.plans_list.description_5f40ac52bb8c')"
                     :image-size="48"
                   />
                 </div>
@@ -4566,13 +4572,13 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             </div>
           </template>
         </el-table-column>
-        <el-table-column v-if="isProductionColumnVisible('customer')" prop="sourceCustomerName" label="客户" min-width="120" show-overflow-tooltip sortable />
-        <el-table-column v-if="isProductionColumnVisible('process')" prop="processName" label="工序" width="120" show-overflow-tooltip sortable />
-        <el-table-column v-if="isProductionColumnVisible('batchDate')" prop="batchDate" label="批次日期" width="120" sortable />
+        <el-table-column v-if="isProductionColumnVisible('customer')" prop="sourceCustomerName" :label="t('production.plans_list.label_ad4af312dbc2')" min-width="120" show-overflow-tooltip sortable />
+        <el-table-column v-if="isProductionColumnVisible('process')" prop="processName" :label="t('production.plans_list.label_648cd106a0b7')" width="120" show-overflow-tooltip sortable />
+        <el-table-column v-if="isProductionColumnVisible('batchDate')" prop="batchDate" :label="t('production.plans_list.label_4ab95394a48e')" width="120" sortable />
         <el-table-column
           v-if="isProductionColumnVisible('plannedQuantity')"
           prop="plannedQuantity"
-          label="计划成品"
+          :label="t('production.plans_list.label_79c31e394ad1')"
           width="110"
           align="right"
           sortable
@@ -4580,7 +4586,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
         >
           <template #default="{ row }">{{ formatPlanDisplayQuantity(row) }}</template>
         </el-table-column>
-        <el-table-column label="生产类型" width="110" align="center">
+        <el-table-column :label="t('production.plans_list.label_ffb141f8ff73')" width="110" align="center">
           <template #default="{ row }">
             <el-tag
               size="small"
@@ -4591,7 +4597,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
         <el-table-column
           v-if="isProductionColumnVisible('actualQuantity')"
           prop="actualQuantity"
-          label="实际数量"
+          :label="t('production.plans_list.label_dbf1981b4fdb')"
           width="120"
           align="right"
           sortable
@@ -4599,10 +4605,10 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
         >
           <template #default="{ row }">{{ formatPlanActualQuantity(row) }}</template>
         </el-table-column>
-        <el-table-column v-if="isProductionColumnVisible('plannedDate')" prop="plannedDate" label="计划日期" width="120" sortable />
+        <el-table-column v-if="isProductionColumnVisible('plannedDate')" prop="plannedDate" :label="t('production.plans_list.label_011247215d19')" width="120" sortable />
         <el-table-column
           prop="status"
-          label="状态"
+          :label="t('production.plans_list.label_6320b4a8722a')"
           width="100"
           align="center"
           :filters="productionStatusFilters"
@@ -4620,7 +4626,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column v-if="isProductionColumnVisible('inventoryStatus')" label="入库状态" width="125" align="center">
+        <el-table-column v-if="isProductionColumnVisible('inventoryStatus')" :label="t('production.plans_list.label_a54c13487c75')" width="125" align="center">
           <template #default="{ row }">
             <el-tag
               v-if="getSettlementStatus(row)"
@@ -4635,52 +4641,52 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
               content="本计划走存货生产小结，成品已在小结时入库，没有单独的仓库确认单"
               placement="top"
             >
-              <el-tag type="info" size="small" effect="plain">无仓库确认单</el-tag>
+              <UBadge color="info" size="sm" variant="outline">{{ t('production.plans_list.text_4ed501a4eb64') }}</UBadge>
             </el-tooltip>
             <el-tooltip
               v-else-if="getSettlementStatusError(row)"
               :content="getSettlementStatusError(row)"
               placement="top"
             >
-              <el-tag type="danger" size="small" effect="plain">加载失败</el-tag>
+              <UBadge color="error" size="sm" variant="outline">{{ t('production.plans_list.text_d1d044826a45') }}</UBadge>
             </el-tooltip>
-            <el-tag v-else-if="String(row.status || '').toUpperCase() === 'COMPLETED'" type="info" size="small">
-              结单加载中
-            </el-tag>
+            <UBadge variant="soft" v-else-if="String(row.status || '').toUpperCase() === 'COMPLETED'" color="info" size="sm">
+              {{ t('production.plans_list.text_4ada3d1f26c9') }}
+            </UBadge>
             <span v-else>-</span>
           </template>
         </el-table-column>
-        <el-table-column v-if="isProductionColumnVisible('materialReference')" label="原料参考" width="130" align="center">
+        <el-table-column v-if="isProductionColumnVisible('materialReference')" :label="t('production.plans_list.label_407a177f0d11')" width="130" align="center">
           <template #default="{ row }">
             <el-tooltip
               v-if="getPlanAdvisory(row)?.hasWarning"
               :content="getPlanAdvisorySummary(row)"
               placement="top"
             >
-              <el-tag type="danger" size="small" :icon="Warning">缺料预警</el-tag>
+              <el-tag type="danger" size="small" :icon="Warning">{{ t('production.plans_list.text_a0323f11cfe5') }}</el-tag>
             </el-tooltip>
             <el-tooltip
               v-else-if="getPlanAdvisory(row)"
               :content="getPlanAdvisorySummary(row)"
               placement="top"
             >
-              <el-tag type="success" size="small">库存参考</el-tag>
+              <UBadge variant="soft" color="success" size="sm">{{ t('production.plans_list.text_7dfba9f30f37') }}</UBadge>
             </el-tooltip>
-            <el-tag v-else-if="isUnfinishedStatus(row.status)" type="info" size="small">加载中</el-tag>
+            <UBadge variant="soft" v-else-if="isUnfinishedStatus(row.status)" color="info" size="sm">{{ t('production.plans_list.text_d04fcbda737f') }}</UBadge>
             <span v-else>-</span>
           </template>
         </el-table-column>
-        <el-table-column v-if="isProductionColumnVisible('nextStep')" label="下一步" min-width="220">
+        <el-table-column v-if="isProductionColumnVisible('nextStep')" :label="t('production.plans_list.label_acfc4e74a650')" min-width="220">
           <template #default="{ row }">
             <div class="next-step-cell">
               <el-tag :type="nextStepTagType(row)" size="small" effect="plain">
                 {{ nextStepText(row) }}
               </el-tag>
               <div v-if="row.skipProcessReporting === false" class="next-step-hint">
-                工序任务将下发至 APP
+                {{ t('production.plans_list.text_1d11058f5210') }}
               </div>
               <div v-else-if="isUnfinishedStatus(row.status)" class="next-step-hint">
-                文员核对实际领用后结单
+                {{ t('production.plans_list.text_1e8ba74cf965') }}
               </div>
               <div
                 v-else-if="cancellationAuditFor(row)"
@@ -4688,19 +4694,19 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
                 :title="`取消原因：${cancellationAuditFor(row)?.reason}`"
               >
                 <div class="cancellation-audit__reason">
-                  原因：{{ cancellationAuditFor(row)?.reason }}
+                  {{ t('production.plans_list.text_b9fbb8ede4cb') }}{{ cancellationAuditFor(row)?.reason }}
                 </div>
                 <div>{{ cancellationAuditFor(row)?.actor }} · {{ cancellationAuditFor(row)?.time }}</div>
               </div>
             </div>
           </template>
         </el-table-column>
-        <el-table-column v-if="isProductionColumnVisible('workers')" prop="estimatedWorkers" label="预计工人" width="90" align="center" sortable />
-        <el-table-column v-if="isProductionColumnVisible('supervisor')" prop="assignedSupervisorName" label="指派主管" width="100" show-overflow-tooltip sortable />
+        <el-table-column v-if="isProductionColumnVisible('workers')" prop="estimatedWorkers" :label="t('production.plans_list.label_7dd57ce90957')" width="90" align="center" sortable />
+        <el-table-column v-if="isProductionColumnVisible('supervisor')" prop="assignedSupervisorName" :label="t('production.plans_list.label_8f4fdba6fb72')" width="100" show-overflow-tooltip sortable />
         <el-table-column
           v-if="isProductionColumnVisible('source')"
           prop="sourceType"
-          label="来源"
+          :label="t('production.plans_list.label_a488e93d69cc')"
           min-width="170"
           align="center"
           :filters="productionSourceFilters"
@@ -4708,44 +4714,44 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
         >
           <template #default="{ row }">
             <!-- SP2: planNumber 前缀 SEC- 标识独立再加工/返工 (planSourceType 字段未暴露在 DTO) -->
-            <el-tag v-if="String(row.planNumber || '').startsWith('SEC-')" type="warning" size="small">独立再加工</el-tag>
-            <el-tag v-else-if="row.sourceType === 'EXCEL_IMPORT'" type="warning" size="small">Excel导入</el-tag>
-            <el-tag v-else-if="row.sourceType === 'AI_CHAT'" type="success" size="small">AI创建</el-tag>
-            <el-tag v-else-if="row.sourceType === 'SAFETY_STOCK'" type="info" size="small">存货生产</el-tag>
-            <el-tag v-else-if="row.sourceType === 'CUSTOMER_ORDER'" type="primary" size="small">销售订单</el-tag>
-            <el-tag v-else-if="row.sourceType === 'AI_FORECAST'" type="success" size="small">AI预测</el-tag>
-            <el-tag v-else size="small">手动</el-tag>
-            <el-button
+            <UBadge variant="soft" v-if="String(row.planNumber || '').startsWith('SEC-')" color="warning" size="sm">{{ t('production.plans_list.text_cb80423476c0') }}</UBadge>
+            <UBadge variant="soft" v-else-if="row.sourceType === 'EXCEL_IMPORT'" color="warning" size="sm">{{ t('production.plans_list.text_d4d56720f342') }}</UBadge>
+            <UBadge variant="soft" v-else-if="row.sourceType === 'AI_CHAT'" color="success" size="sm">{{ t('production.plans_list.text_a5057dd3ee5b') }}</UBadge>
+            <UBadge variant="soft" v-else-if="row.sourceType === 'SAFETY_STOCK'" color="info" size="sm">{{ t('production.plans_list.text_e391b8370ca2') }}</UBadge>
+            <UBadge variant="soft" v-else-if="row.sourceType === 'CUSTOMER_ORDER'" color="primary" size="sm">{{ t('production.plans_list.text_68bd4b5a1bf2') }}</UBadge>
+            <UBadge variant="soft" v-else-if="row.sourceType === 'AI_FORECAST'" color="success" size="sm">{{ t('production.plans_list.text_5bc21e98c136') }}</UBadge>
+            <UBadge variant="soft" v-else size="sm">{{ t('production.plans_list.text_962f41ef825b') }}</UBadge>
+            <UButton
               v-if="row.sourceType === 'CUSTOMER_ORDER' && row.sourceOrderId"
-              type="primary"
-              link
-              size="small"
+              color="primary"
+              variant="link"
+              size="sm"
               class="source-order-link"
-              :title="sourceOrderBusinessNumber(row) ? '打开销售订单' : '业务订单号尚未同步，点击仍可打开关联订单'"
+              :title="sourceOrderBusinessNumber(row) ? t('production.plans_list.title_635c9754d592') : t('production.plans_list.title_0aa0beca5c30')"
               @click="openSourceOrder(row)"
-            >{{ sourceOrderDisplay(row) }}</el-button>
+            >{{ sourceOrderDisplay(row) }}</UButton>
           </template>
         </el-table-column>
         <!-- Wave2: 报工模式 badge -->
-        <el-table-column v-if="isProductionColumnVisible('reportMode')" label="报工模式" width="100" align="center">
+        <el-table-column v-if="isProductionColumnVisible('reportMode')" :label="t('production.plans_list.label_32ac10e7e9ae')" width="100" align="center">
           <template #default="{ row }">
-            <el-tag
+            <UBadge variant="soft"
               v-if="row.skipProcessReporting === false"
-              type="warning"
-              size="small"
-              title="逐道工序报工"
-            >逐道</el-tag>
-            <el-tag
+              color="warning"
+              size="sm"
+              :title="t('production.plans_list.title_9c4db651846b')"
+            >{{ t('production.plans_list.text_0ccc3e54cd13') }}</UBadge>
+            <UBadge variant="soft"
               v-else
-              type="info"
-              size="small"
-              title="只报领料+产出两点（免工序报工）"
-            >免工序</el-tag>
+              color="info"
+              size="sm"
+              :title="t('production.plans_list.title_d0836b5890b0')"
+            >{{ t('production.plans_list.text_1287b1f994d8') }}</UBadge>
           </template>
         </el-table-column>
-        <el-table-column v-if="isProductionColumnVisible('createdAt')" prop="createdAt" label="创建时间" width="180" :formatter="formatDateTimeCell" sortable />
+        <el-table-column v-if="isProductionColumnVisible('createdAt')" prop="createdAt" :label="t('production.plans_list.label_07ec86e0f1d4')" width="180" :formatter="formatDateTimeCell" sortable />
         <el-table-column
-          label="操作"
+          :label="t('production.plans_list.label_ed31fbb483ee')"
           width="360"
           fixed="right"
           align="center"
@@ -4753,27 +4759,27 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
         >
           <template #default="{ row }">
             <div class="plan-action-cell business-action-row">
-              <el-button
+              <UButton
                 :data-testid="`production-plan-create-batch-${row.id}`"
                 v-if="canShowProductionActions(row)"
-                type="warning"
-                link
-                size="small"
+                color="warning"
+                variant="link"
+                size="sm"
                 :loading="entryPreparingPlanId === String(row.id)"
                 :disabled="entryPreparingPlanId !== null"
                 @click="openProcessEntry(row)"
-              >{{ processEntryActionLabel(row) }}</el-button>
-              <el-button
+              >{{ processEntryActionLabel(row) }}</UButton>
+              <UButton
                 :data-testid="`production-settle-${row.id}`"
                 v-if="canShowProductionActions(row)"
-                type="success"
-                link
-                size="small"
+                color="success"
+                variant="link"
+                size="sm"
                 :loading="row.sourceType === 'SAFETY_STOCK'
                   ? interimSettleLoadingId === String(row.id)
                   : actionLoading"
                 @click="handlePrimarySettlementAction(row)"
-              >{{ settlementActionLabel(row) }}</el-button>
+              >{{ settlementActionLabel(row) }}</UButton>
               <!--
                 🔴 2026-08-02: 补回「仓库确认入库」入口。
                 handleWarehouseReceipt 与整个 receiptDialog 一直都在, 但**模板从未引用它** ——
@@ -4784,15 +4790,15 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
                 手工调 API 立刻 postingStatus=POSTED 并生成成品批次 —— 缺的只是这个按钮。
                 判据复用既有的 postingStatus, 不新造一套。
               -->
-              <el-button
+              <UButton
                 :data-testid="`finished-goods-receive-${row.id}`"
                 v-if="needsWarehouseReceipt(row)"
-                type="warning"
-                link
-                size="small"
+                color="warning"
+                variant="link"
+                size="sm"
                 :loading="receiptLoading && String(receiptRow?.id) === String(row.id)"
                 @click="handleWarehouseReceipt(row)"
-              >仓库确认入库</el-button>
+              >{{ t('production.plans_list.action_c3e464c67c4e') }}</UButton>
               <!--
                 🔴 2026-08-04: 补回「中转挂账清账」入口 —— 结算链的最后一段。
                 #2176 补回上面那个按钮时, 把 PENDING_CLEARING 也算进了 needsWarehouseReceipt,
@@ -4804,28 +4810,28 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
                 (见 nextStepText), 用户点到的却是入库弹窗 —— 清账做不了。
                 判据复用既有的 canClearTransit(它已含 COMPLETED + PENDING_CLEARING + 写权限)。
               -->
-              <el-button
+              <UButton
                 v-if="canClearTransit(row)"
-                type="danger"
-                link
-                size="small"
+                color="error"
+                variant="link"
+                size="sm"
                 :loading="clearingLoading && String(clearingRow?.id) === String(row.id)"
                 @click="handleTransitClearing(row)"
-              >中转挂账清账</el-button>
-              <el-button
+              >{{ t('production.plans_list.action_615b303181b9') }}</UButton>
+              <UButton
                 v-if="canRecalculateSettledCost(row)"
-                type="primary"
-                link
-                size="small"
+                color="primary"
+                variant="link"
+                size="sm"
                 :loading="costRecalculatingPlanId === String(row.id)"
                 @click="handleRecalculateSettledCost(row)"
-              >重算成本</el-button>
-              <el-button
-                type="primary"
-                link
-                size="small"
+              >{{ t('production.plans_list.action_6a856be3ae75') }}</UButton>
+              <UButton
+                color="primary"
+                variant="link"
+                size="sm"
                 @click="openArchiveCenter(row)"
-              >档案与核算</el-button>
+              >{{ t('production.plans_list.action_6d219d873e20') }}</UButton>
             <!--
               「更多」的显隐与每一项的显隐都出自 productionMoreCommands(row) 一个判据:
               一项都没有就不渲染按钮 (2026-08-04: 进行中+非存货生产+已有产出的行原先会弹出
@@ -4837,9 +4843,9 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
               @command="(command: ProductionActionCommand) => handleProductionActionCommand(command, row)"
               @visible-change="(visible: boolean) => visible && ensureAssignOperatorCandidates(row)"
             >
-              <el-button type="info" link size="small">
-                更多<el-icon class="el-icon--right"><ArrowDown /></el-icon>
-              </el-button>
+              <UButton color="info" variant="link" size="sm">
+                {{ t('production.plans_list.action_38844b135cf7') }}<span class="el-icon--right"><ArrowDown /></span>
+              </UButton>
               <template #dropdown>
                 <el-dropdown-menu>
                   <!-- 防呆 Rule 1: 不可编辑时灰显并写清原因, 不让用户点开才知道 -->
@@ -4852,7 +4858,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
                     v-if="hasProductionMoreCommand(row, 'copy')"
                     command="copy"
                     :disabled="actionLoading"
-                  >复制为新计划</el-dropdown-item>
+                  >{{ t('production.plans_list.text_d6fc1af05749') }}</el-dropdown-item>
                   <!--
                     缺陷 51: 「分配工序操作员」——生产计划开工后生成的 PB-* 成品批次才挂工序任务,
                     这里下拉打开时惰性解析(ensureAssignOperatorCandidates), 无成品批次时灰显并说清
@@ -4863,35 +4869,35 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
                     command="assign-process-operator"
                     :disabled="actionLoading || assignOperatorDisabledReason(row) !== ''"
                     :title="assignOperatorDisabledReason(row)"
-                  >分配工序操作员</el-dropdown-item>
+                  >{{ t('production.plans_list.text_7950b0f4cdef') }}</el-dropdown-item>
                   <el-dropdown-item
                     v-if="hasProductionMoreCommand(row, 'start-secondary')"
                     command="start-secondary"
                     divided
                     :disabled="actionLoading"
-                  >开始二次加工</el-dropdown-item>
+                  >{{ t('production.plans_list.text_e798387ba5d6') }}</el-dropdown-item>
                   <el-dropdown-item
                     v-if="hasProductionMoreCommand(row, 'app-reporting')"
                     command="app-reporting"
                     divided
                     :disabled="actionLoading"
-                  >下发 APP 报工</el-dropdown-item>
+                  >{{ t('production.plans_list.text_420ace87350e') }}</el-dropdown-item>
                   <el-dropdown-item
                     v-if="hasProductionMoreCommand(row, 'generate-transfer')"
                     command="generate-transfer"
                     :disabled="actionLoading"
-                  >生成调拨单</el-dropdown-item>
+                  >{{ t('production.plans_list.text_4712399e10b3') }}</el-dropdown-item>
                   <el-dropdown-item
                     v-if="hasProductionMoreCommand(row, 'reverse-interim-settle')"
                     command="reverse-interim-settle"
                     divided
                     :disabled="reverseInterimSettleLoadingId === String(row.id)"
-                  >申请撤销小结</el-dropdown-item>
+                  >{{ t('production.plans_list.text_a44dfe126fc1') }}</el-dropdown-item>
                   <el-dropdown-item
                     v-if="hasProductionMoreCommand(row, 'stop-production')"
                     command="stop-production"
                     :disabled="stopProductionLoadingId === String(row.id)"
-                  >停产</el-dropdown-item>
+                  >{{ t('production.plans_list.text_37a9ba378c9f') }}</el-dropdown-item>
                   <el-dropdown-item
                     v-if="hasProductionMoreCommand(row, 'repin-authority')"
                     command="repin-authority"
@@ -4899,18 +4905,18 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
                     :disabled="actionLoading || row.canRepinAuthority !== true"
                     :title="repinAuthorityBlockedReason(row)"
                   >{{ row.canRepinAuthority === true
-                    ? '更新到当前配方'
+                    ? t('production.plans_list.text_d081b003835b')
                     : `更新到当前配方（${repinAuthorityBlockedReason(row)}）` }}</el-dropdown-item>
                   <el-dropdown-item
                     v-if="hasProductionMoreCommand(row, 'cancel')"
                     command="cancel"
                     divided
                     :disabled="actionLoading"
-                  >取消计划</el-dropdown-item>
+                  >{{ t('production.plans_list.text_10c3a2e7a980') }}</el-dropdown-item>
                   <el-dropdown-item
                     v-if="hasProductionMoreCommand(row, 'stop-blocked')"
                     disabled
-                  >停产：{{ row.stopBlockedReason }}</el-dropdown-item>
+                  >{{ t('production.plans_list.text_541c34bca691') }}{{ row.stopBlockedReason }}</el-dropdown-item>
                 </el-dropdown-menu>
               </template>
             </el-dropdown>
@@ -4927,7 +4933,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
       />
 
       <div class="pagination-wrapper">
-        <el-pagination
+        <CompatPagination
           v-model:current-page="pagination.page"
           v-model:page-size="pagination.size"
           :page-sizes="[10, 20, 50, 100]"
@@ -4937,7 +4943,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
           @size-change="handleSizeChange"
         />
       </div>
-    </el-card>
+    </UCard>
 
     <el-drawer
       v-model="archiveCenterVisible"
@@ -4946,25 +4952,25 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
       destroy-on-close
     >
       <template v-if="archiveCenterPlan">
-        <el-descriptions :column="2" border size="small" class="archive-center-summary">
-          <el-descriptions-item label="产品">
+        <CompatDescriptions :column="2" border size="small" class="archive-center-summary">
+          <CompatDescriptionsItem :label="t('production.plans_list.label_aea82737cc01')">
             {{ archiveCenterPlan.productTypeName || archiveCenterPlan.productName || archiveCenterPlan.productTypeId || '-' }}
-          </el-descriptions-item>
-          <el-descriptions-item label="状态">
+          </CompatDescriptionsItem>
+          <CompatDescriptionsItem :label="t('production.plans_list.label_6320b4a8722a')">
             <el-tag :type="getStatusType(archiveCenterPlan.status as string)" size="small">
               {{ getStatusText(archiveCenterPlan.status as string) }}
             </el-tag>
-          </el-descriptions-item>
-          <el-descriptions-item label="来源订单">
+          </CompatDescriptionsItem>
+          <CompatDescriptionsItem :label="t('production.plans_list.label_472876096b98')">
             {{ sourceOrderDisplay(archiveCenterPlan) }}
-          </el-descriptions-item>
-          <el-descriptions-item label="报工模式">
-            {{ archiveCenterPlan.skipProcessReporting === false ? '逐道报工' : '免工序报工' }}
-          </el-descriptions-item>
-        </el-descriptions>
+          </CompatDescriptionsItem>
+          <CompatDescriptionsItem :label="t('production.plans_list.label_32ac10e7e9ae')">
+            {{ archiveCenterPlan.skipProcessReporting === false ? t('production.plans_list.text_79c2f490b43a') : t('production.plans_list.text_c08a8d7acc29') }}
+          </CompatDescriptionsItem>
+        </CompatDescriptions>
 
         <el-tabs v-model="archiveCenterTab" class="archive-center-tabs">
-          <el-tab-pane label="生产单据" name="documents">
+          <el-tab-pane :label="t('production.plans_list.label_bf4260a7cbc6')" name="documents">
             <div class="archive-center-grid">
               <button
                 type="button"
@@ -4972,8 +4978,8 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
                 :disabled="!canPrintPlanDocuments(archiveCenterPlan.status)"
                 @click="openArchiveDocument('work-order')"
               >
-                <strong>生产工单</strong>
-                <span>查看或下载工序与生产指令</span>
+                <strong>{{ t('production.plans_list.text_ab2f0c85a7aa') }}</strong>
+                <span>{{ t('production.plans_list.text_f00a22ad31dc') }}</span>
               </button>
               <button
                 type="button"
@@ -4981,8 +4987,8 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
                 :disabled="!canPrintPlanDocuments(archiveCenterPlan.status)"
                 @click="openArchiveDocument('material-requisition')"
               >
-                <strong>领料单</strong>
-                <span>查看仓库发料依据与物料需求</span>
+                <strong>{{ t('production.plans_list.text_17b4e90233e2') }}</strong>
+                <span>{{ t('production.plans_list.text_9aace1582995') }}</span>
               </button>
               <button
                 type="button"
@@ -4990,8 +4996,8 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
                 :disabled="!canPrintPlanDocuments(archiveCenterPlan.status)"
                 @click="openArchiveDocument('batching-sheet')"
               >
-                <strong>配料单</strong>
-                <span>查看车间称量与投料指导</span>
+                <strong>{{ t('production.plans_list.text_147ccc80903a') }}</strong>
+                <span>{{ t('production.plans_list.text_62408ef4041f') }}</span>
               </button>
               <button
                 type="button"
@@ -4999,44 +5005,44 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
                 :disabled="!canPrintPlanDocuments(archiveCenterPlan.status)"
                 @click="openArchiveDocument('document-pack')"
               >
-                <strong>生产单据包 PDF</strong>
-                <span>一次下载工单、领料单和配料单</span>
+                <strong>{{ t('production.plans_list.text_d8b5f2ec5998') }}</strong>
+                <span>{{ t('production.plans_list.text_f4399bf13193') }}</span>
               </button>
             </div>
           </el-tab-pane>
-          <el-tab-pane label="计划档案" name="trace">
+          <el-tab-pane :label="t('production.plans_list.label_a748f10410ab')" name="trace">
             <el-alert
-              title="这里汇总计划上下游业务单据；计划编号本身可直接打开计划详情。"
+              :title="t('production.plans_list.title_91ca788502ae')"
               type="info"
               :closable="false"
               show-icon
             />
             <div class="archive-center-actions">
-              <el-button type="primary" @click="openArchiveTrace">查看单据追溯</el-button>
-              <el-button
+              <UButton color="primary" @click="openArchiveTrace">{{ t('production.plans_list.action_9d51cac8a1b2') }}</UButton>
+              <UButton color="neutral" variant="outline"
                 v-if="archiveCenterPlan.sourceType === 'CUSTOMER_ORDER' && archiveCenterPlan.sourceOrderId"
                 @click="openSourceOrder(archiveCenterPlan)"
-              >打开销售订单</el-button>
+              >{{ t('production.plans_list.action_635c9754d592') }}</UButton>
             </div>
           </el-tab-pane>
-          <el-tab-pane label="汇总与核算" name="accounting">
+          <el-tab-pane :label="t('production.plans_list.label_41cc50ef4963')" name="accounting">
             <el-alert
-              title="计划负责安排与结单；实际耗用、出成率、成本、质检和证据属于完工批次事实。"
+              :title="t('production.plans_list.title_968ae199fec7')"
               type="warning"
               :closable="false"
               show-icon
             />
             <div class="archive-center-grid archive-center-grid--accounting">
               <button type="button" class="archive-center-card" @click="openArchiveSummary">
-                <strong>生产计划汇总</strong>
-                <span>随时查看计划、工序、报工和物料汇总</span>
+                <strong>{{ t('production.plans_list.text_c506d4cfc1c6') }}</strong>
+                <span>{{ t('production.plans_list.text_cac05f5e3cbf') }}</span>
               </button>
               <button type="button" class="archive-center-card" @click="openArchiveYieldCost">
                 <strong>{{ yieldCostActionLabel(archiveCenterPlan) }}</strong>
                 <span>
                   {{ String(archiveCenterPlan.status || '').toUpperCase() === 'COMPLETED'
-                    ? '查看完工批次出成率与成本核算'
-                    : '结单形成完工批次后开放；不会提前显示假核算' }}
+                    ? t('production.plans_list.text_81ade0489dfd')
+                    : t('production.plans_list.text_55da86798022') }}
                 </span>
               </button>
             </div>
@@ -5049,15 +5055,15 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
       缺陷 51: 一张计划可能有多个成品批次(联产/多产品), 「分配工序操作员」不能悄悄取第一个 ——
       多候选时弹这个选择框, 用户自己挑要分配哪个批次的工序。
     -->
-    <el-dialog
+    <CompatDialog
       v-model="assignOperatorPickerVisible"
-      title="选择要分配工序操作员的批次"
+      :title="t('production.plans_list.title_afb2e4aaa4bf')"
       width="440px"
       data-testid="assign-operator-picker"
     >
       <div v-if="assignOperatorPickerRow" class="assign-operator-picker">
         <p class="assign-operator-picker-hint">
-          该计划生成了多个成品批次，请选择要分配工序操作员的批次：
+          {{ t('production.plans_list.text_7d574932b83d') }}
         </p>
         <div
           v-for="candidate in (assignOperatorState[String(assignOperatorPickerRow.id || '')]?.candidates || [])"
@@ -5066,38 +5072,38 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
           data-testid="assign-operator-picker-item"
         >
           <span>{{ candidate.documentNumber || candidate.documentId }}</span>
-          <el-button
-            type="primary"
-            link
+          <UButton
+            color="primary"
+            variant="link"
             @click="goToAssignOperatorBatch(candidate)"
-          >前往分配</el-button>
+          >{{ t('production.plans_list.action_b9d0065fb113') }}</UButton>
         </div>
       </div>
-    </el-dialog>
+    </CompatDialog>
 
-    <el-dialog
+    <CompatDialog
       v-model="documentPackVisible"
-      title="下载生产单据包"
+      :title="t('production.plans_list.title_8a30ea5294c4')"
       width="520px"
       destroy-on-close
     >
       <el-alert
-        title="系统将一次生成一个 PDF；封面后各单据章节从新页开始，不会打开三个打印窗口。"
+        :title="t('production.plans_list.title_58355b3b22da')"
         type="info"
         :closable="false"
         show-icon
         style="margin-bottom: 16px;"
       />
-      <el-descriptions v-if="documentPackPlan" :column="1" border size="small" style="margin-bottom: 16px;">
-        <el-descriptions-item label="生产计划">
+      <CompatDescriptions v-if="documentPackPlan" :column="1" border size="small" style="margin-bottom: 16px;">
+        <CompatDescriptionsItem :label="t('production.plans_list.label_d8393f4287a5')">
           {{ documentPackPlan.planNumber || documentPackPlan.id }}
-        </el-descriptions-item>
-        <el-descriptions-item label="销售订单">
+        </CompatDescriptionsItem>
+        <CompatDescriptionsItem :label="t('production.plans_list.label_68bd4b5a1bf2')">
           {{ sourceOrderDisplay(documentPackPlan) }}
-        </el-descriptions-item>
-      </el-descriptions>
+        </CompatDescriptionsItem>
+      </CompatDescriptions>
       <div class="document-pack-chapters">
-        <div class="document-pack-label">选择章节（默认全选）</div>
+        <div class="document-pack-label">{{ t('production.plans_list.text_587197506773') }}</div>
         <el-checkbox-group v-model="selectedDocumentChapters">
           <el-checkbox
             v-for="chapter in PRODUCTION_DOCUMENT_CHAPTERS"
@@ -5108,30 +5114,30 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
       </div>
       <el-alert
         v-if="selectedDocumentChapters.length === 0"
-        title="请至少选择一章；系统不会生成空白或不完整 PDF。"
+        :title="t('production.plans_list.title_1878ad272f53')"
         type="warning"
         :closable="false"
         show-icon
         style="margin-top: 14px;"
       />
       <template #footer>
-        <el-button @click="documentPackVisible = false">取消</el-button>
-        <el-button
-          type="primary"
+        <UButton color="neutral" variant="outline" @click="documentPackVisible = false">{{ t('production.plans_list.action_2cd0f3be8738') }}</UButton>
+        <UButton
+          color="primary"
           :loading="documentPackLoading"
           :disabled="selectedDocumentChapters.length === 0"
           @click="submitProductionDocumentPack"
-        >下载单文件 PDF</el-button>
+        >{{ t('production.plans_list.action_8c13c646c7eb') }}</UButton>
       </template>
-    </el-dialog>
+    </CompatDialog>
 
-    <el-drawer v-model="documentTraceVisible" title="生产计划单据追踪" size="620px">
+    <el-drawer v-model="documentTraceVisible" :title="t('production.plans_list.title_79613a048f62')" size="620px">
       <div v-loading="documentTraceLoading" class="document-trace">
         <template v-if="documentTrace">
-          <el-descriptions :column="2" border style="margin-bottom: 16px">
-            <el-descriptions-item label="生产计划">{{ documentTrace.planNumber }}</el-descriptions-item>
-            <el-descriptions-item label="状态">{{ documentTrace.planStatus || '-' }}</el-descriptions-item>
-          </el-descriptions>
+          <CompatDescriptions :column="2" border style="margin-bottom: 16px">
+            <CompatDescriptionsItem :label="t('production.plans_list.label_d8393f4287a5')">{{ documentTrace.planNumber }}</CompatDescriptionsItem>
+            <CompatDescriptionsItem :label="t('production.plans_list.label_6320b4a8722a')">{{ documentTrace.planStatus || '-' }}</CompatDescriptionsItem>
+          </CompatDescriptions>
           <el-alert
             v-for="missing in documentTrace.missingLinks"
             :key="missing"
@@ -5141,7 +5147,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             show-icon
             style="margin-bottom: 10px"
           />
-          <el-empty v-if="documentTrace.documents.length === 0" description="当前计划暂无已关联单据" />
+          <UEmpty v-if="documentTrace.documents.length === 0" :description="t('production.plans_list.description_5792b7476775')" />
           <el-timeline v-else>
             <el-timeline-item
               v-for="document in documentTrace.documents"
@@ -5158,17 +5164,17 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
               >
                 <div class="trace-document-header">
                   <div>
-                    <el-tag size="small" effect="plain">{{ traceDirectionLabel(document.direction) }}</el-tag>
+                    <UBadge size="sm" variant="outline">{{ traceDirectionLabel(document.direction) }}</UBadge>
                     <strong>{{ traceDocumentLabel(document.documentType) }}</strong>
                   </div>
                   <!-- 不跳页, 就地展开 (客户 2026-07-31); 与共用的 DocumentTraceDrawer 同口径 -->
-                  <el-button
-                    type="primary"
-                    link
+                  <UButton
+                    color="primary"
+                    variant="link"
                     data-testid="trace-detail-toggle"
                     :aria-expanded="traceDocumentKey(document) === expandedTraceKey"
                     @click.stop="toggleTraceDocument(document)"
-                  >{{ traceDocumentKey(document) === expandedTraceKey ? '收起' : '查看详情' }}</el-button>
+                  >{{ traceDocumentKey(document) === expandedTraceKey ? t('production.plans_list.text_afd4b783536b') : t('production.plans_list.text_a748cc074f78') }}</UButton>
                 </div>
                 <div class="trace-document-number">{{ document.documentNumber || document.documentId }}</div>
                 <div class="trace-document-meta">
@@ -5176,9 +5182,9 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
                   <!-- 按单据类型选状态表: 同一个码在不同单据含义不同 (REJECTED 收货是「已退回」,
                        FINANCE_APPROVED 销售是「已批准」采购是「已审核」), 全局表必然有一半显示错。
                        客户 2026-07-30 在这里看到的「未知状态（IN_PROGRESS）」= 生产批次的「生产中」。 -->
-                  <el-tag v-if="document.status" size="small" type="info">{{ traceStatusLabel(document.documentType, document.status) }}</el-tag>
+                  <UBadge variant="soft" v-if="document.status" size="sm" color="info">{{ traceStatusLabel(document.documentType, document.status) }}</UBadge>
                 </div>
-                <el-descriptions
+                <CompatDescriptions
                   v-if="traceDocumentKey(document) === expandedTraceKey"
                   class="trace-document-detail"
                   data-testid="trace-detail-panel"
@@ -5186,15 +5192,15 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
                   border
                   size="small"
                 >
-                  <el-descriptions-item v-if="document.occurredAt" label="发生时间">
+                  <CompatDescriptionsItem v-if="document.occurredAt" :label="t('production.plans_list.label_81a54d6edff7')">
                     {{ document.occurredAt }}
-                  </el-descriptions-item>
-                  <el-descriptions-item
+                  </CompatDescriptionsItem>
+                  <CompatDescriptionsItem
                     v-for="field in document.details || []"
                     :key="field.label"
                     :label="field.label"
-                  >{{ field.value }}</el-descriptions-item>
-                </el-descriptions>
+                  >{{ field.value }}</CompatDescriptionsItem>
+                </CompatDescriptions>
               </el-card>
             </el-timeline-item>
           </el-timeline>
@@ -5203,97 +5209,97 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
     </el-drawer>
 
     <!-- 查看计划详情 -->
-    <el-dialog v-model="viewDialogVisible" title="计划详情" width="680px" destroy-on-close>
+    <CompatDialog v-model="viewDialogVisible" :title="t('production.plans_list.title_30bf41953b38')" width="680px" destroy-on-close>
       <div v-if="viewPlan" class="plan-detail">
         <!-- 基本信息 -->
         <div class="detail-section">
-          <div class="detail-section-title">基本信息</div>
-          <el-descriptions :column="2" border size="small">
-            <el-descriptions-item label="计划编号">{{ viewPlan.planNumber }}</el-descriptions-item>
-            <el-descriptions-item label="产品类型">
+          <div class="detail-section-title">{{ t('production.plans_list.text_e8df05872569') }}</div>
+          <CompatDescriptions :column="2" border size="small">
+            <CompatDescriptionsItem :label="t('production.plans_list.label_c68a7f735afe')">{{ viewPlan.planNumber }}</CompatDescriptionsItem>
+            <CompatDescriptionsItem :label="t('production.plans_list.label_0b3894ed2a38')">
               {{ viewPlan.productTypeName || viewPlan.productName || viewPlan.productTypeId || '-' }}
               <template v-if="Array.isArray(viewPlan?.targetFinishedGoodIds) && viewPlan.targetFinishedGoodIds.length > 0">
-                <el-tag
+                <UBadge variant="soft"
                   v-for="(name, idx) in targetFinishedGoodNames(viewPlan.targetFinishedGoodIds)"
                   :key="idx"
-                  size="small"
+                  size="sm"
                   style="margin-left: 4px;"
-                >→ {{ name }}</el-tag>
+                >→ {{ name }}</UBadge>
               </template>
-            </el-descriptions-item>
-            <el-descriptions-item label="客户">{{ viewPlan.sourceCustomerName || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="指派主管">{{ viewPlan.assignedSupervisorName || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="计划成品">{{ formatPlanDisplayQuantity(viewPlan) }}</el-descriptions-item>
-            <el-descriptions-item label="实际数量">{{ formatPlanActualQuantity(viewPlan) }}</el-descriptions-item>
-            <el-descriptions-item label="状态">
+            </CompatDescriptionsItem>
+            <CompatDescriptionsItem :label="t('production.plans_list.label_ad4af312dbc2')">{{ viewPlan.sourceCustomerName || '-' }}</CompatDescriptionsItem>
+            <CompatDescriptionsItem :label="t('production.plans_list.label_8f4fdba6fb72')">{{ viewPlan.assignedSupervisorName || '-' }}</CompatDescriptionsItem>
+            <CompatDescriptionsItem :label="t('production.plans_list.label_79c31e394ad1')">{{ formatPlanDisplayQuantity(viewPlan) }}</CompatDescriptionsItem>
+            <CompatDescriptionsItem :label="t('production.plans_list.label_dbf1981b4fdb')">{{ formatPlanActualQuantity(viewPlan) }}</CompatDescriptionsItem>
+            <CompatDescriptionsItem :label="t('production.plans_list.label_6320b4a8722a')">
               <el-tag :type="getStatusType(viewPlan.status as string)" size="small">{{ getStatusText(viewPlan.status as string) }}</el-tag>
-            </el-descriptions-item>
-            <el-descriptions-item label="来源">
+            </CompatDescriptionsItem>
+            <CompatDescriptionsItem :label="t('production.plans_list.label_a488e93d69cc')">
               <!-- SP2 -->
-              <el-tag v-if="String(viewPlan.planNumber || '').startsWith('SEC-')" type="warning" size="small">独立再加工</el-tag>
-              <el-tag v-else-if="viewPlan.sourceType === 'EXCEL_IMPORT'" type="warning" size="small">Excel导入</el-tag>
-              <el-tag v-else-if="viewPlan.sourceType === 'AI_CHAT'" type="success" size="small">AI创建</el-tag>
-              <el-tag v-else-if="viewPlan.sourceType === 'SAFETY_STOCK'" type="info" size="small">存货生产</el-tag>
-              <el-tag v-else-if="viewPlan.sourceType === 'CUSTOMER_ORDER'" type="primary" size="small">销售订单</el-tag>
-              <el-tag v-else-if="viewPlan.sourceType === 'AI_FORECAST'" type="success" size="small">AI预测</el-tag>
-              <el-tag v-else size="small">手动</el-tag>
-            </el-descriptions-item>
-            <el-descriptions-item
+              <UBadge variant="soft" v-if="String(viewPlan.planNumber || '').startsWith('SEC-')" color="warning" size="sm">{{ t('production.plans_list.text_cb80423476c0') }}</UBadge>
+              <UBadge variant="soft" v-else-if="viewPlan.sourceType === 'EXCEL_IMPORT'" color="warning" size="sm">{{ t('production.plans_list.text_d4d56720f342') }}</UBadge>
+              <UBadge variant="soft" v-else-if="viewPlan.sourceType === 'AI_CHAT'" color="success" size="sm">{{ t('production.plans_list.text_a5057dd3ee5b') }}</UBadge>
+              <UBadge variant="soft" v-else-if="viewPlan.sourceType === 'SAFETY_STOCK'" color="info" size="sm">{{ t('production.plans_list.text_e391b8370ca2') }}</UBadge>
+              <UBadge variant="soft" v-else-if="viewPlan.sourceType === 'CUSTOMER_ORDER'" color="primary" size="sm">{{ t('production.plans_list.text_68bd4b5a1bf2') }}</UBadge>
+              <UBadge variant="soft" v-else-if="viewPlan.sourceType === 'AI_FORECAST'" color="success" size="sm">{{ t('production.plans_list.text_5bc21e98c136') }}</UBadge>
+              <UBadge variant="soft" v-else size="sm">{{ t('production.plans_list.text_962f41ef825b') }}</UBadge>
+            </CompatDescriptionsItem>
+            <CompatDescriptionsItem
               v-if="viewPlan.sourceType === 'CUSTOMER_ORDER'"
-              label="销售订单"
+              :label="t('production.plans_list.label_68bd4b5a1bf2')"
               :span="2"
             >
-              <el-button
+              <UButton
                 v-if="viewPlan.sourceOrderId"
-                type="primary"
-                link
+                color="primary"
+                variant="link"
                 @click="openSourceOrder(viewPlan)"
-              >{{ sourceOrderDisplay(viewPlan) }}</el-button>
+              >{{ sourceOrderDisplay(viewPlan) }}</UButton>
               <span v-else>—</span>
-            </el-descriptions-item>
+            </CompatDescriptionsItem>
             <!-- 多订单计划只展示数量；完整业务单号通过单据追溯读取，避免泄漏内部 UUID。 -->
-            <el-descriptions-item
+            <CompatDescriptionsItem
               v-if="Array.isArray((viewPlan as any).sourceOrderIds) && (viewPlan as any).sourceOrderIds.length > 1"
-              label="合并订单"
+              :label="t('production.plans_list.label_a2d55bbc766f')"
               :span="2"
             >
-              共 {{ (viewPlan as any).sourceOrderIds.length }} 张销售订单，完整业务单号请查看「单据追溯」。
-            </el-descriptions-item>
-          </el-descriptions>
+              {{ t('production.plans_list.text_76e547a8fa54') }} {{ (viewPlan as any).sourceOrderIds.length }} {{ t('production.plans_list.text_b5f3d23178ab') }}
+            </CompatDescriptionsItem>
+          </CompatDescriptions>
         </div>
 
         <!-- 时间 -->
         <div class="detail-section">
-          <div class="detail-section-title">时间</div>
-          <el-descriptions :column="2" border size="small">
-            <el-descriptions-item label="计划日期">{{ viewPlan.plannedDate || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="批次日期">{{ viewPlan.batchDate || '-' }}</el-descriptions-item>
-          </el-descriptions>
+          <div class="detail-section-title">{{ t('production.plans_list.text_8b6ff498515b') }}</div>
+          <CompatDescriptions :column="2" border size="small">
+            <CompatDescriptionsItem :label="t('production.plans_list.label_011247215d19')">{{ viewPlan.plannedDate || '-' }}</CompatDescriptionsItem>
+            <CompatDescriptionsItem :label="t('production.plans_list.label_4ab95394a48e')">{{ viewPlan.batchDate || '-' }}</CompatDescriptionsItem>
+          </CompatDescriptions>
         </div>
 
         <!-- 工序 + 负责人 -->
         <div class="detail-section">
           <div class="detail-section-title">
-            工序
-            <span v-if="viewProcessLoading" class="detail-section-hint">加载中…</span>
-            <span v-else-if="viewProcessList.length > 0" class="detail-section-hint">{{ viewProcessList.length }} 道</span>
+            {{ t('production.plans_list.text_648cd106a0b7') }}
+            <span v-if="viewProcessLoading" class="detail-section-hint">{{ t('production.plans_list.text_4927a53bcc88') }}</span>
+            <span v-else-if="viewProcessList.length > 0" class="detail-section-hint">{{ viewProcessList.length }} {{ t('production.plans_list.text_00a9d5bd97c2') }}</span>
           </div>
           <div v-if="viewProcessLoading" class="process-list-loading">
-            <el-icon class="is-loading"><Refresh /></el-icon>
-            <span>加载工序配置…</span>
+            <span class="is-loading"><Refresh /></span>
+            <span>{{ t('production.plans_list.text_6ff7c948d398') }}</span>
           </div>
           <ol v-else-if="viewProcessList.length > 0" class="process-list">
             <li v-for="(wp, idx) in viewProcessList" :key="wp.id" class="process-item">
               <span class="process-order">{{ idx + 1 }}.</span>
               <span class="process-name">{{ wp.processName }}</span>
               <span class="process-assignee">
-                <el-tag v-if="wp.responsibleWorkerName" type="primary" size="small" effect="plain">{{ wp.responsibleWorkerName }}</el-tag>
-                <span v-else class="process-unassigned">未指派</span>
+                <UBadge v-if="wp.responsibleWorkerName" color="primary" size="sm" variant="outline">{{ wp.responsibleWorkerName }}</UBadge>
+                <span v-else class="process-unassigned">{{ t('production.plans_list.text_350c68309b7b') }}</span>
               </span>
             </li>
           </ol>
           <div v-else class="process-list-empty">
-            {{ viewPlan.processName || '暂无工序配置' }}
+            {{ viewPlan.processName || t('production.plans_list.text_e3cbb9c97f92') }}
           </div>
         </div>
 
@@ -5313,36 +5319,36 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
 
         <!-- 备注 -->
         <div v-if="viewPlan.notes" class="detail-section">
-          <div class="detail-section-title">备注</div>
+          <div class="detail-section-title">{{ t('production.plans_list.text_daede9881787') }}</div>
           <div class="detail-notes">{{ viewPlan.notes }}</div>
         </div>
       </div>
-    </el-dialog>
+    </CompatDialog>
 
     <!-- 新建计划对话框 -->
-    <el-dialog
+    <CompatDialog
       v-model="dialogVisible"
-      title="新建生产计划"
+      :title="t('production.plans_list.title_8a8f0f5cf51d')"
       width="500px"
       :close-on-click-modal="false"
       :before-close="handleDialogClose"
     >
-      <el-form :model="planForm" label-width="100px">
-        <el-form-item label="来源类型" required>
+      <CompatForm :model="planForm" label-width="100px">
+        <CompatFormItem :label="t('production.plans_list.label_38e1e77b3ef3')" required>
           <el-radio-group v-model="planForm.sourceType" @change="handleSourceTypeChange">
-            <el-radio label="SAFETY_STOCK">存货生产</el-radio>
-            <el-radio label="CUSTOMER_ORDER">销售订单</el-radio>
+            <el-radio label="SAFETY_STOCK">{{ t('production.plans_list.text_e391b8370ca2') }}</el-radio>
+            <el-radio label="CUSTOMER_ORDER">{{ t('production.plans_list.text_68bd4b5a1bf2') }}</el-radio>
           </el-radio-group>
           <div
             v-if="planForm.sourceType === 'SAFETY_STOCK'"
             style="font-size: 12px; color: var(--text-color-secondary, var(--cs-muted)); margin-top: 4px;"
           >
-            存货生产按实际报工推进，可多次执行“生产小结”；计划完成后从“更多”中停产关闭。
+            {{ t('production.plans_list.text_f6500e6eaec5') }}
           </div>
-        </el-form-item>
-        <el-form-item
+        </CompatFormItem>
+        <CompatFormItem
           v-if="planForm.sourceType === 'CUSTOMER_ORDER'"
-          label="销售订单"
+          :label="t('production.plans_list.label_68bd4b5a1bf2')"
           required
           :class="{ 'field-error': sourceOrderIdError }"
         >
@@ -5350,7 +5356,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             data-testid="production-plan-source-order"
             ref="sourceOrderSelectRef"
             v-model="planForm.sourceOrderId"
-            placeholder="选择关联的销售订单"
+            :placeholder="t('production.plans_list.placeholder_f0bf980989d4')"
             filterable
             :loading="salesOrdersLoading"
             style="width: 100%"
@@ -5363,12 +5369,12 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
               :value="String(so.id)"
             />
           </el-select>
-          <div v-if="sourceOrderIdError" class="field-error-hint">请选择来源销售订单</div>
-        </el-form-item>
+          <div v-if="sourceOrderIdError" class="field-error-hint">{{ t('production.plans_list.text_c802f7260f7a') }}</div>
+        </CompatFormItem>
         <!-- SP5 多SO合并: 追加额外销售订单 -->
-        <el-form-item
+        <CompatFormItem
           v-if="planForm.sourceType === 'CUSTOMER_ORDER' && planForm.sourceOrderId"
-          label="合并订单"
+          :label="t('production.plans_list.label_a2d55bbc766f')"
         >
           <div style="width: 100%">
             <div v-if="planForm.extraSourceOrderIds.length > 0" style="margin-bottom: 6px; display: flex; flex-wrap: wrap; gap: 4px;">
@@ -5384,7 +5390,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
               </el-tag>
             </div>
             <el-select
-              placeholder="+ 追加合并销售订单"
+              :placeholder="t('production.plans_list.placeholder_82f20b12ce7d')"
               filterable
               :loading="salesOrdersLoading"
               style="width: 100%"
@@ -5404,46 +5410,46 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
               />
             </el-select>
             <div style="font-size: 12px; color: var(--text-color-secondary, var(--cs-muted)); margin-top: 4px;">
-              可追加多个销售订单合并为一张生产工单。产品类型由主订单行确定，追加订单需已财务审核。
+              {{ t('production.plans_list.text_b766810f54ef') }}
             </div>
           </div>
-        </el-form-item>
-        <el-form-item
+        </CompatFormItem>
+        <CompatFormItem
           v-if="planForm.sourceType === 'CUSTOMER_ORDER' && planForm.sourceOrderId"
-          label="产品行"
+          :label="t('production.plans_list.label_c5cdb44b7449')"
           required
         >
           <!-- 以销定产 (2026-06-24): 多选, 选 SO 默认带出全部产品行, 取消不需要的; 每保留行各建一张计划 (产品/数量取自该行) -->
-          <el-select
+          <CompatSelect
             v-model="planForm.sourceOrderItemIds"
             multiple
-            placeholder="默认已带出全部产品行, 可取消不需要的 (每行各建一张计划)"
+            :placeholder="t('production.plans_list.placeholder_2adffe0262e6')"
             filterable
             style="width: 100%"
           >
-            <el-option
+            <CompatOption
               v-for="it in selectedOrderItems"
               :key="String(it.id)"
               :label="`${it.productName || ''}${it.specification ? ' | ' + it.specification : ''} | 数量 ${it.quantity || 0} | 待发 ${it.remainingQty || 0}`"
               :value="String(it.id)"
             />
-          </el-select>
+          </CompatSelect>
           <div v-if="planForm.sourceOrderItemIds.length > 1" style="font-size:12px;color:var(--cs-muted);margin-top:4px">
-            已选 {{ planForm.sourceOrderItemIds.length }} 个产品, 将各建一张生产计划 (产品类型/数量自动取自销售订单行)
+            {{ t('production.plans_list.text_7ecf1cde6486') }} {{ planForm.sourceOrderItemIds.length }} {{ t('production.plans_list.text_d32ca0b1bc6c') }}
           </div>
           <UpstreamMissingHint
             v-if="planForm.sourceType === 'CUSTOMER_ORDER' && planForm.sourceOrderId && selectedOrderItems.length === 0"
-            description="该订单暂无产品行，无法据此排产"
+            :description="t('production.plans_list.description_3ef7547b2642')"
             target-module="sales"
             :require-write="true"
             action-text="去销售订单添加产品行"
             contact-text="请联系销售或管理员为该订单补充产品行后再排产"
             @action="goAddOrderItems(planForm.sourceOrderId || '')"
           />
-        </el-form-item>
-        <el-form-item
+        </CompatFormItem>
+        <CompatFormItem
           v-if="planForm.sourceType === 'CUSTOMER_ORDER' && planForm.sourceOrderItemIds.length > 0"
-          label="计划成品数量"
+          :label="t('production.plans_list.label_b4167e2ad6e0')"
         >
           <div class="sales-order-quantity-readonly">
             <div
@@ -5451,31 +5457,31 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
               :key="String(item.id)"
               class="sales-order-quantity-row"
             >
-              <span>{{ item.productName || item.productCode || '销售订单产品' }}</span>
+              <span>{{ item.productName || item.productCode || t('production.plans_list.text_8dfb28716fed') }}</span>
               <strong>{{ item.quantity || 0 }} {{ displayUnit(item.unit || item.quantityUnit || '') }}</strong>
             </div>
-            <small>数量来自销售订单产品行，创建生产计划时不可修改。</small>
+            <small>{{ t('production.plans_list.text_fbb031464f4d') }}</small>
           </div>
-        </el-form-item>
+        </CompatFormItem>
         <!-- 以销定产 (2026-06-24): 来源=销售订单时, 产品/数量按所选产品行各自取, 不再手选单产品 → 隐藏 -->
         <!-- 完全匹配优先；无完全匹配时接受覆盖所选成品的最小联产超集。 -->
-        <el-form-item v-if="planForm.sourceType !== 'CUSTOMER_ORDER'" label="生产成品" required>
-          <el-select
+        <CompatFormItem v-if="planForm.sourceType !== 'CUSTOMER_ORDER'" :label="t('production.plans_list.label_f6469fb8876c')" required>
+          <CompatSelect
             v-model="planForm.targetFinishedGoodIds"
             multiple
             filterable
-            placeholder="选择本次生产的成品 (可多选)"
+            :placeholder="t('production.plans_list.placeholder_1ae0db7d32a2')"
             style="width: 100%"
           >
-            <el-option
+            <CompatOption
               v-for="item in finishedGoodProductTypes"
               :key="item.id"
               :label="item.name"
               :value="item.id"
             />
-          </el-select>
+          </CompatSelect>
           <div v-if="resolvingWorkflow" style="font-size: 12px; color: var(--text-color-secondary, var(--cs-muted)); margin-top: 4px;">
-            正在解析工序图…
+            {{ t('production.plans_list.text_2846aba140b8') }}
           </div>
           <template v-else-if="planForm.targetFinishedGoodIds.length > 0">
             <div
@@ -5484,7 +5490,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             >
               <div class="selected-workflow-route__head">
                 <div>
-                  <span class="selected-workflow-route__eyebrow">本计划已固定工序路线</span>
+                  <span class="selected-workflow-route__eyebrow">{{ t('production.plans_list.text_fe8edc3ea6b6') }}</span>
                   <strong>{{ workflowCandidateProcessSummary(resolvedWorkflowCandidate) }}</strong>
                 </div>
                 <el-popover
@@ -5499,20 +5505,20 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
                     :edges="resolvedWorkflowCandidate.previewEdges"
                   />
                   <template #reference>
-                    <el-button size="small" plain @click.stop>悬浮查看 Cell 图</el-button>
+                    <UButton color="neutral" size="sm" variant="outline" @click.stop>{{ t('production.plans_list.action_42ea5f662997') }}</UButton>
                   </template>
                 </el-popover>
               </div>
               <div class="selected-workflow-route__meta">
-                <el-tag type="success" size="small">{{ workflowCandidateTopologyLabel(resolvedWorkflowCandidate) }}</el-tag>
-                <span>版本 v{{ resolvedWorkflowCandidate.definitionVersion }}</span>
+                <UBadge variant="soft" color="success" size="sm">{{ workflowCandidateTopologyLabel(resolvedWorkflowCandidate) }}</UBadge>
+                <span>{{ t('production.plans_list.text_b4b1256c272c') }}{{ resolvedWorkflowCandidate.definitionVersion }}</span>
               </div>
               <div class="selected-workflow-route__outputs">
-                <el-tag
+                <UBadge variant="soft"
                   v-for="t in (resolvedWorkflowCandidate.terminalOutputs || [])"
                   :key="t.productTypeId"
-                  size="small"
-                >→ {{ t.productName }}</el-tag>
+                  size="sm"
+                >→ {{ t.productName }}</UBadge>
               </div>
             </div>
             <el-alert
@@ -5522,17 +5528,17 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
               :closable="false"
               class="workflow-route-decision-alert"
               :title="planForm.resolvedCandidates.length > 1
-                ? '多个 Workflow 处于同一匹配层级，需要选择实际生产路线'
-                : '该 Workflow 会同时产出其它成品，需要确认完整产出集合'"
+                ? t('production.plans_list.title_ab0ba302fdbf')
+                : t('production.plans_list.title_6bf8f50e55b7')"
             >
-              <el-button
-                type="warning"
-                plain
-                size="small"
+              <UButton
+                color="warning"
+                variant="outline"
+                size="sm"
                 @click="openWorkflowCandidateDialog"
               >
-                选择生产工序路线
-              </el-button>
+                {{ t('production.plans_list.action_c3fcde144398') }}
+              </UButton>
             </el-alert>
             <!-- 有联产超集: 图是对的, 缺的是「把联产成品一起选上」。⛔ 不要说「未找到」。 -->
             <el-alert
@@ -5544,21 +5550,21 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
               data-testid="joint-superset-hint"
             >
               <template #title>
-                这个成品由一张联产工艺图产出，同一批还会产出：{{ jointSupersetHint.extraNames.join('、') }}
+                {{ t('production.plans_list.text_3700417d7264') }}{{ jointSupersetHint.extraNames.join('、') }}
               </template>
               <div style="margin-top: 4px; color: var(--cs-muted); font-size: 12px;">
-                联产图不能只为其中一个成品建计划（产出会对不上账）。把它们一起选上即可继续。
+                {{ t('production.plans_list.text_efca2e1acd6c') }}
               </div>
               <div style="display: flex; gap: 8px; margin-top: 8px;">
-                <el-button
-                  size="small"
-                  type="primary"
+                <UButton
+                  size="sm"
+                  color="primary"
                   data-testid="adopt-joint-outputs"
                   @click="adoptJointSupersetOutputs"
-                >一起选上这 {{ jointSupersetHint.allIds.length }} 个成品</el-button>
-                <el-button size="small" @click="goToWorkflowConfig(planForm.targetFinishedGoodIds)">
-                  查看工艺图
-                </el-button>
+                >{{ t('production.plans_list.action_15ce2b1c14a9') }} {{ jointSupersetHint.allIds.length }} {{ t('production.plans_list.action_b127fa76cb9d') }}</UButton>
+                <UButton color="neutral" variant="outline" size="sm" @click="goToWorkflowConfig(planForm.targetFinishedGoodIds)">
+                  {{ t('production.plans_list.action_fcd64d3900a0') }}
+                </UButton>
               </div>
             </el-alert>
             <el-alert
@@ -5568,13 +5574,13 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
               :closable="false"
               style="margin-top: 8px;"
             >
-              <template #title>未找到覆盖该产品的工序 Workflow，请前往 Workflow 配置</template>
+              <template #title>{{ t('production.plans_list.text_8360d3c955d9') }}</template>
               <div style="display: flex; gap: 8px; margin-top: 8px;">
-                <el-button
-                  size="small"
-                  type="primary"
+                <UButton
+                  size="sm"
+                  color="primary"
                   @click="goToWorkflowConfig(planForm.targetFinishedGoodIds)"
-                >去 Workflow 配置</el-button>
+                >{{ t('production.plans_list.action_fbedb04d2c2b') }}</UButton>
               </div>
             </el-alert>
             <el-alert
@@ -5582,12 +5588,12 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
               type="error"
               show-icon
               :closable="false"
-              title="未找到共享的工序 Workflow，请分开创建生产计划"
+              :title="t('production.plans_list.title_9a65c5b389c0')"
               style="margin-top: 8px;"
             />
           </template>
-        </el-form-item>
-        <el-form-item v-if="planForm.sourceType === 'SAFETY_STOCK'" label="关联客户(选填)">
+        </CompatFormItem>
+        <CompatFormItem v-if="planForm.sourceType === 'SAFETY_STOCK'" :label="t('production.plans_list.label_8b7fc028e18a')">
           <div style="width: 100%;">
             <el-select
               v-model="planForm.customerId"
@@ -5595,7 +5601,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
               :loading="customerReadStatus === 'loading'"
               clearable
               filterable
-              placeholder="可关联客户，供料方式单独选择"
+              :placeholder="t('production.plans_list.placeholder_341106e892ac')"
               style="width: 100%"
               @change="handlePlanCustomerChange"
               @clear="handlePlanCustomerChange('')"
@@ -5609,34 +5615,34 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             </el-select>
             <div v-if="customerReadHint" role="status" data-testid="plan-customer-read-status">
               {{ customerReadHint }}
-              <el-button v-if="canRetryCustomers" link type="primary" @click="loadCustomers">重试</el-button>
+              <UButton v-if="canRetryCustomers" variant="link" color="primary" @click="loadCustomers">{{ t('production.plans_list.action_b8784c8dd563') }}</UButton>
             </div>
             <div style="font-size: 12px; color: var(--text-color-secondary, var(--cs-muted)); margin-top: 4px;">
-              选择客户不会自动改为客户供料。工厂供料的成品归公司库存；客户供料的成品归该客户。
+              {{ t('production.plans_list.text_08fb4d9972b9') }}
             </div>
           </div>
-        </el-form-item>
-        <el-form-item v-if="planForm.sourceType === 'SAFETY_STOCK' && planForm.customerId" label="主料供料方式">
+        </CompatFormItem>
+        <CompatFormItem v-if="planForm.sourceType === 'SAFETY_STOCK' && planForm.customerId" :label="t('production.plans_list.label_0a95447d1a67')">
           <div>
             <el-radio-group v-model="planForm.materialSupplyMode" @change="handlePlanCustomerChange(planForm.customerId)">
-              <el-radio value="FACTORY_SUPPLIED">工厂自有原料</el-radio>
-              <el-radio value="CUSTOMER_SUPPLIED">客户提供原料</el-radio>
+              <el-radio value="FACTORY_SUPPLIED">{{ t('production.plans_list.text_d0190e5935ec') }}</el-radio>
+              <el-radio value="CUSTOMER_SUPPLIED">{{ t('production.plans_list.text_0114e380002a') }}</el-radio>
             </el-radio-group>
             <div style="font-size: 12px; color: var(--text-color-secondary, var(--cs-muted)); margin-top: 4px;">
-              两种方式均通过仓储入库、调拨和领料。辅料、包材可使用工厂自有库存。
+              {{ t('production.plans_list.text_005cbc347a67') }}
             </div>
             <el-alert
               v-if="planForm.materialSupplyMode === 'CUSTOMER_SUPPLIED'"
               type="warning"
               show-icon
               :closable="false"
-              title="客户供料仅可领用该客户尚未绑定销售订单的主料；工厂自有主料不计入可用库存，调拨仓库不会改变归属。"
+              :title="t('production.plans_list.title_097396074cc1')"
               style="margin-top: 8px;"
             />
           </div>
-        </el-form-item>
+        </CompatFormItem>
         <!-- Wave2 六扇门: 免工序报工开关 (Rule 1 防呆: 产品无工序时 disabled 锁定) -->
-        <el-form-item label="报工模式">
+        <CompatFormItem :label="t('production.plans_list.label_32ac10e7e9ae')">
           <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
             <el-switch
               v-model="planForm.skipProcessReporting"
@@ -5649,97 +5655,97 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             />
             <span style="font-size: 12px; color: var(--text-color-secondary, var(--cs-muted));">
               <template v-if="planForm.skipProcessReporting">
-                操作员只报「领料入」+「产出」两个节点
+                {{ t('production.plans_list.text_916cbb503dae') }}
               </template>
               <template v-else>
-                操作员逐道工序报工
+                {{ t('production.plans_list.text_75c9710fd88e') }}
               </template>
               <template v-if="hasActiveWorkflow">
-                （本产品由工序 Workflow 驱动，逐道报工按图逐工序执行）
+                {{ t('production.plans_list.text_5896af8ec58e') }}
               </template>
               <template v-else-if="!hasProcesses && planForm.productTypeId">
-                （产品未配置工序，只能走免工序报工）
+                {{ t('production.plans_list.text_76e9aa833606') }}
               </template>
             </span>
           </div>
-        </el-form-item>
+        </CompatFormItem>
         <!-- A3: 工序只读展示；免工序报工时隐藏，产品无工序时改提示 -->
-        <el-form-item v-if="!planForm.skipProcessReporting" label="工序">
+        <CompatFormItem v-if="!planForm.skipProcessReporting" :label="t('production.plans_list.label_648cd106a0b7')">
           <template v-if="!planForm.productTypeId">
-            <span style="color: var(--text-color-secondary, var(--cs-muted)); font-size: 13px;">请先选择产品类型</span>
+            <span style="color: var(--text-color-secondary, var(--cs-muted)); font-size: 13px;">{{ t('production.plans_list.text_51fff14f1ca7') }}</span>
           </template>
           <template v-else-if="hasActiveWorkflow">
             <span style="color: var(--el-color-success, var(--cs-success)); font-size: 13px;">
-              本产品由「产品工序 Workflow」驱动，逐道报工按图逐工序执行（含分支/多产出）。转批次后在逐道录入抽屉逐道保存。
+              {{ t('production.plans_list.text_a80b96e8ef0c') }}
             </span>
           </template>
           <template v-else-if="productWorkProcessList.length === 0">
             <span style="color: var(--el-color-warning, var(--cs-warning)); font-size: 13px;">
-              该产品尚未发布并启用画布工艺，无法建计划。请先到
-              <el-link type="primary" underline="hover" @click="router.push('/system/product-processes')" style="font-size: 13px; vertical-align: baseline;">产品工艺画布</el-link>
-              建立工艺并发布启用。
+              {{ t('production.plans_list.text_4798ea33690c') }}
+              <el-link type="primary" underline="hover" @click="router.push('/system/product-processes')" style="font-size: 13px; vertical-align: baseline;">{{ t('production.plans_list.text_c1fc5e1fefb6') }}</el-link>
+              {{ t('production.plans_list.text_ebc54f702bda') }}
             </span>
           </template>
           <template v-else>
             <div style="width: 100%;">
-              <el-tag
+              <UBadge variant="soft"
                 v-for="(wp, idx) in productWorkProcessList"
                 :key="wp.id"
-                size="small"
+                size="sm"
                 style="margin-right: 6px; margin-bottom: 4px;"
-              >{{ idx + 1 }}. {{ wp.processName }}<template v-if="wp.responsibleWorkerName"> ({{ wp.responsibleWorkerName }})</template></el-tag>
+              >{{ idx + 1 }}. {{ wp.processName }}<template v-if="wp.responsibleWorkerName"> ({{ wp.responsibleWorkerName }})</template></UBadge>
             </div>
           </template>
           <!-- processName is kept in sync via loadBomProcesses (T135 ITEM #4) -->
-        </el-form-item>
+        </CompatFormItem>
         <!-- Wave2: 免工序报工模式下的工序提示（产品已配工序但选了免工序） -->
-        <el-form-item v-else-if="hasProcesses && planForm.productTypeId" label="工序">
+        <CompatFormItem v-else-if="hasProcesses && planForm.productTypeId" :label="t('production.plans_list.label_648cd106a0b7')">
           <span style="color: var(--text-color-secondary, var(--cs-muted)); font-size: 13px;">
-            已跳过工序（共 {{ productWorkProcessList.length }} 道），操作员仅需报领料+产出
+            {{ t('production.plans_list.text_afe8ff7bd451') }} {{ productWorkProcessList.length }} {{ t('production.plans_list.text_a7373802071a') }}
           </span>
-        </el-form-item>
+        </CompatFormItem>
         <!-- A5/E3: batchDate 已被后端消费 (ProductionProgressDashboard 按批次日期过滤)，保留；加说明区分两个日期 -->
-        <el-form-item label="批次日期">
+        <CompatFormItem :label="t('production.plans_list.label_4ab95394a48e')">
           <div data-testid="production-plan-batch-date" style="width:100%">
-          <el-date-picker
+          <CompatDatePicker
             v-model="planForm.batchDate"
             type="date"
-            placeholder="实际转批次日期（默认今日）"
+            :placeholder="t('production.plans_list.placeholder_2cc5aee95aba')"
             value-format="YYYY-MM-DD"
             style="width: 100%"
           />
           </div>
           <div style="font-size: 12px; color: var(--text-color-secondary, var(--cs-muted)); margin-top: 2px;">
-            批次日期 = 实际开工/转批次日；计划日期 = 预期完成生产日
+            {{ t('production.plans_list.text_7b5f02abf33d') }}
           </div>
-        </el-form-item>
+        </CompatFormItem>
         <!-- 以销定产: 来源=销售订单时数量按各产品行取, 不手填 → 隐藏 -->
         <!-- 存货生产(SAFETY_STOCK): 无计划数量, 按实际小结累计 → 同样隐藏 -->
-        <el-form-item
+        <CompatFormItem
           v-if="planForm.sourceType !== 'CUSTOMER_ORDER' && planForm.sourceType !== 'SAFETY_STOCK'"
           :label="hasResolvedWorkflowCandidate
             ? `${planForm.resolutionMode === 'SHARED_MULTI_OUTPUT' ? 'Workflow 计划基准数量' : '计划成品数量'}（${resolvedWorkflowCandidate?.plannedUnit || '单位未配置'}）`
-            : '计划成品数量'"
+            : t('production.plans_list.label_b4167e2ad6e0')"
           required
         >
           <el-input-number v-model="planForm.plannedQuantity" :min="1" style="width: 100%" />
           <div v-if="planForm.aiRequestedUnit" class="ai-unit-preserved">
-            AI 原始数量单位：{{ planForm.aiRequestedUnit }}；保存口径：{{ resolvedWorkflowCandidate?.plannedUnit || '等待 Workflow 解析' }}
+            {{ t('production.plans_list.text_8e4a739bc280') }}{{ planForm.aiRequestedUnit }}{{ t('production.plans_list.text_57dbcadf863b') }}{{ resolvedWorkflowCandidate?.plannedUnit || t('production.plans_list.text_fb0f23ddddb5') }}
           </div>
           <div style="font-size: 12px; color: var(--text-color-secondary, var(--cs-muted)); margin-top: 2px;">
             <template v-if="hasResolvedWorkflowCandidate && planForm.resolutionMode === 'SHARED_MULTI_OUTPUT'">
-              计划绑定整张共同 Workflow；逐道报工按图处理全部投入、半成品和产出，不裁剪其它分支。
+              {{ t('production.plans_list.text_c966ddc44114') }}
             </template>
             <template v-else-if="hasResolvedWorkflowCandidate">
-              按 Workflow 终端成品输出端口单位填写；各工序继续按自己的端口单位报工。
+              {{ t('production.plans_list.text_e35bfdab0d10') }}
             </template>
             <template v-else>
-              按产品成品单位填写；首道投料数量以逐工序报工和配方出成率为准
+              {{ t('production.plans_list.text_78fe0b7fcec4') }}
             </template>
           </div>
-        </el-form-item>
+        </CompatFormItem>
         <!-- 存货生产的产量由逐道报工/生产小结形成；此处只接受可选的排产参考数量。 -->
-        <el-form-item
+        <CompatFormItem
           v-if="planForm.sourceType === 'SAFETY_STOCK' && (hasActiveWorkflow || hasResolvedWorkflowCandidate)"
           :label="`${planForm.resolutionMode === 'SHARED_MULTI_OUTPUT' ? 'Workflow 计划基准数量' : '计划成品数量'}（选填，${resolvedWorkflowCandidate?.plannedUnit || '单位未配置'}）`"
         >
@@ -5747,52 +5753,52 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             v-model="planForm.plannedQuantity"
             :min="1"
             clearable
-            placeholder="留空则按实际生产报工确定"
+            :placeholder="t('production.plans_list.placeholder_2918dd6ed1b4')"
             style="width: 100%"
           />
           <div style="font-size: 12px; color: var(--text-color-secondary, var(--cs-muted)); margin-top: 2px;">
             <template v-if="planForm.resolutionMode === 'SHARED_MULTI_OUTPUT'">
-              可填写计划参考基准；留空时按完整 Workflow 逐道报工，并以实际产出结算。
+              {{ t('production.plans_list.text_e96aa2a7e3a8') }}
             </template>
             <template v-else>
-              计划数量仅作排产参考；留空不影响建单，实际产量由逐道报工或生产小结确认。
+              {{ t('production.plans_list.text_d4321bf969de') }}
             </template>
           </div>
-        </el-form-item>
-        <el-form-item label="计划生产日" required>
+        </CompatFormItem>
+        <CompatFormItem :label="t('production.plans_list.label_972e6a485642')" required>
           <div data-testid="production-plan-planned-date" style="width:100%">
-          <el-date-picker
+          <CompatDatePicker
             v-model="planForm.plannedDate"
             type="date"
-            placeholder="预期完成生产日期（默认今日）"
+            :placeholder="t('production.plans_list.placeholder_7c7949a96f66')"
             value-format="YYYY-MM-DD"
             style="width: 100%"
           />
           </div>
-        </el-form-item>
-        <el-form-item label="备注">
+        </CompatFormItem>
+        <CompatFormItem :label="t('production.plans_list.label_daede9881787')">
           <el-input data-testid="production-plan-notes" v-model="planForm.notes" type="textarea" :rows="3" />
-        </el-form-item>
-        <el-form-item label="预计工人数">
-          <el-input-number v-model="planForm.estimatedWorkers" :min="1" :max="100" placeholder="可选" style="width: 100%" />
-        </el-form-item>
+        </CompatFormItem>
+        <CompatFormItem :label="t('production.plans_list.label_ad4181bf4e26')">
+          <el-input-number v-model="planForm.estimatedWorkers" :min="1" :max="100" :placeholder="t('production.plans_list.placeholder_537352400c49')" style="width: 100%" />
+        </CompatFormItem>
         <!-- E2: 指派主管为可选字段，后端 DTO 无 @NotNull，前端亦无 required 规则 -->
-        <el-form-item label="指派主管(可选)">
-          <el-select v-model="planForm.assignedSupervisorId" clearable placeholder="可不填，稍后再指派" style="width: 100%">
-            <el-option v-for="sup in supervisors" :key="sup.id" :label="sup.fullName || sup.username" :value="sup.id" />
-          </el-select>
-        </el-form-item>
+        <CompatFormItem :label="t('production.plans_list.label_d09aca4c2433')">
+          <CompatSelect v-model="planForm.assignedSupervisorId" clearable :placeholder="t('production.plans_list.placeholder_9a3640adf716')" style="width: 100%">
+            <CompatOption v-for="sup in supervisors" :key="sup.id" :label="sup.fullName || sup.username" :value="sup.id" />
+          </CompatSelect>
+        </CompatFormItem>
         <CanvasDynamicFields v-model="planForm.customFields" module-code="production_plan" />
-      </el-form>
+      </CompatForm>
       <template #footer>
-        <el-button @click="handleDialogClose">取消</el-button>
-        <el-button data-testid="production-plan-submit" type="primary" :loading="dialogLoading" :disabled="nonSoSubmitBlocked" @click="submitPlan">确定</el-button>
+        <UButton color="neutral" variant="outline" @click="handleDialogClose">{{ t('production.plans_list.action_2cd0f3be8738') }}</UButton>
+        <UButton data-testid="production-plan-submit" color="primary" :loading="dialogLoading" :disabled="nonSoSubmitBlocked" @click="submitPlan">{{ t('production.plans_list.action_fac2a67ad878') }}</UButton>
       </template>
-    </el-dialog>
+    </CompatDialog>
 
     <el-dialog
       v-model="workflowCandidateDialogVisible"
-      title="选择本计划使用的生产工序路线"
+      :title="t('production.plans_list.title_cd4dc131e250')"
       width="880px"
       top="7vh"
       append-to-body
@@ -5804,7 +5810,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
         show-icon
         :closable="false"
         class="workflow-candidate-dialog__hint"
-        title="系统只展示当前最高优先层的候选。Workflow 名称不作为判断依据，请核对中间工序、投入和完整产出。"
+        :title="t('production.plans_list.title_4e88b2058d67')"
       />
       <el-radio-group v-model="pendingCandidateWorkflowId" class="workflow-candidate-list">
         <div
@@ -5834,27 +5840,27 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
                 :edges="candidate.previewEdges"
               />
               <template #reference>
-                <el-button
+                <UButton
                   class="workflow-preview-trigger"
-                  type="primary"
-                  plain
-                  size="small"
+                  color="primary"
+                  variant="outline"
+                  size="sm"
                   @click.stop
                 >
-                  悬浮查看 Cell 连线
-                </el-button>
+                  {{ t('production.plans_list.action_7984083228f1') }}
+                </UButton>
               </template>
             </el-popover>
           </div>
 
           <div class="workflow-candidate-card__meta">
-            <el-tag size="small" type="info">{{ workflowCandidateTopologyLabel(candidate) }}</el-tag>
-            <span>版本 v{{ candidate.definitionVersion }}</span>
-            <span v-if="candidate.ownerProductName">归属 {{ candidate.ownerProductName }}</span>
+            <UBadge variant="soft" size="sm" color="info">{{ workflowCandidateTopologyLabel(candidate) }}</UBadge>
+            <span>{{ t('production.plans_list.text_b4b1256c272c') }}{{ candidate.definitionVersion }}</span>
+            <span v-if="candidate.ownerProductName">{{ t('production.plans_list.text_1e9b3dc5ae01') }} {{ candidate.ownerProductName }}</span>
           </div>
 
           <div class="workflow-candidate-card__outputs">
-            <span class="workflow-candidate-card__label">完整产出</span>
+            <span class="workflow-candidate-card__label">{{ t('production.plans_list.text_5361a6a39295') }}</span>
             <el-tag
               v-for="output in (candidate.terminalOutputs || [])"
               :key="output.productTypeId"
@@ -5866,31 +5872,31 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             </el-tag>
           </div>
 
-          <el-alert
+          <CompatAlert
             v-if="candidateExtraOutputNames(candidate).length > 0"
-            type="warning"
-            :closable="false"
+            color="warning"
+            :close="false"
             :title="`确认后会把额外联产成品加入本计划：${candidateExtraOutputNames(candidate).join('、')}`"
           />
         </div>
       </el-radio-group>
       <template #footer>
-        <el-button @click="workflowCandidateDialogVisible = false">暂不选择</el-button>
-        <el-button
-          type="primary"
+        <UButton color="neutral" variant="outline" @click="workflowCandidateDialogVisible = false">{{ t('production.plans_list.action_410641b40d8b') }}</UButton>
+        <UButton
+          color="primary"
           :loading="confirmingWorkflowCandidate"
           :disabled="pendingCandidateWorkflowId == null"
           @click="confirmWorkflowCandidateSelection"
         >
-          确认并固定该路线
-        </el-button>
+          {{ t('production.plans_list.action_28ad4974dabd') }}
+        </UButton>
       </template>
     </el-dialog>
 
     <!-- #742 / 6.12 核对结单 dialog -->
     <el-dialog
       v-model="completeDialogVisible"
-      :title="completeProductName ? `核对结单 — ${completeProductName}` : '核对结单'"
+      :title="completeProductName ? `核对结单 — ${completeProductName}` : t('production.plans_list.title_639203de03d3')"
       width="760px"
       top="4vh"
       class="settlement-dialog"
@@ -5898,7 +5904,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
       append-to-body
       :before-close="handleCompleteDialogBeforeClose"
     >
-      <el-form data-testid="production-settle-dialog" label-width="118px" class="settlement-form">
+      <CompatForm data-testid="production-settle-dialog" label-width="118px" class="settlement-form">
         <div v-if="completeAdvisory?.hasWarning" class="settlement-advisory-alert">
           <el-alert
             :title="completeAdvisory.message"
@@ -5906,20 +5912,20 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             show-icon
             :closable="false"
           />
-          <el-button
+          <UButton
             v-if="advisoryNeedsUnitConfig(completeAdvisory)"
-            type="warning"
-            plain
-            size="small"
+            color="warning"
+            variant="outline"
+            size="sm"
             @click="goMaterialUnitConfig(completeAdvisory)"
           >
-            去核对单位配置
-          </el-button>
+            {{ t('production.plans_list.action_75890d8c752f') }}
+          </UButton>
         </div>
         <!-- Phase 2A: 报工自动预填审计 -->
         <el-alert
           v-if="settlementPrefillLoading"
-          title="正在按逐道报工自动带入结单数据…"
+          :title="t('production.plans_list.title_3811e3feb83f')"
           type="info"
           show-icon
           :closable="false"
@@ -5927,7 +5933,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
         />
         <el-alert
           v-else-if="settlementPrefillClean"
-          title="审计通过，已自动带入逐道报工数据，请核对后一键确认提交。"
+          :title="t('production.plans_list.title_3a34cccd4de4')"
           type="success"
           show-icon
           :closable="false"
@@ -5942,7 +5948,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
         >
           <template #title>
             <div style="font-weight: 600; margin-bottom: 4px;">
-              部分数据需人工核对补全（共 {{ settlementBlockerIssues.length }} 项），补全后才能提交：
+              {{ t('production.plans_list.text_c0c0e008b8b4') }} {{ settlementBlockerIssues.length }} {{ t('production.plans_list.text_c7098fadd405') }}
             </div>
             <ul style="margin: 0; padding-left: 18px;">
               <li v-for="(it, idx) in settlementBlockerIssues" :key="idx" style="line-height: 1.6;">
@@ -5969,47 +5975,47 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
         </el-alert>
         <div class="settlement-context">
           <div>
-            <div class="settlement-context-label">计划单号</div>
+            <div class="settlement-context-label">{{ t('production.plans_list.text_167b0c9adcd9') }}</div>
             <div class="settlement-context-value">{{ completePlanNumber || '-' }}</div>
           </div>
           <div>
-            <div class="settlement-context-label">品名</div>
+            <div class="settlement-context-label">{{ t('production.plans_list.text_7d432cf3863b') }}</div>
             <div class="settlement-context-value">{{ completeProductName || '-' }}</div>
           </div>
           <div>
-            <div class="settlement-context-label">计划数量</div>
+            <div class="settlement-context-label">{{ t('production.plans_list.text_19a908ffd1ae') }}</div>
             <div class="settlement-context-value">{{ formatPlannedQuantity(completePlannedQuantity, completePlannedUnit) }}</div>
           </div>
         </div>
         <template v-if="settlementPrefillClean">
-          <el-divider content-position="left">逐道报工汇总</el-divider>
+          <el-divider content-position="left">{{ t('production.plans_list.text_f47f334ad89d') }}</el-divider>
           <div class="settlement-reconciliation-grid">
             <div class="settlement-reconciliation-card">
-              <span>实际成品产出</span>
+              <span>{{ t('production.plans_list.text_624cb7192399') }}</span>
               <strong>{{ completeActualQuantity }} {{ displayUnit(completePlannedUnit) }}</strong>
             </div>
             <div class="settlement-reconciliation-card">
-              <span>原料批次</span>
-              <strong>{{ completeForm.rawMaterialConsumptions.length }} 个</strong>
+              <span>{{ t('production.plans_list.text_89c47ef5e018') }}</span>
+              <strong>{{ completeForm.rawMaterialConsumptions.length }} {{ t('production.plans_list.text_3a116815bc9d') }}</strong>
             </div>
             <div class="settlement-reconciliation-card">
-              <span>逐道工时</span>
-              <strong>{{ completeForm.workMinutes }} 分钟</strong>
+              <span>{{ t('production.plans_list.text_23a85f58ad63') }}</span>
+              <strong>{{ completeForm.workMinutes }} {{ t('production.plans_list.text_bd957bc497aa') }}</strong>
             </div>
           </div>
           <div v-if="settlementTerminalOutputs.length > 0" class="settlement-reconciliation-section">
-            <div class="settlement-reconciliation-title">终端产出（按 SKU / 批次 / 单位）</div>
+            <div class="settlement-reconciliation-title">{{ t('production.plans_list.text_3c776f13dc90') }}</div>
             <div
               v-for="(output, index) in settlementTerminalOutputs"
               :key="`terminal-${output.productTypeId}-${output.batchNumber}-${output.unit}-${index}`"
               class="settlement-reconciliation-row"
             >
-              <span>{{ resolveOutputProductLabel(output.productTypeId) }} · {{ output.batchNumber || '未识别批次' }}</span>
+              <span>{{ resolveOutputProductLabel(output.productTypeId) }} · {{ output.batchNumber || t('production.plans_list.text_4cfbcdf65bdb') }}</span>
               <strong>{{ output.quantity }} {{ displayUnit(output.unit) }}</strong>
             </div>
           </div>
           <div class="settlement-reconciliation-section">
-            <div class="settlement-reconciliation-title">实际原料领用</div>
+            <div class="settlement-reconciliation-title">{{ t('production.plans_list.text_46a749285c09') }}</div>
             <div
               v-for="(line, index) in completeForm.rawMaterialConsumptions"
               :key="`recorded-raw-${line.materialBatchId}-${index}`"
@@ -6020,43 +6026,43 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             </div>
           </div>
           <div class="settlement-reconciliation-section">
-            <div class="settlement-reconciliation-title">人员与工时</div>
+            <div class="settlement-reconciliation-title">{{ t('production.plans_list.text_569f271f7d1f') }}</div>
             <div
               v-for="(segment, index) in completeForm.laborSegments"
               :key="`recorded-labor-${index}`"
               class="settlement-reconciliation-row"
             >
               <span>{{ segment.workType || `第 ${index + 1} 道工序` }}</span>
-              <strong>{{ segment.headcount }} 人 × {{ segment.minutes }} 分钟</strong>
+              <strong>{{ segment.headcount }} {{ t('production.plans_list.text_dafefee2c6e7') }} {{ segment.minutes }} {{ t('production.plans_list.text_bd957bc497aa') }}</strong>
             </div>
           </div>
           <el-alert
-            title="以上数据来自逐道报工，确认后系统将统一结算领用、产出和工时，并结束当前生产计划。"
+            :title="t('production.plans_list.title_2357d2a3699e')"
             type="info"
             show-icon
             :closable="false"
             style="margin: 12px 0"
           />
           <div class="settlement-line-header">
-            <span>外部半成品领用</span>
-            <el-button
+            <span>{{ t('production.plans_list.text_30df0b90b8a9') }}</span>
+            <UButton
               v-if="!settlementManualWipVisible"
-              size="small"
-              type="primary"
-              plain
+              size="sm"
+              color="primary"
+              variant="outline"
               :loading="wipListLoading"
               @click="openSettlementManualWip"
-            >补充外部半成品领用</el-button>
+            >{{ t('production.plans_list.action_18d46856d4be') }}</UButton>
           </div>
           <div v-if="!settlementManualWipVisible" class="settlement-help">
-            如领用外部半成品，请点击上方入口手工添加；无需领用可直接确认结单。
+            {{ t('production.plans_list.text_dcfa15fb5d3b') }}
           </div>
           <template v-else>
             <div class="settlement-help">
-              仅添加本计划实际领用的外部半成品。请选择批次并填写 0.01 起的有效数量，不能超过当前可用量。
+              {{ t('production.plans_list.text_be0588e7908e') }}
             </div>
             <div v-if="wipList.length === 0 && !wipListLoading" class="settlement-empty">
-              暂无可用半成品库存，无法添加外部半成品领用。
+              {{ t('production.plans_list.text_5e082ae321b8') }}
             </div>
             <div
               v-for="(line, index) in completeForm.semiFinishedConsumptions"
@@ -6066,7 +6072,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
               <el-select
                 v-model="line.semiFinishedInventoryId"
                 filterable
-                placeholder="选择半成品 WIP 批次"
+                :placeholder="t('production.plans_list.placeholder_c63461102ffe')"
                 :loading="wipListLoading"
                 class="consumption-select"
               >
@@ -6085,21 +6091,21 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
                 :step="0.01"
                 class="consumption-qty"
               />
-              <el-input v-model="line.note" placeholder="备注/交接单号" class="consumption-note" />
-              <el-button text type="danger" @click="removeWipConsumptionLine(index)">删除</el-button>
+              <UInput v-model="line.note" :placeholder="t('production.plans_list.placeholder_70044377f282')" class="consumption-note" />
+              <UButton variant="ghost" color="error" @click="removeWipConsumptionLine(index)">{{ t('production.plans_list.action_2f9daa828907') }}</UButton>
               <div v-if="selectedWipForSettlement(line.semiFinishedInventoryId)" class="settlement-wip-boundary">
-                当前可用 <strong>{{ selectedWipForSettlement(line.semiFinishedInventoryId)?.availableQuantity }} {{ displayUnit(selectedWipForSettlement(line.semiFinishedInventoryId)?.unit) }}</strong>；超出可用量或数量无效将禁止提交。
+                {{ t('production.plans_list.text_7badcaa8c639') }} <strong>{{ selectedWipForSettlement(line.semiFinishedInventoryId)?.availableQuantity }} {{ displayUnit(selectedWipForSettlement(line.semiFinishedInventoryId)?.unit) }}</strong>{{ t('production.plans_list.text_af6bfb364dcd') }}
               </div>
               <div v-if="wipLineDisabledReason(line, index)" class="settlement-wip-boundary danger">
                 {{ wipLineDisabledReason(line, index) }}
               </div>
             </div>
-            <el-button size="small" :icon="Plus" @click="addWipConsumptionLine">增加半成品行</el-button>
+            <el-button size="small" :icon="Plus" @click="addWipConsumptionLine">{{ t('production.plans_list.action_7d122a5dd5da') }}</el-button>
           </template>
         </template>
         <template v-else>
-        <el-divider content-position="left">产出核对</el-divider>
-        <el-form-item label="实际产量" required>
+        <el-divider content-position="left">{{ t('production.plans_list.text_bac4a080fdc9') }}</el-divider>
+        <CompatFormItem :label="t('production.plans_list.label_a98c596e050c')" required>
           <el-input-number
             v-model="completeForm.actualQuantity"
             :min="0"
@@ -6108,48 +6114,48 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
           />
           <!-- 防呆 Rule 1: 有计划数量时软性参考提示; 存货生产等无计划数量 (=0/null) 跳过, 不误导 -->
           <div v-if="completePlannedQuantity > 0" class="settlement-help">
-            参考: 计划 {{ formatPlannedQuantity(completePlannedQuantity, completePlannedUnit) }}。计划数量只是参考，超出时系统预警并要求原因，不硬拦。
+            {{ t('production.plans_list.text_68d4606240cd') }} {{ formatPlannedQuantity(completePlannedQuantity, completePlannedUnit) }}{{ t('production.plans_list.text_36cb3fef184c') }}
           </div>
-        </el-form-item>
+        </CompatFormItem>
         <el-alert
           v-if="completeIsOverPlan"
-          title="实际产量超过计划数量，请选择差异原因。"
+          :title="t('production.plans_list.title_faf16c671cfb')"
           type="warning"
           show-icon
           :closable="false"
           style="margin-bottom: 12px"
         />
-        <el-form-item v-if="completeIsOverPlan" label="差异原因" required>
-          <el-select
+        <CompatFormItem v-if="completeIsOverPlan" :label="t('production.plans_list.label_0c23811a1e04')" required>
+          <CompatSelect
             v-model="completeForm.varianceReason"
-            placeholder="请选择差异原因"
+            :placeholder="t('production.plans_list.placeholder_2303629e133d')"
             style="width: 100%"
           >
-            <el-option
+            <CompatOption
               v-for="opt in SETTLEMENT_VARIANCE_REASON_OPTIONS"
               :key="opt.value"
               :label="opt.label"
               :value="opt.value"
             />
-          </el-select>
-        </el-form-item>
-        <el-form-item v-if="completeIsOverPlan && completeForm.varianceReason === '其他'" label="原因补充" required>
+          </CompatSelect>
+        </CompatFormItem>
+        <CompatFormItem v-if="completeIsOverPlan && completeForm.varianceReason === '其他'" :label="t('production.plans_list.label_59889a398f35')" required>
           <el-input
             v-model="completeForm.otherVarianceReason"
             type="textarea"
             :rows="2"
-            placeholder="请说明实际产量超过计划的现场原因"
+            :placeholder="t('production.plans_list.placeholder_9d036b414b41')"
           />
-        </el-form-item>
+        </CompatFormItem>
         <!-- 不良品清点 —— 三态, 不是一个可以留空也可以填 0 的数字。
              2026-08-26 实测: 72 张报工单零填写, 旧代码兜底填 0,
              于是 8 个已完工批次全部声称 100% 良品, 而其中 4 个的质检明确记了不合格。
              「已清点确认零」和「没清点」必须分开, 否则那个 0 又会被当成真实读数。 -->
-        <el-form-item label="不良品">
+        <CompatFormItem :label="t('production.plans_list.label_cdfad7941f8e')">
           <el-radio-group v-model="completeForm.defectCountOutcome">
-            <el-radio label="COUNTED">有不良品</el-radio>
-            <el-radio label="NONE_CONFIRMED">已清点，无不良品</el-radio>
-            <el-radio label="NOT_COUNTED">未清点</el-radio>
+            <el-radio label="COUNTED">{{ t('production.plans_list.text_7e4912250bd2') }}</el-radio>
+            <el-radio label="NONE_CONFIRMED">{{ t('production.plans_list.text_21179fc049de') }}</el-radio>
+            <el-radio label="NOT_COUNTED">{{ t('production.plans_list.text_ee2db7f3bcce') }}</el-radio>
           </el-radio-group>
           <el-input-number
             v-if="completeForm.defectCountOutcome === 'COUNTED'"
@@ -6157,28 +6163,27 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             :min="0"
             :precision="2"
             style="width: 100%; margin-top: 8px"
-            placeholder="不良品数量"
+            :placeholder="t('production.plans_list.placeholder_f216e34e8c99')"
           />
           <div class="settlement-help">
-            留空不影响提交，但这批会被标记为「未清点不良品」，盘点时需要补录。
-            ⛔ 请不要用「已清点，无不良品」代替「未清点」—— 前者会被当成真实读数计入良品率。
+            {{ t('production.plans_list.text_b96b5ea01a75') }}
           </div>
-        </el-form-item>
-        <el-form-item v-if="settlementNeedsManualReason" label="人工补录原因" required>
-          <el-select v-model="completeForm.manualOverrideReason" placeholder="请选择" style="width: 100%">
-            <el-option v-for="reason in MANUAL_OVERRIDE_REASON_OPTIONS" :key="reason" :label="reason" :value="reason" />
-          </el-select>
+        </CompatFormItem>
+        <CompatFormItem v-if="settlementNeedsManualReason" :label="t('production.plans_list.label_d7d0b2d05596')" required>
+          <CompatSelect v-model="completeForm.manualOverrideReason" :placeholder="t('production.plans_list.placeholder_da590a8fe3ce')" style="width: 100%">
+            <CompatOption v-for="reason in MANUAL_OVERRIDE_REASON_OPTIONS" :key="reason" :label="reason" :value="reason" />
+          </CompatSelect>
           <el-input
             v-if="completeForm.manualOverrideReason === '其他'"
             v-model="completeForm.otherManualOverrideReason"
             type="textarea"
             :rows="2"
             maxlength="255"
-            placeholder="请填写原因"
+            :placeholder="t('production.plans_list.placeholder_1394a36d93a0')"
             style="margin-top: 8px"
           />
-          <div class="settlement-help">这张结单会标记为人工补录，原因和操作人都会留痕。</div>
-        </el-form-item>
+          <div class="settlement-help">{{ t('production.plans_list.text_96c425eb5472') }}</div>
+        </CompatFormItem>
         <el-alert
           type="warning"
           show-icon
@@ -6187,19 +6192,19 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
         >
           <template #title>
             <div class="settlement-loss-guide">
-              <strong>生产报损/损耗留证：</strong>
-              现场发生损耗时，不要直接改领用数量抵消。请到
+              <strong>{{ t('production.plans_list.text_4466799410d9') }}</strong>
+              {{ t('production.plans_list.text_794b250703be') }}
               <el-link
                 type="primary"
                 underline="hover"
                 @click="router.push({ path: '/warehouse/wastage-reports', query: { reason: 'PRODUCTION_WASTE', source: 'production-settlement' } })"
-              >报损登记</el-link>
-              报损原因选择“生产损耗”，拍照或附件留证；审批后再按缺料结果补调拨。
+              >{{ t('production.plans_list.text_28b219276a74') }}</el-link>
+              {{ t('production.plans_list.text_e44d6985a1ad') }}
             </div>
           </template>
         </el-alert>
 
-        <el-divider content-position="left">实际领用核对</el-divider>
+        <el-divider content-position="left">{{ t('production.plans_list.text_b64d65fb5f2c') }}</el-divider>
         <div v-if="completeAdvisory?.hasWarning" class="settlement-advisory-alert">
           <el-alert
             :title="completeAdvisory.message"
@@ -6207,15 +6212,15 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             show-icon
             :closable="false"
           />
-          <el-button
+          <UButton
             v-if="advisoryNeedsUnitConfig(completeAdvisory)"
-            type="danger"
-            plain
-            size="small"
+            color="error"
+            variant="outline"
+            size="sm"
             @click="goMaterialUnitConfig(completeAdvisory)"
           >
-            去核对单位配置
-          </el-button>
+            {{ t('production.plans_list.action_75890d8c752f') }}
+          </UButton>
         </div>
         <el-alert
           v-else-if="completeAdvisory"
@@ -6227,29 +6232,29 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
         />
         <div class="settlement-line-header">
           <span>
-            原料/辅料实际领用
-            <el-tag
+            {{ t('production.plans_list.text_162fe23e26bc') }}
+            <UBadge
               v-if="settlementFieldHasIssue('rawMaterialConsumptions')"
-              type="warning"
-              size="small"
-              effect="light"
+              color="warning"
+              size="sm"
+              variant="soft"
               style="margin-left: 6px"
-            >需人工补全</el-tag>
+            >{{ t('production.plans_list.text_ea1b2f687b8c') }}</UBadge>
           </span>
-          <el-button size="small" :icon="Plus" @click="addRawConsumptionLine">增加原料行</el-button>
+          <el-button size="small" :icon="Plus" @click="addRawConsumptionLine">{{ t('production.plans_list.action_8729b2a7eae9') }}</el-button>
         </div>
         <div
           v-if="bomFilterBlockedMessage && !materialBatchListLoading"
           class="settlement-empty"
         >
           {{ bomFilterBlockedMessage }}
-          <el-button size="small" type="primary" link @click="goConfigBomFromSettlement">去配置 BOM</el-button>
+          <UButton size="sm" color="primary" variant="link" @click="goConfigBomFromSettlement">{{ t('production.plans_list.action_bd87397c8609') }}</UButton>
         </div>
         <div
           v-else-if="bomFilteredMaterialBatchOptions.length === 0 && !materialBatchListLoading"
           class="settlement-empty"
         >
-          暂无可用原料批次；不能伪造领用，请先完成仓库入库或选择正确产品/BOM。
+          {{ t('production.plans_list.text_0670810c2dfe') }}
         </div>
         <div
           v-for="(line, index) in completeForm.rawMaterialConsumptions"
@@ -6259,7 +6264,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
           <el-select
             v-model="line.materialBatchId"
             filterable
-            placeholder="选择原料批次 (已按产品 BOM 预过滤)"
+            :placeholder="t('production.plans_list.placeholder_09c5406373dc')"
             :loading="materialBatchListLoading"
             class="consumption-select"
             @change="applyPickedRawMaterialBatch(line)"
@@ -6278,28 +6283,28 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             :precision="2"
             class="consumption-qty"
           />
-          <el-input
+          <UInput
             v-model="line.note"
-            placeholder="备注/称重单号"
+            :placeholder="t('production.plans_list.placeholder_97af4ef88e1e')"
             class="consumption-note"
           />
-          <el-button text type="danger" @click="removeRawConsumptionLine(index)">删除</el-button>
+          <UButton variant="ghost" color="error" @click="removeRawConsumptionLine(index)">{{ t('production.plans_list.action_2f9daa828907') }}</UButton>
           <div
             v-if="materialWarehouseBreakdown(selectedMaterialBatch(line.materialBatchId))"
             class="settlement-wip-boundary"
           >
-            可用分布：{{ materialWarehouseBreakdown(selectedMaterialBatch(line.materialBatchId)) }}
+            {{ t('production.plans_list.text_e79d9cfb1a15') }}{{ materialWarehouseBreakdown(selectedMaterialBatch(line.materialBatchId)) }}
           </div>
         </div>
         <div class="settlement-line-header">
-          <span>半成品实际领用</span>
-          <el-button size="small" :icon="Plus" @click="addWipConsumptionLine">增加半成品行</el-button>
+          <span>{{ t('production.plans_list.text_c306310c10e0') }}</span>
+          <el-button size="small" :icon="Plus" @click="addWipConsumptionLine">{{ t('production.plans_list.action_7d122a5dd5da') }}</el-button>
         </div>
         <div class="settlement-help">
-          选择半成品后会持续显示当前可用量；本行最多领用当前可用数量，超出可用量会被拦截。
+          {{ t('production.plans_list.text_04dd4031aa75') }}
         </div>
         <div v-if="wipList.length === 0 && !wipListLoading" class="settlement-empty">
-          暂无可用半成品库存；如果本计划无需半成品领用，可以不新增半成品行。
+          {{ t('production.plans_list.text_964e828cd2e6') }}
         </div>
         <div
           v-for="(line, index) in completeForm.semiFinishedConsumptions"
@@ -6309,7 +6314,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
           <el-select
             v-model="line.semiFinishedInventoryId"
             filterable
-            placeholder="选择半成品 WIP"
+            :placeholder="t('production.plans_list.placeholder_2fcfee497cfa')"
             :loading="wipListLoading"
             class="consumption-select"
           >
@@ -6327,67 +6332,67 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             :precision="2"
             class="consumption-qty"
           />
-          <el-input
+          <UInput
             v-model="line.note"
-            placeholder="备注/交接单号"
+            :placeholder="t('production.plans_list.placeholder_70044377f282')"
             class="consumption-note"
           />
-          <el-button text type="danger" @click="removeWipConsumptionLine(index)">删除</el-button>
+          <UButton variant="ghost" color="error" @click="removeWipConsumptionLine(index)">{{ t('production.plans_list.action_2f9daa828907') }}</UButton>
           <div
             v-if="selectedWipForSettlement(line.semiFinishedInventoryId)"
             class="settlement-wip-boundary"
           >
-            当前可用
+            {{ t('production.plans_list.text_7badcaa8c639') }}
             <strong>
               {{ selectedWipForSettlement(line.semiFinishedInventoryId)?.availableQuantity }}
               {{ displayUnit(selectedWipForSettlement(line.semiFinishedInventoryId)?.unit) }}
             </strong>
-            ，本行最多领用
+            {{ t('production.plans_list.text_0f71b786e217') }}
             <strong>
               {{ selectedWipForSettlement(line.semiFinishedInventoryId)?.availableQuantity }}
               {{ displayUnit(selectedWipForSettlement(line.semiFinishedInventoryId)?.unit) }}
             </strong>
-            ；超出可用量会被拦截。
+            {{ t('production.plans_list.text_eb0bb1760cd3') }}
           </div>
         </div>
 
         <el-divider content-position="left">
-          工时/人效最小字段
-          <el-tag
+          {{ t('production.plans_list.text_3a98c074b428') }}
+          <UBadge
             v-if="settlementFieldHasIssue('laborSegments')"
-            type="warning"
-            size="small"
-            effect="light"
+            color="warning"
+            size="sm"
+            variant="soft"
             style="margin-left: 6px"
-          >需人工补全</el-tag>
+          >{{ t('production.plans_list.text_ea1b2f687b8c') }}</UBadge>
         </el-divider>
         <el-row :gutter="12">
           <el-col :span="12">
-            <el-form-item label="人数">
+            <CompatFormItem :label="t('production.plans_list.label_389485a87c70')">
               <el-input-number
                 v-model="completeForm.workerCount"
                 :min="0"
                 :precision="0"
                 style="width: 100%"
               />
-            </el-form-item>
+            </CompatFormItem>
           </el-col>
           <el-col :span="12">
-            <el-form-item label="工时分钟">
+            <CompatFormItem :label="t('production.plans_list.label_4391a355f1d7')">
               <el-input-number
                 v-model="completeForm.workMinutes"
                 :min="0"
                 :precision="0"
                 style="width: 100%"
               />
-            </el-form-item>
+            </CompatFormItem>
           </el-col>
         </el-row>
         <div class="settlement-help" style="margin-bottom: 12px;">
-          仅在上方出现异常时才需要补录或调整；正常计划会直接展示逐道报工汇总。
+          {{ t('production.plans_list.text_0b88c08d38b3') }}
         </div>
         </template>
-        <el-form-item label="半成品产量" data-testid="settlement-semi-output">
+        <CompatFormItem :label="t('production.plans_list.label_3e073c238b91')" data-testid="settlement-semi-output">
           <el-input-number
             v-model="completeForm.semiFinishedOutputQuantity"
             :min="0"
@@ -6395,9 +6400,9 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             style="width: 100%"
           />
           <div class="settlement-help">
-            填写本计划剩余、需转入半成品库的实际数量；已被下道领用或已入半成品库的数量不要重复填写。成品需仓库确认实收后才入库。
+            {{ t('production.plans_list.text_b1d1cbb2f32e') }}
           </div>
-        </el-form-item>
+        </CompatFormItem>
         <el-alert
           v-if="!settlementPrefillClean && completeSubmitDisabledReason"
           :title="completeSubmitDisabledReason"
@@ -6406,43 +6411,43 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
           :closable="false"
           style="margin-bottom: 4px"
         />
-      </el-form>
+      </CompatForm>
       <template #footer>
-        <el-button @click="requestCloseCompleteDialog">取消</el-button>
-        <el-button
-          type="primary"
+        <UButton color="neutral" variant="outline" @click="requestCloseCompleteDialog">{{ t('production.plans_list.action_2cd0f3be8738') }}</UButton>
+        <UButton
+          color="primary"
           :loading="actionLoading"
           :disabled="!completeCanSubmit"
           data-testid="production-settle-dialog-submit"
           @click="submitComplete"
-        >确认结单并结束计划</el-button>
+        >{{ t('production.plans_list.action_544a279f2f80') }}</UButton>
       </template>
     </el-dialog>
 
     <!-- 6.12: 生产报产与仓库实收必须双方核对；差异进入中转挂账 -->
     <el-dialog
       v-model="receiptDialogVisible"
-      :title="receiptProductName ? `仓库确认入库 — ${receiptProductName}` : '仓库确认入库'"
+      :title="receiptProductName ? `仓库确认入库 — ${receiptProductName}` : t('production.plans_list.title_c3e464c67c4e')"
       width="720px"
       top="6vh"
       class="settlement-dialog"
       destroy-on-close
       append-to-body
     >
-      <el-form data-testid="finished-goods-receive-dialog" v-loading="receiptLoading" label-width="124px" class="settlement-form">
+      <CompatForm data-testid="finished-goods-receive-dialog" v-loading="receiptLoading" label-width="124px" class="settlement-form">
         <div v-if="!receiptHasOutputLines" class="settlement-context">
           <div>
-            <div class="settlement-context-label">计划单号</div>
+            <div class="settlement-context-label">{{ t('production.plans_list.text_167b0c9adcd9') }}</div>
             <div class="settlement-context-value">{{ receiptPlanNumber || '-' }}</div>
           </div>
           <div>
-            <div class="settlement-context-label">生产报产</div>
+            <div class="settlement-context-label">{{ t('production.plans_list.text_6d781005de23') }}</div>
             <div class="settlement-context-value">
               {{ receiptReportedQuantity }} {{ receiptDisplayUnit }}
             </div>
           </div>
           <div>
-            <div class="settlement-context-label">容差</div>
+            <div class="settlement-context-label">{{ t('production.plans_list.text_4249c8e935d2') }}</div>
             <div class="settlement-context-value">
               {{ receiptTolerance }} {{ receiptDisplayUnit }}
             </div>
@@ -6451,7 +6456,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
 
         <el-alert
           v-if="receiptHasOutputLines"
-          title="本计划按 SKU、批次和各自单位逐行确认，支持分次入库；每次填写本次实收，系统累计到生产报产上限。"
+          :title="t('production.plans_list.title_44db70874ad3')"
           type="info"
           show-icon
           :closable="false"
@@ -6464,16 +6469,16 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             class="receipt-output-line"
           >
             <div class="receipt-output-line__identity">
-              <span>产出 {{ index + 1 }}</span>
+              <span>{{ t('production.plans_list.text_4c97f9db086d') }} {{ index + 1 }}</span>
               <strong>{{ resolveOutputProductLabel(line.productTypeId) }}</strong>
-              <small>批次 {{ line.reportedBatchNumber }}</small>
+              <small>{{ t('production.plans_list.text_620226469b1a') }} {{ line.reportedBatchNumber }}</small>
             </div>
             <div class="receipt-output-line__reported">
-              <span>生产报产</span>
+              <span>{{ t('production.plans_list.text_6d781005de23') }}</span>
               <strong>{{ line.reportedQuantity }} {{ displayUnit(line.quantityUnit) }}</strong>
-              <small>已入库 {{ line.originalReceivedQuantity || 0 }}，剩余 {{ Number(line.reportedQuantity) - Number(line.originalReceivedQuantity || 0) }}</small>
+              <small>{{ t('production.plans_list.text_2bfa8a13150e') }} {{ line.originalReceivedQuantity || 0 }}{{ t('production.plans_list.text_58263aa6feb0') }} {{ Number(line.reportedQuantity) - Number(line.originalReceivedQuantity || 0) }}</small>
             </div>
-            <el-form-item label="仓库实收" required class="receipt-output-line__input">
+            <CompatFormItem :label="t('production.plans_list.label_28f0c5580f0b')" required class="receipt-output-line__input">
               <el-input-number
                 data-testid="native-receipt-quantity" v-model="line.receivedQuantity"
                 :min="0"
@@ -6485,16 +6490,16 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
               <small
                 v-if="Number(line.receivedQuantity) > Number(line.reportedQuantity) - Number(line.originalReceivedQuantity || 0)"
                 class="danger"
-              >本次实收超过剩余待入库数量，提交后系统将拒绝且不会改动库存。</small>
-            </el-form-item>
+              >{{ t('production.plans_list.text_e9f782a13c69') }}</small>
+            </CompatFormItem>
           </div>
         </div>
 
         <el-alert
           v-else
           :title="receiptUsesInterimFinishedGoods
-            ? '存货生产小结已生成唯一成品库存；本步骤仅确认仓库实收，不会重复创建成品批次。'
-            : '生产结单后不直接入成品库存；仓库确认实收后才入库。实收短少超过容差会生成中转挂账，待责任归属清账。'"
+            ? t('production.plans_list.title_e7199944edb3')
+            : t('production.plans_list.title_c8ab0fd87aab')"
           type="warning"
           show-icon
           :closable="false"
@@ -6502,7 +6507,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
         />
 
         <template v-if="!receiptHasOutputLines">
-        <el-form-item label="仓库实收" required>
+        <CompatFormItem :label="t('production.plans_list.label_28f0c5580f0b')" required>
           <el-input-number
             data-testid="native-receipt-quantity" v-model="receiptForm.receivedQuantity"
             :min="0"
@@ -6513,19 +6518,19 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
           <div class="settlement-help" data-testid="receipt-over-receive-help">
             {{ receiptOverReceiveHelp }}
           </div>
-        </el-form-item>
+        </CompatFormItem>
 
         <div class="receipt-diff-panel">
           <div>
-            <span>生产报产</span>
+            <span>{{ t('production.plans_list.text_6d781005de23') }}</span>
             <strong>{{ receiptReportedQuantity }} {{ receiptDisplayUnit }}</strong>
           </div>
           <div>
-            <span>仓库实收</span>
+            <span>{{ t('production.plans_list.text_28f0c5580f0b') }}</span>
             <strong>{{ receiptReceivedQuantity }} {{ receiptDisplayUnit }}</strong>
           </div>
           <div :class="{ danger: receiptVarianceQuantity > receiptTolerance }">
-            <span>待核差异</span>
+            <span>{{ t('production.plans_list.text_e7958de61fa2') }}</span>
             <strong>{{ receiptVarianceQuantity }} {{ receiptDisplayUnit }}</strong>
           </div>
         </div>
@@ -6540,7 +6545,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
         />
         <el-alert
           v-else-if="receiptNeedsReason"
-          title="差异超过容差，本次确认会生成中转挂账；请选择原因和责任侧。"
+          :title="t('production.plans_list.title_30e11c0b8a21')"
           type="error"
           show-icon
           :closable="false"
@@ -6548,50 +6553,50 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
         />
         <el-alert
           v-else-if="receiptVarianceQuantity > 0"
-          title="差异在称重容差内，系统会记录为容差入库，不生成中转挂账。"
+          :title="t('production.plans_list.title_2c8912269726')"
           type="info"
           show-icon
           :closable="false"
           style="margin-bottom: 12px"
         />
 
-        <el-form-item v-if="receiptNeedsReason" label="差异原因" required>
-          <el-select v-model="receiptForm.varianceReason" placeholder="请选择差异原因" style="width: 100%">
-            <el-option
+        <CompatFormItem v-if="receiptNeedsReason" :label="t('production.plans_list.label_0c23811a1e04')" required>
+          <CompatSelect v-model="receiptForm.varianceReason" :placeholder="t('production.plans_list.placeholder_2303629e133d')" style="width: 100%">
+            <CompatOption
               v-for="opt in RECEIPT_VARIANCE_REASON_OPTIONS"
               :key="opt.value"
               :label="opt.label"
               :value="opt.value"
             />
-          </el-select>
-        </el-form-item>
-        <el-form-item v-if="receiptNeedsReason && receiptForm.varianceReason === '其他'" label="原因补充" required>
+          </CompatSelect>
+        </CompatFormItem>
+        <CompatFormItem v-if="receiptNeedsReason && receiptForm.varianceReason === '其他'" :label="t('production.plans_list.label_59889a398f35')" required>
           <el-input
             v-model="receiptForm.otherVarianceReason"
             type="textarea"
             :rows="2"
-            placeholder="请说明差异现场原因"
+            :placeholder="t('production.plans_list.placeholder_6bcf26fe9138')"
           />
-        </el-form-item>
-        <el-form-item v-if="receiptNeedsReason" label="责任侧" required>
-          <el-select v-model="receiptForm.responsibilitySide" placeholder="请选择责任侧" style="width: 100%">
-            <el-option
+        </CompatFormItem>
+        <CompatFormItem v-if="receiptNeedsReason" :label="t('production.plans_list.label_7a2abf6405e6')" required>
+          <CompatSelect v-model="receiptForm.responsibilitySide" :placeholder="t('production.plans_list.placeholder_2b0d794013e7')" style="width: 100%">
+            <CompatOption
               v-for="opt in RECEIPT_RESPONSIBILITY_OPTIONS"
               :key="opt.value"
               :label="opt.label"
               :value="opt.value"
             />
-          </el-select>
-        </el-form-item>
+          </CompatSelect>
+        </CompatFormItem>
         </template>
-        <el-form-item label="备注">
+        <CompatFormItem :label="t('production.plans_list.label_daede9881787')">
           <el-input
             v-model="receiptForm.varianceNote"
             type="textarea"
             :rows="2"
-            placeholder="可记录称重单号、交接人、现场说明"
+            :placeholder="t('production.plans_list.placeholder_424e06f4eadd')"
           />
-        </el-form-item>
+        </CompatFormItem>
         <el-alert
           v-if="receiptSubmitDisabledReason"
           :title="receiptSubmitDisabledReason"
@@ -6600,41 +6605,41 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
           :closable="false"
           style="margin-bottom: 4px"
         />
-      </el-form>
+      </CompatForm>
       <template #footer>
-        <el-button @click="receiptDialogVisible = false">取消</el-button>
-        <el-button
-          type="primary"
+        <UButton color="neutral" variant="outline" @click="receiptDialogVisible = false">{{ t('production.plans_list.action_2cd0f3be8738') }}</UButton>
+        <UButton
+          color="primary"
           :loading="actionLoading"
           data-testid="finished-goods-receive-dialog-submit"
           :disabled="!receiptCanSubmit"
           @click="submitWarehouseReceipt"
-        >确认入库</el-button>
+        >{{ t('production.plans_list.action_f1f3965f6080') }}</UButton>
       </template>
     </el-dialog>
 
-    <el-dialog
+    <CompatDialog
       v-model="clearingDialogVisible"
-      :title="clearingProductName ? `中转挂账清账 — ${clearingProductName}` : '中转挂账清账'"
+      :title="clearingProductName ? `中转挂账清账 — ${clearingProductName}` : t('production.plans_list.title_615b303181b9')"
       width="560px"
       class="settlement-dialog"
       destroy-on-close
       append-to-body
     >
-      <el-form v-loading="clearingLoading" label-width="112px" class="settlement-form">
+      <CompatForm v-loading="clearingLoading" label-width="112px" class="settlement-form">
         <div class="settlement-context">
           <div>
-            <div class="settlement-context-label">计划单号</div>
+            <div class="settlement-context-label">{{ t('production.plans_list.text_167b0c9adcd9') }}</div>
             <div class="settlement-context-value">{{ clearingPlanNumber || '-' }}</div>
           </div>
           <div>
-            <div class="settlement-context-label">当前状态</div>
+            <div class="settlement-context-label">{{ t('production.plans_list.text_82b7cf40b5e6') }}</div>
             <div class="settlement-context-value">
               {{ postingStatusText(clearingSettlement?.postingStatus) }}
             </div>
           </div>
           <div>
-            <div class="settlement-context-label">挂账说明</div>
+            <div class="settlement-context-label">{{ t('production.plans_list.text_572cb4a367ba') }}</div>
             <div class="settlement-context-value">
               {{ clearingSettlement?.postingMessage || '-' }}
             </div>
@@ -6642,43 +6647,43 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
         </div>
 
         <el-alert
-          title="清账只表示生产与仓库已处理并确认差异归属；未清账前该结单仍停留在中转挂账。"
+          :title="t('production.plans_list.title_9c278d3124b3')"
           type="warning"
           show-icon
           :closable="false"
           style="margin: 12px 0"
         />
 
-        <el-form-item label="清账原因" required>
-          <el-select
+        <CompatFormItem :label="t('production.plans_list.label_e10d67a6884b')" required>
+          <CompatSelect
             v-model="clearingForm.clearingReason"
-            placeholder="请选择清账原因"
+            :placeholder="t('production.plans_list.placeholder_1be6f1099773')"
             style="width: 100%"
           >
-            <el-option
+            <CompatOption
               v-for="opt in CLEARING_REASON_OPTIONS"
               :key="opt.value"
               :label="opt.label"
               :value="opt.value"
             />
-          </el-select>
-        </el-form-item>
-        <el-form-item v-if="clearingForm.clearingReason === '其他'" label="原因补充" required>
+          </CompatSelect>
+        </CompatFormItem>
+        <CompatFormItem v-if="clearingForm.clearingReason === '其他'" :label="t('production.plans_list.label_59889a398f35')" required>
           <el-input
             v-model="clearingForm.otherClearingReason"
             type="textarea"
             :rows="2"
-            placeholder="请说明生产/仓库/财务如何处理该差异"
+            :placeholder="t('production.plans_list.placeholder_37ca9292730a')"
           />
-        </el-form-item>
-        <el-form-item label="清账说明">
+        </CompatFormItem>
+        <CompatFormItem :label="t('production.plans_list.label_653abf1dd5e7')">
           <el-input
             v-model="clearingForm.clearingNote"
             type="textarea"
             :rows="3"
-            placeholder="可填写交接人、盘点单号、财务确认记录等"
+            :placeholder="t('production.plans_list.placeholder_ce4ba7d5e7d5')"
           />
-        </el-form-item>
+        </CompatFormItem>
         <el-alert
           v-if="clearingDisabledReason"
           :title="clearingDisabledReason"
@@ -6686,71 +6691,71 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
           show-icon
           :closable="false"
         />
-      </el-form>
+      </CompatForm>
       <template #footer>
-        <el-button @click="clearingDialogVisible = false">取消</el-button>
-        <el-button
-          type="danger"
+        <UButton color="neutral" variant="outline" @click="clearingDialogVisible = false">{{ t('production.plans_list.action_2cd0f3be8738') }}</UButton>
+        <UButton
+          color="error"
           :loading="actionLoading"
           :disabled="!clearingCanSubmit"
           @click="submitTransitClearing"
-        >确认清账</el-button>
+        >{{ t('production.plans_list.action_6d9468de7b61') }}</UButton>
       </template>
-    </el-dialog>
+    </CompatDialog>
 
     <!-- #743 取消原因 dialog (快捷下拉 + 品名) -->
-    <el-dialog
+    <CompatDialog
       v-model="cancelDialogVisible"
-      :title="cancelProductName ? `取消计划 — ${cancelProductName} (${cancelPlanNumber})` : '取消计划'"
+      :title="cancelProductName ? `取消计划 — ${cancelProductName} (${cancelPlanNumber})` : t('production.plans_list.title_10c3a2e7a980')"
       width="460px"
       destroy-on-close
       append-to-body
     >
-      <el-form label-width="100px">
-        <el-form-item label="品名">
+      <CompatForm label-width="100px">
+        <CompatFormItem :label="t('production.plans_list.label_7d432cf3863b')">
           <span>{{ cancelProductName || '-' }}</span>
-        </el-form-item>
-        <el-form-item label="计划单号">
+        </CompatFormItem>
+        <CompatFormItem :label="t('production.plans_list.label_167b0c9adcd9')">
           <span>{{ cancelPlanNumber || '-' }}</span>
-        </el-form-item>
-        <el-form-item label="取消原因" required>
-          <el-select
+        </CompatFormItem>
+        <CompatFormItem :label="t('production.plans_list.label_b73005b16d22')" required>
+          <CompatSelect
             v-model="cancelForm.reasonOption"
-            placeholder="请选择取消原因"
+            :placeholder="t('production.plans_list.placeholder_59e5542fcb33')"
             style="width: 100%"
           >
-            <el-option
+            <CompatOption
               v-for="opt in CANCEL_REASON_OPTIONS"
               :key="opt.value"
               :label="opt.label"
               :value="opt.value"
             />
-          </el-select>
-        </el-form-item>
-        <el-form-item v-if="cancelForm.reasonOption === '其他'" label="原因补充" required>
+          </CompatSelect>
+        </CompatFormItem>
+        <CompatFormItem v-if="cancelForm.reasonOption === '其他'" :label="t('production.plans_list.label_59889a398f35')" required>
           <el-input
             v-model="cancelForm.otherReason"
             type="textarea"
             :rows="3"
-            placeholder="请说明具体取消原因"
+            :placeholder="t('production.plans_list.placeholder_3a22f008fcf5')"
           />
-        </el-form-item>
-      </el-form>
+        </CompatFormItem>
+      </CompatForm>
       <template #footer>
-        <el-button @click="cancelDialogVisible = false">关闭</el-button>
-        <el-button type="danger" :loading="actionLoading" @click="submitCancel">确认取消计划</el-button>
+        <UButton color="neutral" variant="outline" @click="cancelDialogVisible = false">{{ t('production.plans_list.action_3fd47edce45b') }}</UButton>
+        <UButton color="error" :loading="actionLoading" @click="submitCancel">{{ t('production.plans_list.action_ed723524fe93') }}</UButton>
       </template>
-    </el-dialog>
+    </CompatDialog>
 
     <!-- 编辑生产计划 dialog (更多→编辑 dead-stub 修复; 防呆 Rule 2: 标题带品名+单号) -->
-    <el-dialog
+    <CompatDialog
       v-model="editDialogVisible"
-      :title="editingProductName ? `编辑生产计划 — ${editingProductName} (${editingPlanNumber})` : '编辑生产计划'"
+      :title="editingProductName ? `编辑生产计划 — ${editingProductName} (${editingPlanNumber})` : t('production.plans_list.title_75dc8eb83cc1')"
       width="520px"
       destroy-on-close
       append-to-body
     >
-      <el-form v-loading="editDialogLoading" :model="editForm" label-width="120px">
+      <CompatForm v-loading="editDialogLoading" :model="editForm" label-width="120px">
         <!--
           防呆 Rule 1: 已开工的计划能改什么, 打开就看得见 —— 两个硬字段灰显并写明原因,
           而不是让用户改完点保存才被 409 弹回来。
@@ -6760,37 +6765,37 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
           type="info"
           :closable="false"
           show-icon
-          title="生产已开始，只能修改排产信息"
-          description="计划生产日与计划数量已进入批次与结单比对，开工后不可再改；如确需调整请先停产或联系车间主管。"
+          :title="t('production.plans_list.title_002934444a2d')"
+          :description="t('production.plans_list.description_bb301a849d37')"
           style="margin-bottom: 12px;"
         />
-        <el-form-item label="产品">
+        <CompatFormItem :label="t('production.plans_list.label_aea82737cc01')">
           <span>{{ editingProductName || '-' }}</span>
-        </el-form-item>
-        <el-form-item label="单号">
+        </CompatFormItem>
+        <CompatFormItem :label="t('production.plans_list.label_5c2eb0883fd7')">
           <span>{{ editingPlanNumber || '-' }}</span>
-        </el-form-item>
-        <el-form-item label="计划生产日" :required="!editScopeIsScheduleMeta">
-          <el-date-picker
+        </CompatFormItem>
+        <CompatFormItem :label="t('production.plans_list.label_972e6a485642')" :required="!editScopeIsScheduleMeta">
+          <CompatDatePicker
             v-model="editForm.plannedDate"
             type="date"
             value-format="YYYY-MM-DD"
-            placeholder="选择计划生产日"
+            :placeholder="t('production.plans_list.placeholder_b3812a61504a')"
             style="width: 100%"
             :disabled="editScopeIsScheduleMeta"
           />
-        </el-form-item>
-        <el-form-item label="预计完成日期">
-          <el-date-picker
+        </CompatFormItem>
+        <CompatFormItem :label="t('production.plans_list.label_3248d4a7fefc')">
+          <CompatDatePicker
             v-model="editForm.expectedCompletionDate"
             type="date"
             value-format="YYYY-MM-DD"
-            placeholder="默认为计划生产日+1天"
+            :placeholder="t('production.plans_list.placeholder_db40cd4e7f1a')"
             style="width: 100%"
             clearable
           />
-        </el-form-item>
-        <el-form-item label="计划数量" :required="!editScopeIsScheduleMeta">
+        </CompatFormItem>
+        <CompatFormItem :label="t('production.plans_list.label_19a908ffd1ae')" :required="!editScopeIsScheduleMeta">
           <el-input-number
             v-model="editForm.plannedQuantity"
             :min="0"
@@ -6798,40 +6803,40 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             style="width: 100%"
             :disabled="editScopeIsScheduleMeta"
           />
-        </el-form-item>
-        <el-form-item label="预计工人数">
-          <el-input-number v-model="editForm.estimatedWorkers" :min="1" :max="500" style="width: 100%" placeholder="可不填" />
-        </el-form-item>
-        <el-form-item label="指派车间主管">
-          <el-select v-model="editForm.assignedSupervisorId" clearable placeholder="可不填，稍后再指派" style="width: 100%">
-            <el-option v-for="sup in supervisors" :key="sup.id" :label="sup.fullName || sup.username" :value="sup.id" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="备注">
-          <el-input v-model="editForm.notes" type="textarea" :rows="2" placeholder="可不填" />
-        </el-form-item>
-      </el-form>
+        </CompatFormItem>
+        <CompatFormItem :label="t('production.plans_list.label_ad4181bf4e26')">
+          <el-input-number v-model="editForm.estimatedWorkers" :min="1" :max="500" style="width: 100%" :placeholder="t('production.plans_list.placeholder_394680d3cea1')" />
+        </CompatFormItem>
+        <CompatFormItem :label="t('production.plans_list.label_03df8922ea8e')">
+          <CompatSelect v-model="editForm.assignedSupervisorId" clearable :placeholder="t('production.plans_list.placeholder_9a3640adf716')" style="width: 100%">
+            <CompatOption v-for="sup in supervisors" :key="sup.id" :label="sup.fullName || sup.username" :value="sup.id" />
+          </CompatSelect>
+        </CompatFormItem>
+        <CompatFormItem :label="t('production.plans_list.label_daede9881787')">
+          <el-input v-model="editForm.notes" type="textarea" :rows="2" :placeholder="t('production.plans_list.placeholder_394680d3cea1')" />
+        </CompatFormItem>
+      </CompatForm>
       <template #footer>
-        <el-button @click="editDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="editDialogLoading" @click="submitEditPlan">保存</el-button>
+        <UButton color="neutral" variant="outline" @click="editDialogVisible = false">{{ t('production.plans_list.action_2cd0f3be8738') }}</UButton>
+        <UButton color="primary" :loading="editDialogLoading" @click="submitEditPlan">{{ t('production.plans_list.action_a3030bf8f16d') }}</UButton>
       </template>
-    </el-dialog>
+    </CompatDialog>
 
     <!-- SP2 独立再加工/返工计划创建 dialog -->
-    <el-dialog
+    <CompatDialog
       v-model="secondaryDialogVisible"
-      title="创建独立再加工/返工计划"
+      :title="t('production.plans_list.title_940a89920308')"
       width="520px"
       :close-on-click-modal="false"
       destroy-on-close
       append-to-body
     >
-      <el-form :model="secondaryForm" label-width="110px" v-loading="wipListLoading">
+      <CompatForm :model="secondaryForm" label-width="110px" v-loading="wipListLoading">
         <!-- 防呆 Rule 1: 源 WIP 可用量前置显示，不等提交才报错 -->
-        <el-form-item label="源半成品 WIP" required>
+        <CompatFormItem :label="t('production.plans_list.label_67dc6c1da241')" required>
           <el-select
             v-model="secondaryForm.wipId"
-            placeholder="选择可用半成品库存"
+            :placeholder="t('production.plans_list.placeholder_4c14a9d29bb2')"
             filterable
             style="width: 100%"
             :loading="wipListLoading"
@@ -6845,23 +6850,23 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             >
               <span style="float: left; font-weight: 500;">{{ wip.intermediateBatchNo }}</span>
               <span style="float: right; font-size: 12px; color: var(--cs-muted); margin-left: 12px;">
-                可用 {{ wip.availableQuantity }}{{ displayUnit(wip.unit) }}
+                {{ t('production.plans_list.text_4d99c976beb8') }} {{ wip.availableQuantity }}{{ displayUnit(wip.unit) }}
               </span>
             </el-option>
           </el-select>
           <!-- 防呆 Rule 1: 实时显示所选 WIP 可用量 -->
           <div v-if="selectedWip" style="margin-top: 6px; font-size: 12px; color: var(--el-color-success);">
-            可用余量: <strong>{{ selectedWip.availableQuantity }} {{ displayUnit(selectedWip.unit) }}</strong>
+            {{ t('production.plans_list.text_9291de781e60') }} <strong>{{ selectedWip.availableQuantity }} {{ displayUnit(selectedWip.unit) }}</strong>
             <template v-if="selectedWip.unitCost != null">
-              ｜ 单位成本: ¥{{ Number(selectedWip.unitCost).toFixed(4) }}
+              {{ t('production.plans_list.text_33a9eb391e90') }}{{ Number(selectedWip.unitCost).toFixed(4) }}
             </template>
           </div>
           <div v-if="wipList.length === 0 && !wipListLoading" style="margin-top: 6px; font-size: 12px; color: var(--el-color-warning);">
-            暂无可用半成品库存。请先完成报工产出 WIP，再创建独立再加工/返工计划。
+            {{ t('production.plans_list.text_1c3532227187') }}
           </div>
-        </el-form-item>
+        </CompatFormItem>
 
-        <el-form-item label="计划加工数量" required>
+        <CompatFormItem :label="t('production.plans_list.label_e04cb061f5ce')" required>
           <!-- 防呆 Rule 1: :max 限制不超过可用量 -->
           <el-input-number
             v-model="secondaryForm.quantity"
@@ -6871,48 +6876,48 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             style="width: 100%"
           />
           <div v-if="selectedWip" style="font-size: 12px; color: var(--text-color-secondary, var(--cs-muted)); margin-top: 4px;">
-            最大可用 {{ selectedWip.availableQuantity }} {{ displayUnit(selectedWip.unit) }}（超出将被后端拒绝）
+            {{ t('production.plans_list.text_27028e07c61b') }} {{ selectedWip.availableQuantity }} {{ displayUnit(selectedWip.unit) }}{{ t('production.plans_list.text_fd7a582f86b2') }}
           </div>
-        </el-form-item>
+        </CompatFormItem>
 
-        <el-form-item label="目标产品类型" required>
-          <el-select
+        <CompatFormItem :label="t('production.plans_list.label_cd8ec8a28f8a')" required>
+          <CompatSelect
             v-model="secondaryForm.productTypeId"
-            placeholder="选择目标成品类型"
+            :placeholder="t('production.plans_list.placeholder_505a93195b39')"
             filterable
             style="width: 100%"
           >
-            <el-option
+            <CompatOption
               v-for="item in productTypes"
               :key="item.id"
               :label="item.name"
               :value="item.id"
             />
-          </el-select>
+          </CompatSelect>
           <div v-if="selectedWip && !secondaryForm.productTypeId" style="margin-top: 4px; font-size: 12px; color: var(--text-color-secondary, var(--cs-muted));">
-            请选择该半成品后续加工要产出的成品；系统不会将源半成品自动当作目标产品。
+            {{ t('production.plans_list.text_2c9ec1e56a9a') }}
           </div>
           <!-- 防呆 Rule 2: 来源上下文 -->
           <div v-if="selectedWip && secondaryForm.productTypeId" style="margin-top: 4px; font-size: 12px; color: var(--text-color-secondary, var(--cs-muted));">
-            源 WIP 批次: {{ selectedWip.intermediateBatchNo }}
+            {{ t('production.plans_list.text_71faa8fdd443') }} {{ selectedWip.intermediateBatchNo }}
           </div>
-        </el-form-item>
+        </CompatFormItem>
 
-        <el-form-item label="计划日期">
-          <el-date-picker
+        <CompatFormItem :label="t('production.plans_list.label_011247215d19')">
+          <CompatDatePicker
             v-model="secondaryForm.plannedDate"
             type="date"
-            placeholder="预期完成日期（默认明日）"
+            :placeholder="t('production.plans_list.placeholder_2f8143fa18df')"
             value-format="YYYY-MM-DD"
             style="width: 100%"
           />
-        </el-form-item>
-      </el-form>
+        </CompatFormItem>
+      </CompatForm>
       <template #footer>
-        <el-button @click="secondaryDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="secondaryDialogLoading" @click="submitSecondaryPlan">创建独立再加工/返工计划</el-button>
+        <UButton color="neutral" variant="outline" @click="secondaryDialogVisible = false">{{ t('production.plans_list.action_2cd0f3be8738') }}</UButton>
+        <UButton color="primary" :loading="secondaryDialogLoading" @click="submitSecondaryPlan">{{ t('production.plans_list.action_940a89920308') }}</UButton>
       </template>
-    </el-dialog>
+    </CompatDialog>
 
     <!-- AI 对话创建 -->
     <AiEntryDrawer
@@ -6954,28 +6959,28 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
     />
 
     <!-- 撤销小结审批 (STOCKTAKE_APPROVAL_ROLES: 财务经理/工厂超管) -->
-    <el-dialog v-model="reversalApprovalVisible" title="撤销小结审批" width="760px" destroy-on-close>
+    <CompatDialog v-model="reversalApprovalVisible" :title="t('production.plans_list.title_d1e55c3a4f9b')" width="760px" destroy-on-close>
       <div style="margin-bottom:8px;color:var(--cs-muted);font-size:13px;">
-        待审批的撤销小结申请。审批通过将逆转该次小结的入库并还回被扣消耗；若相关半成品/成品已被下游领用/发货，执行时会拒绝（不绕过）。
+        {{ t('production.plans_list.text_b31c6ccc8368') }}
       </div>
-      <el-table :data="reversalRequests" v-loading="reversalApprovalLoading" size="small" border>
-        <el-table-column prop="productionPlanId" label="计划" min-width="120" show-overflow-tooltip />
-        <el-table-column prop="sessionSeq" label="小结次序" width="90" align="center" />
-        <el-table-column prop="reason" label="撤销原因" min-width="150" show-overflow-tooltip />
-        <el-table-column prop="requestedAt" label="申请时间" width="160" />
-        <el-table-column label="操作" width="150" align="center">
+      <CompatTable :data="reversalRequests" v-loading="reversalApprovalLoading" size="small" border>
+        <CompatTableColumn prop="productionPlanId" :label="t('production.plans_list.label_0f6b1949b093')" min-width="120" show-overflow-tooltip />
+        <CompatTableColumn prop="sessionSeq" :label="t('production.plans_list.label_b3a43d2ab02a')" width="90" align="center" />
+        <CompatTableColumn prop="reason" :label="t('production.plans_list.label_258f2558689d')" min-width="150" show-overflow-tooltip />
+        <CompatTableColumn prop="requestedAt" :label="t('production.plans_list.label_e9b5d944cc4b')" width="160" />
+        <CompatTableColumn :label="t('production.plans_list.label_ed31fbb483ee')" width="150" align="center">
           <template #default="{ row }">
-            <el-button type="success" size="small" link
+            <UButton color="success" size="sm" variant="link"
               :disabled="reversalActingId === row.id" :loading="reversalActingId === row.id"
-              @click="handleApproveReversal(row)">审批通过</el-button>
-            <el-button type="danger" size="small" link
+              @click="handleApproveReversal(row)">{{ t('production.plans_list.action_642cfa74e9d8') }}</UButton>
+            <UButton color="error" size="sm" variant="link"
               :disabled="reversalActingId === row.id"
-              @click="handleRejectReversal(row)">驳回</el-button>
+              @click="handleRejectReversal(row)">{{ t('production.plans_list.action_089e6ed3f55f') }}</UButton>
           </template>
-        </el-table-column>
-        <template #empty>暂无待审批的撤销申请</template>
-      </el-table>
-    </el-dialog>
+        </CompatTableColumn>
+        <template #empty>{{ t('production.plans_list.text_9a300659cf0e') }}</template>
+      </CompatTable>
+    </CompatDialog>
   </div>
   </CanvasAwareWrapper>
 </template>

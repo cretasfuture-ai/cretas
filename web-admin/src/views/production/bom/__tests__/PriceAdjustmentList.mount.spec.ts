@@ -36,6 +36,10 @@ vi.mock('element-plus', () => ({
   ElMessage: Object.assign(vi.fn(), { success: vi.fn(), warning: vi.fn(), error: vi.fn(), info: vi.fn() }),
   ElMessageBox: { confirm: (...a: unknown[]) => harness.confirm(...a) },
 }));
+vi.mock('@/components/compat/messages', async () => {
+  const { ElMessage, ElMessageBox } = await import('element-plus');
+  return { useCompatMessages: () => ({ ElMessage, ElMessageBox }) };
+});
 
 import PriceAdjustmentList from '../PriceAdjustmentList.vue';
 

@@ -1,8 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { sourceWithChinese } from '@/i18n-pilot/sourceForTests';
 
-const source = readFileSync(resolve(__dirname, '../list.vue'), 'utf8');
+const source = sourceWithChinese(readFileSync(resolve(__dirname, '../list.vue'), 'utf8'));
 
 describe('production plan operator guardrails', () => {
   it('does not invent kilograms when a production plan unit is missing', () => {

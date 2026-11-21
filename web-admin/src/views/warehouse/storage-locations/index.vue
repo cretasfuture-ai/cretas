@@ -1,8 +1,14 @@
 <script setup lang="ts">
+import { CompatDialog, CompatForm, CompatFormItem } from '@/components/compat';
+import { useCompatMessages } from '@/components/compat/messages';
+const { ElMessage, ElMessageBox } = useCompatMessages();
+import { useT } from '@/i18n-pilot/useT';
+const { t } = useT();
+
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import AiUploadHint from '@/components/common/AiUploadHint.vue';
 import { useRouter } from 'vue-router';
-import { ElMessage, ElMessageBox } from 'element-plus';
+
 import { Box, Close, Delete, FullScreen, Grid, Location, Plus, Search, Upload } from '@element-plus/icons-vue';
 import { VueFlow, type Node, type NodeDragEvent } from '@vue-flow/core';
 import { Background } from '@vue-flow/background';
@@ -113,13 +119,13 @@ const showAnnotations = ref(true);
 const hasMapDraft = ref(false);
 const overlayRef = ref<InstanceType<typeof WarehouseFloorOverlay> | null>(null);
 const categoryOptions: ItemCategory[] = ['原料', '成品', '包材', '辅材'];
-const navigationTabs = [{ id: 'locations', label: '储存位置' }, { id: 'check', label: '现场盘点' }, { id: 'map', label: '仓库平面图' }] as const;
+const navigationTabs = [{ id: 'locations', label: t('warehouse.storage_locations_index.label_669dd509df4c') }, { id: 'check', label: t('warehouse.storage_locations_index.label_a19c42ce1aa0') }, { id: 'map', label: t('warehouse.storage_locations_index.label_f3ed1b30aa0c') }] as const;
 const zoneColors = ['#dbeafe', '#e0f2fe', '#ede9fe', '#fef3c7', '#dcfce7'];
 const annotationColors = ['#2563eb', '#d03050', '#0f9d58', '#b26a00', '#17243a'];
 const mapTools: Array<{ id: MapTool; label: string }> = [
-  { id: 'select', label: '选择' }, { id: 'zone', label: '区域' }, { id: 'rect', label: '矩形' },
-  { id: 'ellipse', label: '圆形' }, { id: 'polygon', label: '多边形' }, { id: 'freehand', label: '自由笔' },
-  { id: 'text', label: '文字' },
+  { id: 'select', label: t('warehouse.storage_locations_index.label_c11330b85234') }, { id: 'zone', label: t('warehouse.storage_locations_index.label_3382870bc4ad') }, { id: 'rect', label: t('warehouse.storage_locations_index.label_88b75a101595') },
+  { id: 'ellipse', label: t('warehouse.storage_locations_index.label_81639a8a9bce') }, { id: 'polygon', label: t('warehouse.storage_locations_index.label_388216f2d6f6') }, { id: 'freehand', label: t('warehouse.storage_locations_index.label_3d33b25b3e96') },
+  { id: 'text', label: t('warehouse.storage_locations_index.label_14b69bd6eeb0') },
 ];
 let inventoryController: AbortController | undefined;
 
@@ -257,9 +263,9 @@ function updateAnnotation(annotation: WarehouseAnnotation) {
 async function requestAnnotationText(rect: WarehouseRectGeometry) {
   if (!canEditLayout.value) return;
   try {
-    const result = await ElMessageBox.prompt('输入要标在平面图上的文字', '文字标注', {
-      confirmButtonText: '添加',
-      cancelButtonText: '取消',
+    const result = await ElMessageBox.prompt(t('warehouse.storage_locations_index.message_76cd467fc8c9'), t('warehouse.storage_locations_index.message_2542aff1b103'), {
+      confirmButtonText: t('warehouse.storage_locations_index.confirmbuttontext_7a8a11ead507'),
+      cancelButtonText: t('warehouse.storage_locations_index.cancelbuttontext_2cd0f3be8738'),
       inputValidator: (input: string) => (input && input.trim() ? true : '请输入文字'),
     }) as { value: string };
     const text = String(result.value ?? '').trim();
@@ -303,7 +309,7 @@ function selectMapTool(tool: MapTool) {
 }
 
 function openMapFullscreen() {
-  if (!activeFloor.value) return ElMessage.warning('请先添加一个楼层');
+  if (!activeFloor.value) return ElMessage.warning(t('warehouse.storage_locations_index.message_f1beabe98c4b'));
   mapFullscreen.value = true;
 }
 
@@ -421,7 +427,7 @@ async function persist(showMessage = true) {
   saving.value = true;
   try {
     await saveWarehouseLayout(factoryId.value, layout.value);
-    if (showMessage) ElMessage.success('已保存');
+    if (showMessage) ElMessage.success(t('warehouse.storage_locations_index.message_1bd91a7d0c53'));
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '保存失败');
     throw error;
@@ -433,8 +439,8 @@ async function persist(showMessage = true) {
 async function addZone() {
   const name = zoneForm.name.trim();
   const prefix = zoneForm.prefix.trim().toUpperCase();
-  if (!name || !/^[A-Z]{2,8}$/.test(prefix)) return ElMessage.warning('请填写名称和 2 至 8 位英文前缀');
-  if (layout.value.zones.some((zone) => zone.prefix === prefix)) return ElMessage.warning('英文前缀已存在');
+  if (!name || !/^[A-Z]{2,8}$/.test(prefix)) return ElMessage.warning(t('warehouse.storage_locations_index.message_5ee7308e5ab4'));
+  if (layout.value.zones.some((zone) => zone.prefix === prefix)) return ElMessage.warning(t('warehouse.storage_locations_index.message_dc235e3ddd69'));
   const zone: WarehouseZone = { id: crypto.randomUUID(), name, prefix, color: zoneColors[layout.value.zones.length % zoneColors.length] };
   layout.value.zones.push(zone);
   selectedZoneId.value = zone.id;
@@ -451,7 +457,7 @@ function openZoneDialog() {
 }
 
 function openLocationDialog() {
-  if (!activeZone.value) return ElMessage.warning('请先创建储存区域');
+  if (!activeZone.value) return ElMessage.warning(t('warehouse.storage_locations_index.message_e26db9cee714'));
   locationForm.code = nextLocationCode(activeZone.value, layout.value.locations);
   locationForm.name = '';
   locationForm.notes = '';
@@ -472,7 +478,7 @@ async function addLocation() {
   if (!activeZone.value) return;
   const code = locationForm.code.trim().toUpperCase();
   if (!code.startsWith(activeZone.value.prefix)) return ElMessage.warning(`位置编码须以 ${activeZone.value.prefix} 开头`);
-  if (layout.value.locations.some((location) => location.code === code)) return ElMessage.warning('位置编码已存在');
+  if (layout.value.locations.some((location) => location.code === code)) return ElMessage.warning(t('warehouse.storage_locations_index.message_75ba8599f44b'));
   layout.value.locations.push({ id: crypto.randomUUID(), zoneId: activeZone.value.id, code, name: locationForm.name.trim() || code, notes: locationForm.notes.trim() });
   locationDialogVisible.value = false;
   await persist();
@@ -486,7 +492,7 @@ async function addFloor() {
 }
 
 async function addRack() {
-  if (!activeFloor.value || !activeZone.value) return ElMessage.warning('请先选择楼层和区域');
+  if (!activeFloor.value || !activeZone.value) return ElMessage.warning(t('warehouse.storage_locations_index.message_6339ba9203fb'));
   const index = activeFloor.value.racks.length;
   const rack: WarehouseRack = {
     id: crypto.randomUUID(), zoneId: activeZone.value.id, name: `${index + 1} 号货架`,
@@ -528,7 +534,7 @@ async function unbindLocation(location: WarehouseLocation) {
 
 async function confirmRemove(message: string): Promise<boolean> {
   try {
-    await ElMessageBox.confirm(message, '确认删除', { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' });
+    await ElMessageBox.confirm(message, t('warehouse.storage_locations_index.message_a3ea3c17b401'), { type: 'warning', confirmButtonText: t('warehouse.storage_locations_index.confirmbuttontext_2f9daa828907'), cancelButtonText: t('warehouse.storage_locations_index.cancelbuttontext_2cd0f3be8738') });
     return true;
   } catch {
     return false;
@@ -594,7 +600,7 @@ async function moveBatch() {
   // ZZ99-NOT-CONFIGURED 返回 200 并写入), 本轮已在后端补上; 前端这一道是同口径的
   // 第二层, 免得再出现 storageLocation 里躺着来源描述的情况。
   if (!layout.value.locations.some((item) => item.code === moveLocation.value)) {
-    return ElMessage.warning('请选择本厂已配置的储存位置');
+    return ElMessage.warning(t('warehouse.storage_locations_index.message_a8856531ea62'));
   }
   try {
     const path = batch.finished
@@ -603,7 +609,7 @@ async function moveBatch() {
     await put(path, { storageLocation: moveLocation.value });
     batch.location = moveLocation.value;
     moveDialogVisible.value = false;
-    ElMessage.success('位置已更新');
+    ElMessage.success(t('warehouse.storage_locations_index.message_54b30d387eaf'));
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '位置调整失败');
   }
@@ -612,7 +618,7 @@ async function moveBatch() {
 async function handleImageUpload(event: Event) {
   const file = (event.target as HTMLInputElement).files?.[0];
   if (!file || !factoryId.value) return;
-  if (file.size > 8_000_000) return ElMessage.warning('图片不能超过 8MB');
+  if (file.size > 8_000_000) return ElMessage.warning(t('warehouse.storage_locations_index.message_b8ff633baf82'));
   const image = await new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result));
@@ -660,7 +666,7 @@ async function applyBackgroundOnly() {
     recognizePreviewImage.value = '';
     recognizePreview.value = null;
     recognizeError.value = '';
-    ElMessage.success('底图已保存，可在全屏地图手动画区域');
+    ElMessage.success(t('warehouse.storage_locations_index.message_e259fb873a4c'));
   } catch {
     if (createdFloor) {
       layout.value.floors = layout.value.floors.filter((item) => item.id !== createdFloor?.id);
@@ -718,7 +724,7 @@ async function applyRecognizedLayout() {
     recognizeDialogVisible.value = false;
     recognizePreview.value = null;
     recognizePreviewImage.value = '';
-    ElMessage.success('平面图已应用');
+    ElMessage.success(t('warehouse.storage_locations_index.message_9f04e3cf7ab5'));
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '应用识别结果失败');
   } finally {
@@ -770,19 +776,19 @@ onUnmounted(() => {
 <template>
   <main v-loading="loading" class="storage-workspace">
     <header class="workspace-header">
-      <div><h1>仓储空间</h1><span class="muted">{{ layout.zones.length }} 个区域 · {{ layout.locations.length }} 个位置</span></div>
-      <el-button :icon="Box" @click="router.push('/warehouse/stocktakes')">盘点任务</el-button>
+      <div><h1>{{ t('warehouse.storage_locations_index.text_8cceacb74c3c') }}</h1><span class="muted">{{ layout.zones.length }} {{ t('warehouse.storage_locations_index.text_24abae289b75') }} {{ layout.locations.length }} {{ t('warehouse.storage_locations_index.text_6329b40c5030') }}</span></div>
+      <el-button :icon="Box" @click="router.push('/warehouse/stocktakes')">{{ t('warehouse.storage_locations_index.action_c960f5010844') }}</el-button>
     </header>
 
     <nav class="workspace-tabs">
       <button v-for="tab in navigationTabs" :key="tab.id" :data-activity-action="`storage.tab.${tab.id}`" :class="{ active: activeTab === tab.id }" :disabled="!!inventoryError && tab.id !== 'map'" @click="activeTab = tab.id">{{ tab.label }}</button>
     </nav>
-    <el-alert v-if="inventoryError" class="inventory-load-error" type="error" :closable="false" show-icon :title="`库存未完整加载：${inventoryError}`"><el-button size="small" @click="loadWorkspace">重试加载库存</el-button></el-alert>
-    <el-alert v-if="warehouseError" class="inventory-load-error" type="warning" :closable="false" show-icon :title="`业务仓库信息未加载：${warehouseError}`"><el-button size="small" @click="loadWorkspace">重试</el-button></el-alert>
+    <el-alert v-if="inventoryError" class="inventory-load-error" type="error" :closable="false" show-icon :title="`库存未完整加载：${inventoryError}`"><UButton color="neutral" variant="outline" size="sm" @click="loadWorkspace">{{ t('warehouse.storage_locations_index.action_b306c43fa663') }}</UButton></el-alert>
+    <el-alert v-if="warehouseError" class="inventory-load-error" type="warning" :closable="false" show-icon :title="`业务仓库信息未加载：${warehouseError}`"><UButton color="neutral" variant="outline" size="sm" @click="loadWorkspace">{{ t('warehouse.storage_locations_index.action_b8784c8dd563') }}</UButton></el-alert>
 
     <section v-if="activeTab === 'locations'" class="workspace-body">
       <aside class="zone-sidebar">
-        <div class="section-heading"><h2>储存区域</h2><el-button v-if="canEditLayout" data-activity-action="storage.add-zone" :icon="Plus" circle size="small" aria-label="添加储存区域" title="添加储存区域" @click="openZoneDialog" /></div>
+        <div class="section-heading"><h2>{{ t('warehouse.storage_locations_index.text_7541a72299e6') }}</h2><el-button v-if="canEditLayout" data-activity-action="storage.add-zone" :icon="Plus" circle size="small" :aria-label="t('warehouse.storage_locations_index.aria_label_30bc19b09404')" :title="t('warehouse.storage_locations_index.title_30bc19b09404')" @click="openZoneDialog" /></div>
         <div v-for="zone in layout.zones" :key="zone.id" class="zone-row" :class="{ selected: zone.id === selectedZoneId }">
           <button class="zone-main" data-activity-action="storage.select-zone" @click="selectedZoneId = zone.id">
             <span class="zone-prefix" :style="{ background: zone.color }">{{ zone.prefix }}</span>
@@ -790,41 +796,41 @@ onUnmounted(() => {
           </button>
           <el-button v-if="canEditLayout" class="row-remove" data-activity-action="storage.delete-zone" link :icon="Delete" :aria-label="`删除区域 ${zone.name}`" :title="`删除区域 ${zone.name}`" @click.stop="removeZone(zone)" />
         </div>
-        <el-empty v-if="!layout.zones.length" description="暂无区域" :image-size="70" />
+        <el-empty v-if="!layout.zones.length" :description="t('warehouse.storage_locations_index.description_44ec0db28057')" :image-size="70" />
       </aside>
 
       <div class="primary-panel">
-        <div class="section-heading"><h2>{{ activeZone?.name || '储存位置' }}</h2><div class="toolbar"><el-input v-model="searchTerm" :prefix-icon="Search" placeholder="搜索位置" clearable /><el-button v-if="canEditLayout" type="primary" :icon="Plus" @click="openLocationDialog">添加位置</el-button></div></div>
-        <div class="location-grid"><article v-for="location in visibleLocations" :key="location.id" class="location-card"><div class="card-top"><strong>{{ location.code }}</strong><span class="card-top-right"><span>{{ countAt(location.code).length }} 批</span><el-button v-if="canEditLayout" data-activity-action="storage.delete-location" link :icon="Delete" :aria-label="`删除位置 ${location.code}`" :title="`删除位置 ${location.code}`" @click="removeLocation(location)" /></span></div><div>{{ location.name }}</div><small class="muted">{{ location.notes || (countAt(location.code).length ? `${new Set(countAt(location.code).map(item => item.name)).size} 种物料` : '空闲') }}</small><small v-if="countAt(location.code).length && !warehouseError" class="muted warehouse-occupancy">{{ warehouseSummaryAt(location.code) }}</small></article></div>
-        <el-empty v-if="!visibleLocations.length" description="暂无储存位置" :image-size="90" />
+        <div class="section-heading"><h2>{{ activeZone?.name || t('warehouse.storage_locations_index.text_669dd509df4c') }}</h2><div class="toolbar"><el-input v-model="searchTerm" :prefix-icon="Search" :placeholder="t('warehouse.storage_locations_index.placeholder_2dd0c7682898')" clearable /><el-button v-if="canEditLayout" type="primary" :icon="Plus" @click="openLocationDialog">{{ t('warehouse.storage_locations_index.action_a79ad579bc8c') }}</el-button></div></div>
+        <div class="location-grid"><article v-for="location in visibleLocations" :key="location.id" class="location-card"><div class="card-top"><strong>{{ location.code }}</strong><span class="card-top-right"><span>{{ countAt(location.code).length }} {{ t('warehouse.storage_locations_index.text_3c7d528881fd') }}</span><el-button v-if="canEditLayout" data-activity-action="storage.delete-location" link :icon="Delete" :aria-label="`删除位置 ${location.code}`" :title="`删除位置 ${location.code}`" @click="removeLocation(location)" /></span></div><div>{{ location.name }}</div><small class="muted">{{ location.notes || (countAt(location.code).length ? `${new Set(countAt(location.code).map(item => item.name)).size} 种物料` : t('warehouse.storage_locations_index.text_dae661d17c2d')) }}</small><small v-if="countAt(location.code).length && !warehouseError" class="muted warehouse-occupancy">{{ warehouseSummaryAt(location.code) }}</small></article></div>
+        <el-empty v-if="!visibleLocations.length" :description="t('warehouse.storage_locations_index.description_62379706de99')" :image-size="90" />
       </div>
     </section>
 
     <section v-else-if="activeTab === 'check'" class="stock-panel">
-      <div class="category-grid"><button v-for="category in categoryOptions" :key="category" class="category-card" :class="{ selected: category === selectedCategory }" @click="selectCategory(category)"><strong>{{ category }}</strong><small>{{ categoryCount(category) }} 项</small></button></div>
-      <div class="section-heading"><h2>{{ selectedCategory }}</h2><div class="toolbar"><el-input v-model="searchTerm" :prefix-icon="Search" placeholder="搜索名称 / 批次" clearable /><el-select v-model="locationFilter" placeholder="全部位置" clearable><el-option-group v-for="zone in layout.zones" :key="zone.id" :label="`${zone.name} · ${zone.prefix}`"><el-option v-for="location in layout.locations.filter(item => item.zoneId === zone.id)" :key="location.id" :label="location.code" :value="location.code" /></el-option-group></el-select></div></div>
-      <div class="material-grid"><button v-for="material in visibleMaterials" :key="material.name" class="material-card" :class="{ selected: selectedMaterial === material.name }" @click="selectedMaterial = material.name"><strong>{{ material.name }}</strong><small v-if="material.unnamed" class="unnamed-tag">未登记物料名 · 按批次号显示</small><span class="quantity">{{ formatQuantity(material.quantity) }} <small>{{ material.unit }}</small></span><span class="card-foot"><small>{{ material.entries.length }} 批次</small><small>{{ material.maxAge === null ? '在库时长未知' : `最长 ${material.maxAge} 天` }}</small></span></button></div>
-      <div v-if="materials.length > visibleMaterialCount" class="load-more-materials"><span>已显示 {{ visibleMaterials.length }} / {{ materials.length }} 项</span><el-button @click="visibleMaterialCount += 36">显示更多</el-button></div>
-      <el-empty v-if="!inventoryError && !materials.length" description="暂无库存" :image-size="75" />
-      <template v-if="selectedMaterial"><div class="section-heading batch-heading"><h2>{{ selectedMaterial }}</h2><el-button type="primary" plain @click="router.push('/warehouse/stocktakes')">发起盘点</el-button></div><div class="batch-grid"><article v-for="batch in selectedBatches" :key="batch.id" class="batch-card"><div class="card-top"><strong>{{ batch.batchNumber }}</strong><el-button v-if="canMoveInventory" link type="primary" @click="openMoveDialog(batch)">调整位置</el-button></div><div class="quantity">{{ formatQuantity(batch.quantity) }} <small>{{ batch.unit }}</small></div><small v-if="!warehouseError" class="muted warehouse-occupancy">{{ warehouseLabel(batch.warehouseId) }}</small><div class="card-foot"><span :class="{ 'bad-location': batch.location && !isConfiguredLocation(batch.location) }" :title="batch.location">{{ batch.location ? (isConfiguredLocation(batch.location) ? batch.location : '位置无效') : '未分配' }}</span><span>在库 {{ formatAge(batch.inboundDate) }}</span></div></article></div></template>
+      <div class="category-grid"><button v-for="category in categoryOptions" :key="category" class="category-card" :class="{ selected: category === selectedCategory }" @click="selectCategory(category)"><strong>{{ category }}</strong><small>{{ categoryCount(category) }} {{ t('warehouse.storage_locations_index.text_49ccde43a154') }}</small></button></div>
+      <div class="section-heading"><h2>{{ selectedCategory }}</h2><div class="toolbar"><el-input v-model="searchTerm" :prefix-icon="Search" :placeholder="t('warehouse.storage_locations_index.placeholder_28579bf843d8')" clearable /><el-select v-model="locationFilter" :placeholder="t('warehouse.storage_locations_index.placeholder_7990e5fdd73a')" clearable><el-option-group v-for="zone in layout.zones" :key="zone.id" :label="`${zone.name} · ${zone.prefix}`"><el-option v-for="location in layout.locations.filter(item => item.zoneId === zone.id)" :key="location.id" :label="location.code" :value="location.code" /></el-option-group></el-select></div></div>
+      <div class="material-grid"><button v-for="material in visibleMaterials" :key="material.name" class="material-card" :class="{ selected: selectedMaterial === material.name }" @click="selectedMaterial = material.name"><strong>{{ material.name }}</strong><small v-if="material.unnamed" class="unnamed-tag">{{ t('warehouse.storage_locations_index.text_d389fba21e97') }}</small><span class="quantity">{{ formatQuantity(material.quantity) }} <small>{{ material.unit }}</small></span><span class="card-foot"><small>{{ material.entries.length }} {{ t('warehouse.storage_locations_index.text_620226469b1a') }}</small><small>{{ material.maxAge === null ? t('warehouse.storage_locations_index.text_4f5a2492f7fb') : `最长 ${material.maxAge} 天` }}</small></span></button></div>
+      <div v-if="materials.length > visibleMaterialCount" class="load-more-materials"><span>{{ t('warehouse.storage_locations_index.text_326fee0b9058') }} {{ visibleMaterials.length }} / {{ materials.length }} {{ t('warehouse.storage_locations_index.text_49ccde43a154') }}</span><UButton color="neutral" variant="outline" @click="visibleMaterialCount += 36">{{ t('warehouse.storage_locations_index.action_331af79f34e7') }}</UButton></div>
+      <el-empty v-if="!inventoryError && !materials.length" :description="t('warehouse.storage_locations_index.description_b0f8a0549006')" :image-size="75" />
+      <template v-if="selectedMaterial"><div class="section-heading batch-heading"><h2>{{ selectedMaterial }}</h2><UButton color="primary" variant="outline" @click="router.push('/warehouse/stocktakes')">{{ t('warehouse.storage_locations_index.action_4b85ec0209bc') }}</UButton></div><div class="batch-grid"><article v-for="batch in selectedBatches" :key="batch.id" class="batch-card"><div class="card-top"><strong>{{ batch.batchNumber }}</strong><UButton v-if="canMoveInventory" variant="link" color="primary" @click="openMoveDialog(batch)">{{ t('warehouse.storage_locations_index.action_67371a4243a5') }}</UButton></div><div class="quantity">{{ formatQuantity(batch.quantity) }} <small>{{ batch.unit }}</small></div><small v-if="!warehouseError" class="muted warehouse-occupancy">{{ warehouseLabel(batch.warehouseId) }}</small><div class="card-foot"><span :class="{ 'bad-location': batch.location && !isConfiguredLocation(batch.location) }" :title="batch.location">{{ batch.location ? (isConfiguredLocation(batch.location) ? batch.location : t('warehouse.storage_locations_index.text_724dd72f45ea')) : t('warehouse.storage_locations_index.text_52496e5aeff4') }}</span><span>{{ t('warehouse.storage_locations_index.text_77a5541fefbd') }} {{ formatAge(batch.inboundDate) }}</span></div></article></div></template>
     </section>
 
     <section v-else class="map-panel" :class="{ 'is-fullscreen': mapFullscreen }">
       <div class="map-toolbar">
         <div>
           <el-radio-group v-model="selectedFloorId"><el-radio-button v-for="floor in layout.floors" :key="floor.id" :value="floor.id">{{ floor.name }}</el-radio-button></el-radio-group>
-          <el-button v-if="canEditLayout" link :icon="Plus" @click="addFloor">楼层</el-button>
+          <el-button v-if="canEditLayout" link :icon="Plus" @click="addFloor">{{ t('warehouse.storage_locations_index.action_ce3b386bd714') }}</el-button>
           <el-button v-if="canEditLayout && activeFloor" data-activity-action="storage.delete-floor" link :icon="Delete" :aria-label="`删除${activeFloor.name}`" :title="`删除${activeFloor.name}`" @click="removeFloor(activeFloor)" />
         </div>
         <div class="toolbar">
           <!-- 全屏面板高于默认传送到 body 的弹层；选项留在面板内才能点到。 -->
-          <el-select v-model="selectedZoneId" placeholder="选择区域" :teleported="false"><el-option v-for="zone in layout.zones" :key="zone.id" :label="`${zone.name} · ${zone.prefix}`" :value="zone.id" /></el-select>
-          <el-button v-if="canEditLayout" :icon="Grid" @click="addRack">添加货架</el-button>
-          <el-button v-if="canEditLayout" :icon="Upload" @click="fileInput?.click()">上传底图 / AI 识别</el-button>
+          <el-select v-model="selectedZoneId" :placeholder="t('warehouse.storage_locations_index.placeholder_8b34c0fd32be')" :teleported="false"><el-option v-for="zone in layout.zones" :key="zone.id" :label="`${zone.name} · ${zone.prefix}`" :value="zone.id" /></el-select>
+          <el-button v-if="canEditLayout" :icon="Grid" @click="addRack">{{ t('warehouse.storage_locations_index.action_c054041d7bc4') }}</el-button>
+          <el-button v-if="canEditLayout" :icon="Upload" @click="fileInput?.click()">{{ t('warehouse.storage_locations_index.action_bff3c553a963') }}</el-button>
           <input ref="fileInput" type="file" accept="image/*" hidden @change="handleImageUpload">
           <AiUploadHint v-if="canEditLayout" />
           <el-button v-if="!mapFullscreen" type="primary" :icon="FullScreen" @click="openMapFullscreen">{{ mapFullscreenLabel }}</el-button>
-          <el-button v-else :icon="Close" @click="closeMapFullscreen">退出全屏</el-button>
+          <el-button v-else :icon="Close" @click="closeMapFullscreen">{{ t('warehouse.storage_locations_index.action_0f1505b6ad3f') }}</el-button>
         </div>
       </div>
 
@@ -833,14 +839,14 @@ onUnmounted(() => {
         画布交互(拖货架/平移/缩放)与本次改动之前逐字节相同。
       -->
       <div v-if="mapFullscreen" class="draw-toolbar">
-        <div class="tool-group" role="group" aria-label="平面图绘制工具">
+        <div class="tool-group" role="group" :aria-label="t('warehouse.storage_locations_index.aria_label_f78e4dd55898')">
           <button
             v-for="tool in mapTools" :key="tool.id" type="button" class="tool-button"
             :class="{ active: mapTool === tool.id }" :disabled="!canEditLayout"
             :aria-pressed="mapTool === tool.id" @click="selectMapTool(tool.id)"
           >{{ tool.label }}</button>
         </div>
-        <div class="tool-group" role="group" aria-label="标注颜色">
+        <div class="tool-group" role="group" :aria-label="t('warehouse.storage_locations_index.aria_label_4420e6a9ac38')">
           <button
             v-for="color in annotationColors" :key="color" type="button" class="color-swatch"
             :class="{ active: annotationColor === color }" :style="{ background: color }"
@@ -849,9 +855,9 @@ onUnmounted(() => {
           />
         </div>
         <div class="tool-group">
-          <el-checkbox v-model="showAnnotations">显示标注</el-checkbox>
-          <el-button v-if="canEditLayout && mapTool === 'polygon'" link type="primary" @click="overlayRef?.finishPolygon()">收笔</el-button>
-          <el-button v-if="canEditLayout && mapSelection" link type="danger" :icon="Delete" @click="removeSelectedShape">删除选中</el-button>
+          <UCheckbox v-model="showAnnotations"><template #label>{{ t('warehouse.storage_locations_index.text_e329e0732d86') }}</template></UCheckbox>
+          <UButton v-if="canEditLayout && mapTool === 'polygon'" variant="link" color="primary" @click="overlayRef?.finishPolygon()">{{ t('warehouse.storage_locations_index.action_f6043e4b66ba') }}</UButton>
+          <el-button v-if="canEditLayout && mapSelection" link type="danger" :icon="Delete" @click="removeSelectedShape">{{ t('warehouse.storage_locations_index.action_469f67cf665e') }}</el-button>
         </div>
         <span class="muted map-hint">{{ mapHint }}</span>
       </div>
@@ -877,22 +883,22 @@ onUnmounted(() => {
             <!-- Controls 必须排在叠加层**之后** —— 两者同为 z-index:5, 后写的在上, 否则落笔状态下缩放按钮被盖住点不到 -->
             <Controls position="bottom-left" />
           </VueFlow>
-          <el-empty v-else description="暂无楼层" :image-size="100" />
+          <el-empty v-else :description="t('warehouse.storage_locations_index.description_a7ba53ec2ad9')" :image-size="100" />
           <button v-if="!mapFullscreen && activeFloor" type="button" class="canvas-expand" :aria-label="mapFullscreenAriaLabel" :title="mapFullscreenAriaLabel" @click="openMapFullscreen">
-            <el-icon><FullScreen /></el-icon><span>{{ mapFullscreenLabel }}</span>
+            <span><FullScreen /></span><span>{{ mapFullscreenLabel }}</span>
           </button>
         </div>
 
         <aside class="rack-detail">
           <div v-if="rackWarnings.length" class="rack-warning-list" role="status">
-            <strong>有 {{ rackWarnings.length }} 个货架需要核对位置</strong>
-            <p>货架中心落在其他区域内，图上位置与归属可能不一致。请对照现场核对后移动货架或调整区域边界。</p>
+            <strong>{{ t('warehouse.storage_locations_index.text_90ce0f66f094') }} {{ rackWarnings.length }} {{ t('warehouse.storage_locations_index.text_a9af41da9d53') }}</strong>
+            <p>{{ t('warehouse.storage_locations_index.text_e1fbfc0380a9') }}</p>
             <button v-for="item in rackWarnings" :key="item.rack.id" type="button" @click="selectedRackId = item.rack.id">
               {{ item.rack.name }} → {{ item.otherZone.name }}
             </button>
           </div>
           <div v-if="canEditLayout && activeFloor && unplacedZones.length" class="unplaced-zones">
-            <h3>还没画在{{ activeFloor.name }}的区域</h3>
+            <h3>{{ t('warehouse.storage_locations_index.text_1d8ad05a6e90') }}{{ activeFloor.name }}{{ t('warehouse.storage_locations_index.text_6c7249638787') }}</h3>
             <div class="chip-row">
               <button
                 v-for="zone in unplacedZones" :key="zone.id" type="button" class="place-zone-chip"
@@ -900,46 +906,46 @@ onUnmounted(() => {
                 @click="placeZoneOnFloor(zone)"
               >{{ zone.prefix }} · {{ zone.name }}</button>
             </div>
-            <small class="muted">点一下按默认位置放上去，或全屏后用「区域」笔在图上拖出它的实际位置。</small>
+            <small class="muted">{{ t('warehouse.storage_locations_index.text_e332683afc8a') }}</small>
           </div>
           <template v-if="activeRack">
             <div class="section-heading"><h2>{{ activeRack.name }}</h2><el-button v-if="canEditLayout" data-activity-action="storage.delete-rack" link :icon="Delete" :aria-label="`删除${activeRack.name}`" :title="`删除${activeRack.name}`" @click="removeRack(activeRack)" /></div>
-            <span class="muted">{{ layout.zones.find(z => z.id === activeRack!.zoneId)?.name || '未归属区域' }} · {{ activeRack.levels }} 层</span>
-            <p v-if="activeRackWarning" class="rack-warning-detail">图上位于「{{ activeRackWarning.otherZone.name }}」，归属仍为「{{ layout.zones.find(z => z.id === activeRack!.zoneId)?.name || '未归属区域' }}」。请按现场实际位置核对。</p>
+            <span class="muted">{{ layout.zones.find(z => z.id === activeRack!.zoneId)?.name || t('warehouse.storage_locations_index.text_d1401d1ed5c2') }} · {{ activeRack.levels }} {{ t('warehouse.storage_locations_index.text_b6fd20c013e9') }}</span>
+            <p v-if="activeRackWarning" class="rack-warning-detail">{{ t('warehouse.storage_locations_index.text_40783bc9dc5f') }}{{ activeRackWarning.otherZone.name }}{{ t('warehouse.storage_locations_index.text_9a47dff65766') }}{{ layout.zones.find(z => z.id === activeRack!.zoneId)?.name || t('warehouse.storage_locations_index.text_d1401d1ed5c2') }}{{ t('warehouse.storage_locations_index.text_17b508cbdf41') }}</p>
             <div class="shelf-stack">
               <div v-for="level in Array.from({ length: activeRack.levels }, (_, index) => activeRack!.levels - index)" :key="level" class="shelf-level">
                 <span class="level-number">{{ level }}F</span>
                 <div class="shelf-content">
-                  <div v-for="location in activeRackLocations.filter(item => item.level === level)" :key="location.id" class="shelf-location"><strong>{{ location.code }}</strong><small>{{ inventoryError ? '库存未加载' : `${countAt(location.code).length} 批` }}</small><small v-if="!inventoryError && countAt(location.code)[0]">{{ formatAge(countAt(location.code)[0]?.inboundDate) }}</small><el-button v-if="canEditLayout" link :icon="Delete" :aria-label="`把 ${location.code} 从本层解绑`" :title="`把 ${location.code} 从本层解绑`" @click="unbindLocation(location)" /></div>
-                  <el-dropdown v-if="canEditLayout" trigger="click" :teleported="false" @command="(id: string) => { const location = layout.locations.find(item => item.id === id); if (location) bindLocation(location, level); }"><el-button text :icon="Plus">绑定位置</el-button><template #dropdown><el-dropdown-menu><el-dropdown-item v-for="location in layout.locations.filter(item => item.zoneId === activeRack!.zoneId && !item.rackId)" :key="location.id" :command="location.id">{{ location.code }}</el-dropdown-item></el-dropdown-menu></template></el-dropdown>
+                  <div v-for="location in activeRackLocations.filter(item => item.level === level)" :key="location.id" class="shelf-location"><strong>{{ location.code }}</strong><small>{{ inventoryError ? t('warehouse.storage_locations_index.text_6f4334e257f2') : `${countAt(location.code).length} 批` }}</small><small v-if="!inventoryError && countAt(location.code)[0]">{{ formatAge(countAt(location.code)[0]?.inboundDate) }}</small><el-button v-if="canEditLayout" link :icon="Delete" :aria-label="`把 ${location.code} 从本层解绑`" :title="`把 ${location.code} 从本层解绑`" @click="unbindLocation(location)" /></div>
+                  <el-dropdown v-if="canEditLayout" trigger="click" :teleported="false" @command="(id: string) => { const location = layout.locations.find(item => item.id === id); if (location) bindLocation(location, level); }"><el-button text :icon="Plus">{{ t('warehouse.storage_locations_index.action_5c6877179f34') }}</el-button><template #dropdown><el-dropdown-menu><el-dropdown-item v-for="location in layout.locations.filter(item => item.zoneId === activeRack!.zoneId && !item.rackId)" :key="location.id" :command="location.id">{{ location.code }}</el-dropdown-item></el-dropdown-menu></template></el-dropdown>
                 </div>
               </div>
             </div>
           </template>
-          <el-empty v-else description="选择货架" :image-size="80" />
+          <el-empty v-else :description="t('warehouse.storage_locations_index.description_39c66c88c1b4')" :image-size="80" />
         </aside>
       </div>
     </section>
 
-    <el-dialog :key="`zone-${zoneDialogKey}`" v-model="zoneDialogVisible" title="添加储存区域" width="420"><el-form label-position="top"><el-form-item label="区域名称"><el-input v-model="zoneForm.name" placeholder="例如：冷藏区" /></el-form-item><el-form-item label="英文前缀"><el-input v-model="zoneForm.prefix" maxlength="8" placeholder="例如：LC" /></el-form-item></el-form><template #footer><el-button @click="zoneDialogVisible = false">取消</el-button><el-button type="primary" :loading="saving" @click="addZone">保存</el-button></template></el-dialog>
-    <el-dialog :key="`location-${locationDialogKey}`" v-model="locationDialogVisible" title="添加储存位置" width="440"><el-form label-position="top"><el-form-item label="位置编码"><el-input v-model="locationForm.code" /></el-form-item><el-form-item label="位置名称"><el-input v-model="locationForm.name" placeholder="选填" /></el-form-item><el-form-item label="备注"><el-input v-model="locationForm.notes" placeholder="选填" /></el-form-item></el-form><template #footer><el-button @click="locationDialogVisible = false">取消</el-button><el-button type="primary" :loading="saving" @click="addLocation">保存</el-button></template></el-dialog>
-    <el-dialog :key="`move-${moveDialogKey}`" v-model="moveDialogVisible" title="调整储存位置" width="420"><el-form label-position="top"><el-form-item label="批次"><span>{{ selectedBatch?.batchNumber }}</span></el-form-item><el-form-item label="储存位置"><el-select v-model="moveLocation" filterable placeholder="选择位置" style="width:100%"><el-option-group v-for="zone in layout.zones" :key="zone.id" :label="`${zone.name} · ${zone.prefix}`"><el-option v-for="location in layout.locations.filter(item => item.zoneId === zone.id)" :key="location.id" :label="`${location.code} · ${location.name}`" :value="location.code" /></el-option-group></el-select></el-form-item></el-form><template #footer><el-button @click="moveDialogVisible = false">取消</el-button><el-button type="primary" @click="moveBatch">保存</el-button></template></el-dialog>
-    <el-dialog :key="`recognize-${recognizeDialogKey}`" v-model="recognizeDialogVisible" :title="recognizeError ? '设置仓库底图' : '确认 AI 识别结果'" :z-index="2500" width="560">
-      <el-alert v-if="recognizeError" title="AI 识别暂不可用" type="warning" :closable="false" show-icon class="recognize-note">
-        <template #default>识别服务返回错误：{{ recognizeError }}。仍可只保存底图，再在全屏地图手动画区域。</template>
+    <CompatDialog :key="`zone-${zoneDialogKey}`" v-model="zoneDialogVisible" :title="t('warehouse.storage_locations_index.title_30bc19b09404')" width="420"><CompatForm label-position="top"><CompatFormItem :label="t('warehouse.storage_locations_index.label_559301786f08')"><UInput v-model="zoneForm.name" :placeholder="t('warehouse.storage_locations_index.placeholder_73702e76c9f3')" /></CompatFormItem><CompatFormItem :label="t('warehouse.storage_locations_index.label_86a66b7a5a79')"><UInput v-model="zoneForm.prefix" maxlength="8" :placeholder="t('warehouse.storage_locations_index.placeholder_259072344c95')" /></CompatFormItem></CompatForm><template #footer><UButton color="neutral" variant="outline" @click="zoneDialogVisible = false">{{ t('warehouse.storage_locations_index.action_2cd0f3be8738') }}</UButton><UButton color="primary" :loading="saving" @click="addZone">{{ t('warehouse.storage_locations_index.action_a3030bf8f16d') }}</UButton></template></CompatDialog>
+    <CompatDialog :key="`location-${locationDialogKey}`" v-model="locationDialogVisible" :title="t('warehouse.storage_locations_index.title_8e04d3690d42')" width="440"><CompatForm label-position="top"><CompatFormItem :label="t('warehouse.storage_locations_index.label_b98e7ed0315a')"><UInput v-model="locationForm.code" /></CompatFormItem><CompatFormItem :label="t('warehouse.storage_locations_index.label_1e1d6f75ccc1')"><UInput v-model="locationForm.name" :placeholder="t('warehouse.storage_locations_index.placeholder_ebdcbdcf9c99')" /></CompatFormItem><CompatFormItem :label="t('warehouse.storage_locations_index.label_daede9881787')"><UInput v-model="locationForm.notes" :placeholder="t('warehouse.storage_locations_index.placeholder_ebdcbdcf9c99')" /></CompatFormItem></CompatForm><template #footer><UButton color="neutral" variant="outline" @click="locationDialogVisible = false">{{ t('warehouse.storage_locations_index.action_2cd0f3be8738') }}</UButton><UButton color="primary" :loading="saving" @click="addLocation">{{ t('warehouse.storage_locations_index.action_a3030bf8f16d') }}</UButton></template></CompatDialog>
+    <CompatDialog :key="`move-${moveDialogKey}`" v-model="moveDialogVisible" :title="t('warehouse.storage_locations_index.title_a8001bc392a3')" width="420"><CompatForm label-position="top"><CompatFormItem :label="t('warehouse.storage_locations_index.label_620226469b1a')"><span>{{ selectedBatch?.batchNumber }}</span></CompatFormItem><CompatFormItem :label="t('warehouse.storage_locations_index.label_669dd509df4c')"><el-select v-model="moveLocation" filterable :placeholder="t('warehouse.storage_locations_index.placeholder_38418cc70d55')" style="width:100%"><el-option-group v-for="zone in layout.zones" :key="zone.id" :label="`${zone.name} · ${zone.prefix}`"><el-option v-for="location in layout.locations.filter(item => item.zoneId === zone.id)" :key="location.id" :label="`${location.code} · ${location.name}`" :value="location.code" /></el-option-group></el-select></CompatFormItem></CompatForm><template #footer><UButton color="neutral" variant="outline" @click="moveDialogVisible = false">{{ t('warehouse.storage_locations_index.action_2cd0f3be8738') }}</UButton><UButton color="primary" @click="moveBatch">{{ t('warehouse.storage_locations_index.action_a3030bf8f16d') }}</UButton></template></CompatDialog>
+    <el-dialog :key="`recognize-${recognizeDialogKey}`" v-model="recognizeDialogVisible" :title="recognizeError ? t('warehouse.storage_locations_index.title_3b7bb263effb') : t('warehouse.storage_locations_index.title_e59dc0456ba4')" :z-index="2500" width="560">
+      <el-alert v-if="recognizeError" :title="t('warehouse.storage_locations_index.title_1386f5c515fa')" type="warning" :closable="false" show-icon class="recognize-note">
+        <template #default>{{ t('warehouse.storage_locations_index.text_d41c72ecc245') }}{{ recognizeError }}{{ t('warehouse.storage_locations_index.text_b025e6a56571') }}</template>
       </el-alert>
-      <p v-else class="muted recognize-note">识别结果不会自动生效。确认后才会写入本厂仓储配置，底图也一并保存。</p>
+      <p v-else class="muted recognize-note">{{ t('warehouse.storage_locations_index.text_139169948800') }}</p>
       <ul v-if="recognizePreview" class="recognize-list">
-        <li><strong>新增区域 {{ recognizedZonesToAdd.length }} 个</strong><span v-if="recognizedZonesToAdd.length">：{{ recognizedZonesToAdd.map(z => `${z.name} · ${String(z.prefix).toUpperCase()}`).join('、') }}</span></li>
-        <li v-if="recognizedZonesSkipped > 0" class="muted">另有 {{ recognizedZonesSkipped }} 个区域被跳过（前缀不合法或已存在）</li>
-        <li><strong>新增货架 {{ recognizedRacks.length }} 个</strong></li>
-        <li v-if="recognizePreview?.confidence != null" class="muted">模型置信度 {{ Math.round((recognizePreview.confidence || 0) * 100) }}%</li>
+        <li><strong>{{ t('warehouse.storage_locations_index.text_bd9811b2c1d5') }} {{ recognizedZonesToAdd.length }} {{ t('warehouse.storage_locations_index.text_3a116815bc9d') }}</strong><span v-if="recognizedZonesToAdd.length">：{{ recognizedZonesToAdd.map(z => `${z.name} · ${String(z.prefix).toUpperCase()}`).join('、') }}</span></li>
+        <li v-if="recognizedZonesSkipped > 0" class="muted">{{ t('warehouse.storage_locations_index.text_268ec6902063') }} {{ recognizedZonesSkipped }} {{ t('warehouse.storage_locations_index.text_269644affae1') }}</li>
+        <li><strong>{{ t('warehouse.storage_locations_index.text_dce484e9ca88') }} {{ recognizedRacks.length }} {{ t('warehouse.storage_locations_index.text_3a116815bc9d') }}</strong></li>
+        <li v-if="recognizePreview?.confidence != null" class="muted">{{ t('warehouse.storage_locations_index.text_9ad29c910a65') }} {{ Math.round((recognizePreview.confidence || 0) * 100) }}%</li>
       </ul>
-      <img v-if="recognizePreviewImage" class="recognize-preview" :src="recognizePreviewImage" alt="待确认的仓库底图">
+      <img v-if="recognizePreviewImage" class="recognize-preview" :src="recognizePreviewImage" :alt="t('warehouse.storage_locations_index.alt_3baacb70eefe')">
       <template #footer>
-        <el-button @click="recognizeDialogVisible = false">取消</el-button>
-        <el-button :loading="saving" :disabled="!recognizePreviewImage" @click="applyBackgroundOnly">仅保存底图</el-button>
-        <el-button v-if="recognizePreview" type="primary" :loading="loading" :disabled="!recognizedZonesToAdd.length && !recognizedRacks.length" @click="applyRecognizedLayout">应用识别结果</el-button>
+        <UButton color="neutral" variant="outline" @click="recognizeDialogVisible = false">{{ t('warehouse.storage_locations_index.action_2cd0f3be8738') }}</UButton>
+        <UButton color="neutral" variant="outline" :loading="saving" :disabled="!recognizePreviewImage" @click="applyBackgroundOnly">{{ t('warehouse.storage_locations_index.action_a9d9fb41bbc5') }}</UButton>
+        <UButton v-if="recognizePreview" color="primary" :loading="loading" :disabled="!recognizedZonesToAdd.length && !recognizedRacks.length" @click="applyRecognizedLayout">{{ t('warehouse.storage_locations_index.action_0964e0e012d8') }}</UButton>
       </template>
     </el-dialog>
   </main>

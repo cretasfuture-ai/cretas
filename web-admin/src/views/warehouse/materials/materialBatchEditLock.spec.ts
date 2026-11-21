@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { sourceWithChinese } from '@/i18n-pilot/sourceForTests';
 
 /**
  * 账实红线 (owner 2026-08-20):「入库任务与批次」的编辑弹窗此前能直接改数量/总重量/总价值/
@@ -31,7 +32,7 @@ function stripComments(source: string): string {
     .replace(/^\s*\/\/.*$/gm, '');       // 整行行注释
 }
 
-const SOURCE = stripComments(RAW);
+const SOURCE = sourceWithChinese(stripComments(RAW));
 
 /** 账实字段: 改了就直接改写库存台账 / 成本 / 溯源归属 / 消耗顺序。 */
 const LOCKED_FIELDS = [
@@ -95,7 +96,7 @@ describe('批次编辑不再允许直接改账实数量 (owner 2026-08-20 内控
    * input-number / select —— 而入库日期用的是 el-date-picker, 也就是说
    * **就算它没被 disable, 这条断言也读不到**。量错了控件类型 = 量了个寂寞。
    */
-  const CONTROL_RE = /<el-(?:input-number|select|date-picker)[^>]*v-model="formData\.[^"]+"[^>]*>/g;
+  const CONTROL_RE = /<(?:el-(?:input-number|select|date-picker)|CompatSelect|CompatDatePicker|UInput)[^>]*v-model="formData\.[^"]+"[^>]*>/g;
 
   it('账实字段在编辑态下是只读的', () => {
     // 界面层的第二道: 光不发还不够, 输入框还开着会让用户以为改成功了。

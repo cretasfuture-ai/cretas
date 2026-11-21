@@ -1,4 +1,10 @@
 <script setup lang="ts">
+import { CompatOption, CompatPagination, CompatSelect, CompatTable, CompatTableColumn } from '@/components/compat';
+import { useCompatMessages } from '@/components/compat/messages';
+const { ElMessage, ElMessageBox } = useCompatMessages();
+import { useT } from '@/i18n-pilot/useT';
+const { t } = useT();
+
 /**
  * 销售退货管理 — T-RTA (issue #531) frontend MVP.
  *
@@ -21,7 +27,7 @@ import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get } from '@/api/request';
 import { submitReturnOrder, approveReturnOrder, rejectReturnOrder } from '@/api/returnOrder';
-import { ElMessage, ElMessageBox } from 'element-plus';
+
 import { Refresh, Search, View } from '@element-plus/icons-vue';
 import { formatAmount } from '@/utils/tableFormatters';
 import { formatDateTime } from '@/utils/dateFormat';
@@ -97,18 +103,18 @@ function handleRowActionClick(actionId: string, row: TableRow) {
       void runRowAction(row, '提交审核', '确认提交本退货单进入审批?', submitReturnOrder);
       break;
     case 'approve':
-      if (!canApprove.value) { ElMessage({ message: '无业务审批权限 (需 sales 写权限)', type: 'error', duration: 0, showClose: true }); break; }
+      if (!canApprove.value) { ElMessage({ message: t('sales.returns_list.message_1f0fb0613229'), type: 'error', duration: 0, showClose: true }); break; }
       void runRowAction(row, '审批通过', '审批通过后, 退货单状态推进. 确认审批?', approveReturnOrder);
       break;
     case 'reject':
-      if (!canApprove.value) { ElMessage({ message: '无业务审批权限 (需 sales 写权限)', type: 'error', duration: 0, showClose: true }); break; }
+      if (!canApprove.value) { ElMessage({ message: t('sales.returns_list.message_1f0fb0613229'), type: 'error', duration: 0, showClose: true }); break; }
       void runRowAction(row, '驳回', '驳回后退货单状态置为已驳回, 不再处理. 确认驳回?', rejectReturnOrder);
       break;
     // 'edit'/'delete' (DRAFT/REJECTED 状态可配置项): 后端暂无对应写接口 — Rule 5
     // (dead-end 改导航) 引导用户到详情页处理, 不留静默无效按钮.
     case 'edit':
     case 'delete':
-      ElMessage.info('该操作请前往详情页处理');
+      ElMessage.info(t('sales.returns_list.message_b91294ca2bff'));
       router.push(`/sales/returns/${row.id}`);
       break;
     default: ElMessage.warning(`该操作暂不支持: ${actionId}`);
@@ -140,14 +146,14 @@ const summaryRequest = computed<ListSummaryRequest>(() => ({
 const { summary: footerSummary, loading: footerLoading } = useListSummary('returnOrder', summaryRequest);
 
 const STATUS_OPTIONS = [
-  { value: '', label: '全部状态' },
-  { value: 'DRAFT', label: '草稿' },
-  { value: 'SUBMITTED', label: '已提交' },
-  { value: 'APPROVED', label: '已审批' },
-  { value: 'FINANCE_APPROVED', label: '财务已审' },
-  { value: 'REJECTED', label: '已驳回' },
-  { value: 'PROCESSING', label: '处理中' },
-  { value: 'COMPLETED', label: '已完成' },
+  { value: '', label: t('sales.returns_list.label_0a379c1e7398') },
+  { value: 'DRAFT', label: t('sales.returns_list.label_2a2fd29bd27a') },
+  { value: 'SUBMITTED', label: t('sales.returns_list.label_bc37a6110a07') },
+  { value: 'APPROVED', label: t('sales.returns_list.label_180fcc4a4eec') },
+  { value: 'FINANCE_APPROVED', label: t('sales.returns_list.label_f16c1a6e1a4d') },
+  { value: 'REJECTED', label: t('sales.returns_list.label_4dbcdec8693b') },
+  { value: 'PROCESSING', label: t('sales.returns_list.label_694b71bc8013') },
+  { value: 'COMPLETED', label: t('sales.returns_list.label_f28461bb49c8') },
 ];
 
 function statusType(s: string) {
@@ -202,24 +208,24 @@ function viewDetail(row: TableRow) { router.push(`/sales/returns/${row.id}`); }
 
 <template>
   <div class="page-wrapper">
-    <el-card class="page-card" shadow="never">
+    <UCard class="page-card" >
       <template #header>
         <div class="card-header">
           <div class="header-left">
-            <span class="page-title">销售退货</span>
-            <span class="data-count">共 {{ pagination.total }} 单</span>
+            <span class="page-title">{{ t('sales.returns_list.text_08e6ba1e5529') }}</span>
+            <span class="data-count">{{ t('sales.returns_list.text_76e547a8fa54') }} {{ pagination.total }} {{ t('sales.returns_list.text_26092b300f84') }}</span>
           </div>
           <div class="header-right">
-            <el-select v-model="filterStatus" placeholder="状态筛选" clearable style="width: 160px" @change="handleSearch">
-              <el-option v-for="opt in STATUS_OPTIONS" :key="opt.value" :label="opt.label" :value="opt.value" />
-            </el-select>
-            <el-button :icon="Search" type="primary" @click="handleSearch">查询</el-button>
-            <el-button :icon="Refresh" @click="loadData">刷新</el-button>
+            <CompatSelect v-model="filterStatus" :placeholder="t('sales.returns_list.placeholder_9a9acd39e536')" clearable style="width: 160px" @change="handleSearch">
+              <CompatOption v-for="opt in STATUS_OPTIONS" :key="opt.value" :label="opt.label" :value="opt.value" />
+            </CompatSelect>
+            <el-button :icon="Search" type="primary" @click="handleSearch">{{ t('sales.returns_list.action_bcd6771e08ec') }}</el-button>
+            <el-button :icon="Refresh" @click="loadData">{{ t('sales.returns_list.action_aee887434131') }}</el-button>
           </div>
         </div>
       </template>
 
-      <el-table :data="tableData" v-loading="loading" stripe border style="width: 100%">
+      <CompatTable :data="tableData" v-loading="loading" stripe border style="width: 100%">
         <template #empty>
           <ListEmptyExplain
             :load-error="loadError"
@@ -230,31 +236,31 @@ function viewDetail(row: TableRow) { router.push(`/sales/returns/${row.id}`); }
             @clear-filter="clearFilters"
           />
         </template>
-        <el-table-column prop="returnNumber" label="退货单号" width="200" />
-        <el-table-column label="客户" min-width="160" show-overflow-tooltip>
+        <CompatTableColumn prop="returnNumber" :label="t('sales.returns_list.label_07c4a05db006')" width="200" />
+        <CompatTableColumn :label="t('sales.returns_list.label_ad4af312dbc2')" min-width="160" show-overflow-tooltip>
           <template #default="{ row }">{{ row.counterpartyName || row.customerName || row.counterpartyId || '-' }}</template>
-        </el-table-column>
-        <el-table-column label="源订单" min-width="160" show-overflow-tooltip>
+        </CompatTableColumn>
+        <CompatTableColumn :label="t('sales.returns_list.label_af1726ab36bb')" min-width="160" show-overflow-tooltip>
           <template #default="{ row }">{{ row.sourceOrderNumber || row.sourceOrderId || '-' }}</template>
-        </el-table-column>
-        <el-table-column prop="returnDate" label="退货日期" width="120" />
-        <el-table-column v-if="canViewPrice" label="退货金额" width="130" align="right">
+        </CompatTableColumn>
+        <CompatTableColumn prop="returnDate" :label="t('sales.returns_list.label_2934964f31bf')" width="120" />
+        <CompatTableColumn v-if="canViewPrice" :label="t('sales.returns_list.label_6f8d27fcc358')" width="130" align="right">
           <template #default="{ row }">{{ formatAmount(row.totalAmount) }}</template>
-        </el-table-column>
-        <el-table-column label="状态" width="110" align="center">
+        </CompatTableColumn>
+        <CompatTableColumn :label="t('sales.returns_list.label_6320b4a8722a')" width="110" align="center">
           <template #default="{ row }">
             <el-tag :type="statusType(row.status)" size="small">{{ statusLabel(row.status) }}</el-tag>
           </template>
-        </el-table-column>
-        <el-table-column label="原因" min-width="200" show-overflow-tooltip>
+        </CompatTableColumn>
+        <CompatTableColumn :label="t('sales.returns_list.label_f029d9cb4a76')" min-width="200" show-overflow-tooltip>
           <template #default="{ row }">{{ row.reason || '-' }}</template>
-        </el-table-column>
-        <el-table-column label="创建时间" width="160">
+        </CompatTableColumn>
+        <CompatTableColumn :label="t('sales.returns_list.label_07ec86e0f1d4')" width="160">
           <template #default="{ row }">{{ formatDateTime(row.createdAt) }}</template>
-        </el-table-column>
-        <el-table-column label="操作" width="180" align="center" fixed="right">
+        </CompatTableColumn>
+        <CompatTableColumn :label="t('sales.returns_list.label_ed31fbb483ee')" width="180" align="center" fixed="right">
           <template #default="{ row }">
-            <el-button :icon="View" link type="primary" @click="viewDetail(row)">查看</el-button>
+            <el-button :icon="View" link type="primary" @click="viewDetail(row)">{{ t('sales.returns_list.action_db8db0530432') }}</el-button>
             <RowActionMenu
               :actions="rowActionsFor(row)"
               button-label="更多"
@@ -262,8 +268,8 @@ function viewDetail(row: TableRow) { router.push(`/sales/returns/${row.id}`); }
               @ai-trigger="() => openAiForRow(row)"
             />
           </template>
-        </el-table-column>
-      </el-table>
+        </CompatTableColumn>
+      </CompatTable>
 
       <TableFooter
         price-gate="both"
@@ -274,14 +280,14 @@ function viewDetail(row: TableRow) { router.push(`/sales/returns/${row.id}`); }
       />
 
       <div class="pagination-wrapper">
-        <el-pagination
+        <CompatPagination
           v-model:current-page="pagination.page" v-model:page-size="pagination.size"
           :total="pagination.total" :page-sizes="[10, 20, 50, 100]"
           layout="total, sizes, prev, pager, next, jumper"
           background
           @current-change="handlePageChange" @size-change="handleSizeChange" />
       </div>
-    </el-card>
+    </UCard>
   </div>
 </template>
 

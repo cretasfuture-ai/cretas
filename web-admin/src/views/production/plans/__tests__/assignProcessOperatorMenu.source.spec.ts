@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { sourceWithChinese } from '@/i18n-pilot/sourceForTests';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -16,7 +17,7 @@ const ENTRY = resolve(HERE, '../assignProcessOperatorEntry.ts');
  * 纯逻辑(候选解析/目标路由)已抽到 assignProcessOperatorEntry.ts 并有独立单测。
  */
 describe('生产计划列表「分配工序操作员」入口 —— 接线契约', () => {
-  const view = readFileSync(LIST, 'utf8');
+  const view = sourceWithChinese(readFileSync(LIST, 'utf8'));
   const entry = readFileSync(ENTRY, 'utf8');
 
   it('菜单项接到 productionMoreActions 的唯一判据, 不另起一套 v-if', () => {
@@ -28,7 +29,7 @@ describe('生产计划列表「分配工序操作员」入口 —— 接线契�
   it('🔒 硬约束8: 全文件只有一处「更多」下拉 (table 行内), 没有 card/mobile 副本要同步登记', () => {
     // 判据: 「更多」的显隐按钮字面量只出现一次 —— 若未来加了移动端卡片视图,
     // 这条断言会先红, 提醒补第二处 v-if/command 而不是悄悄漏掉。
-    const moreButtonOccurrences = (view.match(/更多<el-icon/g) || []).length;
+    const moreButtonOccurrences = (view.match(/更多<(?:el-icon|span)\b/g) || []).length;
     expect(moreButtonOccurrences).toBe(1);
     const commandOccurrences = (view.match(/command="assign-process-operator"/g) || []).length;
     expect(commandOccurrences).toBe(1);

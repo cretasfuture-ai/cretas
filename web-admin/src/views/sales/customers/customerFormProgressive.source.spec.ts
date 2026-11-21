@@ -1,8 +1,9 @@
 import { readFileSync } from 'node:fs';
+import { sourceWithChinese } from '@/i18n-pilot/sourceForTests';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-const source = readFileSync(resolve(__dirname, 'list.vue'), 'utf8');
+const source = sourceWithChinese(readFileSync(resolve(__dirname, 'list.vue'), 'utf8'));
 
 describe('customer create/edit progressive disclosure', () => {
   // 2026-08-12: 本用例原来断言这五个字段都带 `required`, 拿「必填」当「在基础区」的代理。
@@ -44,9 +45,9 @@ describe('customer create/edit progressive disclosure', () => {
   it('shows and filters by business customer type instead of the lifecycle column', () => {
     expect(source).toContain('v-model="filterCustomerType"');
     expect(source).toContain('type: filterCustomerType.value || undefined');
-    expect(source).toContain('<el-table-column label="客户类型"');
+    expect(source).toMatch(/<(?:el-table-column|CompatTableColumn) label="客户类型"/);
     expect(source).toContain('customerTypeLabel(row.type)');
-    expect(source).not.toContain('<el-table-column label="生命周期"');
+    expect(source).not.toMatch(/<(?:el-table-column|CompatTableColumn) label="生命周期"/);
     expect(source).toContain("v-if=\"advancedFiltersVisible\"\n          v-model=\"filterCustomerStatus\"");
   });
 });

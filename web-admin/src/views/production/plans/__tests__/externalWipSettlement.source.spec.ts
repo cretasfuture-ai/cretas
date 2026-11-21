@@ -1,10 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { sourceWithChinese } from '@/i18n-pilot/sourceForTests';
 import { parse } from '@vue/compiler-sfc';
 import { parse as parseTemplate, NodeTypes, type ElementNode, type TemplateChildNode } from '@vue/compiler-dom';
 
-const source = readFileSync(resolve(__dirname, '../list.vue'), 'utf8');
+const rawSource = readFileSync(resolve(__dirname, '../list.vue'), 'utf8');
+const source = sourceWithChinese(rawSource);
 
 describe('clean settlement external WIP contract', () => {
   it('keeps the bounded variance reason code separate from its free-text explanation', () => {
@@ -13,7 +15,7 @@ describe('clean settlement external WIP contract', () => {
     expect(source).not.toContain("quantityVarianceReason: completeForm.value.varianceReason === '其他'");
   });
   it('renders the actual semi-output input outside both clean and exception-only branches', () => {
-    const template = parse(source).descriptor.template!.content;
+    const template = parse(rawSource).descriptor.template!.content;
     const matches: Array<{ node: ElementNode; ancestors: ElementNode[] }> = [];
     function visit(nodes: TemplateChildNode[], ancestors: ElementNode[] = []) {
       for (const node of nodes) {
@@ -28,7 +30,7 @@ describe('clean settlement external WIP contract', () => {
     visit(parseTemplate(template).children);
     expect(matches).toHaveLength(1);
     const { node, ancestors } = matches[0]!;
-    expect(ancestors.some(n => n.tag === 'el-form')).toBe(true);
+    expect(ancestors.some(n => ['el-form', 'CompatForm'].includes(n.tag))).toBe(true);
     expect([...ancestors, node].flatMap(n => n.props).some(p =>
       p.type === NodeTypes.DIRECTIVE && ['if', 'else', 'else-if'].includes(p.name)
         && (p.name === 'else' || (p.exp?.type === NodeTypes.SIMPLE_EXPRESSION

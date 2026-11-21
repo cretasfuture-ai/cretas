@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { sourceWithChinese } from '@/i18n-pilot/sourceForTests';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -22,7 +23,7 @@ import { describe, expect, it } from 'vitest';
  * (原料/辅料/包材几乎全是 kg) 触发频率更高。谁把 min 改回 1, 这条死结立刻复活,
  * 而现场表现只是「数量怎么自己变成 1 了」, 没人会怀疑到一个输入框属性上。
  */
-const source = readFileSync(resolve(__dirname, '..', 'list.vue'), 'utf8');
+const source = sourceWithChinese(readFileSync(resolve(__dirname, '..', 'list.vue'), 'utf8'));
 // 快速发货的发货行构造已抽到 deliveryPricePayload.ts (单价缺失不发 0), 数量口径断言读它。
 const builderSource = readFileSync(resolve(__dirname, '..', 'deliveryPricePayload.ts'), 'utf8');
 

@@ -1,10 +1,16 @@
 <script setup lang="ts">
+import { CompatDialog, CompatForm, CompatFormItem, CompatOption, CompatPagination, CompatSelect } from '@/components/compat';
+import { useCompatMessages } from '@/components/compat/messages';
+const { ElMessage } = useCompatMessages();
+import { useT } from '@/i18n-pilot/useT';
+const { t } = useT();
+
 import { ref, onMounted, computed, h } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post } from '@/api/request';
-import { ElMessage } from 'element-plus';
+
 import { Plus, Search, Refresh, ChatDotRound } from '@element-plus/icons-vue';
 import { formatDateTimeCell } from '@/utils/tableFormatters';
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
@@ -66,7 +72,7 @@ function handleRowActionClick(actionId: string, row: TableRow) {
     case 'print-pdf': void safePrint('production-task', factoryId.value, String(row.id), { fileName: `生产批次_${row.batchNumber || row.id}` }); break;
     case 'lock':
       // 'lock' 已在 rowActionsFor() 用 forceDisabled 灰显; 保留仅作防御。
-      ElMessage.info('锁定后该批次将不再允许修改数量/报工记录，进入封存状态。后端 API 正在对接中，暂时不可用。');
+      ElMessage.info(t('production.batches_list.message_461f4ba2b59e'));
       break;
     default: ElMessage.warning(`该操作暂不支持: ${actionId}`);
   }
@@ -244,7 +250,7 @@ function sortableHeader({ column }: { column: { label?: string } }) {
       type: 'button',
       class: 'batch-sort-trigger',
       'aria-label': `按${label}排序，连续操作可切换升序和降序`,
-      title: '点击切换升序和降序',
+      title: t('production.batches_list.title_c1f50de56eac'),
     },
     label,
   );
@@ -446,7 +452,7 @@ async function handleCreate() {
     } catch (e: unknown) {
       console.error('加载产品类型失败:', e);
       const err = e as { actionHint?: unknown };
-      if (!err?.actionHint) ElMessage.error('加载产品类型失败');
+      if (!err?.actionHint) ElMessage.error(t('production.batches_list.message_781dfe4b709b'));
     }
   }
 }
@@ -454,15 +460,15 @@ async function handleCreate() {
 async function submitCreate() {
   if (!factoryId.value) return;
   if (!createForm.value.batchNumber) {
-    ElMessage.warning('请输入批次号');
+    ElMessage.warning(t('production.batches_list.message_c198c1041667'));
     return;
   }
   if (!createForm.value.productTypeId) {
-    ElMessage.warning('请选择产品类型');
+    ElMessage.warning(t('production.batches_list.message_7ddb27f93df1'));
     return;
   }
   if (!createForm.value.plannedQuantity || createForm.value.plannedQuantity <= 0) {
-    ElMessage.warning('请输入有效的计划数量');
+    ElMessage.warning(t('production.batches_list.message_c560d0f388a2'));
     return;
   }
 
@@ -482,7 +488,7 @@ async function submitCreate() {
       trialSampleId: createForm.value.isTrial && createForm.value.trialSampleId ? createForm.value.trialSampleId : null
     });
     if (response.success) {
-      ElMessage.success('批次创建成功');
+      ElMessage.success(t('production.batches_list.message_2b7123a11244'));
       createDialogVisible.value = false;
       loadData();
     } else {
@@ -537,23 +543,23 @@ function getStatusText(status: string) {
       :other="`未来要做什么的「计划」（${getStatusText('PENDING')}状态，可调整数量、日期）`"
       other-path="/production/plans"
     />
-    <el-card class="page-card" shadow="never">
+    <UCard class="page-card" >
       <template #header>
         <div class="card-header">
           <div class="header-left">
-            <span class="page-title">生产批次列表</span>
-            <span class="data-count">共 {{ pagination.total }} 条记录</span>
+            <span class="page-title">{{ t('production.batches_list.text_f5d7b262e90c') }}</span>
+            <span class="data-count">{{ t('production.batches_list.text_76e547a8fa54') }} {{ pagination.total }} {{ t('production.batches_list.text_6016bf63b0ff') }}</span>
           </div>
           <div class="header-right">
             <!-- 列宽已被记住时才出现 —— 拖乱了要有一条明确的退路 (fool-proof Rule 5) -->
-            <el-button v-if="hasStoredColumnWidths" link type="primary" @click="resetColumnWidths">
-              恢复默认列宽
-            </el-button>
+            <UButton v-if="hasStoredColumnWidths" variant="link" color="primary" @click="resetColumnWidths">
+              {{ t('production.batches_list.action_95902143ec62') }}
+            </UButton>
             <el-button v-if="canWrite" type="success" :icon="ChatDotRound" @click="openAiCreate">
-              AI 创建批次
+              {{ t('production.batches_list.action_ec9ee97de0c8') }}
             </el-button>
             <el-button v-if="canWrite" type="primary" :icon="Plus" @click="handleCreate">
-              创建批次
+              {{ t('production.batches_list.action_9fbdaca2499f') }}
             </el-button>
           </div>
         </div>
@@ -563,23 +569,23 @@ function getStatusText(status: string) {
       <div class="search-bar">
         <el-input
           v-model="searchForm.batchNumber"
-          placeholder="批次号"
+          :placeholder="t('production.batches_list.placeholder_cb5386f1a98a')"
           clearable
           style="width: 200px"
           @keyup.enter="handleSearch"
         />
-        <el-select v-model="searchForm.status" placeholder="全部状态" clearable style="width: 150px">
+        <CompatSelect v-model="searchForm.status" :placeholder="t('production.batches_list.placeholder_0a379c1e7398')" clearable style="width: 150px">
           <!-- Bug fix (module-verify 2026-07-03, same root cause as scheduling/plans/create.vue):
                ProductionBatchStatus 枚举没有 PENDING, 传给后端会 400 (IllegalArgumentException).
                PLANNED 才是真实"待生产"状态值。 -->
-          <el-option label="待生产" value="PLANNED" />
-          <el-option label="生产中" value="IN_PROGRESS" />
-          <el-option label="已暂停" value="PAUSED" />
-          <el-option label="已完成" value="COMPLETED" />
-          <el-option label="已取消" value="CANCELLED" />
-        </el-select>
-        <el-button type="primary" :icon="Search" @click="handleSearch">搜索</el-button>
-        <el-button :icon="Refresh" @click="handleReset">重置</el-button>
+          <CompatOption :label="t('production.batches_list.label_a8ea49009cbf')" value="PLANNED" />
+          <CompatOption :label="t('production.batches_list.label_efc42eb363bc')" value="IN_PROGRESS" />
+          <CompatOption :label="t('production.batches_list.label_eb0c326b60ae')" value="PAUSED" />
+          <CompatOption :label="t('production.batches_list.label_f28461bb49c8')" value="COMPLETED" />
+          <CompatOption :label="t('production.batches_list.label_a37778f17c5f')" value="CANCELLED" />
+        </CompatSelect>
+        <el-button type="primary" :icon="Search" @click="handleSearch">{{ t('production.batches_list.action_44ce7ae909bb') }}</el-button>
+        <el-button :icon="Refresh" @click="handleReset">{{ t('production.batches_list.action_cb5d682bac3d') }}</el-button>
       </div>
 
       <!-- 数据表格 -->
@@ -600,7 +606,7 @@ function getStatusText(status: string) {
       >
         <el-table-column
           prop="batchNumber"
-          label="计划/批次号"
+          :label="t('production.batches_list.label_97035a3a38e5')"
           min-width="280"
           :width="columnWidth('batchNumber')"
           sortable
@@ -609,15 +615,15 @@ function getStatusText(status: string) {
         >
           <template #default="{ row }">
             <div v-if="row.isSyntheticPlanGroup" class="plan-group-cell">
-              <span class="plan-group-title">生产计划 {{ row.sourcePlanNumber || row.sourcePlanId || '-' }}</span>
-              <el-tag size="small" type="success">已小结归组</el-tag>
+              <span class="plan-group-title">{{ t('production.batches_list.text_d8393f4287a5') }} {{ row.sourcePlanNumber || row.sourcePlanId || '-' }}</span>
+              <UBadge variant="soft" size="sm" color="success">{{ t('production.batches_list.text_c8bd786bb842') }}</UBadge>
             </div>
             <span v-else>{{ row.batchNumber || '-' }}</span>
           </template>
         </el-table-column>
         <el-table-column
           prop="productTypeName"
-          label="产品类型"
+          :label="t('production.batches_list.label_0b3894ed2a38')"
           min-width="260"
           :width="columnWidth('productTypeName')"
           show-overflow-tooltip
@@ -625,7 +631,7 @@ function getStatusText(status: string) {
           :filter-method="(value: string, row: BatchTableRow) => productNameOf(row) === value"
         >
           <template #default="{ row }">
-            <span v-if="row.isSyntheticPlanGroup">{{ row.children?.length || 0 }} 条已小结批次</span>
+            <span v-if="row.isSyntheticPlanGroup">{{ row.children?.length || 0 }} {{ t('production.batches_list.text_f214aa5e42cc') }}</span>
             <span v-else>{{ row.productTypeName || row.productName || row.productTypeId || '-' }}</span>
           </template>
         </el-table-column>
@@ -645,13 +651,13 @@ function getStatusText(status: string) {
                 v-if="plannedMixed && plannedBasisOf(row) === 'THEORETICAL_CAPACITY'"
                 class="planned-basis-note"
                 data-testid="planned-basis-note"
-              >（理论产能）</span>
+              >{{ t('production.batches_list.text_92f7d4dac8fc') }}</span>
             </template>
           </template>
         </el-table-column>
         <el-table-column
           prop="actualQuantity"
-          label="实际数量"
+          :label="t('production.batches_list.label_dbf1981b4fdb')"
           :width="columnWidth('actualQuantity')"
           align="right"
           sortable
@@ -659,7 +665,7 @@ function getStatusText(status: string) {
           :sort-method="(a: TableSortRow, b: TableSortRow) => compareNullableNumber(a, b, 'actualQuantity')"
         />
         <el-table-column
-          label="来源工序"
+          :label="t('production.batches_list.label_60ad8bace335')"
           column-key="sourceProcess"
           :width="columnWidth('sourceProcess')"
           align="center"
@@ -667,7 +673,7 @@ function getStatusText(status: string) {
           :filter-method="(value: string, row: BatchTableRow) => sourceProcessOf(row) === value"
         >
           <template #default="{ row }">
-            <span v-if="row.isSyntheticPlanGroup">生产计划</span>
+            <span v-if="row.isSyntheticPlanGroup">{{ t('production.batches_list.text_d8393f4287a5') }}</span>
             <span v-else-if="row.batchType === 'CLERK_WIP' && row.sourceProcessOrder">
             <!--
               只显示真名, 不显示 archetype 码。
@@ -684,16 +690,16 @@ function getStatusText(status: string) {
         </el-table-column>
         <el-table-column
           prop="status"
-          label="状态"
+          :label="t('production.batches_list.label_6320b4a8722a')"
           :width="columnWidth('status')"
           align="center"
           :filters="statusFilters"
           :filter-method="(value: string, row: BatchTableRow) => String(row.status || '').toUpperCase() === value"
         >
           <template #default="{ row }">
-            <el-tag v-if="row.isSyntheticPlanGroup" type="info" size="small">
-              计划归组
-            </el-tag>
+            <UBadge variant="soft" v-if="row.isSyntheticPlanGroup" color="info" size="sm">
+              {{ t('production.batches_list.text_7ecf934c6ca3') }}
+            </UBadge>
             <el-tag v-else :type="getStatusType(row.status)" size="small">
               {{ getStatusText(row.status) }}
             </el-tag>
@@ -701,7 +707,7 @@ function getStatusText(status: string) {
         </el-table-column>
         <el-table-column
           prop="supervisorName"
-          label="负责人"
+          :label="t('production.batches_list.label_a525346277ed')"
           :width="columnWidth('supervisorName')"
           :filters="supervisorFilters"
           :filter-method="(value: string, row: BatchTableRow) => String(row.supervisorName || '-') === value"
@@ -710,31 +716,31 @@ function getStatusText(status: string) {
         </el-table-column>
         <el-table-column
           prop="createdAt"
-          label="创建时间"
+          :label="t('production.batches_list.label_07ec86e0f1d4')"
           :width="columnWidth('createdAt')"
           sortable
           :render-header="sortableHeader"
           :sort-method="(a: TableSortRow, b: TableSortRow) => compareNullableDate(a, b, 'createdAt')"
           :formatter="formatDateTimeCell"
         />
-        <el-table-column label="操作" width="220" fixed="right" align="center">
+        <el-table-column :label="t('production.batches_list.label_ed31fbb483ee')" width="220" fixed="right" align="center">
           <template #default="{ row }">
             <template v-if="row.isSyntheticPlanGroup">
-              <el-button type="primary" link size="small" @click="openSourcePlan(row)">查看计划</el-button>
+              <UButton color="primary" variant="link" size="sm" @click="openSourcePlan(row)">{{ t('production.batches_list.action_aed5b2af529b') }}</UButton>
             </template>
             <template v-else>
             <!-- #751: 查看 vs 编辑 区分 — 详情页消费 ?mode=edit 决定 read-only / editable.
                  fool-proof-design Rule 5: 批次没有独立编辑表单, 之前点了才发现是死路
                  (click-then-toast) — 灰显 + title 说明原因, 而不是让用户点一次才知道。 -->
-            <el-button type="primary" link size="small" @click="router.push(`/production/batches/${row.id}`)">查看</el-button>
-            <el-button
+            <UButton color="primary" variant="link" size="sm" @click="router.push(`/production/batches/${row.id}`)">{{ t('production.batches_list.action_db8db0530432') }}</UButton>
+            <UButton
               v-if="canWrite"
-              type="warning"
-              link
-              size="small"
+              color="warning"
+              variant="link"
+              size="sm"
               disabled
-              title="批次编辑功能暂未上线 (无独立编辑表单)"
-            >编辑</el-button>
+              :title="t('production.batches_list.title_cfeaa9ca6bad')"
+            >{{ t('production.batches_list.action_051836569928') }}</UButton>
             <RowActionMenu
               :actions="rowActionsFor(row)"
               button-label="更多"
@@ -748,7 +754,7 @@ function getStatusText(status: string) {
 
       <!-- 分页 -->
       <div class="pagination-wrapper">
-        <el-pagination
+        <CompatPagination
           v-model:current-page="pagination.page"
           v-model:page-size="pagination.size"
           :page-sizes="[10, 20, 50, 100]"
@@ -758,58 +764,58 @@ function getStatusText(status: string) {
           @size-change="handleSizeChange"
         />
       </div>
-    </el-card>
+    </UCard>
 
     <!-- 创建批次对话框 -->
-    <el-dialog v-model="createDialogVisible" title="创建生产批次" width="500px" :close-on-click-modal="false" destroy-on-close>
-      <el-form :model="createForm" label-width="100px">
-        <el-form-item label="批次号" required>
-          <el-input v-model="createForm.batchNumber" placeholder="自动生成，可手动修改" />
-        </el-form-item>
-        <el-form-item label="产品类型" required>
-          <el-select
+    <CompatDialog v-model="createDialogVisible" :title="t('production.batches_list.title_38e87cfc936e')" width="500px" :close-on-click-modal="false" destroy-on-close>
+      <CompatForm :model="createForm" label-width="100px">
+        <CompatFormItem :label="t('production.batches_list.label_cb5386f1a98a')" required>
+          <UInput v-model="createForm.batchNumber" :placeholder="t('production.batches_list.placeholder_2bbce91f25e7')" />
+        </CompatFormItem>
+        <CompatFormItem :label="t('production.batches_list.label_0b3894ed2a38')" required>
+          <CompatSelect
             v-model="createForm.productTypeId"
-            placeholder="请选择产品类型"
+            :placeholder="t('production.batches_list.placeholder_7ddb27f93df1')"
             filterable
             style="width: 100%"
             @change="handleCreateProductTypeChange"
           >
-            <el-option
+            <CompatOption
               v-for="pt in productTypes"
               :key="pt.id"
               :label="pt.name || pt.productName"
               :value="pt.id"
             />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="计划数量" required>
+          </CompatSelect>
+        </CompatFormItem>
+        <CompatFormItem :label="t('production.batches_list.label_19a908ffd1ae')" required>
           <el-input-number v-model="createForm.plannedQuantity" :min="1" :precision="2" style="width: 200px" />
-          <el-select v-model="createForm.unit" style="width: 80px; margin-left: 8px">
-            <el-option v-for="unit in createUnitOptions" :key="unit" :label="unit" :value="unit" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="备注">
-          <el-input v-model="createForm.notes" type="textarea" :rows="3" placeholder="可选备注信息" />
-        </el-form-item>
+          <CompatSelect v-model="createForm.unit" style="width: 80px; margin-left: 8px">
+            <CompatOption v-for="unit in createUnitOptions" :key="unit" :label="unit" :value="unit" />
+          </CompatSelect>
+        </CompatFormItem>
+        <CompatFormItem :label="t('production.batches_list.label_daede9881787')">
+          <el-input v-model="createForm.notes" type="textarea" :rows="3" :placeholder="t('production.batches_list.placeholder_d9cb05cfe837')" />
+        </CompatFormItem>
         <!-- SP10: 试制批次 -->
-        <el-form-item label="试制批次">
-          <el-checkbox v-model="createForm.isTrial">标记为试制批次（小试/中试）</el-checkbox>
-        </el-form-item>
-        <el-form-item v-if="createForm.isTrial" label="关联样品">
+        <CompatFormItem :label="t('production.batches_list.label_42f47e8c7f9e')">
+          <UCheckbox v-model="createForm.isTrial"><template #label>{{ t('production.batches_list.text_61d6b5c58041') }}</template></UCheckbox>
+        </CompatFormItem>
+        <CompatFormItem v-if="createForm.isTrial" :label="t('production.batches_list.label_5c080d8e9622')">
           <el-input
             v-model="createForm.trialSampleId"
-            placeholder="输入研发样品 ID（可选）"
+            :placeholder="t('production.batches_list.placeholder_d1d7094bdb10')"
             clearable
             style="width:280px"
           />
-          <el-text type="info" style="margin-left:8px;font-size:12px">对应 RD 样品编号</el-text>
-        </el-form-item>
-      </el-form>
+          <el-text type="info" style="margin-left:8px;font-size:12px">{{ t('production.batches_list.text_8f4d54a421e1') }}</el-text>
+        </CompatFormItem>
+      </CompatForm>
       <template #footer>
-        <el-button @click="createDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="creating" @click="submitCreate">创建</el-button>
+        <UButton color="neutral" variant="outline" @click="createDialogVisible = false">{{ t('production.batches_list.action_2cd0f3be8738') }}</UButton>
+        <UButton color="primary" :loading="creating" @click="submitCreate">{{ t('production.batches_list.action_cde2cd071d25') }}</UButton>
       </template>
-    </el-dialog>
+    </CompatDialog>
 
     <!-- AI 智能创建生产批次抽屉 (Day 9, Issue #780.3) -->
     <AiEntryDrawer

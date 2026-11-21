@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { sourceWithChinese } from '@/i18n-pilot/sourceForTests';
 import {
   normalizeVisibleColumnKeys,
   readVisibleColumnKeys,
@@ -42,7 +43,7 @@ describe('business list column contract', () => {
 
 describe('sales, procurement and production list integration', () => {
   const salesSource = readSource('../../../views/sales/orders/list.vue');
-  const procurementSource = readSource('../../../views/procurement/orders/list.vue');
+  const procurementSource = sourceWithChinese(readSource('../../../views/procurement/orders/list.vue'));
   const productionSource = readSource('../../../views/production/plans/list.vue');
 
   it('sales list (Nuxt UI UTable) keeps the shared grid class and limited column selector', () => {

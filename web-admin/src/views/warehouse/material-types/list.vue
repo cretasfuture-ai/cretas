@@ -1,4 +1,10 @@
 <script setup lang="ts">
+import { CompatDialog, CompatForm, CompatFormItem, CompatOption, CompatPagination, CompatSelect, CompatTable, CompatTableColumn } from '@/components/compat';
+import { useCompatMessages } from '@/components/compat/messages';
+const { ElMessage, ElMessageBox } = useCompatMessages();
+import { useT } from '@/i18n-pilot/useT';
+const { t } = useT();
+
 /**
  * 原料类型字典管理 (raw_material_types)
  *
@@ -33,7 +39,7 @@ import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post, put, del } from '@/api/request';
 import { listSystemUnits, type SystemUnit } from '@/api/systemUnits';
-import { ElMessage, ElMessageBox } from 'element-plus';
+
 import { Plus, Edit, Delete as DeleteIcon, Search, Refresh, Lock, View } from '@element-plus/icons-vue';
 import { formatAmount } from '@/utils/tableFormatters';
 import { bigCategoryOf, MATERIAL_CATEGORY_ENUM_VALUES, MATERIAL_STORAGE_TYPE_ENUM_VALUES } from '@/utils/materialCategory';
@@ -617,13 +623,13 @@ function rematchTaxonomy(): void {
 
 async function handleCreateL3(): Promise<void> {
   if (!canManageClassification.value) {
-    ElMessage.error('没有共享分类维护权限，请联系系统管理员新增三级分类');
+    ElMessage.error(t('warehouse.material_types_list.message_7e516c582c13'));
     createL3DialogVisible.value = false;
     return;
   }
   const label = createL3Form.value.label.trim();
-  if (!segmentL2.value) { ElMessage.warning('请先选择二级分类'); return; }
-  if (!label) { ElMessage.warning('请输入新品类名称'); return; }
+  if (!segmentL2.value) { ElMessage.warning(t('warehouse.material_types_list.message_a28c9868147d')); return; }
+  if (!label) { ElMessage.warning(t('warehouse.material_types_list.message_4458a60da3e0')); return; }
   if (!factoryId.value) return;
 
   const normalizedLabel = label.toLocaleLowerCase();
@@ -1126,14 +1132,14 @@ const submitting = ref(false);
  */
 const showSegmentEditor = computed(() => hasSegmentDictionary.value);
 async function handleSave() {
-  if (!form.value.name) return ElMessage.warning('请填写原料名称');
-  if (!form.value.category) return ElMessage.warning('请选择类别');
-  if (!form.value.unit) return ElMessage.warning('请选择单位');
-  if (!isPackagingMaterial.value && !form.value.storageType) return ElMessage.warning('请选择储存类型');
+  if (!form.value.name) return ElMessage.warning(t('warehouse.material_types_list.message_ec004968c37b'));
+  if (!form.value.category) return ElMessage.warning(t('warehouse.material_types_list.message_64a754862807'));
+  if (!form.value.unit) return ElMessage.warning(t('warehouse.material_types_list.message_164cb209d751'));
+  if (!isPackagingMaterial.value && !form.value.storageType) return ElMessage.warning(t('warehouse.material_types_list.message_38115dfa60c6'));
   if (canViewPrice.value) {
-    if (form.value.taxTreatment === 'TAXABLE' && !form.value.taxRate) return ElMessage.warning('请选择税率');
+    if (form.value.taxTreatment === 'TAXABLE' && !form.value.taxRate) return ElMessage.warning(t('warehouse.material_types_list.message_dda4ec5efe8b'));
     if (form.value.taxTreatment === 'EXEMPT' && !form.value.taxExemptionReason.trim()) {
-      return ElMessage.warning('免税物料必须填写免税依据');
+      return ElMessage.warning(t('warehouse.material_types_list.message_6fd577f5e809'));
     }
     if (form.value.taxIncludedUnitPrice != null && Number(form.value.taxIncludedUnitPrice) <= 0) {
       return ElMessage.warning(isPackagingMaterial.value
@@ -1149,12 +1155,12 @@ async function handleSave() {
     // 这里先拦一道并说清原因, 免得用户按界面说的做了却存不进去。
     if (isPackagingMaterial.value
       && (form.value.taxIncludedUnitPrice == null || Number(form.value.taxIncludedUnitPrice) <= 0)) {
-      return ElMessage.warning('包材必须填写采购参考价 —— BOM 要按它算包装成本，留空会被后端拒绝保存');
+      return ElMessage.warning(t('warehouse.material_types_list.message_c13f5aa57ea9'));
     }
   }
   const hasPartialClassification = Boolean(segmentL1.value || segmentL2.value || segmentL3.value);
   if (hasPartialClassification && (!segmentL1.value || !segmentL2.value || !segmentL3.value)) {
-    return ElMessage.error('分类如需填写，必须完整选择一级、二级、三级；不需要分类时请全部留空');
+    return ElMessage.error(t('warehouse.material_types_list.message_6889d00b46e6'));
   }
   if (!editingId.value && !String(form.value.code || '').trim()) {
     if (!codeSuggestionError.value) await refreshCodeSuggestion(true);
@@ -1203,11 +1209,11 @@ async function handleSave() {
   const repeatedUnits = submittedPackagingRules.some((rule, index, all) =>
     all.findIndex(candidate =>
       candidate.packageUnit.trim().toLowerCase() === rule.packageUnit.trim().toLowerCase()) !== index);
-  if (repeatedUnits) return ElMessage.warning('同一种包装单位只能配置一条换算规则');
+  if (repeatedUnits) return ElMessage.warning(t('warehouse.material_types_list.message_3ba07ac3ad28'));
   // 用 sameUnit 而不是字面比较: `kg` 与 `公斤`、`pcs` 与 `件` 是同一个单位的两种写法,
   // 字面比较放得过去, 存进去就是一条恒等换算(1公斤=1kg), 与不填没区别却更容易误导。
   if (submittedPackagingRules.some(rule => sameUnit(rule.packageUnit, form.value.unit))) {
-    return ElMessage.warning('包装单位不能与库存基本单位相同——若本来就没有固定包装，请把这条规则删掉');
+    return ElMessage.warning(t('warehouse.material_types_list.message_dbd26d87cc24'));
   }
 
   submitting.value = true;
@@ -1241,7 +1247,7 @@ async function handleSave() {
       });
       if (!res.success) throw new Error(res.message || '更新失败');
       materialId = editingId.value;
-      ElMessage.success('更新成功');
+      ElMessage.success(t('warehouse.material_types_list.message_7c0d2664869c'));
     } else {
       const payload = {
         ...materialPayload,
@@ -1250,7 +1256,7 @@ async function handleSave() {
       const res = await post<{ id: string }>(`/${factoryId.value}/raw-material-types`, payload);
       if (!res.success) throw new Error(res.message || '创建失败');
       materialId = res.data?.id || '';
-      ElMessage.success('创建成功');
+      ElMessage.success(t('warehouse.material_types_list.message_1ab62884f4ee'));
     }
 
     // 动态包装规则 upsert / delete；后端同时投影旧层级字段，兼容历史调用方。
@@ -1344,7 +1350,7 @@ async function openSuppliersForMaterial(row: TableRow) {
   const materialId = String(row.id || '').trim();
   const materialName = String(row.name || '').trim();
   if (!materialId || !materialName) {
-    ElMessage.warning('物料身份不完整，无法查询关联供应商');
+    ElMessage.warning(t('warehouse.material_types_list.message_39fe42c318e9'));
     return;
   }
   suppliersDialogMaterialName.value = materialName;
@@ -1419,9 +1425,9 @@ async function openMaterialRelationEdit(row: SupplierMaterialRelation): Promise<
 async function saveMaterialRelation(): Promise<void> {
   const material = suppliersDialogMaterial.value;
   if (!material) return;
-  if (!relationForm.supplierId) return void ElMessage.warning('请选择供应商');
+  if (!relationForm.supplierId) return void ElMessage.warning(t('warehouse.material_types_list.message_ade9f5ce860c'));
   if (materialRelationUnitReason.value) return void ElMessage.warning(materialRelationUnitReason.value);
-  if (!relationForm.currency.trim()) return void ElMessage.warning('请输入币种');
+  if (!relationForm.currency.trim()) return void ElMessage.warning(t('warehouse.material_types_list.message_3ea9ca010e1e'));
   const payload: SupplierMaterialPayload = {
     materialTypeId: material.id,
     supplierMaterialCode: relationForm.supplierMaterialCode.trim() || undefined,
@@ -1443,7 +1449,7 @@ async function saveMaterialRelation(): Promise<void> {
     }
     await reloadMaterialSuppliers();
     relationDialogVisible.value = false;
-    ElMessage.success('供应商—物料关系已保存');
+    ElMessage.success(t('warehouse.material_types_list.message_3814643a77f1'));
   } finally {
     relationSaving.value = false;
   }
@@ -1451,15 +1457,15 @@ async function saveMaterialRelation(): Promise<void> {
 
 async function deactivateMaterialRelation(row: SupplierMaterialRelation): Promise<void> {
   const supplierId = String(row.supplierId || '');
-  if (!supplierId) return void ElMessage.warning('供应商身份缺失，无法停用关系');
+  if (!supplierId) return void ElMessage.warning(t('warehouse.material_types_list.message_319c64d9de4b'));
   await ElMessageBox.confirm(
     `确定停用「${row.supplierName || supplierId}」与当前物料的供应关系吗？历史采购记录不会被删除。`,
-    '停用供应关系',
-    { type: 'warning', confirmButtonText: '停用', cancelButtonText: '取消' },
+    t('warehouse.material_types_list.message_e1d90e216041'),
+    { type: 'warning', confirmButtonText: t('warehouse.material_types_list.confirmbuttontext_4e6fd0e28c55'), cancelButtonText: t('warehouse.material_types_list.cancelbuttontext_2cd0f3be8738') },
   );
   await deleteSupplierMaterial(factoryId.value, supplierId, row.id, row.version);
   await reloadMaterialSuppliers();
-  ElMessage.success('供应关系已停用');
+  ElMessage.success(t('warehouse.material_types_list.message_1db08ede06a3'));
 }
 
 // ==================== 别名 / 合并重复物料 ====================
@@ -1490,12 +1496,12 @@ async function handleDelete(row: TableRow) {
   try {
     await ElMessageBox.confirm(
       `确定删除原料类型「${row.name}」? 该原料关联的批次仍保留, 但无法新建新批次.`,
-      '删除确认',
+      t('warehouse.material_types_list.message_fe43bc43c294'),
       { type: 'warning' },
     );
     const res = await del(`/${factoryId.value}/raw-material-types/${row.id}`);
     if (res.success) {
-      ElMessage.success('删除成功');
+      ElMessage.success(t('warehouse.material_types_list.message_5223f91b9670'));
       loadData();
     }
   } catch { /* user cancelled or interceptor toasted */ }
@@ -1540,26 +1546,26 @@ function handleSizeChange(size: number) {
       other-path="/warehouse/materials"
       consequence="先在这里建原料类型, 再去入库登记里给它建批次"
     />
-    <el-card class="page-card" shadow="never">
+    <UCard class="page-card" >
       <template #header>
         <div class="card-header">
           <div class="header-left">
-            <span class="page-title">原料类型字典</span>
-            <span class="data-count">共 {{ pagination.total }} 条记录</span>
+            <span class="page-title">{{ t('warehouse.material_types_list.text_03134f6f725a') }}</span>
+            <span class="data-count">{{ t('warehouse.material_types_list.text_76e547a8fa54') }} {{ pagination.total }} {{ t('warehouse.material_types_list.text_6016bf63b0ff') }}</span>
           </div>
           <div class="header-right">
             <span v-if="showMaterialTypeWriteRoleHint" class="write-role-hint">
-              物料字典由仓储主管维护
+              {{ t('warehouse.material_types_list.text_677a751e1794') }}
             </span>
             <el-tooltip
               v-if="canWrite && !canManageMaterialTypeDictionary"
               content="物料字典由仓储主管维护，当前角色仅可查看"
               placement="top"
             >
-              <el-button type="primary" :icon="Plus" disabled>新建原料类型</el-button>
+              <el-button type="primary" :icon="Plus" disabled>{{ t('warehouse.material_types_list.action_1285895aeb88') }}</el-button>
             </el-tooltip>
             <el-button v-else-if="canWrite" type="primary" :icon="Plus" @click="openCreate">
-              新建原料类型
+              {{ t('warehouse.material_types_list.action_1285895aeb88') }}
             </el-button>
           </div>
         </div>
@@ -1567,120 +1573,120 @@ function handleSizeChange(size: number) {
 
       <div class="search-bar">
         <!-- 分类层级筛选：用户只看分类名称，节点 ID 由系统维护。 -->
-        <el-select
+        <CompatSelect
           v-model="filterSegmentL1"
-          placeholder="全部一级分类"
+          :placeholder="t('warehouse.material_types_list.placeholder_80dab2e19fb1')"
           clearable
           style="width: 170px"
           @change="handleSearch"
         >
-          <el-option
+          <CompatOption
             v-for="opt in segmentL1Options"
             :key="opt.id"
             :label="formatSegmentOptionLabel(opt)"
             :value="opt.id"
           />
-        </el-select>
-        <el-select
+        </CompatSelect>
+        <CompatSelect
           v-model="filterSegmentL2"
-          placeholder="全部二级分类"
+          :placeholder="t('warehouse.material_types_list.placeholder_913a953dee42')"
           clearable
           filterable
           :disabled="!filterSegmentL1"
           style="width: 190px"
           @change="handleSearch"
         >
-          <el-option
+          <CompatOption
             v-for="opt in filterSegmentL2Options"
             :key="opt.id"
             :label="formatSegmentOptionLabel(opt)"
             :value="opt.id"
           />
-        </el-select>
-        <el-select
+        </CompatSelect>
+        <CompatSelect
           v-model="filterSegmentL3"
-          placeholder="全部三级分类"
+          :placeholder="t('warehouse.material_types_list.placeholder_6e8e4b775fb5')"
           clearable
           filterable
           :disabled="!filterSegmentL2"
           style="width: 220px"
           @change="handleSearch"
         >
-          <el-option
+          <CompatOption
             v-for="opt in filterSegmentL3Options"
             :key="opt.id"
             :label="formatSegmentOptionLabel(opt)"
             :value="opt.id"
           />
-        </el-select>
+        </CompatSelect>
         <el-input
           v-model="searchKeyword"
-          placeholder="搜索原料名称 / 料号"
+          :placeholder="t('warehouse.material_types_list.placeholder_26776cea5174')"
           clearable
           style="width: 280px"
           @keyup.enter="handleSearch"
         />
-        <el-button :icon="Search" @click="handleSearch">搜索</el-button>
-        <el-button :icon="Refresh" @click="handleRefresh">重置</el-button>
+        <el-button :icon="Search" @click="handleSearch">{{ t('warehouse.material_types_list.action_44ce7ae909bb') }}</el-button>
+        <el-button :icon="Refresh" @click="handleRefresh">{{ t('warehouse.material_types_list.action_cb5d682bac3d') }}</el-button>
       </div>
 
-      <el-table v-loading="loading" :data="tableData" stripe>
-        <el-table-column label="料号" min-width="180">
+      <CompatTable v-loading="loading" :data="tableData" stripe>
+        <CompatTableColumn :label="t('warehouse.material_types_list.label_7033b8a7afc4')" min-width="180">
           <template #default="{ row }">
             <div class="material-code-cell">
               <span class="material-code-value">{{ materialDisplayCode(row) }}</span>
             </div>
           </template>
-        </el-table-column>
-        <el-table-column label="原料名称" min-width="200">
+        </CompatTableColumn>
+        <CompatTableColumn :label="t('warehouse.material_types_list.label_a27f31ef6fa4')" min-width="200">
           <template #default="{ row }">
             <div>{{ row.name }}</div>
             <div v-if="Array.isArray(row.aliases) && row.aliases.length" class="alias-line" data-test="alias-line">
-              别名：{{ row.aliases.join('、') }}
+              {{ t('warehouse.material_types_list.text_cf95352aaf25') }}{{ row.aliases.join('、') }}
             </div>
-            <el-tag v-if="row.mergedIntoId" size="small" type="info" data-test="merged-tag">
-              已合并到「{{ row.mergedIntoName || row.mergedIntoId }}」
-            </el-tag>
+            <UBadge variant="soft" v-if="row.mergedIntoId" size="sm" color="info" data-test="merged-tag">
+              {{ t('warehouse.material_types_list.text_ecccf8ea7a90') }}{{ row.mergedIntoName || row.mergedIntoId }}」
+            </UBadge>
           </template>
-        </el-table-column>
-        <el-table-column prop="category" label="类别" width="120" />
-        <el-table-column prop="unit" label="单位" width="80">
+        </CompatTableColumn>
+        <CompatTableColumn prop="category" :label="t('warehouse.material_types_list.label_0d12cbd6562b')" width="120" />
+        <CompatTableColumn prop="unit" :label="t('warehouse.material_types_list.label_80b19d68b149')" width="80">
           <template #default="{ row }">{{ displayUnit(row.unit) }}</template>
-        </el-table-column>
-        <el-table-column prop="storageType" label="储存类型" width="100" />
-        <el-table-column prop="shelfLifeDays" label="保质期 (天)" width="120">
+        </CompatTableColumn>
+        <CompatTableColumn prop="storageType" :label="t('warehouse.material_types_list.label_b2f0fcd336bd')" width="100" />
+        <CompatTableColumn prop="shelfLifeDays" :label="t('warehouse.material_types_list.label_4d1d935843cd')" width="120">
           <template #default="{ row }">{{ row.shelfLifeDays ?? '-' }}</template>
-        </el-table-column>
+        </CompatTableColumn>
         <!-- T2-5b (issue #534): F006 客户反馈 — expose 移动均价 (RawMaterialTypeDTO.movingAvgPrice)
              gated by canViewPrice RBAC (per PR #443/#467 price-field policy) -->
-        <el-table-column v-if="canViewPrice" prop="movingAvgPrice" label="移动均价" width="120" align="right">
+        <CompatTableColumn v-if="canViewPrice" prop="movingAvgPrice" :label="t('warehouse.material_types_list.label_bd201c58efe5')" width="120" align="right">
           <template #default="{ row }">
             <span v-if="row.movingAvgPrice != null">{{ formatAmount(row.movingAvgPrice) }}</span>
             <span v-else style="color: #c0c4cc">-</span>
           </template>
-        </el-table-column>
-        <el-table-column label="操作" width="360" fixed="right">
+        </CompatTableColumn>
+        <CompatTableColumn :label="t('warehouse.material_types_list.label_ed31fbb483ee')" width="360" fixed="right">
           <template #default="{ row }">
             <!-- Issue #779: 反查供应商入口 -->
-            <el-button link type="primary" :icon="View" @click="openSuppliersForMaterial(row)">供应商</el-button>
-            <el-button link type="primary" data-test="row-supply-impact" @click="openImpact(row)">影响分析</el-button>
+            <el-button link type="primary" :icon="View" @click="openSuppliersForMaterial(row)">{{ t('warehouse.material_types_list.action_033ed5945254') }}</el-button>
+            <UButton variant="link" color="primary" data-test="row-supply-impact" @click="openImpact(row)">{{ t('warehouse.material_types_list.action_b2a3fc7add19') }}</UButton>
             <!-- 别名 / 合并: 与编辑同一道写门禁; 已合并的行不再允许编辑 / 合并 / 加别名 -->
-            <el-button
+            <UButton
               v-if="canWrite && !row.mergedIntoId"
-              link
-              type="primary"
+              variant="link"
+              color="primary"
               :disabled="!canManageMaterialTypeDictionary"
               data-test="row-alias"
               @click="openAliasDialog(row)"
-            >别名</el-button>
-            <el-button
+            >{{ t('warehouse.material_types_list.action_55c4cb3d7464') }}</UButton>
+            <UButton
               v-if="canWrite && !row.mergedIntoId"
-              link
-              type="warning"
+              variant="link"
+              color="warning"
               :disabled="!canManageMaterialTypeDictionary"
               data-test="row-merge"
               @click="openMergeDialog(row)"
-            >合并到…</el-button>
+            >{{ t('warehouse.material_types_list.action_3ad7e3b86a2b') }}</UButton>
             <el-button
               v-if="canWrite && !row.mergedIntoId"
               link
@@ -1688,7 +1694,7 @@ function handleSizeChange(size: number) {
               :icon="Edit"
               :disabled="!canManageMaterialTypeDictionary"
               @click="openEdit(row)"
-            >编辑</el-button>
+            >{{ t('warehouse.material_types_list.action_051836569928') }}</el-button>
             <el-button
               v-if="canWrite"
               link
@@ -1696,12 +1702,12 @@ function handleSizeChange(size: number) {
               :icon="DeleteIcon"
               :disabled="!canManageMaterialTypeDictionary"
               @click="handleDelete(row)"
-            >删除</el-button>
+            >{{ t('warehouse.material_types_list.action_2f9daa828907') }}</el-button>
           </template>
-        </el-table-column>
-      </el-table>
+        </CompatTableColumn>
+      </CompatTable>
 
-      <el-pagination
+      <CompatPagination
         v-model:current-page="pagination.page"
         v-model:page-size="pagination.size"
         :total="pagination.total"
@@ -1711,7 +1717,7 @@ function handleSizeChange(size: number) {
         @current-change="handlePageChange"
         @size-change="handleSizeChange"
       />
-    </el-card>
+    </UCard>
 
     <SupplyImpactDialog
       v-if="impactVisible"
@@ -1734,111 +1740,107 @@ function handleSizeChange(size: number) {
     />
 
     <!-- ==================== T159-A: Create / Edit Dialog ==================== -->
-    <el-dialog v-model="dialogVisible" :title="dialogTitle" width="660px" destroy-on-close>
-      <el-form :model="form" label-width="120px">
+    <CompatDialog v-model="dialogVisible" :title="dialogTitle" width="660px" destroy-on-close>
+      <CompatForm :model="form" label-width="120px">
 
-        <el-form-item v-if="editingId" label="料号">
+        <CompatFormItem v-if="editingId" :label="t('warehouse.material_types_list.label_7033b8a7afc4')">
           <el-input :model-value="editingDisplayCode" disabled :prefix-icon="Lock" />
-          <div class="field-hint">料号创建后不可修改。</div>
-        </el-form-item>
-        <el-form-item v-else label="料号" required>
+          <div class="field-hint">{{ t('warehouse.material_types_list.text_41c942cb4793') }}</div>
+        </CompatFormItem>
+        <CompatFormItem v-else :label="t('warehouse.material_types_list.label_7033b8a7afc4')" required>
           <el-input
             :model-value="form.code"
             maxlength="32"
-            placeholder="选择基本类型后自动建议"
+            :placeholder="t('warehouse.material_types_list.placeholder_689aedef99b5')"
             :disabled="!form.category || codeSuggestionLoading || Boolean(codeSuggestionError)"
             @input="handleCodeInput"
           />
-          <el-button
-            size="small"
+          <UButton color="neutral" variant="outline"
+            size="sm"
             :disabled="!form.category"
             :loading="codeSuggestionLoading"
             @click="refreshCodeSuggestion(true)"
-          >重新计算建议</el-button>
-          <div v-if="!form.category" class="field-hint">请先选择基本类型，系统才能计算下一个可用料号。</div>
+          >{{ t('warehouse.material_types_list.action_f53ff005bb08') }}</UButton>
+          <div v-if="!form.category" class="field-hint">{{ t('warehouse.material_types_list.text_d1af61935c7b') }}</div>
           <div v-else-if="codeSuggestionError" class="field-hint field-hint--error">{{ codeSuggestionError }}</div>
           <div v-else-if="codeContractHint" class="field-hint field-hint--matched">{{ codeContractHint }}</div>
-          <div v-else class="field-hint">系统建议后可修改；同一工厂内不可重复。</div>
-        </el-form-item>
+          <div v-else class="field-hint">{{ t('warehouse.material_types_list.text_b438f58443e9') }}</div>
+        </CompatFormItem>
 
-        <el-form-item label="原料名称" required>
-          <el-input v-model="form.name" placeholder="如 冻猪蹄 / 三文鱼 / 吸塑盒2014-3.5" />
-          <div class="field-hint">输入名称后自动匹配历史同类原料，智能填充单位 / 类别 / 保质期 / 包装换算</div>
-        </el-form-item>
+        <CompatFormItem :label="t('warehouse.material_types_list.label_a27f31ef6fa4')" required>
+          <UInput v-model="form.name" :placeholder="t('warehouse.material_types_list.placeholder_3a4523c1f38e')" />
+          <div class="field-hint">{{ t('warehouse.material_types_list.text_3710c459c054') }}</div>
+        </CompatFormItem>
 
-        <el-form-item label="类别" required>
-          <el-select v-model="form.category" placeholder="请选择类别" style="width: 100%" filterable>
-            <el-option
+        <CompatFormItem :label="t('warehouse.material_types_list.label_0d12cbd6562b')" required>
+          <CompatSelect v-model="form.category" :placeholder="t('warehouse.material_types_list.placeholder_64a754862807')" style="width: 100%" filterable>
+            <CompatOption
               v-if="editingId && form.category && !isMaterialFamily(form.category)"
               :label="`${form.category} (历史)`"
               :value="form.category"
               disabled
             />
-            <el-option
+            <CompatOption
               v-for="opt in materialFamilyOptions"
               :key="opt.value"
               :label="opt.label"
               :value="opt.value"
             />
-          </el-select>
-          <div class="field-hint">基本类型决定料号前缀；下方详细分类为选填。</div>
-        </el-form-item>
+          </CompatSelect>
+          <div class="field-hint">{{ t('warehouse.material_types_list.text_b696e9d438aa') }}</div>
+        </CompatFormItem>
 
         <!-- 副产是「来历」不是「材质」: 打了标记的物料仍保留其类别(如原料), 因此既能被排除出
              采购/补货建议, 又能被别的 workflow 当原料投入 —— 后者正是副产进原料字典的初衷。 -->
-        <el-form-item label="副产">
+        <CompatFormItem :label="t('warehouse.material_types_list.label_45102696658e')">
           <el-switch v-model="form.isByproduct" active-text="这是副产（生产产出，无采购来源）" />
           <div class="field-hint">
-            勾选后：不出现在采购下拉与补货建议；可在 BOM 配方内容的「副产」页签被声明；
-            报工产出落生产仓。它的类别仍按上方材质填写，不影响被当作原料投入。
+            {{ t('warehouse.material_types_list.text_67d1e1e63c18') }}
           </div>
-        </el-form-item>
+        </CompatFormItem>
 
         <!-- 缺陷 47 (owner 2026-09-02 裁定「它没有所谓的库存一说」): 冰水/水/蒸汽/现场自制
              高汤等现场取用、不走采购入库的物料。挂在物料类型本身 —— 领料单仍会把它列成
              配方提醒行(不消失), 但不强制填数量、不查库存、不因库存不足拦截。 -->
-        <el-form-item label="自备料">
+        <CompatFormItem :label="t('warehouse.material_types_list.label_7b1294164a24')">
           <el-switch v-model="form.selfSupplied" active-text="自备料（现场取用，不计库存）" />
           <div class="field-hint">
-            勾选后：在领料单/报工投料中仍作为配方提醒行出现，但不要求填写数量、不查库存、
-            不因缺库存被拦截，也不会产生任何库存扣减。适用于冰水、水、蒸汽、现场自制高汤等
-            没有采购入库记录的物料。
+            {{ t('warehouse.material_types_list.text_131051f198e5') }}
           </div>
-        </el-form-item>
+        </CompatFormItem>
 
         <!-- 单位统一入口：搜索不到时可现场创建，重复时直接选择已有单位 -->
-        <el-form-item label="入库计量单位" required>
+        <CompatFormItem :label="t('warehouse.material_types_list.label_47908dee54bd')" required>
           <UnitSelect
             v-model="form.unit"
             :factory-id="factoryId"
             usage-scope="INVENTORY_QUANTITY"
             :show-symbol="false"
-            placeholder="请选择或搜索入库计量单位"
+            :placeholder="t('warehouse.material_types_list.placeholder_e31adb8a5466')"
             :clearable="false"
             @change="handleUnitUserChange"
           />
-          <div class="field-hint">新建默认 kg（公斤），可按实际入库计量单位修改</div>
+          <div class="field-hint">{{ t('warehouse.material_types_list.text_aaee3b64369a') }}</div>
           <div v-if="unitSuggestionHint && !unitManuallyEdited && !editingId" class="field-hint field-hint--matched">
             {{ unitSuggestionHint }}
           </div>
           <div v-if="unitManuallyEdited && !editingId" class="field-hint field-hint--manual">
-            已手动设置，自动填充将不再覆盖此字段
+            {{ t('warehouse.material_types_list.text_93f3cc1f06e5') }}
           </div>
-        </el-form-item>
+        </CompatFormItem>
 
         <!--
           采购包装直接换算到唯一库存基本单位。**不是必填** ——
           抄码/不定重原料(如按实际过磅收的牛肉)本来就没有固定包装, 强制填只会逼出
           假换算(六膳门就填过 `1 斤 = 1 kg`)。见 handleSave 里的说明。
         -->
-        <el-form-item v-if="form.unit" label="包装换算">
+        <CompatFormItem v-if="form.unit" :label="t('warehouse.material_types_list.label_3c3fab794f5d')">
           <div class="material-packaging-spec-list">
             <div class="packaging-rule-note">
-              库存按上方入库计量单位记账。<strong>按箱/袋等固定包装采购时才需要填</strong>，例如：1 箱 = 10 kg。
-              抄码、不定重（按实际过磅收）的原料请留空——收货时直接按{{ displayUnit(form.unit) }}记账。
+              {{ t('warehouse.material_types_list.text_68e9c3d5e56a') }}<strong>{{ t('warehouse.material_types_list.text_f9d2eb12de77') }}</strong>{{ t('warehouse.material_types_list.text_4ca5fd4a5782') }}{{ displayUnit(form.unit) }}{{ t('warehouse.material_types_list.text_ad830c699136') }}
             </div>
             <div v-if="!packagingRules.length" class="packaging-rule-empty">
-              未配置包装换算：收货按 {{ displayUnit(form.unit) }} 直接记账，不做包装折算。
+              {{ t('warehouse.material_types_list.text_dc444bb21cea') }} {{ displayUnit(form.unit) }} {{ t('warehouse.material_types_list.text_7c91db51d562') }}
             </div>
             <div
               v-for="(rule, index) in packagingRules"
@@ -1846,14 +1848,14 @@ function handleSizeChange(size: number) {
               class="material-packaging-spec-item"
             >
               <div class="spec-conversion-row">
-                <el-tag v-if="index === 0" type="success" size="small">默认</el-tag>
-                <span v-else class="packaging-rule-index">规则 {{ index + 1 }}</span>
+                <UBadge variant="soft" v-if="index === 0" color="success" size="sm">{{ t('warehouse.material_types_list.text_844b8cc8dff7') }}</UBadge>
+                <span v-else class="packaging-rule-index">{{ t('warehouse.material_types_list.text_1123245d1bed') }} {{ index + 1 }}</span>
                 <span class="conversion-label">1</span>
                 <UnitSelect
                   v-model="rule.packageUnit"
                   :factory-id="factoryId"
                   usage-scope="PURCHASE_QUANTITY"
-                  placeholder="包装单位（必填，如箱）"
+                  :placeholder="t('warehouse.material_types_list.placeholder_4ca0a07cb6f2')"
                   class="spec-unit-select"
                 />
                 <span class="conversion-equals">=</span>
@@ -1862,7 +1864,7 @@ function handleSizeChange(size: number) {
                   :min="0.00000001"
                   :precision="8"
                   :controls="false"
-                  placeholder="换算数（必填）"
+                  :placeholder="t('warehouse.material_types_list.placeholder_33d0c85dd078')"
                   class="spec-factor-input"
                 />
                 <el-input
@@ -1871,9 +1873,9 @@ function handleSizeChange(size: number) {
                   class="spec-base-unit"
                 />
                 <!-- 第一条也可以删 —— 否则「没有固定包装」就无从表达 -->
-                <el-button type="danger" link @click="removePackagingRule(index)">
-                  删除
-                </el-button>
+                <UButton color="error" variant="link" @click="removePackagingRule(index)">
+                  {{ t('warehouse.material_types_list.action_2f9daa828907') }}
+                </UButton>
               </div>
               <div v-if="packagingRuleErrors[index]" class="spec-rule-error" role="alert">
                 {{ packagingRuleErrors[index] }}
@@ -1882,61 +1884,61 @@ function handleSizeChange(size: number) {
                 v-if="rule.packageUnit && sameUnit(rule.packageUnit, form.unit)"
                 class="spec-same-warn"
               >
-                包装单位不能与库存基本单位相同——若本来就没有固定包装，点右侧「删除」即可
+                {{ t('warehouse.material_types_list.text_fc493ed4024a') }}
               </div>
               <div v-else-if="packagingRuleText(rule)" class="spec-echo">
                 {{ packagingRuleText(rule) }}
               </div>
             </div>
-            <el-button class="add-packaging-rule-button" @click="addPackagingRule">
-              添加多包装换算规则
-            </el-button>
+            <UButton color="neutral" variant="outline" class="add-packaging-rule-button" @click="addPackagingRule">
+              {{ t('warehouse.material_types_list.action_b648eb24c34a') }}
+            </UButton>
           </div>
-        </el-form-item>
+        </CompatFormItem>
 
-        <el-form-item v-if="!isPackagingMaterial" label="储存类型" required>
-          <el-select v-model="form.storageType" placeholder="请选择储存类型" style="width: 100%">
-            <el-option
+        <CompatFormItem v-if="!isPackagingMaterial" :label="t('warehouse.material_types_list.label_b2f0fcd336bd')" required>
+          <CompatSelect v-model="form.storageType" :placeholder="t('warehouse.material_types_list.placeholder_38115dfa60c6')" style="width: 100%">
+            <CompatOption
               v-for="opt in mergeHistoricStorage(form.storageType)"
               :key="opt.value"
               :label="opt.label"
               :value="opt.value"
             />
-          </el-select>
-        </el-form-item>
+          </CompatSelect>
+        </CompatFormItem>
 
-        <el-form-item label="保质期 (天)">
+        <CompatFormItem :label="t('warehouse.material_types_list.label_4d1d935843cd')">
           <el-input-number v-model="form.shelfLifeDays" :min="0" style="width: 100%" />
-        </el-form-item>
+        </CompatFormItem>
 
-        <el-form-item label="备注">
+        <CompatFormItem :label="t('warehouse.material_types_list.label_daede9881787')">
           <el-input v-model="form.notes" type="textarea" :rows="2" />
-        </el-form-item>
+        </CompatFormItem>
 
         <!-- SP4: 税率 + 含税/未税单价 (canViewPrice 门控) -->
         <template v-if="canViewPrice">
-          <el-form-item label="计税方式" required>
+          <CompatFormItem :label="t('warehouse.material_types_list.label_ac9d83674cd7')" required>
             <el-radio-group v-model="form.taxTreatment">
-              <el-radio value="TAXABLE">正常计税</el-radio>
-              <el-radio value="EXEMPT">免税</el-radio>
+              <el-radio value="TAXABLE">{{ t('warehouse.material_types_list.text_3b3bcc26dc0d') }}</el-radio>
+              <el-radio value="EXEMPT">{{ t('warehouse.material_types_list.text_77b9b4aad320') }}</el-radio>
             </el-radio-group>
-          </el-form-item>
-          <el-form-item v-if="form.taxTreatment === 'TAXABLE'" label="采购税率" required>
-            <el-select v-model="form.taxRate" placeholder="请选择税率" style="width: 100%">
-              <el-option label="9% (农产品等)" value="TAX_9" />
-              <el-option label="13% (标准税率)" value="TAX_13" />
-            </el-select>
-          </el-form-item>
-          <el-form-item v-else label="免税依据" required>
-            <el-input v-model="form.taxExemptionReason" placeholder="填写政策、票据或业务依据" maxlength="255" />
-          </el-form-item>
+          </CompatFormItem>
+          <CompatFormItem v-if="form.taxTreatment === 'TAXABLE'" :label="t('warehouse.material_types_list.label_2eabd408188b')" required>
+            <CompatSelect v-model="form.taxRate" :placeholder="t('warehouse.material_types_list.placeholder_dda4ec5efe8b')" style="width: 100%">
+              <CompatOption :label="t('warehouse.material_types_list.label_bdcd82a48285')" value="TAX_9" />
+              <CompatOption :label="t('warehouse.material_types_list.label_e2d2f1fab6c8')" value="TAX_13" />
+            </CompatSelect>
+          </CompatFormItem>
+          <CompatFormItem v-else :label="t('warehouse.material_types_list.label_a0f44fa35a90')" required>
+            <UInput v-model="form.taxExemptionReason" :placeholder="t('warehouse.material_types_list.placeholder_7448b4f64400')" maxlength="255" />
+          </CompatFormItem>
           <!--
             🔴 包材是【必填】: 后端 create/update 两条路径都有
             `if (packaging) validateRequiredPricing(...)`, 缺价直接 400。
             这里原本一律标「选填；未知价格请留空」—— 界面说的和闸判的不是一回事,
             用户照界面留空就存不进去(实测 LIUSHANMEN 24/25 个包材因此改不动)。
           -->
-          <el-form-item
+          <CompatFormItem
             :required="isPackagingMaterial"
             :label="form.taxTreatment === 'EXEMPT' ? `免税采购参考价（元/${displayUnit(form.unit) || '库存主单位'}）` : `含税采购参考价（元/${displayUnit(form.unit) || '库存主单位'}）`"
           >
@@ -1945,34 +1947,34 @@ function handleSizeChange(size: number) {
               :min="0.0001"
               :precision="4"
               :controls="false"
-              :placeholder="isPackagingMaterial ? '包材必填' : '选填；未知价格请留空'"
+              :placeholder="isPackagingMaterial ? t('warehouse.material_types_list.placeholder_384b78a7d8f0') : t('warehouse.material_types_list.placeholder_5cf15a799c51')"
               style="width: 100%"
             />
             <div class="field-hint">
               {{ isPackagingMaterial
-                ? '包材必填 —— BOM 按它算包装成本；留空会被后端拒绝保存。价格按库存主单位维护。'
-                : '价格按库存主单位维护，并可作为供应关系未单独报价时的采购参考；空值不会被当作 0 元。' }}
+                ? t('warehouse.material_types_list.text_fa27376902fe')
+                : t('warehouse.material_types_list.text_92721bde9cab') }}
             </div>
-          </el-form-item>
-          <el-form-item v-if="form.taxIncludedUnitPrice != null && (form.taxRate || form.taxTreatment === 'EXEMPT')" :label="`未税采购参考价（元/${displayUnit(form.unit) || '库存主单位'}）`">
+          </CompatFormItem>
+          <CompatFormItem v-if="form.taxIncludedUnitPrice != null && (form.taxRate || form.taxTreatment === 'EXEMPT')" :label="`未税采购参考价（元/${displayUnit(form.unit) || '库存主单位'}）`">
             <el-input
               :model-value="preTaxUnitPrice != null ? preTaxUnitPrice.toFixed(4) : '—'"
               disabled
               style="width: 100%"
             />
-            <div class="field-hint">{{ form.taxTreatment === 'EXEMPT' ? '免税时未税价等于采购参考价' : '= 含税采购参考价 ÷ (1 + 税率)，自动计算' }}</div>
-          </el-form-item>
+            <div class="field-hint">{{ form.taxTreatment === 'EXEMPT' ? t('warehouse.material_types_list.text_54806c8b65ca') : t('warehouse.material_types_list.text_4910e25b0e72') }}</div>
+          </CompatFormItem>
         </template>
 
         <!-- 包材专属字段只在包材建档时显示和提交。 -->
         <template v-if="isPackagingMaterial">
-          <el-divider>
-            <span class="divider-title">包材专属字段（选填）</span>
-          </el-divider>
-          <el-form-item label="关联固定客户">
+          <USeparator>
+            <span class="divider-title">{{ t('warehouse.material_types_list.text_14d6291dd481') }}</span>
+          </USeparator>
+          <CompatFormItem :label="t('warehouse.material_types_list.label_2cf6fc9a9661')">
           <el-select
             v-model="form.associatedCustomerId"
-            placeholder="该包材专供某客户（可选）"
+            :placeholder="t('warehouse.material_types_list.placeholder_446918e5befb')"
             clearable
             filterable
             style="width: 100%"
@@ -1988,44 +1990,44 @@ function handleSizeChange(size: number) {
               <div style="padding: 8px 12px">
                 <UpstreamMissingHint
                   v-if="customerOptionsLoaded"
-                  description="本工厂暂无客户"
+                  :description="t('warehouse.material_types_list.description_6d312ae85dd5')"
                   target-module="sales"
                   action-text="去添加客户"
                   contact-text="请联系销售或管理员先添加客户"
                   @action="goCreate('/sales/customers')"
                 />
-                <span v-else style="color: var(--cs-muted); font-size: 12px">加载中…</span>
+                <span v-else style="color: var(--cs-muted); font-size: 12px">{{ t('warehouse.material_types_list.text_4927a53bcc88') }}</span>
               </div>
             </template>
           </el-select>
-          <div class="field-hint">选填 — 如吸塑盒专供某客户，留空表示通用包材</div>
-          </el-form-item>
+          <div class="field-hint">{{ t('warehouse.material_types_list.text_8a65dd23db51') }}</div>
+          </CompatFormItem>
         <!-- #759: 每成品单位用量 (仅 PACKAGING 类型显示，后端自动推 BOM standardQuantity) -->
-          <el-form-item label="每产品用量">
+          <CompatFormItem :label="t('warehouse.material_types_list.label_e28e0f53da52')">
           <el-input-number
             v-model="form.packQtyPerProduct"
             :min="0"
             :precision="6"
             :step="0.1"
             style="width: 100%"
-            placeholder="每个成品单位需要该包材多少个"
+            :placeholder="t('warehouse.material_types_list.placeholder_79ebad06f27b')"
           />
           <div class="field-hint">
-            例：吸塑盒 1 个/成品填 1；外箱 20 盒/箱填 0.05（=1/20）。留空则 BOM 行需手填用量
+            {{ t('warehouse.material_types_list.text_c15f5eba2224') }}
           </div>
-          </el-form-item>
+          </CompatFormItem>
         </template>
 
         <!-- 分类字典只承担可选归类，不参与料号生成。 -->
-        <el-divider v-if="showSegmentEditor">
-          <span class="divider-title">详细分类（选填）</span>
-        </el-divider>
+        <USeparator v-if="showSegmentEditor">
+          <span class="divider-title">{{ t('warehouse.material_types_list.text_a3c2c7c43337') }}</span>
+        </USeparator>
         <template v-if="showSegmentEditor">
           <template v-if="segmentL1Options.length > 0 || segmentLoading">
-            <el-form-item label="一级分类">
+            <CompatFormItem :label="t('warehouse.material_types_list.label_07c167eb4e7d')">
               <el-select
                 v-model="segmentL1"
-                placeholder="请选择物料大类"
+                :placeholder="t('warehouse.material_types_list.placeholder_d0060b5e9e75')"
                 clearable
                 filterable
                 style="width: 100%"
@@ -2038,204 +2040,204 @@ function handleSizeChange(size: number) {
                   :value="opt.id"
                 />
               </el-select>
-            </el-form-item>
-            <el-form-item label="二级分类">
-              <el-select
+            </CompatFormItem>
+            <CompatFormItem :label="t('warehouse.material_types_list.label_a84a0cd165d4')">
+              <CompatSelect
                 v-model="segmentL2"
-                :placeholder="segmentL1 ? '请选择二级分类' : '请先选择一级分类'"
+                :placeholder="segmentL1 ? t('warehouse.material_types_list.placeholder_3f7885098127') : t('warehouse.material_types_list.placeholder_87eb418e0c7e')"
                 clearable
                 filterable
                 style="width: 100%"
                 :disabled="!segmentL1"
               >
-                <el-option
+                <CompatOption
                   v-for="opt in segmentL2Options"
                   :key="opt.id"
                   :label="formatSegmentOptionLabel(opt)"
                   :value="opt.id"
                 />
-              </el-select>
-            </el-form-item>
-            <el-form-item label="三级分类">
-              <el-select
+              </CompatSelect>
+            </CompatFormItem>
+            <CompatFormItem :label="t('warehouse.material_types_list.label_2f1c8a0aad07')">
+              <CompatSelect
                 v-model="segmentL3"
-                placeholder="请先选择二级分类"
+                :placeholder="t('warehouse.material_types_list.placeholder_a28c9868147d')"
                 clearable
                 filterable
                 style="width: 100%"
                 :disabled="!segmentL2"
                 @change="handleL3Change"
               >
-                <el-option
+                <CompatOption
                   v-if="canManageClassification"
                   :key="QUICK_CREATE_L3"
-                  label="＋ 新建共享三级分类"
+                  :label="t('warehouse.material_types_list.label_70ecfb9cf8ed')"
                   :value="QUICK_CREATE_L3"
                 />
-                <el-option
+                <CompatOption
                   v-for="opt in segmentL3Options"
                   :key="opt.id"
                   :label="formatSegmentOptionLabel(opt)"
                   :value="opt.id"
                 />
-              </el-select>
-              <div class="field-hint">分类可全部留空；一旦选择则须完整选到三级。分类只用于归类和筛选，不会改变料号。</div>
-              <div v-if="!canManageClassification" class="field-hint">没有共享分类维护权限；如无合适分类，请联系系统管理员在“物料分类字典”中新增。</div>
+              </CompatSelect>
+              <div class="field-hint">{{ t('warehouse.material_types_list.text_6919f3917621') }}</div>
+              <div v-if="!canManageClassification" class="field-hint">{{ t('warehouse.material_types_list.text_dbe1fcdbcb23') }}</div>
               <div v-if="l3MatchHint" class="field-hint field-hint--matched">{{ l3MatchHint }}</div>
-              <div v-if="taxonomyCandidates.length" class="taxonomy-candidates" aria-label="分类建议">
-                <el-button
+              <div v-if="taxonomyCandidates.length" class="taxonomy-candidates" :aria-label="t('warehouse.material_types_list.aria_label_c786aba92396')">
+                <UButton color="neutral"
                   v-for="candidate in taxonomyCandidates"
                   :key="candidate.l3Id"
-                  size="small"
-                  plain
+                  size="sm"
+                  variant="outline"
                   @click="applyTaxonomyCandidate(candidate, true)"
                 >
                   {{ candidate.l1Label }} &gt; {{ candidate.l2Label }} &gt; {{ candidate.l3Label }}
-                </el-button>
+                </UButton>
               </div>
-              <el-button
+              <UButton
                 v-if="l3ManuallyEdited && l3MatchHint.includes('名称已变化')"
-                link
-                type="primary"
+                variant="link"
+                color="primary"
                 @click="rematchTaxonomy"
-              >重新匹配分类</el-button>
-            </el-form-item>
+              >{{ t('warehouse.material_types_list.action_c8fa9bd1e628') }}</UButton>
+            </CompatFormItem>
           </template>
         </template>
 
-      </el-form>
+      </CompatForm>
       <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="submitting" @click="handleSave">保存</el-button>
+        <UButton color="neutral" variant="outline" @click="dialogVisible = false">{{ t('warehouse.material_types_list.action_2cd0f3be8738') }}</UButton>
+        <UButton color="primary" :loading="submitting" @click="handleSave">{{ t('warehouse.material_types_list.action_a3030bf8f16d') }}</UButton>
       </template>
-    </el-dialog>
+    </CompatDialog>
 
-    <el-dialog
+    <CompatDialog
       v-model="createL3DialogVisible"
-      title="新建共享三级分类"
+      :title="t('warehouse.material_types_list.title_cf5430518c8d')"
       width="460px"
       append-to-body
       :close-on-click-modal="false"
     >
       <el-alert
-        title="这里创建的是可被多个原料复用的共享分类，不是当前具体原料"
-        description="例如三级分类可填写“鱼类原料”或“鸡胸肉”；具体规格、供应商形态和包装信息请填写在原料类型中。系统不会复制当前原料名称。"
+        :title="t('warehouse.material_types_list.title_68df4a180fb3')"
+        :description="t('warehouse.material_types_list.description_55e87956f7b4')"
         type="warning"
         :closable="false"
         show-icon
         style="margin-bottom: 16px"
       />
-      <el-form label-width="110px">
-        <el-form-item label="所属二级分类">
+      <CompatForm label-width="110px">
+        <CompatFormItem :label="t('warehouse.material_types_list.label_ba8408a26df0')">
           <el-input :model-value="selectedL2Label" disabled />
-        </el-form-item>
-        <el-form-item label="小类名称" required>
-          <el-input v-model="createL3Form.label" maxlength="100" placeholder="例如：鱼类原料 / 鸡胸肉 / 箱类包材" />
-        </el-form-item>
-      </el-form>
+        </CompatFormItem>
+        <CompatFormItem :label="t('warehouse.material_types_list.label_62feb6fd940d')" required>
+          <UInput v-model="createL3Form.label" maxlength="100" :placeholder="t('warehouse.material_types_list.placeholder_86f484f8765e')" />
+        </CompatFormItem>
+      </CompatForm>
       <template #footer>
-        <el-button @click="createL3DialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="createL3Submitting" @click="handleCreateL3">创建并选中</el-button>
+        <UButton color="neutral" variant="outline" @click="createL3DialogVisible = false">{{ t('warehouse.material_types_list.action_2cd0f3be8738') }}</UButton>
+        <UButton color="primary" :loading="createL3Submitting" @click="handleCreateL3">{{ t('warehouse.material_types_list.action_eee33291914b') }}</UButton>
       </template>
-    </el-dialog>
+    </CompatDialog>
 
     <!-- SupplierMaterial 双向关系：原料侧维护入口 -->
-    <el-dialog
+    <CompatDialog
       v-model="suppliersDialogVisible"
       :title="`${suppliersDialogMaterialName} — 供应商关系`"
       width="980px"
       destroy-on-close
     >
       <div class="supplier-relation-toolbar">
-        <span>一个物料可关联多个供应商；关系价格与采购单位将直接用于采购订单。</span>
+        <span>{{ t('warehouse.material_types_list.text_0a2140646a81') }}</span>
         <el-button
           v-if="canManageSupplierRelations"
           type="primary"
           :icon="Plus"
           @click="openMaterialRelationCreate"
-        >关联供应商</el-button>
+        >{{ t('warehouse.material_types_list.action_e5e52edd6e06') }}</el-button>
       </div>
-      <el-table
+      <CompatTable
         v-loading="suppliersLoading"
         :data="suppliersForMaterial"
-        empty-text="该物料暂无供应商关系"
+        :empty-text="t('warehouse.material_types_list.empty_text_37527c505ba8')"
         stripe
         size="small"
       >
-        <el-table-column prop="supplierName" label="供应商" min-width="170" show-overflow-tooltip>
+        <CompatTableColumn prop="supplierName" :label="t('warehouse.material_types_list.label_033ed5945254')" min-width="170" show-overflow-tooltip>
           <template #default="{ row }">{{ row.supplierName || row.supplierId }}</template>
-        </el-table-column>
-        <el-table-column prop="supplierMaterialCode" label="供应商料号" width="130">
+        </CompatTableColumn>
+        <CompatTableColumn prop="supplierMaterialCode" :label="t('warehouse.material_types_list.label_a742cba4444b')" width="130">
           <template #default="{ row }">{{ row.supplierMaterialCode || '-' }}</template>
-        </el-table-column>
-        <el-table-column label="采购单位" width="100">
+        </CompatTableColumn>
+        <CompatTableColumn :label="t('warehouse.material_types_list.label_7023dd8f558a')" width="100">
           <template #default="{ row }">{{ displayUnit(row.purchaseUnit || row.baseUnit) }}</template>
-        </el-table-column>
-        <el-table-column label="默认采购价" width="155" align="right">
+        </CompatTableColumn>
+        <CompatTableColumn :label="t('warehouse.material_types_list.label_21d8c93ca5cf')" width="155" align="right">
           <template #default="{ row }">
-            {{ row.defaultPurchasePrice == null ? '未配置' : `${row.currency || 'CNY'} ${Number(row.defaultPurchasePrice).toFixed(2)}/${displayUnit(row.purchaseUnit || row.baseUnit)}` }}
+            {{ row.defaultPurchasePrice == null ? t('warehouse.material_types_list.text_80a57e03f071') : `${row.currency || 'CNY'} ${Number(row.defaultPurchasePrice).toFixed(2)}/${displayUnit(row.purchaseUnit || row.baseUnit)}` }}
           </template>
-        </el-table-column>
-        <el-table-column label="最小起订量" width="120" align="right">
+        </CompatTableColumn>
+        <CompatTableColumn :label="t('warehouse.material_types_list.label_659bd4ea4ba4')" width="120" align="right">
           <template #default="{ row }">{{ row.minOrderQuantity ?? '-' }} {{ displayUnit(row.purchaseUnit || row.baseUnit) }}</template>
-        </el-table-column>
-        <el-table-column label="交期" width="90">
+        </CompatTableColumn>
+        <CompatTableColumn :label="t('warehouse.material_types_list.label_7d0e25d161e5')" width="90">
           <template #default="{ row }">{{ row.leadTimeDays == null ? '-' : `${row.leadTimeDays}天` }}</template>
-        </el-table-column>
-        <el-table-column label="状态" width="100">
+        </CompatTableColumn>
+        <CompatTableColumn :label="t('warehouse.material_types_list.label_6320b4a8722a')" width="100">
           <template #default="{ row }">
             <el-tag :type="row.active === false ? 'info' : 'success'" size="small">
-              {{ row.active === false ? '已停用' : row.preferred ? '首选' : '启用' }}
+              {{ row.active === false ? t('warehouse.material_types_list.text_a8c3698b5b8c') : row.preferred ? t('warehouse.material_types_list.text_2b11c99bfed1') : t('warehouse.material_types_list.text_f4f0ead1116b') }}
             </el-tag>
           </template>
-        </el-table-column>
-        <el-table-column v-if="canManageSupplierRelations" label="操作" width="125" fixed="right">
+        </CompatTableColumn>
+        <CompatTableColumn v-if="canManageSupplierRelations" :label="t('warehouse.material_types_list.label_ed31fbb483ee')" width="125" fixed="right">
           <template #default="{ row }">
-            <el-button type="primary" link @click="openMaterialRelationEdit(row)">编辑</el-button>
-            <el-button v-if="row.active !== false" type="warning" link @click="deactivateMaterialRelation(row)">停用</el-button>
+            <UButton color="primary" variant="link" @click="openMaterialRelationEdit(row)">{{ t('warehouse.material_types_list.action_051836569928') }}</UButton>
+            <UButton v-if="row.active !== false" color="warning" variant="link" @click="deactivateMaterialRelation(row)">{{ t('warehouse.material_types_list.action_4e6fd0e28c55') }}</UButton>
           </template>
-        </el-table-column>
-      </el-table>
+        </CompatTableColumn>
+      </CompatTable>
       <template #footer>
-        <el-button @click="suppliersDialogVisible = false">关闭</el-button>
+        <UButton color="neutral" variant="outline" @click="suppliersDialogVisible = false">{{ t('warehouse.material_types_list.action_3fd47edce45b') }}</UButton>
       </template>
-    </el-dialog>
+    </CompatDialog>
 
-    <el-dialog
+    <CompatDialog
       v-model="relationDialogVisible"
-      :title="relationEditing ? '编辑供应商—物料关系' : '关联供应商'"
+      :title="relationEditing ? t('warehouse.material_types_list.title_4c69f78c9e6f') : t('warehouse.material_types_list.title_e5e52edd6e06')"
       width="620px"
       append-to-body
       :close-on-click-modal="false"
     >
-      <el-form label-width="145px">
-        <el-form-item label="供应商" required>
-          <el-select v-model="relationForm.supplierId" filterable :disabled="Boolean(relationEditing)" style="width: 100%" placeholder="请选择当前工厂的合作中供应商">
-            <el-option
+      <CompatForm label-width="145px">
+        <CompatFormItem :label="t('warehouse.material_types_list.label_033ed5945254')" required>
+          <CompatSelect v-model="relationForm.supplierId" filterable :disabled="Boolean(relationEditing)" style="width: 100%" :placeholder="t('warehouse.material_types_list.placeholder_1d80c032fb3d')">
+            <CompatOption
               v-if="relationEditing"
               :label="relationEditing.supplierName || relationEditing.supplierId"
               :value="relationEditing.supplierId"
             />
-            <el-option
+            <CompatOption
               v-for="supplier in availableSupplierOptions"
               :key="supplier.id"
               :label="`${supplier.name}${supplier.supplierCode || supplier.code ? ` (${supplier.supplierCode || supplier.code})` : ''}`"
               :value="supplier.id"
             />
-          </el-select>
-          <div class="field-hint">已关联的供应商不会再次出现，后端唯一约束同时阻止重复关系。</div>
-        </el-form-item>
-        <el-form-item label="物料">
+          </CompatSelect>
+          <div class="field-hint">{{ t('warehouse.material_types_list.text_f412df366173') }}</div>
+        </CompatFormItem>
+        <CompatFormItem :label="t('warehouse.material_types_list.label_6446454e8e36')">
           <el-input :model-value="`${suppliersDialogMaterial?.name || '-'} (${suppliersDialogMaterial?.code || suppliersDialogMaterial?.id || '-'})`" disabled />
-        </el-form-item>
-        <el-form-item label="供应商料号"><el-input v-model="relationForm.supplierMaterialCode" maxlength="100" /></el-form-item>
-        <el-form-item label="采购单位" required>
+        </CompatFormItem>
+        <CompatFormItem :label="t('warehouse.material_types_list.label_a742cba4444b')"><UInput v-model="relationForm.supplierMaterialCode" maxlength="100" /></CompatFormItem>
+        <CompatFormItem :label="t('warehouse.material_types_list.label_7023dd8f558a')" required>
           <UnitSelect
             v-model="relationForm.purchaseUnit"
             :factory-id="factoryId"
             :options="compatibleMaterialPurchaseUnits"
             usage-scope="PURCHASE_QUANTITY"
-            placeholder="请选择采购单位"
+            :placeholder="t('warehouse.material_types_list.placeholder_b3ca76761983')"
           />
           <el-alert
             v-if="materialRelationUnitReason"
@@ -2244,23 +2246,23 @@ function handleSizeChange(size: number) {
             show-icon
             :title="materialRelationUnitReason"
           />
-          <div class="field-hint">采购订单沿用此单位；页面显示中文，API 保存标准单位代码。</div>
-        </el-form-item>
-        <el-form-item :label="`默认采购价（元/${displayUnit(relationForm.purchaseUnit) || '采购单位'}）`">
+          <div class="field-hint">{{ t('warehouse.material_types_list.text_273c68fd6d22') }}</div>
+        </CompatFormItem>
+        <CompatFormItem :label="`默认采购价（元/${displayUnit(relationForm.purchaseUnit) || '采购单位'}）`">
           <el-input-number v-model="relationForm.defaultPurchasePrice" :min="0" :precision="4" controls-position="right" style="width: 100%" />
-          <div class="field-hint">价格与采购单位绑定；未配置时采购单明确提示，不会静默变成 0 元。</div>
-        </el-form-item>
-        <el-form-item label="币种" required><el-input v-model="relationForm.currency" maxlength="3" /></el-form-item>
-        <el-form-item label="最小起订量"><el-input-number v-model="relationForm.minOrderQuantity" :min="0.0001" :precision="4" style="width: 100%" /></el-form-item>
-        <el-form-item label="交期（天）"><el-input-number v-model="relationForm.leadTimeDays" :min="0" :precision="0" style="width: 100%" /></el-form-item>
-        <el-form-item label="首选供应商"><el-switch v-model="relationForm.preferred" /></el-form-item>
-        <el-form-item label="关系启用"><el-switch v-model="relationForm.active" /></el-form-item>
-      </el-form>
+          <div class="field-hint">{{ t('warehouse.material_types_list.text_fb16b58124c2') }}</div>
+        </CompatFormItem>
+        <CompatFormItem :label="t('warehouse.material_types_list.label_9677f386bdcd')" required><UInput v-model="relationForm.currency" maxlength="3" /></CompatFormItem>
+        <CompatFormItem :label="t('warehouse.material_types_list.label_659bd4ea4ba4')"><el-input-number v-model="relationForm.minOrderQuantity" :min="0.0001" :precision="4" style="width: 100%" /></CompatFormItem>
+        <CompatFormItem :label="t('warehouse.material_types_list.label_f0ea6923da21')"><el-input-number v-model="relationForm.leadTimeDays" :min="0" :precision="0" style="width: 100%" /></CompatFormItem>
+        <CompatFormItem :label="t('warehouse.material_types_list.label_8a394d2ba9cf')"><USwitch v-model="relationForm.preferred" /></CompatFormItem>
+        <CompatFormItem :label="t('warehouse.material_types_list.label_262c018aca17')"><USwitch v-model="relationForm.active" /></CompatFormItem>
+      </CompatForm>
       <template #footer>
-        <el-button @click="relationDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="relationSaving" @click="saveMaterialRelation">保存</el-button>
+        <UButton color="neutral" variant="outline" @click="relationDialogVisible = false">{{ t('warehouse.material_types_list.action_2cd0f3be8738') }}</UButton>
+        <UButton color="primary" :loading="relationSaving" @click="saveMaterialRelation">{{ t('warehouse.material_types_list.action_a3030bf8f16d') }}</UButton>
       </template>
-    </el-dialog>
+    </CompatDialog>
   </div>
 </template>
 

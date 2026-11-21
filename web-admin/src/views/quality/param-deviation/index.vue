@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { CompatDatePicker } from '@/components/compat';
+
 /**
  * 工艺参数偏离 (质量 → 工艺参数偏离)。
  *
@@ -272,7 +274,7 @@ onMounted(() => {
       <form class="filters" @submit.prevent="search">
         <label class="field">
           <span>报工日期</span>
-          <el-date-picker
+          <CompatDatePicker
             v-model="filters.range"
             type="daterange"
             value-format="YYYY-MM-DD"

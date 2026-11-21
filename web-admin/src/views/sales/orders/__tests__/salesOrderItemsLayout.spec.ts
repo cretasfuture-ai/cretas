@@ -1,8 +1,9 @@
 import { readFileSync } from 'node:fs';
+import { sourceWithChinese } from '@/i18n-pilot/sourceForTests';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-const source = readFileSync(resolve(import.meta.dirname, '../list.vue'), 'utf8');
+const source = sourceWithChinese(readFileSync(resolve(import.meta.dirname, '../list.vue'), 'utf8'));
 
 describe('sales order item editor layout', () => {
   it('provides an explicit horizontally scrollable workspace for dense line items', () => {

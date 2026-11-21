@@ -1,10 +1,16 @@
 <script setup lang="ts">
+import { CompatDatePicker, CompatDialog, CompatForm, CompatFormItem, CompatOption, CompatPagination, CompatSelect, CompatTable, CompatTableColumn } from '@/components/compat';
+import { useCompatMessages } from '@/components/compat/messages';
+const { ElMessage, ElMessageBox } = useCompatMessages();
+import { useT } from '@/i18n-pilot/useT';
+const { t } = useT();
+
 import { ref, computed, nextTick, onMounted, reactive } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post, put, del } from '@/api/request';
-import { ElMessage, ElMessageBox } from 'element-plus';
+
 import { Plus, Search, Refresh } from '@element-plus/icons-vue';
 import type { FormInstance } from 'element-plus';
 import DynamicEntityForm from '@/components/DynamicEntityForm.vue';
@@ -25,9 +31,9 @@ import {
 // P1 #23 S-CREDIT-1 — 信用状态映射
 type CreditStatusValue = 'NORMAL' | 'WARNING' | 'SUSPENDED';
 const CREDIT_STATUS_OPTIONS: Array<{ value: CreditStatusValue; label: string; tagType: 'success' | 'warning' | 'danger' }> = [
-  { value: 'NORMAL', label: '正常', tagType: 'success' },
-  { value: 'WARNING', label: '预警', tagType: 'warning' },
-  { value: 'SUSPENDED', label: '冻结', tagType: 'danger' },
+  { value: 'NORMAL', label: t('sales.customers_list.label_296de0e31f8c'), tagType: 'success' },
+  { value: 'WARNING', label: t('sales.customers_list.label_75d5781e08db'), tagType: 'warning' },
+  { value: 'SUSPENDED', label: t('sales.customers_list.label_0eafcb149bcd'), tagType: 'danger' },
 ];
 function getCreditStatusOption(v: string | undefined | null) {
   return CREDIT_STATUS_OPTIONS.find(o => o.value === v);
@@ -50,14 +56,14 @@ import {
 
 // 客户扩展字段 — 添加新字段只需在此数组加一行
 const customerExtendedFields: FieldConfig[] = [
-  { key: 'taxNumber', label: '纳税人识别号', type: 'text', group: '开票信息', order: 1 },
-  { key: 'billingAddress', label: '开票地址', type: 'text', group: '开票信息', order: 2 },
-  { key: 'bankName', label: '开户行', type: 'text', group: '开票信息', order: 3 },
-  { key: 'bankAccount', label: '银行账号', type: 'text', group: '开票信息', order: 4 },
-  { key: 'creditLimit', label: '信用额度', type: 'decimal', group: '信用管理', precision: 2, suffix: '元', order: 5 },
-  { key: 'paymentTerms', label: '结算模式', type: 'text', group: '信用管理', order: 6, placeholder: '如 月结30天' },
+  { key: 'taxNumber', label: t('sales.customers_list.label_d83963e77003'), type: 'text', group: '开票信息', order: 1 },
+  { key: 'billingAddress', label: t('sales.customers_list.label_75bd433efe79'), type: 'text', group: '开票信息', order: 2 },
+  { key: 'bankName', label: t('sales.customers_list.label_c74687bbb415'), type: 'text', group: '开票信息', order: 3 },
+  { key: 'bankAccount', label: t('sales.customers_list.label_0cc3f24453f3'), type: 'text', group: '开票信息', order: 4 },
+  { key: 'creditLimit', label: t('sales.customers_list.label_fbf10f214232'), type: 'decimal', group: '信用管理', precision: 2, suffix: '元', order: 5 },
+  { key: 'paymentTerms', label: t('sales.customers_list.label_7f5aeeddec63'), type: 'text', group: '信用管理', order: 6, placeholder: t('sales.customers_list.placeholder_f09b5c3d167e') },
   // P1 #23 S-CREDIT-1: 信用账期天数 + 信用状态
-  { key: 'creditPeriodDays', label: '信用账期', type: 'decimal', group: '信用管理', precision: 0, suffix: '天', order: 7, placeholder: '默认 30' },
+  { key: 'creditPeriodDays', label: t('sales.customers_list.label_a1c8e9f8f90b'), type: 'decimal', group: '信用管理', precision: 0, suffix: '天', order: 7, placeholder: t('sales.customers_list.placeholder_1f86e08ac77b') },
 ];
 
 const authStore = useAuthStore();
@@ -225,8 +231,8 @@ const formRules = {
       trigger: ['blur', 'change'],
     },
   ],
-  status: [{ required: true, message: '请选择客户状态', trigger: 'change' }],
-  email: [{ type: 'email', message: '请输入有效邮箱地址', trigger: ['blur', 'change'] }],
+  status: [{ required: true, message: t('sales.customers_list.message_50d023002e83'), trigger: 'change' }],
+  email: [{ type: 'email', message: t('sales.customers_list.message_ae5e16f4d62c'), trigger: ['blur', 'change'] }],
 };
 
 const advancedFieldKeys = Array.from(new Set([
@@ -345,9 +351,9 @@ async function handleSubmit() {
     if (err?.status === 409 && !err.actionHint) {
       try {
         await ElMessageBox.confirm(
-          '此客户数据已被其他用户修改。点击"确定"将刷新列表并放弃当前编辑。',
-          '并发编辑冲突',
-          { type: 'warning', confirmButtonText: '刷新列表', cancelButtonText: '取消' }
+          t('sales.customers_list.message_323efa39f1f8'),
+          t('sales.customers_list.message_f38a7d8a0c52'),
+          { type: 'warning', confirmButtonText: t('sales.customers_list.confirmbuttontext_e28be7098db1'), cancelButtonText: t('sales.customers_list.cancelbuttontext_2cd0f3be8738') }
         );
         dialogVisible.value = false;
         loadData();
@@ -365,14 +371,14 @@ async function handleSubmit() {
 
 async function handleDelete(row: TableRow) {
   try {
-    await ElMessageBox.confirm(`确定删除客户「${row.name}」吗？`, '删除确认', {
+    await ElMessageBox.confirm(`确定删除客户「${row.name}」吗？`, t('sales.customers_list.message_fe43bc43c294'), {
       type: 'warning',
-      confirmButtonText: '确定',
-      cancelButtonText: '取消',
+      confirmButtonText: t('sales.customers_list.confirmbuttontext_fac2a67ad878'),
+      cancelButtonText: t('sales.customers_list.cancelbuttontext_2cd0f3be8738'),
     });
     const res = await del(`/${factoryId.value}/customers/${row.id}`);
     if (res.success) {
-      ElMessage.success('删除成功');
+      ElMessage.success(t('sales.customers_list.message_5223f91b9670'));
       loadData();
     } else {
       ElMessage.error(res.message || '删除失败');
@@ -393,15 +399,15 @@ async function handleDelete(row: TableRow) {
       other="向我们供货的上游卖家（如肉联厂、包材厂），用于采购订单 / 应付账款"
       other-path="/procurement/suppliers"
     />
-    <el-card class="page-card" shadow="never">
+    <UCard class="page-card" >
       <template #header>
         <div class="card-header">
           <div class="header-left">
-            <span class="page-title">客户管理</span>
-            <span class="data-count">共 {{ pagination.total }} 条记录</span>
+            <span class="page-title">{{ t('sales.customers_list.text_38840bfead29') }}</span>
+            <span class="data-count">{{ t('sales.customers_list.text_76e547a8fa54') }} {{ pagination.total }} {{ t('sales.customers_list.text_6016bf63b0ff') }}</span>
           </div>
           <div class="header-right">
-            <el-button v-if="canWrite" type="primary" :icon="Plus" @click="handleAdd">新增客户</el-button>
+            <el-button v-if="canWrite" type="primary" :icon="Plus" @click="handleAdd">{{ t('sales.customers_list.action_c65d63c6a637') }}</el-button>
           </div>
         </div>
       </template>
@@ -409,93 +415,93 @@ async function handleDelete(row: TableRow) {
       <div class="search-bar">
         <el-input
           v-model="searchKeyword"
-          placeholder="搜索客户名称/编号"
+          :placeholder="t('sales.customers_list.placeholder_fd971c03d230')"
           :prefix-icon="Search"
           clearable
           style="width: 240px"
           @keyup.enter="handleSearch"
         />
-        <el-select
+        <CompatSelect
           v-model="filterCustomerType"
-          placeholder="全部客户类型"
+          :placeholder="t('sales.customers_list.placeholder_5d9575908d1d')"
           clearable
           style="width: 150px"
           @change="handleSearch"
         >
-          <el-option v-for="opt in CUSTOMER_TYPE_OPTIONS" :key="opt.value" :label="opt.label" :value="opt.value" />
-        </el-select>
-        <el-button plain @click="advancedFiltersVisible = !advancedFiltersVisible">
-          {{ advancedFiltersVisible ? '收起高级筛选' : '高级筛选' }}
-        </el-button>
+          <CompatOption v-for="opt in CUSTOMER_TYPE_OPTIONS" :key="opt.value" :label="opt.label" :value="opt.value" />
+        </CompatSelect>
+        <UButton color="neutral" variant="outline" @click="advancedFiltersVisible = !advancedFiltersVisible">
+          {{ advancedFiltersVisible ? t('sales.customers_list.text_8e96288e1868') : t('sales.customers_list.text_97a1d7b98ba6') }}
+        </UButton>
         <!-- CRM 字段降级为高级筛选，避免列表默认界面混淆客户类型与生命周期。 -->
-        <el-select
+        <CompatSelect
           v-if="advancedFiltersVisible"
           v-model="filterCustomerStatus"
-          placeholder="全部生命周期"
+          :placeholder="t('sales.customers_list.placeholder_052373d23b89')"
           clearable
           style="width: 150px"
           @change="handleSearch"
         >
-          <el-option
+          <CompatOption
             v-for="opt in CUSTOMER_STATUS_OPTIONS"
             :key="opt.value"
             :label="opt.label"
             :value="opt.value"
           />
-        </el-select>
-        <el-select
+        </CompatSelect>
+        <CompatSelect
           v-if="advancedFiltersVisible"
           v-model="filterImportance"
-          placeholder="全部重要度"
+          :placeholder="t('sales.customers_list.placeholder_4e1342a9d68d')"
           clearable
           style="width: 140px"
           @change="handleSearch"
         >
-          <el-option
+          <CompatOption
             v-for="opt in CUSTOMER_IMPORTANCE_OPTIONS"
             :key="opt.value"
             :label="opt.label"
             :value="opt.value"
           />
-        </el-select>
-        <el-select
+        </CompatSelect>
+        <CompatSelect
           v-if="advancedFiltersVisible"
           v-model="filterSource"
-          placeholder="全部来源"
+          :placeholder="t('sales.customers_list.placeholder_9f357adb6100')"
           clearable
           style="width: 150px"
           @change="handleSearch"
         >
-          <el-option
+          <CompatOption
             v-for="opt in CUSTOMER_SOURCE_OPTIONS"
             :key="opt.value"
             :label="opt.label"
             :value="opt.value"
           />
-        </el-select>
-        <el-button type="primary" :icon="Search" @click="handleSearch">搜索</el-button>
-        <el-button :icon="Refresh" @click="handleRefresh">重置</el-button>
+        </CompatSelect>
+        <el-button type="primary" :icon="Search" @click="handleSearch">{{ t('sales.customers_list.action_44ce7ae909bb') }}</el-button>
+        <el-button :icon="Refresh" @click="handleRefresh">{{ t('sales.customers_list.action_cb5d682bac3d') }}</el-button>
       </div>
 
-      <el-table :data="tableData" v-loading="loading" empty-text="暂无数据" stripe border style="width: 100%">
-        <el-table-column prop="customerCode" label="客户编号" width="140" />
-        <el-table-column prop="name" label="客户名称" min-width="180" show-overflow-tooltip />
-        <el-table-column prop="contactPerson" label="联系人" width="120" />
-        <el-table-column prop="phone" label="联系电话" width="140" />
-        <el-table-column label="收货地址" min-width="200" show-overflow-tooltip>
+      <CompatTable :data="tableData" v-loading="loading" :empty-text="t('sales.customers_list.empty_text_497c85690c4c')" stripe border style="width: 100%">
+        <CompatTableColumn prop="customerCode" :label="t('sales.customers_list.label_99a48cba26c1')" width="140" />
+        <CompatTableColumn prop="name" :label="t('sales.customers_list.label_27375b325d9d')" min-width="180" show-overflow-tooltip />
+        <CompatTableColumn prop="contactPerson" :label="t('sales.customers_list.label_3303b56982a0')" width="120" />
+        <CompatTableColumn prop="phone" :label="t('sales.customers_list.label_d6981829142a')" width="140" />
+        <CompatTableColumn :label="t('sales.customers_list.label_445edb72726b')" min-width="200" show-overflow-tooltip>
           <template #default="{ row }">{{ row.shippingAddress || '-' }}</template>
-        </el-table-column>
-        <el-table-column prop="status" label="启用" width="80" align="center">
+        </CompatTableColumn>
+        <CompatTableColumn prop="status" :label="t('sales.customers_list.label_f4f0ead1116b')" width="80" align="center">
           <template #default="{ row }">
             <el-tag :type="(row.status === 'ACTIVE' || row.isActive === true) ? 'success' : 'info'" size="small">
-              {{ (row.status === 'ACTIVE' || row.isActive === true) ? '合作中' : '已停用' }}
+              {{ (row.status === 'ACTIVE' || row.isActive === true) ? t('sales.customers_list.text_0149d010d8ea') : t('sales.customers_list.text_a8c3698b5b8c') }}
             </el-tag>
           </template>
-        </el-table-column>
-        <el-table-column label="客户类型" width="110" align="center">
+        </CompatTableColumn>
+        <CompatTableColumn :label="t('sales.customers_list.label_2d89604d7481')" width="110" align="center">
           <template #default="{ row }">{{ customerTypeLabel(row.type) }}</template>
-        </el-table-column>
-        <el-table-column label="重要度" width="80" align="center">
+        </CompatTableColumn>
+        <CompatTableColumn :label="t('sales.customers_list.label_86bd937524c6')" width="80" align="center">
           <template #default="{ row }">
             <el-tag
               v-if="getCustomerImportanceOption(row.importance as string)"
@@ -506,14 +512,14 @@ async function handleDelete(row: TableRow) {
             </el-tag>
             <span v-else class="cell-empty">-</span>
           </template>
-        </el-table-column>
-        <el-table-column label="来源" width="100" align="center">
+        </CompatTableColumn>
+        <CompatTableColumn :label="t('sales.customers_list.label_a488e93d69cc')" width="100" align="center">
           <template #default="{ row }">
             <span>{{ getCustomerSourceOption(row.source as string)?.label || '-' }}</span>
           </template>
-        </el-table-column>
+        </CompatTableColumn>
         <!-- P1 #23 S-CREDIT-1 — 信用状态列 -->
-        <el-table-column label="信用" width="80" align="center">
+        <CompatTableColumn :label="t('sales.customers_list.label_e385e5596087')" width="80" align="center">
           <template #default="{ row }">
             <el-tag
               v-if="getCreditStatusOption(row.creditStatus as string)"
@@ -524,18 +530,18 @@ async function handleDelete(row: TableRow) {
             </el-tag>
             <span v-else class="cell-empty">-</span>
           </template>
-        </el-table-column>
-        <el-table-column label="操作" width="160" fixed="right" align="center">
+        </CompatTableColumn>
+        <CompatTableColumn :label="t('sales.customers_list.label_ed31fbb483ee')" width="160" fixed="right" align="center">
           <template #default="{ row }">
-            <el-button type="primary" link size="small" @click="handleView(row)">查看</el-button>
-            <el-button v-if="canWrite" type="primary" link size="small" @click="handleEdit(row)">编辑</el-button>
-            <el-button v-if="canWrite" type="danger" link size="small" @click="handleDelete(row)">删除</el-button>
+            <UButton color="primary" variant="link" size="sm" @click="handleView(row)">{{ t('sales.customers_list.action_db8db0530432') }}</UButton>
+            <UButton v-if="canWrite" color="primary" variant="link" size="sm" @click="handleEdit(row)">{{ t('sales.customers_list.action_051836569928') }}</UButton>
+            <UButton v-if="canWrite" color="error" variant="link" size="sm" @click="handleDelete(row)">{{ t('sales.customers_list.action_2f9daa828907') }}</UButton>
           </template>
-        </el-table-column>
-      </el-table>
+        </CompatTableColumn>
+      </CompatTable>
 
       <div class="pagination-wrapper">
-        <el-pagination
+        <CompatPagination
           v-model:current-page="pagination.page"
           v-model:page-size="pagination.size"
           :page-sizes="[10, 20, 50, 100]"
@@ -545,9 +551,9 @@ async function handleDelete(row: TableRow) {
           @size-change="handleSizeChange"
         />
       </div>
-    </el-card>
+    </UCard>
 
-    <el-dialog v-model="dialogVisible" :title="dialogTitle" width="min(720px, calc(100vw - 24px))" destroy-on-close>
+    <CompatDialog v-model="dialogVisible" :title="dialogTitle" width="min(720px, calc(100vw - 24px))" destroy-on-close>
       <!-- P1 #23 S-CREDIT-1: view/edit 模式下 mount 信用面板 (在 context bar 之上) -->
       <CreditPanel
         v-if="dialogMode !== 'add' && formData.id"
@@ -557,7 +563,7 @@ async function handleDelete(row: TableRow) {
       <!-- S-CRM-FULL-1 防呆 R2: edit/view 模式下 dialog 顶部 context bar (品名 + 编号 + 状态 + 重要度 + 最近接洽) -->
       <div v-if="dialogMode !== 'add' && formData.name" class="dialog-context-bar">
         <div class="ctx-row">
-          <span class="ctx-label">客户:</span>
+          <span class="ctx-label">{{ t('sales.customers_list.text_18fb065286e7') }}</span>
           <strong>{{ formData.name }}</strong>
           <span v-if="formData.customerCode" class="ctx-code">{{ formData.customerCode }}</span>
         </div>
@@ -566,125 +572,125 @@ async function handleDelete(row: TableRow) {
             v-if="getCustomerStatusOption(formData.customerStatus)"
             :type="getCustomerStatusOption(formData.customerStatus)?.tagType"
             size="small"
-          >生命周期: {{ getCustomerStatusOption(formData.customerStatus)?.label }}</el-tag>
+          >{{ t('sales.customers_list.text_4923b2f37e48') }} {{ getCustomerStatusOption(formData.customerStatus)?.label }}</el-tag>
           <el-tag
             v-if="getCustomerImportanceOption(formData.importance)"
             :type="getCustomerImportanceOption(formData.importance)?.tagType"
             size="small"
-          >重要度: {{ getCustomerImportanceOption(formData.importance)?.label }}</el-tag>
-          <el-tag v-if="formData.source" size="small" type="info">来源: {{ getCustomerSourceOption(formData.source)?.label }}</el-tag>
+          >{{ t('sales.customers_list.text_856764a78b26') }} {{ getCustomerImportanceOption(formData.importance)?.label }}</el-tag>
+          <UBadge variant="soft" v-if="formData.source" size="sm" color="info">{{ t('sales.customers_list.text_15701b7e8888') }} {{ getCustomerSourceOption(formData.source)?.label }}</UBadge>
           <span class="ctx-last-contact">
-            最近接洽: {{ formData.lastContactedAt ? new Date(formData.lastContactedAt).toLocaleString('zh-CN') : '未记录' }}
+            {{ t('sales.customers_list.text_b078682fe745') }} {{ formData.lastContactedAt ? new Date(formData.lastContactedAt).toLocaleString('zh-CN') : t('sales.customers_list.text_7450cc5b16e2') }}
           </span>
         </div>
       </div>
 
-      <el-form ref="formRef" :model="formData" :rules="formRules" label-width="90px" :disabled="isViewMode">
-        <el-form-item label="客户名称" prop="name" required>
-          <el-input v-model="formData.name" placeholder="请输入客户名称" />
-        </el-form-item>
+      <CompatForm ref="formRef" :model="formData" :rules="formRules" label-width="90px" :disabled="isViewMode">
+        <CompatFormItem :label="t('sales.customers_list.label_27375b325d9d')" prop="name" required>
+          <UInput v-model="formData.name" :placeholder="t('sales.customers_list.placeholder_2f0439d74af2')" />
+        </CompatFormItem>
         <!-- 2026-08-12 (Steve): 联系人/联系电话/收货地址改为选填。后端与库本来就允许为空
              (CreateCustomerRequest 上只有 @Size 没有 @NotBlank; public.customers 三列
              nullable=YES) —— 这三个必填只存在于本文件, 是前端单方面加严的。
              它们仍留在基础区(不进折叠), 只是不再拦提交。 -->
-        <el-form-item label="联系人" prop="contactPerson">
-          <el-input v-model="formData.contactPerson" placeholder="请输入联系人（选填）" />
-        </el-form-item>
-        <el-form-item label="联系电话" prop="phone">
-          <el-input v-model="formData.phone" placeholder="请输入联系电话（选填）" />
-        </el-form-item>
-        <el-form-item label="收货地址" prop="shippingAddress">
-          <el-input v-model="formData.shippingAddress" placeholder="请输入收货地址（选填）" type="textarea" :rows="2" />
-        </el-form-item>
+        <CompatFormItem :label="t('sales.customers_list.label_3303b56982a0')" prop="contactPerson">
+          <UInput v-model="formData.contactPerson" :placeholder="t('sales.customers_list.placeholder_096f113e6489')" />
+        </CompatFormItem>
+        <CompatFormItem :label="t('sales.customers_list.label_d6981829142a')" prop="phone">
+          <UInput v-model="formData.phone" :placeholder="t('sales.customers_list.placeholder_ba2975d1794a')" />
+        </CompatFormItem>
+        <CompatFormItem :label="t('sales.customers_list.label_445edb72726b')" prop="shippingAddress">
+          <el-input v-model="formData.shippingAddress" :placeholder="t('sales.customers_list.placeholder_031f9979d713')" type="textarea" :rows="2" />
+        </CompatFormItem>
         <!-- T10 P2.2: status field editable in form (was view-only via list column badge) -->
-        <el-form-item label="状态" prop="status" required>
-          <el-select v-model="formData.status" :disabled="isViewMode" style="width: 100%">
-            <el-option label="合作中" value="ACTIVE" />
-            <el-option label="已停用" value="INACTIVE" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="客户类型" prop="type">
-          <el-select v-model="formData.type" placeholder="请选择客户类型" clearable style="width: 100%">
-            <el-option v-for="opt in CUSTOMER_TYPE_OPTIONS" :key="opt.value" :label="opt.label" :value="opt.value" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="备注" prop="notes">
-          <el-input v-model="formData.notes" placeholder="请输入备注" type="textarea" :rows="2" />
-        </el-form-item>
+        <CompatFormItem :label="t('sales.customers_list.label_6320b4a8722a')" prop="status" required>
+          <CompatSelect v-model="formData.status" :disabled="isViewMode" style="width: 100%">
+            <CompatOption :label="t('sales.customers_list.label_0149d010d8ea')" value="ACTIVE" />
+            <CompatOption :label="t('sales.customers_list.label_a8c3698b5b8c')" value="INACTIVE" />
+          </CompatSelect>
+        </CompatFormItem>
+        <CompatFormItem :label="t('sales.customers_list.label_2d89604d7481')" prop="type">
+          <CompatSelect v-model="formData.type" :placeholder="t('sales.customers_list.placeholder_b2b2379dfee3')" clearable style="width: 100%">
+            <CompatOption v-for="opt in CUSTOMER_TYPE_OPTIONS" :key="opt.value" :label="opt.label" :value="opt.value" />
+          </CompatSelect>
+        </CompatFormItem>
+        <CompatFormItem :label="t('sales.customers_list.label_daede9881787')" prop="notes">
+          <el-input v-model="formData.notes" :placeholder="t('sales.customers_list.placeholder_1004c72456f8')" type="textarea" :rows="2" />
+        </CompatFormItem>
 
         <el-collapse v-model="advancedSections" class="advanced-collapse">
           <el-collapse-item name="advanced">
             <template #title>
-              <span class="advanced-title">高级资料</span>
-              <el-tag v-if="advancedFilledCount" size="small" type="info">已填 {{ advancedFilledCount }} 项</el-tag>
-              <span v-else class="advanced-empty">选填</span>
+              <span class="advanced-title">{{ t('sales.customers_list.text_1311fec5ed1e') }}</span>
+              <UBadge variant="soft" v-if="advancedFilledCount" size="sm" color="info">{{ t('sales.customers_list.text_693875585c47') }} {{ advancedFilledCount }} {{ t('sales.customers_list.text_49ccde43a154') }}</UBadge>
+              <span v-else class="advanced-empty">{{ t('sales.customers_list.text_ebdcbdcf9c99') }}</span>
             </template>
-        <el-form-item label="邮箱" prop="email">
-          <el-input v-model="formData.email" placeholder="请输入邮箱" />
-        </el-form-item>
-        <el-form-item label="所属行业" prop="industry">
-          <el-input v-model="formData.industry" placeholder="请输入所属行业" />
-        </el-form-item>
+        <CompatFormItem :label="t('sales.customers_list.label_73075237fd0f')" prop="email">
+          <UInput v-model="formData.email" :placeholder="t('sales.customers_list.placeholder_59c9ed95eb06')" />
+        </CompatFormItem>
+        <CompatFormItem :label="t('sales.customers_list.label_2ec94bbf93f3')" prop="industry">
+          <UInput v-model="formData.industry" :placeholder="t('sales.customers_list.placeholder_2dc8d7fee7d8')" />
+        </CompatFormItem>
 
-        <el-divider content-position="left">CRM 跟进</el-divider>
-        <el-form-item label="生命周期" prop="customerStatus">
-          <el-select v-model="formData.customerStatus" placeholder="请选择客户生命周期阶段" style="width: 100%">
-            <el-option
+        <el-divider content-position="left">{{ t('sales.customers_list.text_6c78a119cf0b') }}</el-divider>
+        <CompatFormItem :label="t('sales.customers_list.label_9ebe1ab0d17f')" prop="customerStatus">
+          <CompatSelect v-model="formData.customerStatus" :placeholder="t('sales.customers_list.placeholder_d9b44d079200')" style="width: 100%">
+            <CompatOption
               v-for="opt in CUSTOMER_STATUS_OPTIONS"
               :key="opt.value"
               :label="opt.label"
               :value="opt.value"
             />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="重要程度" prop="importance">
-          <el-select v-model="formData.importance" placeholder="请选择客户重要程度" style="width: 100%">
-            <el-option
+          </CompatSelect>
+        </CompatFormItem>
+        <CompatFormItem :label="t('sales.customers_list.label_d9f32d1ae63d')" prop="importance">
+          <CompatSelect v-model="formData.importance" :placeholder="t('sales.customers_list.placeholder_a8b7b1c5f833')" style="width: 100%">
+            <CompatOption
               v-for="opt in CUSTOMER_IMPORTANCE_OPTIONS"
               :key="opt.value"
               :label="opt.label"
               :value="opt.value"
             />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="客户来源" prop="source">
-          <el-select v-model="formData.source" placeholder="请选择客户来源渠道" clearable style="width: 100%">
-            <el-option
+          </CompatSelect>
+        </CompatFormItem>
+        <CompatFormItem :label="t('sales.customers_list.label_b6e60a6bd9eb')" prop="source">
+          <CompatSelect v-model="formData.source" :placeholder="t('sales.customers_list.placeholder_687cf876998e')" clearable style="width: 100%">
+            <CompatOption
               v-for="opt in CUSTOMER_SOURCE_OPTIONS"
               :key="opt.value"
               :label="opt.label"
               :value="opt.value"
             />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="最近接洽" prop="lastContactedAt">
-          <el-date-picker
+          </CompatSelect>
+        </CompatFormItem>
+        <CompatFormItem :label="t('sales.customers_list.label_5f6352bba039')" prop="lastContactedAt">
+          <CompatDatePicker
             v-model="formData.lastContactedAt"
             type="datetime"
-            placeholder="选择最近接洽时间"
+            :placeholder="t('sales.customers_list.placeholder_f1a23f4b4eb6')"
             value-format="YYYY-MM-DDTHH:mm:ss"
             style="width: 100%"
           />
-        </el-form-item>
+        </CompatFormItem>
 
         <!-- Sprint 4 W2 S-INVOICE-CLIENT-1 — 客户级开票默认 (Option 3 三层链第 1 层, R3 dropdown) -->
-        <el-divider content-position="left">开票默认 (新建销售单自动 prefill)</el-divider>
-        <el-form-item label="默认税率" prop="defaultTaxRate">
+        <el-divider content-position="left">{{ t('sales.customers_list.text_530cefad1504') }}</el-divider>
+        <CompatFormItem :label="t('sales.customers_list.label_21d358aaf9ff')" prop="defaultTaxRate">
           <el-input-number
             v-model="formData.defaultTaxRate"
             :precision="2"
             :step="1"
             :min="0"
             :max="100"
-            placeholder="未设 (开票时再选)"
+            :placeholder="t('sales.customers_list.placeholder_6471228cbbdf')"
             style="width: 100%"
           >
             <template #suffix>%</template>
           </el-input-number>
-          <div class="form-hint">销售单/开票申请创建时, 此税率自动 prefill 到行项目 (用户仍可逐行调整)</div>
-        </el-form-item>
-        <el-form-item label="默认开票类型" prop="defaultInvoiceType">
-          <el-select v-model="formData.defaultInvoiceType" placeholder="请选择默认开票类型" clearable style="width: 100%">
+          <div class="form-hint">{{ t('sales.customers_list.text_553b162c41d4') }}</div>
+        </CompatFormItem>
+        <CompatFormItem :label="t('sales.customers_list.label_d5a6d85f98f8')" prop="defaultInvoiceType">
+          <el-select v-model="formData.defaultInvoiceType" :placeholder="t('sales.customers_list.placeholder_3b8f65dc8d45')" clearable style="width: 100%">
             <el-option
               v-for="opt in INVOICE_TYPE_OPTIONS"
               :key="opt.value"
@@ -697,26 +703,26 @@ async function handleDelete(row: TableRow) {
               </span>
             </el-option>
           </el-select>
-        </el-form-item>
+        </CompatFormItem>
 
         <!-- P1 #23 S-CREDIT-1: 信用状态 dropdown (creditLimit / creditPeriodDays 走扩展字段) -->
-        <el-divider content-position="left">信用控制 (创建销售单时按此状态预检)</el-divider>
-        <el-form-item label="信用状态" prop="creditStatus">
-          <el-select v-model="formData.creditStatus" placeholder="请选择信用状态" style="width: 100%">
-            <el-option
+        <el-divider content-position="left">{{ t('sales.customers_list.text_f96fd253ca27') }}</el-divider>
+        <CompatFormItem :label="t('sales.customers_list.label_014d60ecff6f')" prop="creditStatus">
+          <CompatSelect v-model="formData.creditStatus" :placeholder="t('sales.customers_list.placeholder_1987dfae1d6a')" style="width: 100%">
+            <CompatOption
               v-for="opt in CREDIT_STATUS_OPTIONS"
               :key="opt.value"
               :label="opt.label"
               :value="opt.value"
             />
-          </el-select>
+          </CompatSelect>
           <div class="form-hint">
-            NORMAL=正常下单, WARNING=已用 ≥ 80% 自动预警, SUSPENDED=管理员手工冻结 (创建销售单将被阻塞)
+            {{ t('sales.customers_list.text_43d07648406d') }}
           </div>
-        </el-form-item>
+        </CompatFormItem>
 
         <!-- 扩展字段 (动态渲染) -->
-        <el-divider content-position="left">扩展信息</el-divider>
+        <el-divider content-position="left">{{ t('sales.customers_list.text_0e91274c2843') }}</el-divider>
         <DynamicEntityForm
           :fields="customerExtendedFields"
           :model-value="formData as TableRow"
@@ -727,12 +733,12 @@ async function handleDelete(row: TableRow) {
         />
           </el-collapse-item>
         </el-collapse>
-      </el-form>
+      </CompatForm>
       <template #footer>
-        <el-button @click="dialogVisible = false">{{ isViewMode ? '关闭' : '取消' }}</el-button>
-        <el-button v-if="!isViewMode" type="primary" :loading="submitting" @click="handleSubmit">确定</el-button>
+        <UButton color="neutral" variant="outline" @click="dialogVisible = false">{{ isViewMode ? t('sales.customers_list.text_3fd47edce45b') : t('sales.customers_list.text_2cd0f3be8738') }}</UButton>
+        <UButton v-if="!isViewMode" color="primary" :loading="submitting" @click="handleSubmit">{{ t('sales.customers_list.action_fac2a67ad878') }}</UButton>
       </template>
-    </el-dialog>
+    </CompatDialog>
   </div>
 </template>
 

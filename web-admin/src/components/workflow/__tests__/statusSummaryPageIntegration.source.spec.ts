@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { sourceWithChinese } from '@/i18n-pilot/sourceForTests';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -8,8 +9,8 @@ function source(path: string): string {
 
 describe('page-level status summary integration', () => {
   it('removes static tutorial banners from the reported sales and production pages', () => {
-    const returns = source('src/views/sales/returns/list.vue');
-    const plans = source('src/views/production/plans/list.vue');
+    const returns = sourceWithChinese(source('src/views/sales/returns/list.vue'));
+    const plans = sourceWithChinese(source('src/views/production/plans/list.vue'));
 
     expect(returns).not.toContain('如何创建退货单');
     expect(plans).not.toContain('生产计划操作指引');
@@ -18,7 +19,7 @@ describe('page-level status summary integration', () => {
   });
 
   it('uses the existing inbound tabs as the only warehouse receiving status navigation', () => {
-    const materials = source('src/views/warehouse/materials/list.vue');
+    const materials = sourceWithChinese(source('src/views/warehouse/materials/list.vue'));
 
     expect(materials).not.toContain('source-only-hint');
     expect(materials).not.toContain('receiving-workflow-overview');

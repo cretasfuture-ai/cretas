@@ -1,6 +1,12 @@
 import { flushPromises, mount } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ElementPlus, { ElMessageBox } from 'element-plus';
+import { nuxtPilotStubs } from '@/components/compat/testStubs';
+
+vi.mock('@/components/compat/messages', async () => {
+  const { ElMessageBox } = await import('element-plus');
+  return { useCompatMessages: () => ({ ElMessageBox }) };
+});
 
 /**
  * #1844 终审 L-d: 批次编辑弹窗里的「解除来源个体挂载」—— 挂载真实 list.vue, 真点按钮。
@@ -65,6 +71,7 @@ function mountList() {
     global: {
       plugins: [ElementPlus],
       stubs: {
+        ...nuxtPilotStubs,
         teleport: true,
         transition: false,
         ElDialog: {

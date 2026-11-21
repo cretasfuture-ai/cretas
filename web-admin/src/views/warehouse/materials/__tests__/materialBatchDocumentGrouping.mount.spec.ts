@@ -1,6 +1,7 @@
 import { flushPromises, mount } from '@vue/test-utils';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import ElementPlus from 'element-plus';
+import { nuxtPilotStubs } from '@/components/compat/testStubs';
 
 /**
  * 已入库批次按收货单分组 (2026-09-01, owner 原话见 groupBySourceDocument.ts 头部)。
@@ -88,6 +89,7 @@ function mountList() {
     global: {
       plugins: [ElementPlus],
       stubs: {
+        ...nuxtPilotStubs,
         teleport: true,
         transition: false,
         ElDialog: {

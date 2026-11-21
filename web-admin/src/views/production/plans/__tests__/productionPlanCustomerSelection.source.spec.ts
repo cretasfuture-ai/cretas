@@ -1,9 +1,10 @@
 import { readFileSync } from 'node:fs';
+import { sourceWithChinese } from '@/i18n-pilot/sourceForTests';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 describe('库存生产归属客户 UI 契约', () => {
-  const source = readFileSync(resolve(__dirname, '../list.vue'), 'utf8');
+  const source = sourceWithChinese(readFileSync(resolve(__dirname, '../list.vue'), 'utf8'));
 
   it('uses a searchable and clearable customer master-data select instead of free text', () => {
     expect(source).toContain('label="关联客户(选填)"');
