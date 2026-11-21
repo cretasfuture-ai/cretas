@@ -1197,7 +1197,7 @@ public class ArApServiceImpl implements ArApService {
                                                              int page, int size) {
         PageRequest pageRequest = PageRequest.of(page - 1, size);
         String cp = counterpartyId == null || counterpartyId.isBlank() ? null : counterpartyId;
-        List<Long> owners = scopeOwners(factoryId);
+        List<Long> owners = recordScopeOwners(factoryId);
         Page<ArApTransaction> result;
         if (owners != null) {
             if (owners.isEmpty()) return PageResponse.of(List.of(), page, size, 0L);
@@ -1217,7 +1217,7 @@ public class ArApServiceImpl implements ArApService {
                                                           int page, int size) {
         PageRequest pageRequest = PageRequest.of(page - 1, size, Sort.by(Sort.Direction.DESC, "transactionDate"));
         Page<ArApTransaction> result;
-        List<Long> owners = scopeOwners(factoryId);
+        List<Long> owners = recordScopeOwners(factoryId);
         if (owners != null) {
             if (owners.isEmpty()) return PageResponse.of(List.of(), page, size, 0L);
             result = transactionRepository.findScopedTransactions(factoryId,
@@ -1420,6 +1420,12 @@ public class ArApServiceImpl implements ArApService {
 
     private List<Long> scopeOwners(String factoryId) {
         return financeRowScopeQuery == null ? null : financeRowScopeQuery.creators(factoryId);
+    }
+
+    private List<Long> recordScopeOwners(String factoryId) {
+        return financeRowScopeQuery == null
+                ? com.cretas.aims.security.BusinessRowScope.recordCreators(null, factoryId)
+                : financeRowScopeQuery.recordCreators(factoryId);
     }
 
     private boolean isRestrictedScope(String factoryId) {

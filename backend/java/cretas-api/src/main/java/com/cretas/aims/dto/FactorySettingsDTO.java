@@ -284,7 +284,10 @@ public class FactorySettingsDTO {
     @NoArgsConstructor
     @AllArgsConstructor
     @Builder
-    @com.fasterxml.jackson.annotation.JsonIgnoreProperties("shippedRevenueBasis")
+    @com.fasterxml.jackson.annotation.JsonIgnoreProperties({"shippedRevenueBasis",
+            com.cretas.aims.service.inventory.TradeCaliberSettings.LEDGER_KEY,
+            com.cretas.aims.service.inventory.TradeCaliberSettings.PURCHASE_PRICE_KEY,
+            com.cretas.aims.service.inventory.TradeCaliberSettings.CUSTOMER_AVERAGE_KEY})
     public static class ProductionSettings {
         @Schema(description = "默认批次大小", example = "100")
         private Integer defaultBatchSize;

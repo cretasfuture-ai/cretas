@@ -9,6 +9,7 @@ import com.cretas.aims.repository.FactoryRepository;
 import com.cretas.aims.repository.FactorySettingsRepository;
 import com.cretas.aims.service.FactorySettingsService;
 import com.cretas.aims.service.finance.ShippedRevenueBasisSettings;
+import com.cretas.aims.service.inventory.TradeCaliberSettings;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -179,8 +180,7 @@ public class FactorySettingsServiceImpl implements FactorySettingsService {
     public FactorySettingsDTO.ProductionSettings updateProductionSettings(String factoryId,
                                                                           FactorySettingsDTO.ProductionSettings prodSettings) {
         FactorySettings settings = getSettingsEntity(factoryId);
-        settings.setProductionSettings(ShippedRevenueBasisSettings
-                .preserveOnUpdate(factoryId, settings.getProductionSettings(), toJsonString(prodSettings)));
+        mergeProductionSettings(settings, prodSettings);
         settingsRepository.save(settings);
 
         log.info("更新生产设置成功: factoryId={}", factoryId);
@@ -191,6 +191,12 @@ public class FactorySettingsServiceImpl implements FactorySettingsService {
     public FactorySettingsDTO.InventorySettings getInventorySettings(String factoryId) {
         FactorySettings settings = getSettingsEntity(factoryId);
         return parseJsonField(settings.getInventorySettings(), FactorySettingsDTO.InventorySettings.class);
+    }
+
+    private void mergeProductionSettings(FactorySettings settings, FactorySettingsDTO.ProductionSettings incoming) {
+        String previous = settings.getProductionSettings();
+        String updated = ShippedRevenueBasisSettings.preserveOnUpdate(settings.getFactoryId(), previous, toJsonString(incoming));
+        settings.setProductionSettings(TradeCaliberSettings.preserveOnUpdate(previous, updated));
     }
 
     @Override
@@ -351,7 +357,7 @@ public class FactorySettingsServiceImpl implements FactorySettingsService {
         settings.setAiSettings(null);
         settings.setNotificationSettings(null);
         settings.setWorkTimeSettings(null);
-        settings.setProductionSettings(null);
+        settings.setProductionSettings(TradeCaliberSettings.preserveOnUpdate(settings.getProductionSettings(), null));
         settings.setInventorySettings(null);
         settings.setDataRetentionSettings(null);
 
@@ -523,9 +529,7 @@ public class FactorySettingsServiceImpl implements FactorySettingsService {
 
         // 更新生产设置
         if (dto.getProductionSettings() != null) {
-            settings.setProductionSettings(ShippedRevenueBasisSettings
-                    .preserveOnUpdate(settings.getFactoryId(), settings.getProductionSettings(),
-                            toJsonString(dto.getProductionSettings())));
+            mergeProductionSettings(settings, dto.getProductionSettings());
         }
 
         // 更新库存设置

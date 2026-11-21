@@ -6,11 +6,33 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 
 @Repository
 public interface PurchaseOrderItemRepository extends JpaRepository<PurchaseOrderItem, Long> {
+
+    /** Candidate reference prices for a purchase order line, in effective-date priority. */
+    @Query("""
+            SELECT i.priceListId AS priceListId, pl.name AS priceListName, i.unit AS unit, i.standardPrice AS standardPrice
+            FROM PriceListItem i JOIN i.priceList pl
+            WHERE pl.factoryId = :factoryId AND pl.priceType = 'PURCHASE_PRICE' AND pl.customerId IS NULL
+              AND pl.isActive = true AND pl.effectiveFrom <= :asOf
+              AND (pl.effectiveTo IS NULL OR pl.effectiveTo >= :asOf)
+              AND i.materialTypeId = :materialTypeId AND i.standardPrice >= 0
+            ORDER BY pl.effectiveFrom DESC, pl.createdAt DESC, pl.id ASC, i.id ASC
+            """)
+    List<PurchasePriceReference> findPurchasePriceReferences(@Param("factoryId") String factoryId,
+            @Param("materialTypeId") String materialTypeId, @Param("asOf") LocalDate asOf);
+
+    interface PurchasePriceReference {
+        String getPriceListId();
+        String getPriceListName();
+        String getUnit();
+        BigDecimal getStandardPrice();
+    }
 
     List<PurchaseOrderItem> findByPurchaseOrderId(String purchaseOrderId);
 

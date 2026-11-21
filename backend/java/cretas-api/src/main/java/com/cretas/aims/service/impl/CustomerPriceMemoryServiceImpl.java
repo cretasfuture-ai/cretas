@@ -12,8 +12,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 /**
  * Sprint 4 W2 S-PRICE-1 — 客户记忆价服务实现.
@@ -72,16 +74,18 @@ public class CustomerPriceMemoryServiceImpl implements CustomerPriceMemoryServic
         if (order == null || order.getCustomerId() == null) {
             return 0;
         }
-        List<SalesOrderItem> items = salesOrderItemRepository.findBySalesOrderId(order.getId());
+        List<SalesOrderItem> items = salesOrderItemRepository
+                .findBySalesOrderIdAndSalesOrderFactoryId(order.getId(), order.getFactoryId());
         if (items.isEmpty()) {
             log.debug("S-PRICE-1 skip: SO {} has no items", order.getId());
             return 0;
         }
         int written = 0;
-        for (SalesOrderItem item : items) {
-            if (item.getProductTypeId() == null || item.getUnitPrice() == null) {
-                continue;  // 缺关键字段 → 跳过 (不算 history)
-            }
+        var itemsByProduct = items.stream()
+                .filter(item -> item.getProductTypeId() != null && item.getUnitPrice() != null)
+                .collect(Collectors.groupingBy(SalesOrderItem::getProductTypeId));
+        for (var productLines : itemsByProduct.values()) {
+            SalesOrderItem item = productLines.stream().min(Comparator.comparing(SalesOrderItem::getId)).orElseThrow();
             // R4 idempotency check — same SO + customer + product → existing row 已写过, 跳过
             Optional<CustomerPriceHistory> existing = historyRepository
                     .findByFactoryIdAndCustomerIdAndProductTypeIdAndSourceSalesOrderId(
@@ -95,6 +99,15 @@ public class CustomerPriceMemoryServiceImpl implements CustomerPriceMemoryServic
             row.setCustomerId(order.getCustomerId());
             row.setProductTypeId(item.getProductTypeId());
             row.setUnitPrice(item.getUnitPrice());
+            // As with backfill, the recorded price must identify one source line unambiguously.
+            if (item.getQuantity() != null && item.getQuantity().signum() > 0
+                    && productLines.stream().filter(line -> line.getUnitPrice().compareTo(item.getUnitPrice()) == 0).count() == 1) {
+                row.setQuantity(item.getQuantity());
+                row.setQuantityUnit(item.getUnit());
+                row.setPackagingUnit(item.getPackagingUnit());
+                row.setPackagingBaseUnit(item.getPackagingBaseUnit());
+                row.setPackagingFactor(item.getPackagingFactor());
+            }
             row.setSourceSalesOrderId(order.getId());
             row.setSourceOrderNumber(order.getOrderNumber());
             row.setOrderDate(order.getOrderDate());

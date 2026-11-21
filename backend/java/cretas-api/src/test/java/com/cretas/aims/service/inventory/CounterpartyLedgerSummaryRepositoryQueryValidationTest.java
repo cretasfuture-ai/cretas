@@ -1,20 +1,51 @@
 package com.cretas.aims.service.inventory;
 
+import com.cretas.aims.controller.CustomerController;
+import com.cretas.aims.controller.SupplierController;
+import com.cretas.aims.controller.finance.ArApController;
 import com.cretas.aims.entity.ProductType;
+import com.cretas.aims.entity.User;
+import com.cretas.aims.entity.config.RoleDefinition;
 import com.cretas.aims.entity.enums.*;
 import com.cretas.aims.entity.finance.ArApTransaction;
 import com.cretas.aims.entity.inventory.*;
+import com.cretas.aims.exception.GlobalExceptionHandler;
+import com.cretas.aims.repository.CustomerRepository;
+import com.cretas.aims.repository.FactorySettingsRepository;
+import com.cretas.aims.repository.RoleDefinitionRepository;
+import com.cretas.aims.repository.SupplierRepository;
+import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.repository.finance.ArApTransactionRepository;
+import com.cretas.aims.security.AuthenticatedActor;
+import com.cretas.aims.security.AuthenticatedActorType;
 import com.cretas.aims.security.BusinessRowScope;
+import com.cretas.aims.security.DataScopeResolver;
+import com.cretas.aims.security.DataScopeRouteInterceptor;
+import com.cretas.aims.security.PriceFieldResponseAdvice;
+import com.cretas.aims.service.PermissionService;
+import com.cretas.aims.service.finance.FinanceRowScopeQuery;
+import com.cretas.aims.service.finance.impl.ArApServiceImpl;
+import com.cretas.aims.service.impl.CustomerServiceImpl;
+import com.cretas.aims.service.impl.SupplierServiceImpl;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.domain.EntityScan;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -22,8 +53,15 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anySet;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /** 供应商/客户账本汇总 (G4): 真实 JPA Context, 真实 JPQL. */
 @DataJpaTest(showSql = false, properties = {"spring.flyway.enabled=false"})
@@ -34,6 +72,15 @@ import static org.mockito.Mockito.when;
 class CounterpartyLedgerSummaryRepositoryQueryValidationTest extends TradeJpaQueryTestSupport {
 
     private static final String F = "IT-LEDGER";
+    private static final String SELF_ROLE = "finance_manager";
+    private static final String ALL_ROLE = "factory_super_admin";
+    @Autowired private ArApTransactionRepository transactions;
+    @Autowired private CustomerRepository customers;
+    @Autowired private SupplierRepository suppliers;
+    @Autowired private RoleDefinitionRepository roles;
+    @Autowired private UserRepository users;
+    @Autowired private FactorySettingsRepository settings;
+    @Autowired private JdbcTemplate jdbc;
     @PersistenceContext private EntityManager em;
     private CounterpartyLedgerSummaryService svc;
     private BusinessRowScope rowScope;
@@ -59,6 +106,8 @@ class CounterpartyLedgerSummaryRepositoryQueryValidationTest extends TradeJpaQue
         em.persist(product);
         svc = new CounterpartyLedgerSummaryService();
         ReflectionTestUtils.setField(svc, "em", em);
+        ReflectionTestUtils.setField(svc, "transactionRepository", transactions);
+        ReflectionTestUtils.setField(svc, "tradeCaliberSettings", new TradeCaliberSettings(settings));
         rowScope = mock(BusinessRowScope.class);
         when(rowScope.recordCreatorIds(F)).thenReturn(null);
         ReflectionTestUtils.setField(svc, "businessRowScope", rowScope);
@@ -120,7 +169,7 @@ class CounterpartyLedgerSummaryRepositoryQueryValidationTest extends TradeJpaQue
         em.persist(i);
     }
 
-    private void tx(CounterpartyType cp, String id, ArApTransactionType type, String amount) {
+    private ArApTransaction tx(CounterpartyType cp, String id, ArApTransactionType type, String amount) {
         ArApTransaction t = new ArApTransaction();
         t.setFactoryId(F);
         t.setTransactionNumber("TX-" + (++seq));
@@ -132,6 +181,7 @@ class CounterpartyLedgerSummaryRepositoryQueryValidationTest extends TradeJpaQue
         t.setBalanceAfter(BigDecimal.ZERO);
         t.setTransactionDate(LocalDate.of(2026, 11, 3));
         em.persist(t);
+        return t;
     }
 
     @Test
@@ -199,16 +249,151 @@ class CounterpartyLedgerSummaryRepositoryQueryValidationTest extends TradeJpaQue
         assertThat((BigDecimal) m.get("contractAmount")).isEqualByComparingTo("0");
     }
 
-    @Test
-    void restrictedAccountNeverGetsFactoryWideLedgerAmounts() {
-        tx(CounterpartyType.CUSTOMER, "CUS-1", ArApTransactionType.AR_INVOICE, "150");
-        tx(CounterpartyType.CUSTOMER, "CUS-1", ArApTransactionType.AR_PAYMENT, "50");
+    @ParameterizedTest(name = "factory SELF override={0}")
+    @ValueSource(booleans = {true, false})
+    void httpLedgerTotalsMatchVisibleTransactionsForCustomersAndSuppliers(boolean explicitOverride) throws Exception {
+        em.find(User.class, userId).setRoleCode(SELF_ROLE);
+        Long other = TradeJpaFixtures.createUser(em, F, "ledger-other", SELF_ROLE);
+        Long all = TradeJpaFixtures.createUser(em, F, "ledger-all", ALL_ROLE);
+        var yours = so("CUS-1", SalesOrderStatus.CONFIRMED, "150", null);
+        var theirs = so("CUS-1", SalesOrderStatus.CONFIRMED, "900", null);
+        theirs.setCreatedBy(other);
+        var yourPo = po("SUP-1", PurchaseOrderStatus.FINANCE_APPROVED, "400", PurchaseInvoiceStatus.NOT_RECEIVED);
+        var theirPo = po("SUP-1", PurchaseOrderStatus.FINANCE_APPROVED, "700", PurchaseInvoiceStatus.NOT_RECEIVED);
+        theirPo.setCreatedBy(other);
+        var ar = CounterpartyType.CUSTOMER;
+        var ap = CounterpartyType.SUPPLIER;
+        tx(ar, "CUS-1", ArApTransactionType.AR_INVOICE, "150").setSalesOrderId(yours.getId());
+        tx(ar, "CUS-1", ArApTransactionType.AR_PAYMENT, "50").setSalesOrderId(yours.getId());
+        tx(ar, "CUS-1", ArApTransactionType.AR_INVOICE, "900").setSalesOrderId(theirs.getId());
+        var hiddenAr = tx(ar, "CUS-1", ArApTransactionType.AR_PAYMENT, "100");
+        hiddenAr.setSalesOrderId(theirs.getId());
+        hiddenAr.setOperatedBy(userId);
+        var adjustment = tx(ar, "CUS-1", ArApTransactionType.AR_ADJUSTMENT, "12");
+        adjustment.setApprovalStatus(ArApApprovalStatus.APPROVED);
+        adjustment.setOperatedBy(userId);
+        var pending = tx(ar, "CUS-1", ArApTransactionType.AR_ADJUSTMENT, "80");
+        pending.setApprovalStatus(ArApApprovalStatus.PENDING);
+        pending.setOperatedBy(userId);
+
+        tx(ap, "SUP-1", ArApTransactionType.AP_INVOICE, "400").setPurchaseOrderId(yourPo.getId());
+        tx(ap, "SUP-1", ArApTransactionType.AP_PAYMENT, "75").setPurchaseOrderId(yourPo.getId());
+        tx(ap, "SUP-1", ArApTransactionType.AP_INVOICE, "700").setPurchaseOrderId(theirPo.getId());
+        tx(ap, "SUP-1", ArApTransactionType.AP_PAYMENT, "200").setPurchaseOrderId(theirPo.getId());
+        tx(ap, "SUP-1", ArApTransactionType.AP_CREDIT_NOTE, "10").setPurchaseOrderId(yourPo.getId());
+        tx(ap, "SUP-2", ArApTransactionType.AP_INVOICE, "999").setOperatedBy(userId);
         em.flush();
-        assertThat((BigDecimal) svc.customerSummary(F, "CUS-1").get("pendingCollection")).isEqualByComparingTo("100");
 
-        when(rowScope.recordCreatorIds(F)).thenReturn(List.of(userId));
+        MockMvc mvc = ledgerHttp(explicitOverride);
+        assertHttpTotals(mvc, userId, SELF_ROLE, ar, "CUS-1", 4, "112", "50", "SCOPED");
+        assertHttpTotals(mvc, all, ALL_ROLE, ar, "CUS-1", 6, "912", "150", "SCOPED");
+        assertHttpTotals(mvc, userId, SELF_ROLE, ap, "SUP-1", 3, "315", "75", "SCOPED");
+        assertHttpTotals(mvc, all, ALL_ROLE, ap, "SUP-1", 5, "815", "275", "SCOPED");
+        String receivables = "/api/mobile/" + F + "/finance/receivable-items";
+        assertThat(getAs(mvc, get(receivables).param("counterpartyId", "CUS-1").param("size", "1"), userId, SELF_ROLE)
+                .required("totalElements").asLong()).isEqualTo(1);
+        assertThat(getAs(mvc, get(receivables).param("counterpartyId", "CUS-1").param("size", "1"), all, ALL_ROLE)
+                .required("totalElements").asLong()).isEqualTo(2);
 
-        assertThat(svc.customerSummary(F, "CUS-1")).containsEntry("pendingCollection", null)
-                .containsEntry("receivedAmount", null);
+        TradeJpaFixtures.createProductionSettings(em, F, "{\"counterpartyLedgerScopeMode\":\"HIDDEN\"}");
+        var hiddenArSummary = httpSummary(mvc, userId, SELF_ROLE, true, "CUS-1");
+        assertThat(hiddenArSummary.required("counterpartyLedgerScopeMode").asText()).isEqualTo("HIDDEN");
+        assertThat(hiddenArSummary.required("pendingCollection").isNull()).isTrue();
+        assertThat(hiddenArSummary.required("receivedAmount").isNull()).isTrue();
+        var hiddenApSummary = httpSummary(mvc, userId, SELF_ROLE, false, "SUP-1");
+        assertThat(hiddenApSummary.required("counterpartyLedgerScopeMode").asText()).isEqualTo("HIDDEN");
+        assertThat(hiddenApSummary.required("pendingPayable").isNull()).isTrue();
+        assertThat(hiddenApSummary.required("paidAmount").isNull()).isTrue();
+        assertHttpTotals(mvc, all, ALL_ROLE, ar, "CUS-1", 6, "912", "150", "HIDDEN");
+        assertHttpTotals(mvc, all, ALL_ROLE, ap, "SUP-1", 5, "815", "275", "HIDDEN");
+    }
+
+    private MockMvc ledgerHttp(boolean explicitOverride) {
+        roles.saveAndFlush(RoleDefinition.builder().roleCode(SELF_ROLE).displayName("财务测试角色")
+                .dataScope(explicitOverride ? "ALL" : "SELF").build());
+        JdbcTemplate config = spy(jdbc);
+        String readScope = "SELECT data_scope FROM factory_role_data_scopes WHERE factory_id=? AND role_code=?";
+        if (explicitOverride) {
+            doReturn("SELF").when(config).queryForObject(readScope, String.class, F, SELF_ROLE);
+        } else {
+            org.mockito.Mockito.doThrow(new org.springframework.dao.EmptyResultDataAccessException(1))
+                    .when(config).queryForObject(readScope, String.class, F, SELF_ROLE);
+        }
+        doReturn("ALL").when(config).queryForObject(readScope, String.class, F, ALL_ROLE);
+        doReturn(explicitOverride ? 1L : 0L).when(config).queryForObject(
+                "SELECT COUNT(*) FROM factory_role_data_scopes WHERE factory_id=? AND role_code=?", Long.class, F, SELF_ROLE);
+        DataScopeResolver resolver = new DataScopeResolver(users, roles, config);
+        BusinessRowScope scope = new BusinessRowScope(resolver, config);
+        ReflectionTestUtils.setField(svc, "businessRowScope", scope);
+        var financeScope = new FinanceRowScopeQuery(transactions, null, null, null, null, null, null);
+        ReflectionTestUtils.setField(financeScope, "businessRowScope", scope);
+        var finance = new ArApServiceImpl(transactions, customers, suppliers);
+        ReflectionTestUtils.setField(finance, "financeRowScopeQuery", financeScope);
+        var arAp = new ArApController(finance, null, null, null, null);
+        ReflectionTestUtils.setField(arAp, "financeRowScopeQuery", financeScope);
+
+        var customer = new CustomerServiceImpl(customers, null, null);
+        var supplier = new SupplierServiceImpl(suppliers, null, null);
+        ReflectionTestUtils.setField(customer, "ledgerSummaryService", svc);
+        ReflectionTestUtils.setField(supplier, "ledgerSummaryService", svc);
+        var permissions = mock(PermissionService.class);
+        when(permissions.hasConfiguredPermission(any(User.class), eq("finance:read"), anySet())).thenReturn(true);
+        when(permissions.hasPermission(any(User.class), eq("procurement:price:view"))).thenReturn(true);
+        var advice = new PriceFieldResponseAdvice();
+        ReflectionTestUtils.setField(advice, "permissionService", permissions);
+        ReflectionTestUtils.setField(advice, "userRepository", users);
+        return MockMvcBuilders.standaloneSetup(new CustomerController(customer, null, null, null),
+                        new SupplierController(supplier, null, null, null, null), arAp)
+                .addInterceptors(new DataScopeRouteInterceptor(resolver, config))
+                .setControllerAdvice(advice, new GlobalExceptionHandler()).build();
+    }
+
+    private void assertHttpTotals(MockMvc mvc, long actorId, String role, CounterpartyType type, String id,
+                                  int count, String netExpected, String paidExpected, String mode) throws Exception {
+        boolean ar = type == CounterpartyType.CUSTOMER;
+        String root = "/api/mobile/" + F;
+        JsonNode details = getAs(mvc, get(root + "/finance/transactions").param("counterpartyType", type.name())
+                .param("counterpartyId", id), actorId, role).path("content");
+        assertThat(details).hasSize(count);
+        BigDecimal net = BigDecimal.ZERO;
+        BigDecimal paid = BigDecimal.ZERO;
+        for (JsonNode row : details) {
+            assertThat(row.path("balanceAfter").isNumber()).as("running balance visibility").isEqualTo(ALL_ROLE.equals(role));
+            BigDecimal amount = row.required("amount").decimalValue();
+            String transactionType = row.required("transactionType").asText();
+            switch (transactionType) {
+                case "AR_INVOICE", "AP_INVOICE" -> net = net.add(amount);
+                case "AR_PAYMENT", "AP_PAYMENT" -> {
+                    net = net.subtract(amount.abs());
+                    paid = paid.add(amount.abs());
+                }
+                case "AR_CREDIT_NOTE", "AP_CREDIT_NOTE" -> net = net.subtract(amount.abs());
+                case "AR_ADJUSTMENT", "AP_ADJUSTMENT", "AR_REFUND" -> {
+                    if ("APPROVED".equals(row.path("approvalStatus").asText())) net = net.add(amount);
+                }
+                default -> throw new AssertionError("Unexpected ledger transaction " + transactionType);
+            }
+        }
+        assertThat(net).isEqualByComparingTo(netExpected);
+        assertThat(paid).isEqualByComparingTo(paidExpected);
+        JsonNode summary = httpSummary(mvc, actorId, role, ar, id);
+        assertThat(summary.required("counterpartyLedgerScopeMode").asText()).isEqualTo(mode);
+        String netKey = ar ? "pendingCollection" : "pendingPayable";
+        String paidKey = ar ? "receivedAmount" : "paidAmount";
+        assertThat(summary.path(netKey).numberValue()).as(netKey).isNotNull();
+        assertThat(summary.path(paidKey).numberValue()).as(paidKey).isNotNull();
+        assertThat(summary.path(netKey).decimalValue()).isEqualByComparingTo(net);
+        assertThat(summary.path(paidKey).decimalValue()).isEqualByComparingTo(paid);
+    }
+
+    private JsonNode httpSummary(MockMvc mvc, long actorId, String role, boolean ar, String id) throws Exception {
+        return getAs(mvc, get("/api/mobile/" + F + (ar ? "/customers/" : "/suppliers/") + id + "/statistics"), actorId, role);
+    }
+
+    private JsonNode getAs(MockMvc mvc, MockHttpServletRequestBuilder request, long id, String role) throws Exception {
+        String body = mvc.perform(request.requestAttr("userId", id).requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE,
+                        new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, id, F, role)))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        return new ObjectMapper().readTree(body).required("data");
     }
 }

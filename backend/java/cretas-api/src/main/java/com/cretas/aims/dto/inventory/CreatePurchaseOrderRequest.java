@@ -118,20 +118,11 @@ public class CreatePurchaseOrderRequest {
 
         private BigDecimal taxRate;
 
-        /** 单价来源标签 (价目表 / 手改 / 手填), 原样保存. */
-        @Size(max = 32, message = "单价来源长度不能超过32个字符")
+        /** 兼容旧客户端传参。以下五个留痕字段由服务端生成。 */
         private String priceSource;
-
-        /** 下单时的参考价 (价目表价). */
         private BigDecimal referencePrice;
-
-        @Size(max = 191, message = "参考价目表ID长度不能超过191个字符")
         private String referencePriceListId;
-
-        @Size(max = 200, message = "参考价目表名称长度不能超过200个字符")
         private String referencePriceListName;
-
-        /** 单价相对参考价的偏离百分比. */
         private BigDecimal priceDeviationPct;
 
         @com.fasterxml.jackson.annotation.JsonAlias("notes")

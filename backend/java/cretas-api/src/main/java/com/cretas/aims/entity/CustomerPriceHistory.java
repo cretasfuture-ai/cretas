@@ -1,6 +1,7 @@
 package com.cretas.aims.entity;
 
 import com.cretas.aims.security.PriceSensitive;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import lombok.*;
 import org.hibernate.annotations.Where;
 
@@ -67,6 +68,27 @@ public class CustomerPriceHistory extends BaseEntity {
     @PriceSensitive
     @Column(name = "unit_price", nullable = false, precision = 15, scale = 4)
     private BigDecimal unitPrice;
+
+    /** Source sales line quantity in the unit used by unitPrice. Legacy unknown quantities stay null. */
+    @JsonIgnore
+    @Column(name = "quantity", precision = 15, scale = 4)
+    private BigDecimal quantity;
+
+    @JsonIgnore
+    @Column(name = "quantity_unit", length = 20)
+    private String quantityUnit;
+
+    @JsonIgnore
+    @Column(name = "packaging_unit", length = 20)
+    private String packagingUnit;
+
+    @JsonIgnore
+    @Column(name = "packaging_base_unit", length = 20)
+    private String packagingBaseUnit;
+
+    @JsonIgnore
+    @Column(name = "packaging_factor", precision = 20, scale = 8)
+    private BigDecimal packagingFactor;
 
     /** 来源销售订单 ID — 用于 hint "上次成交 ¥X (SO-XXX)" + R4 idempotency */
     @Column(name = "source_sales_order_id", nullable = false, length = 191)

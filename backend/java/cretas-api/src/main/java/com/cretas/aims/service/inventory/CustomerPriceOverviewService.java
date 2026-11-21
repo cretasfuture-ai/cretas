@@ -1,9 +1,12 @@
 package com.cretas.aims.service.inventory;
 
 import com.cretas.aims.dto.common.PageResponse;
+import com.cretas.aims.dto.inventory.CustomerPriceOverviewPage;
 import com.cretas.aims.dto.inventory.CustomerPriceOverviewRow;
+import com.cretas.aims.service.inventory.TradeCaliberSettings.CustomerAverageMode;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
+import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -23,7 +26,10 @@ import java.util.Set;
  * 并带上最近成交价 / 平均成交价 (来自 customer_price_history) 与产品规格。只读, 全部带 factory_id。
  */
 @Service
+@RequiredArgsConstructor
 public class CustomerPriceOverviewService {
+
+    private final TradeCaliberSettings tradeCaliberSettings;
 
     @PersistenceContext
     private EntityManager em;
@@ -33,8 +39,9 @@ public class CustomerPriceOverviewService {
                                                        List<Long> owners) {
         int p = Math.max(page, 1);
         int s = Math.min(Math.max(size, 1), 200);
+        CustomerAverageMode mode = tradeCaliberSettings.customerAverageMode(factoryId);
         if (owners != null && owners.isEmpty()) {
-            return PageResponse.of(List.of(), p, s, 0L);
+            return new CustomerPriceOverviewPage(List.of(), p, s, 0L, mode);
         }
         String kw = keyword == null || keyword.isBlank() ? null : "%" + keyword.trim().toLowerCase(Locale.ROOT) + "%";
 
@@ -48,7 +55,7 @@ public class CustomerPriceOverviewService {
 
         var countQ = em.createQuery("SELECT COUNT(i)" + from, Long.class).setParameter("f", factoryId);
         var rowsQ = em.createQuery("SELECT pl.customerId, c.name, i.id, pl.id, pl.name, i.productTypeId, pt.code, "
-                + "i.itemName, pt.specification, i.unit, i.standardPrice, pl.effectiveFrom, pl.effectiveTo, pl"
+                + "i.itemName, pt.specification, i.unit, i.standardPrice, pl.effectiveFrom, pl.effectiveTo, pl, pt.unit"
                 + from + " ORDER BY c.name ASC, i.itemName ASC, i.id ASC", Object[].class).setParameter("f", factoryId);
         if (kw != null) {
             countQ.setParameter("kw", kw);
@@ -67,7 +74,7 @@ public class CustomerPriceOverviewService {
             customerIds.add((String) r[0]);
             productIds.add((String) r[5]);
         }
-        Map<String, List<Object[]>> history = historyByPair(factoryId, customerIds, productIds, owners);
+        Map<String, List<Trade>> history = historyByPair(factoryId, customerIds, productIds, owners);
 
         List<CustomerPriceOverviewRow> out = new ArrayList<>();
         for (Object[] r : rows) {
@@ -87,32 +94,66 @@ public class CustomerPriceOverviewService {
             v.setEffectiveFrom((LocalDate) r[11]);
             v.setEffectiveTo((LocalDate) r[12]);
             v.setEffective(pl.isCurrentlyEffective());
-            List<Object[]> h = history.get(r[0] + "|" + r[5]);
-            if (h == null || h.isEmpty()) {
-                v.setTradedCount(0);
-            } else {
-                BigDecimal sum = BigDecimal.ZERO;
-                for (Object[] x : h) {
-                    sum = sum.add((BigDecimal) x[0]);
+            List<Trade> trades = history.get(r[0] + "|" + r[5]);
+            if (trades != null) {
+                v.setTradedCount(trades.size());
+                v.setLatestTradedPrice(trades.getFirst().unitPrice());
+                v.setLatestTradedDate(trades.getFirst().orderDate());
+                if (mode == CustomerAverageMode.SIMPLE) {
+                    BigDecimal prices = trades.stream().map(Trade::unitPrice).reduce(BigDecimal.ZERO, BigDecimal::add);
+                    v.setAverageTradedPrice(prices.divide(BigDecimal.valueOf(trades.size()), 4, RoundingMode.HALF_UP));
+                } else {
+                    String baseUnit = (String) r[14];
+                    applyWeightedAverage(v, trades, baseUnit == null || baseUnit.isBlank() ? v.getUnit() : baseUnit);
                 }
-                v.setTradedCount(h.size());
-                v.setAverageTradedPrice(sum.divide(BigDecimal.valueOf(h.size()), 4, RoundingMode.HALF_UP));
-                v.setLatestTradedPrice((BigDecimal) h.get(0)[0]); // 已按订单日倒序
-                v.setLatestTradedDate((LocalDate) h.get(0)[1]);
             }
             out.add(v);
         }
-        return PageResponse.of(out, p, s, total);
+        return new CustomerPriceOverviewPage(out, p, s, total, mode);
     }
 
-    /** key = customerId|productTypeId; 每个 value 是 [unitPrice, orderDate] 列表, 订单日倒序。 */
-    private Map<String, List<Object[]>> historyByPair(String factoryId, Set<String> customerIds, Set<String> productIds,
-                                                     List<Long> owners) {
-        Map<String, List<Object[]>> map = new HashMap<>();
+    private void applyWeightedAverage(CustomerPriceOverviewRow row, List<Trade> trades, String baseUnit) {
+        BigDecimal quantity = BigDecimal.ZERO;
+        BigDecimal amount = BigDecimal.ZERO;
+        long excluded = 0;
+        for (Trade trade : trades) {
+            BigDecimal baseQuantity = trade.quantityIn(baseUnit);
+            if (baseQuantity == null || baseQuantity.signum() <= 0) {
+                excluded++;
+                continue;
+            }
+            quantity = quantity.add(baseQuantity);
+            amount = amount.add(trade.unitPrice().multiply(trade.quantity()));
+        }
+        row.setExcludedTradeCount(excluded);
+        if (quantity.signum() > 0) {
+            row.setAverageTradedPrice(amount.divide(quantity, 4, RoundingMode.HALF_UP));
+            row.setAverageTradedPriceUnit(baseUnit);
+        }
+    }
+
+    private record Trade(BigDecimal unitPrice, LocalDate orderDate, BigDecimal quantity, String unit,
+                         String packagingUnit, String packagingBaseUnit, BigDecimal packagingFactor) {
+        BigDecimal quantityIn(String baseUnit) {
+            if (unit == null || unit.isBlank() || baseUnit == null || baseUnit.isBlank()) return null;
+            if (packagingUnit != null && !FgQuantityUnitConverter.hasPackagingSpec(
+                    packagingUnit, packagingBaseUnit, packagingFactor)) return null;
+            // Use the sale's packaging snapshot and fixed physical conversions. Current SKU specs
+            // and net weight cannot reconstruct a different historical package.
+            return FgQuantityUnitConverter.convertWithPackaging(quantity, unit, baseUnit, null,
+                    packagingUnit, packagingBaseUnit, packagingFactor, null, null, null);
+        }
+    }
+
+    /** key = customerId|productTypeId, 成交记录按订单日倒序。 */
+    private Map<String, List<Trade>> historyByPair(String factoryId, Set<String> customerIds, Set<String> productIds,
+                                                 List<Long> owners) {
+        Map<String, List<Trade>> map = new HashMap<>();
         if (customerIds.isEmpty() || productIds.isEmpty()) {
             return map;
         }
-        var query = em.createQuery("SELECT h.unitPrice, h.orderDate, h.customerId, h.productTypeId "
+        var query = em.createQuery("SELECT h.unitPrice, h.orderDate, h.customerId, h.productTypeId, h.quantity, "
+                + "h.quantityUnit, h.packagingUnit, h.packagingBaseUnit, h.packagingFactor "
                 + "FROM CustomerPriceHistory h WHERE h.factoryId = :f AND h.customerId IN :cs "
                 + "AND h.productTypeId IN :ps AND h.unitPrice IS NOT NULL "
                 + (owners == null ? "" : "AND EXISTS (SELECT 1 FROM SalesOrder o WHERE o.id = h.sourceSalesOrderId "
@@ -121,7 +162,9 @@ public class CustomerPriceOverviewService {
                 .setParameter("f", factoryId).setParameter("cs", customerIds).setParameter("ps", productIds);
         if (owners != null) query.setParameter("owners", owners);
         for (Object[] x : query.getResultList()) {
-            map.computeIfAbsent(x[2] + "|" + x[3], k -> new ArrayList<>()).add(new Object[]{x[0], x[1]});
+            map.computeIfAbsent(x[2] + "|" + x[3], k -> new ArrayList<>())
+                    .add(new Trade((BigDecimal) x[0], (LocalDate) x[1], (BigDecimal) x[4], (String) x[5],
+                            (String) x[6], (String) x[7], (BigDecimal) x[8]));
         }
         return map;
     }

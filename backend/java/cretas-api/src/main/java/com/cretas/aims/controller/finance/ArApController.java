@@ -234,7 +234,7 @@ public class ArApController {
             @RequestParam(defaultValue = "20") int size) {
         PageResponse<ArApTransaction> result = arApService.getTransactions(
                 factoryId, counterpartyType, counterpartyId, page, size);
-        return ApiResponse.success("查询成功", projectTransactions(factoryId, result));
+        return ApiResponse.success("查询成功", projectTransactions(factoryId, result, true));
     }
 
     /**
@@ -256,7 +256,7 @@ public class ArApController {
             @RequestParam(defaultValue = "20") int size) {
         PageResponse<ArApTransaction> raw = arApService.getReceivableItems(
                 factoryId, counterpartyId, overdueOnly, unsettledOnly, dueFrom, dueTo, page, size);
-        PageResponse<ArApTransaction> projected = projectTransactions(factoryId, raw);
+        PageResponse<ArApTransaction> projected = projectTransactions(factoryId, raw, true);
         LocalDate today = LocalDate.now();
         var rows = projected.getContent().stream().map(t -> receivableRow(t, today)).toList();
         return ApiResponse.success("查询成功", PageResponse.of(rows, page, size, projected.getTotalElements()));
@@ -307,7 +307,7 @@ public class ArApController {
             @RequestParam(defaultValue = "20") int size) {
         PageResponse<ArApTransaction> result = arApService.getPendingAdjustments(
                 factoryId, counterpartyType, minAmount, maxAmount, fromDate, toDate, page, size);
-        return ApiResponse.success("查询成功", projectTransactions(factoryId, result));
+        return ApiResponse.success("查询成功", projectTransactions(factoryId, result, false));
     }
 
     /**
@@ -434,14 +434,16 @@ public class ArApController {
     }
 
     private PageResponse<ArApTransaction> projectTransactions(String factoryId,
-                                                               PageResponse<ArApTransaction> transactions) {
+                                                               PageResponse<ArApTransaction> transactions,
+                                                               boolean recordScope) {
         if (financeRowScopeQuery == null) {
             if (org.springframework.web.context.request.RequestContextHolder.getRequestAttributes() != null) {
                 throw new BusinessException(503, "数据范围组件未就绪，访问已停止");
             }
             return transactions;
         }
-        return financeRowScopeQuery.responseTransactions(factoryId, transactions);
+        return recordScope ? financeRowScopeQuery.responseRecordTransactions(factoryId, transactions)
+                : financeRowScopeQuery.responseTransactions(factoryId, transactions);
     }
 
     // ==================== 期初建账修正 (opening AP correction) ====================
