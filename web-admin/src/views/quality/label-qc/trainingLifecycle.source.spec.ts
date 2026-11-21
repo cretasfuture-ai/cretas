@@ -1,12 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { sourceWithChinese } from '@/i18n-pilot/sourceForTests';
 
 const source = (path: string): string =>
   readFileSync(resolve(process.cwd(), path), 'utf8');
 
 describe('label QC training lifecycle UI contract', () => {
-  const page = source('src/views/quality/label-qc/index.vue');
+  const page = sourceWithChinese(source('src/views/quality/label-qc/index.vue'));
   const api = source('src/api/labelQc.ts');
   const workbench = source('src/views/quality/label-qc/LabelQcReviewWorkbench.vue');
 

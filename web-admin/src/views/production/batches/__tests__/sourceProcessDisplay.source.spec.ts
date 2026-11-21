@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { sourceWithChinese } from '@/i18n-pilot/sourceForTests';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -26,10 +27,10 @@ import { describe, expect, it } from 'vitest';
  * 和质检员那处（解析不出显示 <code>#ID</code>）是同一条原则：诚实-null 比假装认识好。
  */
 describe('生产批次「来源工序」列', () => {
-    const source = readFileSync(
+    const source = sourceWithChinese(readFileSync(
         resolve(process.cwd(), 'src/views/production/batches/list.vue'),
         'utf-8',
-    );
+    ));
 
     it('阳性对照: 源码读得到且确实有这一列', () => {
         expect(source).toContain('label="来源工序"');

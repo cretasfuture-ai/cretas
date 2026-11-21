@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { sourceWithChinese } from '@/i18n-pilot/sourceForTests';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -8,7 +9,7 @@ function source(path: string): string {
 
 describe('统一仓储待收货入口', () => {
   const detail = source('src/views/procurement/orders/detail.vue');
-  const materials = source('src/views/warehouse/materials/list.vue');
+  const materials = sourceWithChinese(source('src/views/warehouse/materials/list.vue'));
   const panel = source('src/views/warehouse/materials/PendingPurchaseReceivingPanel.vue');
   const dropZone = source('src/components/attachment/AttachmentDropZone.vue');
   const receiveApi = source('src/api/purchaseReceive.ts');
@@ -80,7 +81,7 @@ describe('统一仓储待收货入口', () => {
       panel.indexOf('function sourceLabel'),
     );
     expect(customerConfirm).not.toContain('/warehouse/receiving/receipts/');
-    expect(materials).not.toContain('>入库登记</el-button>');
+    expect(materials).not.toMatch(/>入库登记<\/(el-button|UButton)>/);
   });
 
   it('采购收齐后自动退出待办，少收时提供有原因和差额的手动关闭', () => {

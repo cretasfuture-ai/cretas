@@ -1,4 +1,10 @@
 <script setup lang="ts">
+import { CompatDescriptions, CompatDescriptionsItem, CompatDialog, CompatForm, CompatFormItem, CompatOption, CompatPagination, CompatSelect, CompatTable, CompatTableColumn } from '@/components/compat';
+import { useCompatMessages } from '@/components/compat/messages';
+const { ElMessage, ElMessageBox } = useCompatMessages();
+import { useT } from '@/i18n-pilot/useT';
+const { t } = useT();
+
 /**
  * BOM 调价建议 (D-S5-09, 2026-11-11): 采购价变动后系统为可改的配方版本生成的调价建议,
  * 这里看列表 / 详情, 批准 (把配方行价改成建议价) 或驳回 (必须填原因)。
@@ -9,7 +15,7 @@
  *   - 价格字段看不到采购价的账号由后端返回 null, 这里显示「—」。
  */
 import { computed, onMounted, ref, watch } from 'vue';
-import { ElMessage, ElMessageBox } from 'element-plus';
+
 import { Refresh } from '@element-plus/icons-vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
@@ -131,21 +137,21 @@ async function handleApprove(row: BomPriceProposal) {
       `把配方行单价从 ${money(row.currentUnitPrice)} 改为 ${money(row.proposedUnitPrice)}（${percent(row.deltaPercent)}），`
         + `影响 ${row.affectedProductCount} 个产品的标准成本。`,
       `批准调价 — ${subject(row)}`,
-      { type: 'warning', confirmButtonText: '确认批准', cancelButtonText: '取消' },
+      { type: 'warning', confirmButtonText: t('production.bom_priceadjustmentlist.confirmbuttontext_38034be43042'), cancelButtonText: t('production.bom_priceadjustmentlist.cancelbuttontext_2cd0f3be8738') },
     );
     await approveBomPriceProposal(factoryId.value, row.id, {
       approverId: currentUserId.value,
       // 传审批人看到的建议价: 看完之后建议被新收货更新过时后端 409, 不会悄悄批成新价
       expectedUnitPrice: row.proposedUnitPrice,
     });
-    ElMessage.success('已批准，配方行单价已更新');
+    ElMessage.success(t('production.bom_priceadjustmentlist.message_46b0ca7c8729'));
     detailOpen.value = false;
     loadData();
   } catch (e) {
     if (e === 'cancel') return;
     const err = e as { status?: number; actionHint?: string | null } | undefined;
     if (!err || (err.status !== 409 && err.status !== 403 && !err.actionHint)) {
-      ElMessage({ message: '批准失败', type: 'error', duration: 0, showClose: true });
+      ElMessage({ message: t('production.bom_priceadjustmentlist.message_c598ebcb5f6e'), type: 'error', duration: 0, showClose: true });
     }
     if (err?.status === 409) loadData();
   }
@@ -182,14 +188,14 @@ async function submitReject() {
   rejecting.value = true;
   try {
     await rejectBomPriceProposal(factoryId.value, row.id, rejectReason.value);
-    ElMessage.success('已驳回，配方行单价未改动');
+    ElMessage.success(t('production.bom_priceadjustmentlist.message_5ab92e90127b'));
     rejectOpen.value = false;
     detailOpen.value = false;
     loadData();
   } catch (e) {
     const err = e as { status?: number; actionHint?: string | null } | undefined;
     if (!err || (err.status !== 409 && err.status !== 403 && err.status !== 400 && !err.actionHint)) {
-      ElMessage({ message: '驳回失败', type: 'error', duration: 0, showClose: true });
+      ElMessage({ message: t('production.bom_priceadjustmentlist.message_188fc644b59d'), type: 'error', duration: 0, showClose: true });
     }
     if (err?.status === 409) {
       rejectOpen.value = false;
@@ -203,18 +209,18 @@ async function submitReject() {
 
 <template>
   <div class="page-wrapper">
-    <el-card>
+    <UCard>
       <template #header>
         <div class="card-header">
-          <span>BOM 调价建议</span>
+          <span>{{ t('production.bom_priceadjustmentlist.text_83e567748167') }}</span>
           <div class="toolbar">
             <el-radio-group v-model="status" size="small" data-testid="bpa-status-filter">
-              <el-radio-button value="PENDING">待审批</el-radio-button>
-              <el-radio-button value="APPROVED">已批准</el-radio-button>
-              <el-radio-button value="REJECTED">已驳回</el-radio-button>
-              <el-radio-button value="">全部</el-radio-button>
+              <el-radio-button value="PENDING">{{ t('production.bom_priceadjustmentlist.text_dcb49342a5e5') }}</el-radio-button>
+              <el-radio-button value="APPROVED">{{ t('production.bom_priceadjustmentlist.text_b42cb548c1d4') }}</el-radio-button>
+              <el-radio-button value="REJECTED">{{ t('production.bom_priceadjustmentlist.text_4dbcdec8693b') }}</el-radio-button>
+              <el-radio-button value="">{{ t('production.bom_priceadjustmentlist.text_5c55a67935af') }}</el-radio-button>
             </el-radio-group>
-            <el-button :icon="Refresh" size="small" @click="loadData">刷新</el-button>
+            <el-button :icon="Refresh" size="small" @click="loadData">{{ t('production.bom_priceadjustmentlist.action_aee887434131') }}</el-button>
           </div>
         </div>
       </template>
@@ -226,57 +232,57 @@ async function submitReject() {
         show-icon
         class="hint"
         data-testid="bpa-no-approve-hint"
-        title="你可以查看调价建议，但没有批准 / 驳回权限。需要审批请联系管理员在「系统设置 → 审批规则 → 谁能审批」开通「BOM调价审批」。"
+        :title="t('production.bom_priceadjustmentlist.title_99ffddaf91d7')"
       />
       <el-alert v-if="loadError" type="error" :closable="false" show-icon class="hint" :title="loadError" />
 
-      <el-table v-loading="loading" :data="rows" stripe data-testid="bpa-table" empty-text="没有符合条件的调价建议">
-        <el-table-column label="物料" min-width="150">
+      <CompatTable v-loading="loading" :data="rows" stripe data-testid="bpa-table" :empty-text="t('production.bom_priceadjustmentlist.empty_text_ab1ccacff015')">
+        <CompatTableColumn :label="t('production.bom_priceadjustmentlist.label_6446454e8e36')" min-width="150">
           <template #default="{ row }">{{ row.materialName || row.materialTypeId }}</template>
-        </el-table-column>
-        <el-table-column label="配方 / 产品" min-width="180">
+        </CompatTableColumn>
+        <CompatTableColumn :label="t('production.bom_priceadjustmentlist.label_80f994d0432d')" min-width="180">
           <template #default="{ row }">
             <div>{{ row.productName || row.productTypeId || '—' }}</div>
             <div class="sub">{{ row.recipeCode || row.recipeId }}</div>
           </template>
-        </el-table-column>
-        <el-table-column label="当前单价" width="110" align="right">
+        </CompatTableColumn>
+        <CompatTableColumn :label="t('production.bom_priceadjustmentlist.label_f7615229414c')" width="110" align="right">
           <template #default="{ row }">{{ money(row.currentUnitPrice) }}</template>
-        </el-table-column>
-        <el-table-column label="建议单价" width="110" align="right">
+        </CompatTableColumn>
+        <CompatTableColumn :label="t('production.bom_priceadjustmentlist.label_3a782343c11d')" width="110" align="right">
           <template #default="{ row }">{{ money(row.proposedUnitPrice) }}</template>
-        </el-table-column>
-        <el-table-column label="变化" width="90" align="right">
+        </CompatTableColumn>
+        <CompatTableColumn :label="t('production.bom_priceadjustmentlist.label_e329c44530ee')" width="90" align="right">
           <template #default="{ row }">{{ percent(row.deltaPercent) }}</template>
-        </el-table-column>
-        <el-table-column label="影响产品" prop="affectedProductCount" width="90" align="center" />
-        <el-table-column label="来源" width="100">
+        </CompatTableColumn>
+        <CompatTableColumn :label="t('production.bom_priceadjustmentlist.label_d2d0473b7bcc')" prop="affectedProductCount" width="90" align="center" />
+        <CompatTableColumn :label="t('production.bom_priceadjustmentlist.label_a488e93d69cc')" width="100">
           <template #default="{ row }">{{ SOURCE_LABEL[row.sourceType] || row.sourceType }}</template>
-        </el-table-column>
-        <el-table-column label="状态" width="90">
+        </CompatTableColumn>
+        <CompatTableColumn :label="t('production.bom_priceadjustmentlist.label_6320b4a8722a')" width="90">
           <template #default="{ row }">
             <el-tag :type="STATUS_TAG[row.status as BomPriceProposalStatus]" size="small">
               {{ STATUS_LABEL[row.status as BomPriceProposalStatus] || row.status }}
             </el-tag>
           </template>
-        </el-table-column>
-        <el-table-column label="生成时间" prop="createdAt" width="160" />
-        <el-table-column label="操作" width="190" fixed="right">
+        </CompatTableColumn>
+        <CompatTableColumn :label="t('production.bom_priceadjustmentlist.label_5c04175c4536')" prop="createdAt" width="160" />
+        <CompatTableColumn :label="t('production.bom_priceadjustmentlist.label_ed31fbb483ee')" width="190" fixed="right">
           <template #default="{ row }">
-            <el-button link type="primary" size="small" @click="openDetail(row)">详情</el-button>
+            <UButton variant="link" color="primary" size="sm" @click="openDetail(row)">{{ t('production.bom_priceadjustmentlist.action_979a332955c8') }}</UButton>
             <template v-if="canApprove && row.status === 'PENDING'">
               <el-tooltip :disabled="priceVisible(row)" content="你看不到采购价，无法核对建议价，不能批准；可驳回或请能看到采购价的人审批" placement="top">
                 <span>
-                  <el-button link type="success" size="small" data-testid="bpa-approve" :disabled="!priceVisible(row)" @click="handleApprove(row)">批准</el-button>
+                  <UButton variant="link" color="success" size="sm" data-testid="bpa-approve" :disabled="!priceVisible(row)" @click="handleApprove(row)">{{ t('production.bom_priceadjustmentlist.action_8cbe697b1573') }}</UButton>
                 </span>
               </el-tooltip>
-              <el-button link type="danger" size="small" data-testid="bpa-reject" @click="openReject(row)">驳回</el-button>
+              <UButton variant="link" color="error" size="sm" data-testid="bpa-reject" @click="openReject(row)">{{ t('production.bom_priceadjustmentlist.action_089e6ed3f55f') }}</UButton>
             </template>
           </template>
-        </el-table-column>
-      </el-table>
+        </CompatTableColumn>
+      </CompatTable>
 
-      <el-pagination
+      <CompatPagination
         v-if="total > size"
         v-model:current-page="page"
         :page-size="size"
@@ -285,75 +291,74 @@ async function submitReject() {
         class="pager"
         @current-change="loadData"
       />
-    </el-card>
+    </UCard>
 
-    <el-drawer v-model="detailOpen" :title="detail ? `调价建议 — ${subject(detail)}` : '调价建议'" size="440px">
-      <el-descriptions v-if="detail" :column="1" border data-testid="bpa-detail">
-        <el-descriptions-item label="状态">{{ STATUS_LABEL[detail.status] || detail.status }}</el-descriptions-item>
-        <el-descriptions-item label="物料">{{ detail.materialName || detail.materialTypeId }}</el-descriptions-item>
-        <el-descriptions-item label="产品">{{ detail.productName || detail.productTypeId || '—' }}</el-descriptions-item>
-        <el-descriptions-item label="配方编码">{{ detail.recipeCode || detail.recipeId }}</el-descriptions-item>
-        <el-descriptions-item label="当前单价">{{ money(detail.currentUnitPrice) }}</el-descriptions-item>
-        <el-descriptions-item label="建议单价">{{ money(detail.proposedUnitPrice) }}</el-descriptions-item>
-        <el-descriptions-item label="单价变化">{{ money(detail.deltaAmount) }}（{{ percent(detail.deltaPercent) }}）</el-descriptions-item>
-        <el-descriptions-item label="影响产品数">{{ detail.affectedProductCount }}</el-descriptions-item>
-        <el-descriptions-item label="来源">
+    <el-drawer v-model="detailOpen" :title="detail ? `调价建议 — ${subject(detail)}` : t('production.bom_priceadjustmentlist.title_6a74e40610b0')" size="440px">
+      <CompatDescriptions v-if="detail" :column="1" border data-testid="bpa-detail">
+        <CompatDescriptionsItem :label="t('production.bom_priceadjustmentlist.label_6320b4a8722a')">{{ STATUS_LABEL[detail.status] || detail.status }}</CompatDescriptionsItem>
+        <CompatDescriptionsItem :label="t('production.bom_priceadjustmentlist.label_6446454e8e36')">{{ detail.materialName || detail.materialTypeId }}</CompatDescriptionsItem>
+        <CompatDescriptionsItem :label="t('production.bom_priceadjustmentlist.label_aea82737cc01')">{{ detail.productName || detail.productTypeId || '—' }}</CompatDescriptionsItem>
+        <CompatDescriptionsItem :label="t('production.bom_priceadjustmentlist.label_1096ac40b90b')">{{ detail.recipeCode || detail.recipeId }}</CompatDescriptionsItem>
+        <CompatDescriptionsItem :label="t('production.bom_priceadjustmentlist.label_f7615229414c')">{{ money(detail.currentUnitPrice) }}</CompatDescriptionsItem>
+        <CompatDescriptionsItem :label="t('production.bom_priceadjustmentlist.label_3a782343c11d')">{{ money(detail.proposedUnitPrice) }}</CompatDescriptionsItem>
+        <CompatDescriptionsItem :label="t('production.bom_priceadjustmentlist.label_dc2f4c3987cc')">{{ money(detail.deltaAmount) }}（{{ percent(detail.deltaPercent) }}）</CompatDescriptionsItem>
+        <CompatDescriptionsItem :label="t('production.bom_priceadjustmentlist.label_6b363b26e78a')">{{ detail.affectedProductCount }}</CompatDescriptionsItem>
+        <CompatDescriptionsItem :label="t('production.bom_priceadjustmentlist.label_a488e93d69cc')">
           {{ SOURCE_LABEL[detail.sourceType] || detail.sourceType }}
-          <span v-if="detail.sourceReceiveRecordId" class="sub">（收货单 {{ detail.sourceReceiveRecordId }}）</span>
-        </el-descriptions-item>
-        <el-descriptions-item label="生成时间">{{ detail.createdAt || '—' }}</el-descriptions-item>
-        <el-descriptions-item v-if="detail.status !== 'PENDING'" :label="detail.status === 'REJECTED' ? '驳回时间' : '批准时间'">
+          <span v-if="detail.sourceReceiveRecordId" class="sub">{{ t('production.bom_priceadjustmentlist.text_fb1a056140a6') }} {{ detail.sourceReceiveRecordId }}）</span>
+        </CompatDescriptionsItem>
+        <CompatDescriptionsItem :label="t('production.bom_priceadjustmentlist.label_5c04175c4536')">{{ detail.createdAt || '—' }}</CompatDescriptionsItem>
+        <CompatDescriptionsItem v-if="detail.status !== 'PENDING'" :label="detail.status === 'REJECTED' ? t('production.bom_priceadjustmentlist.label_58e5f79022ef') : t('production.bom_priceadjustmentlist.label_48dc49554691')">
           {{ detail.approvedAt || '—' }}
-        </el-descriptions-item>
-        <el-descriptions-item v-if="detail.status !== 'PENDING'" :label="detail.status === 'REJECTED' ? '驳回原因' : '审批意见'">
+        </CompatDescriptionsItem>
+        <CompatDescriptionsItem v-if="detail.status !== 'PENDING'" :label="detail.status === 'REJECTED' ? t('production.bom_priceadjustmentlist.label_1245e49f52f3') : t('production.bom_priceadjustmentlist.label_97d012369eab')">
           <span data-testid="bpa-detail-comment">{{ detail.approvalComment || '—' }}</span>
-        </el-descriptions-item>
-      </el-descriptions>
+        </CompatDescriptionsItem>
+      </CompatDescriptions>
       <div v-if="detail && canApprove && detail.status === 'PENDING'" class="drawer-actions">
-        <el-button type="success" :disabled="!priceVisible(detail)" @click="handleApprove(detail)">批准</el-button>
-        <el-button type="danger" @click="openReject(detail)">驳回</el-button>
+        <UButton color="success" :disabled="!priceVisible(detail)" @click="handleApprove(detail)">{{ t('production.bom_priceadjustmentlist.action_8cbe697b1573') }}</UButton>
+        <UButton color="error" @click="openReject(detail)">{{ t('production.bom_priceadjustmentlist.action_089e6ed3f55f') }}</UButton>
       </div>
     </el-drawer>
 
-    <el-dialog
+    <CompatDialog
       v-model="rejectOpen"
-      :title="rejectTarget ? `驳回调价 — ${subject(rejectTarget)}` : '驳回调价'"
+      :title="rejectTarget ? `驳回调价 — ${subject(rejectTarget)}` : t('production.bom_priceadjustmentlist.title_9270b869888d')"
       width="480px"
       data-testid="bpa-reject-dialog"
     >
       <p v-if="rejectTarget" class="reject-context">
-        建议把单价从 {{ money(rejectTarget.currentUnitPrice) }} 改为 {{ money(rejectTarget.proposedUnitPrice) }}。
-        驳回后配方行单价保持不变。
+        {{ t('production.bom_priceadjustmentlist.text_ff46e1c4d4ea') }} {{ money(rejectTarget.currentUnitPrice) }} {{ t('production.bom_priceadjustmentlist.text_87a354cd7d2f') }} {{ money(rejectTarget.proposedUnitPrice) }}{{ t('production.bom_priceadjustmentlist.text_9f1ee58f0049') }}
       </p>
-      <el-form label-position="top">
-        <el-form-item label="驳回原因（必填）" required>
-          <el-select v-model="rejectChoice" placeholder="请选择驳回原因" style="width: 100%" data-testid="bpa-reject-reason">
-            <el-option v-for="r in REJECT_REASONS" :key="r" :label="r" :value="r" />
-          </el-select>
-        </el-form-item>
-        <el-form-item v-if="rejectChoice === '其他'" label="具体原因（必填）" required>
+      <CompatForm label-position="top">
+        <CompatFormItem :label="t('production.bom_priceadjustmentlist.label_36a933aee61f')" required>
+          <CompatSelect v-model="rejectChoice" :placeholder="t('production.bom_priceadjustmentlist.placeholder_d35fe2412948')" style="width: 100%" data-testid="bpa-reject-reason">
+            <CompatOption v-for="r in REJECT_REASONS" :key="r" :label="r" :value="r" />
+          </CompatSelect>
+        </CompatFormItem>
+        <CompatFormItem v-if="rejectChoice === '其他'" :label="t('production.bom_priceadjustmentlist.label_f52e08403996')" required>
           <el-input
             v-model="rejectOther"
             type="textarea"
             :rows="3"
             maxlength="500"
             show-word-limit
-            placeholder="请写明为什么不调价"
+            :placeholder="t('production.bom_priceadjustmentlist.placeholder_1f81dfa3d4f6')"
             data-testid="bpa-reject-other"
           />
-        </el-form-item>
-      </el-form>
+        </CompatFormItem>
+      </CompatForm>
       <template #footer>
-        <el-button @click="rejectOpen = false">取消</el-button>
-        <el-button
-          type="danger"
+        <UButton color="neutral" variant="outline" @click="rejectOpen = false">{{ t('production.bom_priceadjustmentlist.action_2cd0f3be8738') }}</UButton>
+        <UButton
+          color="error"
           :disabled="rejectInvalid"
           :loading="rejecting"
           data-testid="bpa-reject-submit"
           @click="submitReject"
-        >确认驳回</el-button>
+        >{{ t('production.bom_priceadjustmentlist.action_c68e99e0908b') }}</UButton>
       </template>
-    </el-dialog>
+    </CompatDialog>
   </div>
 </template>
 

@@ -1,0 +1,4 @@
+/* Keep messages emitted by the adapters above both Nuxt and legacy dialogs. */
+[data-slot='viewport']:has(.compat-message-toast) {
+  z-index: 2100;
+}

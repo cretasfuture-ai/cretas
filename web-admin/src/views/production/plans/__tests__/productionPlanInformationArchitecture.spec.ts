@@ -1,8 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { sourceWithChinese } from '@/i18n-pilot/sourceForTests';
 
-const source = readFileSync(resolve(__dirname, '../list.vue'), 'utf8');
+const source = sourceWithChinese(readFileSync(resolve(__dirname, '../list.vue'), 'utf8'));
 const mainTableStart = source.indexOf('class="wide-table business-list-table"');
 const operationLabel = source.indexOf('label="操作"', mainTableStart);
 const operationStart = source.lastIndexOf('<el-table-column', operationLabel);
@@ -21,8 +22,8 @@ describe('production plan list information architecture', () => {
     expect(operations).toContain(':disabled="entryPreparingPlanId !== null"');
     expect(operations).toContain('{{ settlementActionLabel(row) }}');
     expect(operations).toContain('@click="handlePrimarySettlementAction(row)"');
-    expect(operations).toContain('>档案与核算</el-button>');
-    expect(operations).toContain('更多<el-icon');
+    expect(operations).toMatch(/>档案与核算<\/(el-button|UButton)>/);
+    expect(operations).toMatch(/更多<(el-icon|span)/);
     expect(operations).toContain('command="stop-production"');
     expect(operations).toContain('command="cancel"');
     // 2026-08-04: 「更多」一项都没有时不渲染按钮 (原先会弹出空白小方块);
@@ -33,12 +34,12 @@ describe('production plan list information architecture', () => {
     expect(operations).toContain('command="copy"');
     expect(source).toContain('void handleEditPlan(row);');
     expect(source).toContain('void handleCopyPlan(row);');
-    expect(operations).not.toContain('生产操作<el-icon');
-    expect(operations).not.toContain('生产单据<el-icon');
-    expect(operations).not.toContain('追溯与核算<el-icon');
-    expect(operations).not.toContain('>查看详情</el-button>');
+    expect(operations).not.toMatch(/生产操作<(el-icon|span)/);
+    expect(operations).not.toMatch(/生产单据<(el-icon|span)/);
+    expect(operations).not.toMatch(/追溯与核算<(el-icon|span)/);
+    expect(operations).not.toMatch(/>查看详情<\/(el-button|UButton)>/);
     expect(operations).not.toContain('RowActionMenu');
-    expect(operations).not.toContain('>确认入库</el-button>');
+    expect(operations).not.toMatch(/>确认入库<\/(el-button|UButton)>/);
     expect(source).toContain("return canWrite.value && isUnfinishedStatus(String(row.status || ''))");
   });
 
@@ -67,7 +68,7 @@ describe('production plan list information architecture', () => {
 
   it('consolidates import/export and selection-scoped batch actions', () => {
     expect(source).toContain('@command="handleDataCommand"');
-    expect(source).toContain('导入/导出<el-icon');
+    expect(source).toMatch(/导入\/导出<(el-icon|span)/);
     expect(source).toContain('v-if="productionBatchMode && selectedPlans.length > 0"');
     expect(source).toContain('{{ productionBatchMode ? \'退出批量打印\' : \'批量打印\' }}');
     expect(source).toContain('批量操作 ({{ selectedPlans.length }})');
@@ -99,7 +100,7 @@ describe('production plan list information architecture', () => {
     expect(source).toContain('label="生产成品"');
     expect(source).toContain('{{ planFinishedProductNames(row).join(\'、\') }}');
     expect(source).toContain('aria-label="预览工序路线"');
-    expect(source).toContain('>工序图</el-button>');
+    expect(source).toMatch(/>工序图<\/(el-button|UButton)>/);
     expect(source).toContain('<WorkflowRoutePreview');
     expect(source).toContain('item.workflowId === selectedWorkflowId');
     expect(source).toContain('item.definitionVersion === selectedWorkflowVersion');

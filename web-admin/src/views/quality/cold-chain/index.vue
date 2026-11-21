@@ -1,4 +1,10 @@
 <script setup lang="ts">
+import { CompatDatePicker, CompatDescriptions, CompatDescriptionsItem, CompatDialog, CompatForm, CompatFormItem, CompatOption, CompatSelect, CompatTable, CompatTableColumn } from '@/components/compat';
+import { useCompatMessages } from '@/components/compat/messages';
+const { ElMessage, ElMessageBox } = useCompatMessages();
+import { useT } from '@/i18n-pilot/useT';
+const { t } = useT();
+
 /**
  * 冷链超温批次 (食品 DAG 缺口 15「温度关联批次」, Steve 2026-11-03: 先做软件侧)。
  *
@@ -13,7 +19,7 @@
  */
 import { computed, onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { ElMessage, ElMessageBox } from 'element-plus';
+
 import type { CsTableColumn as TableColumn, CsTabItem as TabsItem } from '@/types/csTable';
 import iconColdChain from '@/assets/quality/icon-cold-chain.webp';
 import { useAuthStore } from '@/store/modules/auth';
@@ -86,7 +92,7 @@ const HISTORY_COLUMNS: TableColumn<ColdChainLocationView>[] = [
 ];
 const tabItems = computed<TabsItem[]>(() => [
   { label: `超温告警 (${alerts.value.length})`, value: 'alerts', slot: 'alerts' },
-  { label: '设备库位', value: 'equipment', slot: 'equipment' },
+  { label: t('quality.cold_chain_index.label_92a4b9108e54'), value: 'equipment', slot: 'equipment' },
 ]);
 const STATUS_LABELS: Record<string, string> = { OPEN: '未处理', ACKNOWLEDGED: '已确认', RESOLVED: '已解决' };
 
@@ -136,8 +142,8 @@ async function holdSelected() {
     await ElMessageBox.confirm(
       `设备 ${r.alert.equipmentName ?? ''}（${r.alert.equipmentCode ?? ''}）${r.excursion.start} ~ ${r.excursion.end} 超温。\n`
         + `下面 ${selected.value.length} 个批次将转为待检，放行前不能领用、分配或发货：\n${lines}`,
-      '转质检确认',
-      { confirmButtonText: '确认转质检', cancelButtonText: '取消', type: 'warning', customStyle: { whiteSpace: 'pre-line' } },
+      t('quality.cold_chain_index.message_24d4552ef1dc'),
+      { confirmButtonText: t('quality.cold_chain_index.confirmbuttontext_2401bd0e7fbf'), cancelButtonText: t('quality.cold_chain_index.cancelbuttontext_2cd0f3be8738'), type: 'warning', customStyle: { whiteSpace: 'pre-line' } },
     );
   } catch {
     return;
@@ -251,11 +257,11 @@ onMounted(async () => {
       <div class="head-main">
         <img :src="iconColdChain" alt="" class="head-icon" width="56" height="56">
         <div>
-          <h2>冷链超温批次</h2>
-          <p>点一条超温告警，查看超温期间存放在这台设备所在仓库里的批次及各自暴露时长，勾选后一键转质检。</p>
+          <h2>{{ t('quality.cold_chain_index.text_04e7c526d2c4') }}</h2>
+          <p>{{ t('quality.cold_chain_index.text_7427e7a1af69') }}</p>
         </div>
       </div>
-      <UButton color="neutral" variant="outline" icon="i-lucide-refresh-cw" :loading="alertsLoading || equipmentLoading" @click="loadAlerts(); loadEquipment()">刷新</UButton>
+      <UButton color="neutral" variant="outline" icon="i-lucide-refresh-cw" :loading="alertsLoading || equipmentLoading" @click="loadAlerts(); loadEquipment()">{{ t('quality.cold_chain_index.action_aee887434131') }}</UButton>
     </div>
 
     <section class="cs-card">
@@ -263,145 +269,145 @@ onMounted(async () => {
         <template #alerts>
           <UAlert v-if="alertsError" :title="alertsError" color="error" variant="subtle" icon="i-lucide-circle-alert" class="m-3" />
           <UTable :data="alerts" :columns="ALERT_COLUMNS" :loading="alertsLoading" class="cs-table" data-testid="cc-alert-table">
-            <template #empty><div class="cs-empty-art"><img :src="iconColdChain" alt="" width="96"><span>最近 90 天没有冷链超温告警</span></div></template>
+            <template #empty><div class="cs-empty-art"><img :src="iconColdChain" alt="" width="96"><span>{{ t('quality.cold_chain_index.text_4417f37078d4') }}</span></div></template>
             <template #equipment-cell="{ row }">{{ row.original.equipmentName || '—' }}（{{ row.original.equipmentCode || row.original.equipmentId }}）</template>
             <template #severity-cell="{ row }">
-              <UBadge :color="row.original.severity === 'CRITICAL' ? 'error' : 'warning'" variant="soft">{{ row.original.severity === 'CRITICAL' ? '严重' : '警告' }}</UBadge>
+              <UBadge :color="row.original.severity === 'CRITICAL' ? 'error' : 'warning'" variant="soft">{{ row.original.severity === 'CRITICAL' ? t('quality.cold_chain_index.text_73eb0e14e307') : t('quality.cold_chain_index.text_a8b7a4480407') }}</UBadge>
             </template>
             <template #temp-cell="{ row }"><span class="num">{{ row.original.minTemp }} ~ {{ row.original.maxTemp }} ℃</span></template>
             <template #status-cell="{ row }">{{ STATUS_LABELS[row.original.status] ?? row.original.status }}</template>
             <template #actions-cell="{ row }">
-              <UButton size="xs" :data-testid="`cc-open-${row.original.id}`" @click="openAlert(row.original.id)">受影响批次</UButton>
+              <UButton size="xs" :data-testid="`cc-open-${row.original.id}`" @click="openAlert(row.original.id)">{{ t('quality.cold_chain_index.action_b32c85c2193c') }}</UButton>
             </template>
           </UTable>
         </template>
 
         <template #equipment>
           <p class="muted hint">
-            登记每台冷链设备放在哪个仓库、从什么时候开始。设备换库时登记新仓库即可，旧记录保留，历史告警仍按当时的仓库计算。
+            {{ t('quality.cold_chain_index.text_16904f58e4e0') }}
           </p>
           <UTable :data="equipment" :columns="EQUIPMENT_COLUMNS" :loading="equipmentLoading" class="cs-table" data-testid="cc-equipment-table">
-            <template #empty>本厂还没有冷链设备</template>
+            <template #empty>{{ t('quality.cold_chain_index.text_ff4499b028b5') }}</template>
             <template #equipment-cell="{ row }">{{ row.original.equipmentName }}（{{ row.original.equipmentCode }}）</template>
             <template #target-cell="{ row }"><span class="num">{{ row.original.targetTempMin }} ~ {{ row.original.targetTempMax }} ℃</span></template>
             <template #warehouse-cell="{ row }">
               <span v-if="row.original.currentWarehouseName">{{ row.original.currentWarehouseName }}</span>
-              <UBadge v-else color="error" variant="soft">未登记</UBadge>
+              <UBadge v-else color="error" variant="soft">{{ t('quality.cold_chain_index.text_0db3db44213b') }}</UBadge>
             </template>
             <template #actions-cell="{ row }">
-              <UButton size="xs" class="mr-2" @click="openAssign(row.original)">登记库位</UButton>
-              <UButton size="xs" color="neutral" variant="outline" @click="showHistory(row.original)">历史</UButton>
+              <UButton size="xs" class="mr-2" @click="openAssign(row.original)">{{ t('quality.cold_chain_index.action_a65749e7acaa') }}</UButton>
+              <UButton size="xs" color="neutral" variant="outline" @click="showHistory(row.original)">{{ t('quality.cold_chain_index.action_b0385cfe4b42') }}</UButton>
             </template>
           </UTable>
           <div v-if="historyFor" class="history">
-            <h4>{{ historyFor.equipmentName }} 的库位历史</h4>
+            <h4>{{ historyFor.equipmentName }} {{ t('quality.cold_chain_index.text_ec952657e9b1') }}</h4>
             <UTable :data="history" :columns="HISTORY_COLUMNS" class="cs-table">
-              <template #empty>还没有登记过</template>
-              <template #end-cell="{ row }">{{ row.original.effectiveTo ?? '至今' }}</template>
+              <template #empty>{{ t('quality.cold_chain_index.text_3c96e5f1dd59') }}</template>
+              <template #end-cell="{ row }">{{ row.original.effectiveTo ?? t('quality.cold_chain_index.text_fe985eafa4a9') }}</template>
             </UTable>
           </div>
         </template>
       </UTabs>
     </section>
 
-    <el-drawer v-model="drawerVisible" size="80%" title="超温受影响批次" data-testid="cc-drawer">
+    <el-drawer v-model="drawerVisible" size="80%" :title="t('quality.cold_chain_index.title_833d08a14e5f')" data-testid="cc-drawer">
       <div v-loading="reportLoading">
         <el-alert v-if="reportError" :title="reportError" type="error" :closable="false" show-icon class="mb" />
         <template v-if="report">
-          <el-descriptions :column="3" border size="small" class="mb">
-            <el-descriptions-item label="设备">{{ report.alert.equipmentName }}（{{ report.alert.equipmentCode }}）</el-descriptions-item>
-            <el-descriptions-item label="超温时段">
-              {{ report.excursion.start }} ~ {{ report.excursion.end }}（{{ report.excursion.minutes }} 分钟{{ report.excursion.ongoing ? '，仍未恢复' : '' }}）
-            </el-descriptions-item>
-            <el-descriptions-item label="温度">
-              实测 {{ report.excursion.minTemp }} ~ {{ report.excursion.maxTemp }} ℃，要求 {{ report.excursion.targetTempMin }} ~ {{ report.excursion.targetTempMax }} ℃
-            </el-descriptions-item>
-            <el-descriptions-item label="当时所在仓库" :span="3">
+          <CompatDescriptions :column="3" border size="small" class="mb">
+            <CompatDescriptionsItem :label="t('quality.cold_chain_index.label_e1506406a5bd')">{{ report.alert.equipmentName }}（{{ report.alert.equipmentCode }}）</CompatDescriptionsItem>
+            <CompatDescriptionsItem :label="t('quality.cold_chain_index.label_49b8d682252e')">
+              {{ report.excursion.start }} ~ {{ report.excursion.end }}（{{ report.excursion.minutes }} {{ t('quality.cold_chain_index.text_bd957bc497aa') }}{{ report.excursion.ongoing ? t('quality.cold_chain_index.text_0f9d0e8221b7') : '' }}）
+            </CompatDescriptionsItem>
+            <CompatDescriptionsItem :label="t('quality.cold_chain_index.label_3732e264dfa9')">
+              {{ t('quality.cold_chain_index.text_c1f1b497d395') }} {{ report.excursion.minTemp }} ~ {{ report.excursion.maxTemp }} {{ t('quality.cold_chain_index.text_e608d4ff1083') }} {{ report.excursion.targetTempMin }} ~ {{ report.excursion.targetTempMax }} ℃
+            </CompatDescriptionsItem>
+            <CompatDescriptionsItem :label="t('quality.cold_chain_index.label_c3ea4f9e0a93')" :span="3">
               <span v-for="s in report.segments" :key="s.warehouseId + s.start" class="seg">
-                {{ s.warehouseName ?? s.warehouseId }}：{{ s.start }} ~ {{ s.end }}（{{ s.minutes }} 分钟）
+                {{ s.warehouseName ?? s.warehouseId }}：{{ s.start }} ~ {{ s.end }}（{{ s.minutes }} {{ t('quality.cold_chain_index.text_40fce7ced6e7') }}
               </span>
-              <span v-if="report.segments.length === 0" class="danger">未登记</span>
-            </el-descriptions-item>
-          </el-descriptions>
+              <span v-if="report.segments.length === 0" class="danger">{{ t('quality.cold_chain_index.text_0db3db44213b') }}</span>
+            </CompatDescriptionsItem>
+          </CompatDescriptions>
           <el-alert v-if="report.note" type="warning" :closable="false" show-icon class="mb" :title="report.note">
-            <el-button link type="primary" @click="goEquipmentTab">去登记设备库位</el-button>
+            <UButton variant="link" color="primary" @click="goEquipmentTab">{{ t('quality.cold_chain_index.action_8ef5203fcd70') }}</UButton>
           </el-alert>
           <div class="summary mb">
-            <span>确定受影响 <b>{{ report.affectedCount }}</b> 个</span>
-            <span>在库时间不确定 <b>{{ report.uncertainCount }}</b> 个</span>
-            <span class="muted">按仓库匹配：同仓但不在这台设备里的批次也会列出，请质检判断</span>
+            <span>{{ t('quality.cold_chain_index.text_d1f87b8b3d6e') }} <b>{{ report.affectedCount }}</b> {{ t('quality.cold_chain_index.text_3a116815bc9d') }}</span>
+            <span>{{ t('quality.cold_chain_index.text_2455f02f6337') }} <b>{{ report.uncertainCount }}</b> {{ t('quality.cold_chain_index.text_3a116815bc9d') }}</span>
+            <span class="muted">{{ t('quality.cold_chain_index.text_e4eae0cccfcb') }}</span>
           </div>
-          <el-table :data="report.batches" stripe empty-text="超温期间这个仓库里没有在库批次"
+          <CompatTable :data="report.batches" stripe :empty-text="t('quality.cold_chain_index.empty_text_d9c119bb56ec')"
                     data-testid="cc-affected-table" @selection-change="(v: ColdChainAffectedBatch[]) => (selected = v)">
-            <el-table-column type="selection" width="44" :selectable="selectable" />
-            <el-table-column label="形态" width="110">
+            <CompatTableColumn type="selection" width="44" :selectable="selectable" />
+            <CompatTableColumn :label="t('quality.cold_chain_index.label_b81375e09f24')" width="110">
               <template #default="{ row }">
                 <el-tag :type="row.targetType === 'FINISHED_GOODS' ? 'success' : row.targetType === 'WIP_MATERIAL_BATCH' ? 'info' : ''">{{ row.formLabel }}</el-tag>
               </template>
-            </el-table-column>
-            <el-table-column prop="batchNumber" label="批次号" min-width="170" show-overflow-tooltip />
-            <el-table-column prop="itemName" label="品名" min-width="130" show-overflow-tooltip />
-            <el-table-column prop="warehouseName" label="仓库" width="110" />
-            <el-table-column label="在库" min-width="230">
+            </CompatTableColumn>
+            <CompatTableColumn prop="batchNumber" :label="t('quality.cold_chain_index.label_cb5386f1a98a')" min-width="170" show-overflow-tooltip />
+            <CompatTableColumn prop="itemName" :label="t('quality.cold_chain_index.label_7d432cf3863b')" min-width="130" show-overflow-tooltip />
+            <CompatTableColumn prop="warehouseName" :label="t('quality.cold_chain_index.label_89b2ecbe1f09')" width="110" />
+            <CompatTableColumn :label="t('quality.cold_chain_index.label_77a5541fefbd')" min-width="230">
               <template #default="{ row }">{{ row.inStockFrom }} → {{ row.inStockUntil }}</template>
-            </el-table-column>
-            <el-table-column label="暴露时长" min-width="170">
+            </CompatTableColumn>
+            <CompatTableColumn :label="t('quality.cold_chain_index.label_5036e6958926')" min-width="170">
               <template #default="{ row }">
-                <span v-if="row.verdict === 'AFFECTED'" class="danger"><b>{{ row.exposureMinutes }}</b> 分钟</span>
+                <span v-if="row.verdict === 'AFFECTED'" class="danger"><b>{{ row.exposureMinutes }}</b> {{ t('quality.cold_chain_index.text_bd957bc497aa') }}</span>
                 <el-tooltip v-else :content="row.uncertainReason ?? '在库时间不确定'" placement="top">
-                  <el-tag type="warning">在库时间不确定 · 最多 {{ row.maxExposureMinutes }} 分钟</el-tag>
+                  <UBadge variant="soft" color="warning">{{ t('quality.cold_chain_index.text_a3478dafcb52') }} {{ row.maxExposureMinutes }} {{ t('quality.cold_chain_index.text_bd957bc497aa') }}</UBadge>
                 </el-tooltip>
               </template>
-            </el-table-column>
-            <el-table-column label="现存" width="110" align="right">
+            </CompatTableColumn>
+            <CompatTableColumn :label="t('quality.cold_chain_index.label_b7e9a7c29419')" width="110" align="right">
               <template #default="{ row }">{{ qty(row) }}</template>
-            </el-table-column>
-            <el-table-column label="质检" min-width="150">
+            </CompatTableColumn>
+            <CompatTableColumn :label="t('quality.cold_chain_index.label_8a4bd8a4a5a9')" min-width="150">
               <template #default="{ row }">
-                <el-tag v-if="row.alreadyHeld" type="success">已转质检</el-tag>
+                <UBadge variant="soft" v-if="row.alreadyHeld" color="success">{{ t('quality.cold_chain_index.text_0c77409730e3') }}</UBadge>
                 <span v-else-if="!row.holdable" class="muted">{{ row.holdBlockedReason }}</span>
-                <span v-else class="muted">可转质检</span>
+                <span v-else class="muted">{{ t('quality.cold_chain_index.text_e01ab10129c6') }}</span>
               </template>
-            </el-table-column>
-          </el-table>
+            </CompatTableColumn>
+          </CompatTable>
         </template>
       </div>
       <template #footer>
-        <span v-if="report && selected.length === 0" class="muted footer-tip">勾选要转质检的批次</span>
-        <el-button @click="drawerVisible = false">关闭</el-button>
-        <el-button type="danger" :disabled="selected.length === 0" :loading="holding" data-testid="cc-hold" @click="holdSelected">
-          转质检 ({{ selected.length }})
-        </el-button>
-        <el-button link type="primary" @click="router.push('/quality/release')">去质检放行</el-button>
+        <span v-if="report && selected.length === 0" class="muted footer-tip">{{ t('quality.cold_chain_index.text_0a3956bf7bd3') }}</span>
+        <UButton color="neutral" variant="outline" @click="drawerVisible = false">{{ t('quality.cold_chain_index.action_3fd47edce45b') }}</UButton>
+        <UButton color="error" :disabled="selected.length === 0" :loading="holding" data-testid="cc-hold" @click="holdSelected">
+          {{ t('quality.cold_chain_index.action_3f6809b51ff9') }}{{ selected.length }})
+        </UButton>
+        <UButton variant="link" color="primary" @click="router.push('/quality/release')">{{ t('quality.cold_chain_index.action_806d24e29f42') }}</UButton>
       </template>
     </el-drawer>
 
-    <el-dialog v-model="assignVisible" :title="`登记库位 — ${assignTarget?.equipmentName ?? ''}（${assignTarget?.equipmentCode ?? ''}）`" width="480px">
-      <el-form label-position="top">
-        <el-form-item label="现在所在仓库">
-          {{ assignTarget?.currentWarehouseName ?? '未登记' }}<span v-if="assignTarget?.currentSince" class="muted">（自 {{ assignTarget.currentSince }}）</span>
-        </el-form-item>
-        <el-form-item label="放到哪个仓库" required>
-          <el-select v-model="assignWarehouseId" placeholder="选择仓库" style="width: 100%" data-testid="cc-assign-warehouse">
-            <el-option v-for="w in warehouses" :key="w.id" :label="`${w.name}（${w.code}）`" :value="w.id"
+    <CompatDialog v-model="assignVisible" :title="`登记库位 — ${assignTarget?.equipmentName ?? ''}（${assignTarget?.equipmentCode ?? ''}）`" width="480px">
+      <CompatForm label-position="top">
+        <CompatFormItem :label="t('quality.cold_chain_index.label_d263f048cc68')">
+          {{ assignTarget?.currentWarehouseName ?? t('quality.cold_chain_index.text_0db3db44213b') }}<span v-if="assignTarget?.currentSince" class="muted">{{ t('quality.cold_chain_index.text_8a54749f7246') }} {{ assignTarget.currentSince }}）</span>
+        </CompatFormItem>
+        <CompatFormItem :label="t('quality.cold_chain_index.label_b3a4021d7dba')" required>
+          <CompatSelect v-model="assignWarehouseId" :placeholder="t('quality.cold_chain_index.placeholder_1c25426ef7e8')" style="width: 100%" data-testid="cc-assign-warehouse">
+            <CompatOption v-for="w in warehouses" :key="w.id" :label="`${w.name}（${w.code}）`" :value="w.id"
                        :disabled="w.id === assignTarget?.currentWarehouseId" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="从什么时候开始（不填 = 现在）">
-          <el-date-picker v-model="assignFrom" type="datetime" value-format="YYYY-MM-DDTHH:mm:ss"
-                          placeholder="现在" style="width: 100%" />
-          <div class="form-tip">只能填现在或过去、且晚于上一次登记的时间；已登记的历史不能改。</div>
-        </el-form-item>
-        <el-form-item label="备注">
-          <el-input v-model="assignRemark" maxlength="500" placeholder="例如：冷库 A 区搬到 B 区" />
-        </el-form-item>
-      </el-form>
+          </CompatSelect>
+        </CompatFormItem>
+        <CompatFormItem :label="t('quality.cold_chain_index.label_cd1d8e6981e4')">
+          <CompatDatePicker v-model="assignFrom" type="datetime" value-format="YYYY-MM-DDTHH:mm:ss"
+                          :placeholder="t('quality.cold_chain_index.placeholder_43584f37c1f4')" style="width: 100%" />
+          <div class="form-tip">{{ t('quality.cold_chain_index.text_b113aa3843a4') }}</div>
+        </CompatFormItem>
+        <CompatFormItem :label="t('quality.cold_chain_index.label_daede9881787')">
+          <UInput v-model="assignRemark" maxlength="500" :placeholder="t('quality.cold_chain_index.placeholder_08d1f416bd70')" />
+        </CompatFormItem>
+      </CompatForm>
       <template #footer>
         <span v-if="assignDisabledReason" class="disabled-reason">{{ assignDisabledReason }}</span>
-        <el-button @click="assignVisible = false">取消</el-button>
-        <el-button type="primary" :loading="assigning" :disabled="!!assignDisabledReason" @click="submitAssign">确认登记</el-button>
+        <UButton color="neutral" variant="outline" @click="assignVisible = false">{{ t('quality.cold_chain_index.action_2cd0f3be8738') }}</UButton>
+        <UButton color="primary" :loading="assigning" :disabled="!!assignDisabledReason" @click="submitAssign">{{ t('quality.cold_chain_index.action_c10ad85c5c9f') }}</UButton>
       </template>
-    </el-dialog>
+    </CompatDialog>
   </div>
 </template>
 <style scoped>

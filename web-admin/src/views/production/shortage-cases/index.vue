@@ -1,10 +1,16 @@
 <script setup lang="ts">
+import { CompatDescriptions, CompatDescriptionsItem, CompatTable, CompatTableColumn } from '@/components/compat';
+import { useCompatMessages } from '@/components/compat/messages';
+const { ElMessage, ElMessageBox } = useCompatMessages();
+import { useT } from '@/i18n-pilot/useT';
+const { t } = useT();
+
 /**
  * S4 缺料异常: 一个缺料事件一条处理实例。缺口按物料列「需求 / 已放行 / 质检中 / 在途 / 还缺」,
  * 下了采购单和到货待检都不算解决, 只有放行入库才减少缺口。「缺口已解决」和「订单交付」分两列。
  */
 import { ref, computed, onMounted } from 'vue';
-import { ElMessage, ElMessageBox } from 'element-plus';
+
 import { Refresh } from '@element-plus/icons-vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
@@ -124,7 +130,7 @@ async function load() {
     }
   } catch {
     loadFailed.value = true;
-    ElMessage.error('缺料实例加载失败，请稍后重试');
+    ElMessage.error(t('production.shortage_cases_index.message_47aefd3b60ce'));
   } finally {
     loading.value = false;
   }
@@ -144,7 +150,7 @@ async function openDetail(row: ShortageCase) {
       ElMessage.error(res.message || '详情加载失败');
     }
   } catch {
-    ElMessage.error('详情加载失败');
+    ElMessage.error(t('production.shortage_cases_index.message_19a7ca44a09a'));
   } finally {
     detailLoading.value = false;
   }
@@ -156,7 +162,7 @@ async function refreshCase() {
   try {
     const res = await refreshShortageCase(factoryId.value, detail.value.case.id);
     if (res.success) {
-      ElMessage.success('已按当前库存与采购重新核对');
+      ElMessage.success(t('production.shortage_cases_index.message_6fbcac1655ce'));
       await openDetail(detail.value.case);
       await load();
     } else {
@@ -305,7 +311,7 @@ async function propose() {
 async function applyCandidate(key: string, label: string) {
   if (!detail.value || !reschedule.value) return;
   try {
-    await ElMessageBox.confirm(`按「${label}」调整排程？`, '应用重排', { confirmButtonText: '应用', cancelButtonText: '先不' });
+    await ElMessageBox.confirm(`按「${label}」调整排程？`, t('production.shortage_cases_index.message_7c8b3e741bed'), { confirmButtonText: t('production.shortage_cases_index.confirmbuttontext_63c73c4730f4'), cancelButtonText: t('production.shortage_cases_index.cancelbuttontext_a4d2f6abc99e') });
   } catch {
     return;
   }
@@ -313,7 +319,7 @@ async function applyCandidate(key: string, label: string) {
   try {
     const res = await applyReschedule(factoryId.value, detail.value.case.id, reschedule.value.id, key);
     if (res.success) {
-      ElMessage.success('排程已调整');
+      ElMessage.success(t('production.shortage_cases_index.message_309a8fc8e38b'));
       reschedule.value = null;
       await openDetail(detail.value.case);
       await load();
@@ -337,8 +343,8 @@ async function decide(decision: ShortageCaseDecision) {
   try {
     const r = await ElMessageBox.prompt(`请写明${DECISION_LABEL[decision]}的原因（必填）`, DECISION_LABEL[decision], {
       inputValidator: (v: string) => (v && v.trim().length > 0) || '原因不能为空',
-      confirmButtonText: '确定',
-      cancelButtonText: '先不',
+      confirmButtonText: t('production.shortage_cases_index.confirmbuttontext_fac2a67ad878'),
+      cancelButtonText: t('production.shortage_cases_index.cancelbuttontext_a4d2f6abc99e'),
     });
     reason = (r as { value: string }).value.trim();
   } catch {
@@ -366,170 +372,170 @@ onMounted(load);
 
 <template>
   <div class="page-container">
-    <el-card>
+    <UCard>
       <template #header>
         <div class="card-header">
           <div>
-            <span class="title">缺料异常</span>
-            <span class="subtitle">一个缺料事件一条；下单和到货待检都不算解决，放行入库才减少缺口</span>
+            <span class="title">{{ t('production.shortage_cases_index.text_20aa48607f41') }}</span>
+            <span class="subtitle">{{ t('production.shortage_cases_index.text_bbec6ab5735d') }}</span>
           </div>
           <div class="actions">
             <el-switch v-model="openOnly" active-text="只看未关闭" @change="load" />
-            <el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
+            <el-button :icon="Refresh" :loading="loading" @click="load">{{ t('production.shortage_cases_index.action_aee887434131') }}</el-button>
           </div>
         </div>
       </template>
 
-      <el-alert v-if="loadFailed" type="error" :closable="false" title="缺料实例加载失败，下面的列表不代表没有缺料" show-icon />
+      <el-alert v-if="loadFailed" type="error" :closable="false" :title="t('production.shortage_cases_index.title_a52867afb388')" show-icon />
 
-      <el-table v-loading="loading" :data="rows" empty-text="暂无缺料实例" @row-click="openDetail">
-        <el-table-column label="来源订单" min-width="150">
+      <CompatTable v-loading="loading" :data="rows" :empty-text="t('production.shortage_cases_index.empty_text_b3aefcc22a49')" @row-click="openDetail">
+        <CompatTableColumn :label="t('production.shortage_cases_index.label_472876096b98')" min-width="150">
           <template #default="{ row }">{{ row.salesOrderNumber || row.sourceId }}</template>
-        </el-table-column>
-        <el-table-column label="阶段" width="140">
+        </CompatTableColumn>
+        <CompatTableColumn :label="t('production.shortage_cases_index.label_59eb8d03efea')" width="140">
           <template #default="{ row }">
             <el-tag :type="STAGE_TAG[row.stage as ShortageCaseStage]">{{ STAGE_LABEL[row.stage as ShortageCaseStage] }}</el-tag>
           </template>
-        </el-table-column>
-        <el-table-column label="该谁处理" width="130">
+        </CompatTableColumn>
+        <CompatTableColumn :label="t('production.shortage_cases_index.label_a0722216b2eb')" width="130">
           <template #default="{ row }">{{ ROLE_LABEL[row.ownerRole] || row.ownerRole }}</template>
-        </el-table-column>
-        <el-table-column prop="gapLineCount" label="还缺的物料" width="110" />
-        <el-table-column label="缺口解决时间" width="160">
+        </CompatTableColumn>
+        <CompatTableColumn prop="gapLineCount" :label="t('production.shortage_cases_index.label_a8c500f1ed06')" width="110" />
+        <CompatTableColumn :label="t('production.shortage_cases_index.label_600efbe150eb')" width="160">
           <template #default="{ row }">{{ time(row.gapResolvedAt) }}</template>
-        </el-table-column>
-        <el-table-column label="订单交付状态" width="130">
+        </CompatTableColumn>
+        <CompatTableColumn :label="t('production.shortage_cases_index.label_dc64460e6d8e')" width="130">
           <template #default="{ row }">{{ row.salesOrderStatusLabel || '—' }}</template>
-        </el-table-column>
-        <el-table-column label="最近核对" min-width="200">
+        </CompatTableColumn>
+        <CompatTableColumn :label="t('production.shortage_cases_index.label_538388b8f0f6')" min-width="200">
           <template #default="{ row }">
             {{ time(row.lastRefreshedAt) }} · {{ REASON_LABEL[row.lastRefreshReason] || row.lastRefreshReason }}
           </template>
-        </el-table-column>
-      </el-table>
-    </el-card>
+        </CompatTableColumn>
+      </CompatTable>
+    </UCard>
 
-    <el-drawer v-model="detailVisible" size="760px" title="缺料实例">
+    <el-drawer v-model="detailVisible" size="760px" :title="t('production.shortage_cases_index.title_35465d2bffee')">
       <div v-loading="detailLoading">
         <template v-if="detail">
-          <el-descriptions :column="2" border size="small">
-            <el-descriptions-item label="来源订单">{{ detail.case.salesOrderNumber || detail.case.sourceId }}</el-descriptions-item>
-            <el-descriptions-item label="阶段">{{ STAGE_LABEL[detail.case.stage] }}</el-descriptions-item>
-            <el-descriptions-item label="该谁处理">{{ ROLE_LABEL[detail.case.ownerRole] || detail.case.ownerRole }}</el-descriptions-item>
-            <el-descriptions-item label="订单交付状态">{{ detail.case.salesOrderStatusLabel || '—' }}</el-descriptions-item>
-            <el-descriptions-item label="缺口解决时间">{{ time(detail.case.gapResolvedAt) }}</el-descriptions-item>
-            <el-descriptions-item label="最近核对">{{ time(detail.case.lastRefreshedAt) }}</el-descriptions-item>
-          </el-descriptions>
+          <CompatDescriptions :column="2" border size="small">
+            <CompatDescriptionsItem :label="t('production.shortage_cases_index.label_472876096b98')">{{ detail.case.salesOrderNumber || detail.case.sourceId }}</CompatDescriptionsItem>
+            <CompatDescriptionsItem :label="t('production.shortage_cases_index.label_59eb8d03efea')">{{ STAGE_LABEL[detail.case.stage] }}</CompatDescriptionsItem>
+            <CompatDescriptionsItem :label="t('production.shortage_cases_index.label_a0722216b2eb')">{{ ROLE_LABEL[detail.case.ownerRole] || detail.case.ownerRole }}</CompatDescriptionsItem>
+            <CompatDescriptionsItem :label="t('production.shortage_cases_index.label_dc64460e6d8e')">{{ detail.case.salesOrderStatusLabel || '—' }}</CompatDescriptionsItem>
+            <CompatDescriptionsItem :label="t('production.shortage_cases_index.label_600efbe150eb')">{{ time(detail.case.gapResolvedAt) }}</CompatDescriptionsItem>
+            <CompatDescriptionsItem :label="t('production.shortage_cases_index.label_538388b8f0f6')">{{ time(detail.case.lastRefreshedAt) }}</CompatDescriptionsItem>
+          </CompatDescriptions>
 
           <div class="section-head">
-            <h4>缺口</h4>
-            <el-button v-if="canRefreshCase && isOpen" size="small" :icon="Refresh" :loading="refreshing" @click="refreshCase">按当前库存重新核对</el-button>
+            <h4>{{ t('production.shortage_cases_index.text_245cdcd5fad2') }}</h4>
+            <el-button v-if="canRefreshCase && isOpen" size="small" :icon="Refresh" :loading="refreshing" @click="refreshCase">{{ t('production.shortage_cases_index.action_766315fa6acc') }}</el-button>
           </div>
-          <el-table :data="detail.lines" size="small" border>
-            <el-table-column label="物料" min-width="120">
+          <CompatTable :data="detail.lines" size="small" border>
+            <CompatTableColumn :label="t('production.shortage_cases_index.label_6446454e8e36')" min-width="120">
               <template #default="{ row }">{{ row.materialName || row.materialTypeId }}</template>
-            </el-table-column>
-            <el-table-column label="需求"><template #default="{ row }">{{ qty(row.requiredQty, row.unitLabel) }}</template></el-table-column>
-            <el-table-column label="已放行可用"><template #default="{ row }">{{ qty(row.releasedQty, row.unitLabel) }}</template></el-table-column>
-            <el-table-column label="质检中"><template #default="{ row }">{{ qty(row.inspectingQty, row.unitLabel) }}</template></el-table-column>
-            <el-table-column label="在途">
+            </CompatTableColumn>
+            <CompatTableColumn :label="t('production.shortage_cases_index.label_128a7a03668b')"><template #default="{ row }">{{ qty(row.requiredQty, row.unitLabel) }}</template></CompatTableColumn>
+            <CompatTableColumn :label="t('production.shortage_cases_index.label_60186b05ea0b')"><template #default="{ row }">{{ qty(row.releasedQty, row.unitLabel) }}</template></CompatTableColumn>
+            <CompatTableColumn :label="t('production.shortage_cases_index.label_f6790d80c1b7')"><template #default="{ row }">{{ qty(row.inspectingQty, row.unitLabel) }}</template></CompatTableColumn>
+            <CompatTableColumn :label="t('production.shortage_cases_index.label_555874b7c11d')">
               <template #default="{ row }">
                 {{ qty(row.onOrderQty, row.unitLabel) }}
                 <div v-if="row.onOrderUnitMismatchLines > 0" class="hint">
-                  另有 {{ row.onOrderUnitMismatchLines }} 行采购单位不同，未计入
+                  {{ t('production.shortage_cases_index.text_268ec6902063') }} {{ row.onOrderUnitMismatchLines }} {{ t('production.shortage_cases_index.text_42d9cc3373fb') }}
                 </div>
               </template>
-            </el-table-column>
-            <el-table-column label="还缺">
+            </CompatTableColumn>
+            <CompatTableColumn :label="t('production.shortage_cases_index.label_462413f016af')">
               <template #default="{ row }">
                 <span :class="{ gap: row.gapQty > 0 }">{{ qty(row.gapQty, row.unitLabel) }}</span>
               </template>
-            </el-table-column>
-            <el-table-column v-if="canPurchase && isOpen" label="采购" min-width="190">
+            </CompatTableColumn>
+            <CompatTableColumn v-if="canPurchase && isOpen" :label="t('production.shortage_cases_index.label_6e098153a586')" min-width="190">
               <template #default="{ row }">
                 <template v-if="proposals[row.materialTypeId]">
-                  <el-button
+                  <UButton
                     v-if="proposals[row.materialTypeId].canDraft"
-                    size="small"
-                    type="primary"
+                    size="sm"
+                    color="primary"
                     :loading="drafting === row.materialTypeId"
                     @click="draft(row.materialTypeId)"
                   >
-                    生成采购草稿 {{ proposals[row.materialTypeId].suggestedQty }} {{ row.unitLabel ?? '' }}
-                  </el-button>
+                    {{ t('production.shortage_cases_index.action_f84c85692e46') }} {{ proposals[row.materialTypeId].suggestedQty }} {{ row.unitLabel ?? '' }}
+                  </UButton>
                   <div v-for="(n, i) in proposals[row.materialTypeId].notes" :key="i" class="hint">{{ n }}</div>
                 </template>
               </template>
-            </el-table-column>
-          </el-table>
+            </CompatTableColumn>
+          </CompatTable>
 
           <div v-if="canDecide && canStillDecide" class="decision-bar">
-            <el-button v-if="!isManual" :loading="deciding" @click="decide('MANUAL')">转人工</el-button>
-            <el-button :loading="deciding" type="danger" plain @click="decide('CANCEL')">取消</el-button>
-            <el-button
+            <UButton color="neutral" variant="outline" v-if="!isManual" :loading="deciding" @click="decide('MANUAL')">{{ t('production.shortage_cases_index.action_41f043872f9e') }}</UButton>
+            <UButton :loading="deciding" color="error" variant="outline" @click="decide('CANCEL')">{{ t('production.shortage_cases_index.action_2cd0f3be8738') }}</UButton>
+            <UButton
               :loading="deciding"
-              type="success"
+              color="success"
               :disabled="detail.case.stage !== 'GAP_RESOLVED' && !isManual"
               @click="decide('CLOSE')"
             >
-              {{ isManual ? '关闭（人工处理完毕）' : '关闭（缺口已解决）' }}
-            </el-button>
+              {{ isManual ? t('production.shortage_cases_index.text_a6506d1d5829') : t('production.shortage_cases_index.text_a5054e2cb465') }}
+            </UButton>
           </div>
 
           <template v-if="canReschedule && isOpen">
             <div class="section-head">
-              <h4>局部重排</h4>
-              <el-button size="small" :loading="proposing" @click="propose">
-                {{ reschedule ? '重新生成方案' : '生成重排方案' }}
-              </el-button>
+              <h4>{{ t('production.shortage_cases_index.text_2c40abbaeac5') }}</h4>
+              <UButton color="neutral" variant="outline" size="sm" :loading="proposing" @click="propose">
+                {{ reschedule ? t('production.shortage_cases_index.text_6641047eb381') : t('production.shortage_cases_index.text_9779dbcf8cbf') }}
+              </UButton>
             </div>
-            <div v-if="!reschedule" class="hint">按缺料的预计到货日给出顺延 / 换线方案, 只预览, 确认后才改排程。</div>
+            <div v-if="!reschedule" class="hint">{{ t('production.shortage_cases_index.text_3532de739e3b') }}</div>
             <div v-else>
-              <div class="hint">方案 {{ shortTime(reschedule.expiresAt) }} 前有效; 期间排程被改过, 应用会被拒绝, 需重新生成。</div>
-              <el-card v-for="c in reschedule.candidates" :key="c.key" shadow="never" class="candidate">
+              <div class="hint">{{ t('production.shortage_cases_index.text_6f949ac3522d') }} {{ shortTime(reschedule.expiresAt) }} {{ t('production.shortage_cases_index.text_0308757f77dd') }}</div>
+              <UCard v-for="c in reschedule.candidates" :key="c.key"  class="candidate">
                 <div class="candidate-head">
                   <strong>{{ c.label }}</strong>
-                  <el-tag v-if="!c.applicable" size="small" type="info">不可直接应用</el-tag>
-                <el-button
+                  <UBadge variant="soft" v-if="!c.applicable" size="sm" color="info">{{ t('production.shortage_cases_index.text_ce877a44859b') }}</UBadge>
+                <UButton
                   v-else-if="c.applicable && candidateBasis(c).length"
-                    size="small"
-                    type="primary"
+                    size="sm"
+                    color="primary"
                     :loading="applying === c.key"
                     @click="applyCandidate(c.key, c.label)"
                   >
-                    应用此方案
-                  </el-button>
+                    {{ t('production.shortage_cases_index.action_1278b8f6d045') }}
+                  </UButton>
                 </div>
                 <div v-if="candidateBasis(c).length" class="basis-list">
                   <div v-for="(b, i) in candidateBasis(c)" :key="`${b.productionPlanId}-${i}`" class="basis">{{ basisText(b) }}</div>
                 </div>
-                <div v-else class="hint">{{ c.basis === undefined ? '该方案来自旧版本，缺少正式排程依据，请重新生成' : c.notes.join('；') }}</div>
-                <el-table v-if="candidateBasis(c).length && c.moves.length" :data="c.moves" size="small">
-                  <el-table-column label="产线" min-width="140">
+                <div v-else class="hint">{{ c.basis === undefined ? t('production.shortage_cases_index.text_8907acb97378') : c.notes.join('；') }}</div>
+                <CompatTable v-if="candidateBasis(c).length && c.moves.length" :data="c.moves" size="small">
+                  <CompatTableColumn :label="t('production.shortage_cases_index.label_77ca877fdd41')" min-width="140">
                     <template #default="{ row }">
                       {{ row.fromLineName }}<span v-if="row.toLineId !== row.fromLineId"> → {{ row.toLineName }}</span>
                     </template>
-                  </el-table-column>
-                  <el-table-column label="开始" min-width="200">
+                  </CompatTableColumn>
+                  <CompatTableColumn :label="t('production.shortage_cases_index.label_d2bb025a2e51')" min-width="200">
                     <template #default="{ row }">{{ shortTime(row.fromStart) }} → {{ shortTime(row.toStart) }}</template>
-                  </el-table-column>
-                  <el-table-column label="结束" min-width="200">
+                  </CompatTableColumn>
+                  <CompatTableColumn :label="t('production.shortage_cases_index.label_c7b24e7997e9')" min-width="200">
                     <template #default="{ row }">{{ shortTime(row.fromEnd) }} → {{ shortTime(row.toEnd) }}</template>
-                  </el-table-column>
-                </el-table>
+                  </CompatTableColumn>
+                </CompatTable>
                 <div v-for="(n, i) in c.notes" :key="i" class="hint">{{ n }}</div>
-              </el-card>
+              </UCard>
             </div>
           </template>
 
           <div class="section-head">
-            <h4>处理结果核对</h4>
-            <el-button v-if="canRecheck && isOpen" size="small" :loading="rechecking" @click="recheck">
-              按当前数据再核对
-            </el-button>
+            <h4>{{ t('production.shortage_cases_index.text_7385dab92c9e') }}</h4>
+            <UButton color="neutral" variant="outline" v-if="canRecheck && isOpen" size="sm" :loading="rechecking" @click="recheck">
+              {{ t('production.shortage_cases_index.action_4123c3bc2f66') }}
+            </UButton>
           </div>
-          <div v-if="outcomeLoadFailed" class="hint">核对记录加载失败，请稍后重新打开</div>
-          <div v-else-if="!latestCheck" class="hint">还没核对过。应用重排或生成采购草稿后会自动核对一次。</div>
+          <div v-if="outcomeLoadFailed" class="hint">{{ t('production.shortage_cases_index.text_3cf7d92e8228') }}</div>
+          <div v-else-if="!latestCheck" class="hint">{{ t('production.shortage_cases_index.text_feaf44b0149d') }}</div>
           <template v-else>
             <div class="verdict">
               <el-tag :type="VERDICT_TAG[latestCheck.verdict]">{{ latestCheck.verdictLabel }}</el-tag>
@@ -537,9 +543,8 @@ onMounted(load);
             </div>
             <div class="verdict-detail">{{ latestCheck.detail }}</div>
             <div class="hint">
-              交期 {{ latestCheck.dueDate ?? '—' }} · 最晚完工 {{ time(latestCheck.latestPlannedEnd) }}
-              · 晚于交期 {{ latestCheck.lateScheduleCount }} 个 · 未关闭缺口 {{ latestCheck.openGapLines }} 行
-              · 预计到货 {{ latestCheck.supplyReadyDate ?? '—' }}
+              {{ t('production.shortage_cases_index.text_7d0e25d161e5') }} {{ latestCheck.dueDate ?? '—' }} {{ t('production.shortage_cases_index.text_3a2b7f5915cd') }} {{ time(latestCheck.latestPlannedEnd) }}
+              {{ t('production.shortage_cases_index.text_7135e62fccae') }} {{ latestCheck.lateScheduleCount }} {{ t('production.shortage_cases_index.text_84c5dd91e529') }} {{ latestCheck.openGapLines }} {{ t('production.shortage_cases_index.text_69d2115ea652') }} {{ latestCheck.supplyReadyDate ?? '—' }}
             </div>
             <el-collapse v-if="outcomeChecks.length > 1" class="check-history">
               <el-collapse-item :title="`更早的核对（${outcomeChecks.length - 1} 次）`">
@@ -550,7 +555,7 @@ onMounted(load);
             </el-collapse>
           </template>
 
-          <h4>处理记录</h4>
+          <h4>{{ t('production.shortage_cases_index.text_d9271468c389') }}</h4>
           <el-timeline>
             <el-timeline-item v-for="(e, i) in detail.events" :key="i" :timestamp="time(e.createdAt)">
               <strong>{{ REASON_LABEL[e.triggerReason] || e.triggerReason }}</strong>

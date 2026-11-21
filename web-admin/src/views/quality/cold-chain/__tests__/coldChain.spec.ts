@@ -1,6 +1,7 @@
 import { flushPromises, mount } from '@vue/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import ElementPlus from 'element-plus';
+import { nuxtPilotStubs } from '@/components/compat/testStubs';
 
 /**
  * 冷链超温批次页 (缺口 15): 告警 → 受影响批次表 → 勾选转质检。
@@ -17,6 +18,10 @@ vi.mock('@/api/request', () => ({
 vi.mock('element-plus', async (orig) => {
   const mod = await orig<typeof import('element-plus')>();
   return { ...mod, ElMessageBox: { ...mod.ElMessageBox, confirm: (...a: unknown[]) => state.confirm(...a) } };
+});
+vi.mock('@/components/compat/messages', async () => {
+  const { ElMessage, ElMessageBox } = await import('element-plus');
+  return { useCompatMessages: () => ({ ElMessage, ElMessageBox }) };
 });
 import Page from '../index.vue';
 import { nuxtUiStubs } from '@/__tests__/helpers/nuxtUiStubs';
@@ -61,7 +66,7 @@ beforeEach(() => {
 });
 
 async function openDrawer() {
-  const wrapper = mount(Page, { global: { plugins: [ElementPlus], stubs: nuxtUiStubs }, attachTo: document.body });
+  const wrapper = mount(Page, { global: { plugins: [ElementPlus], stubs: { ...nuxtUiStubs, ...nuxtPilotStubs } }, attachTo: document.body });
   await flushPromises();
   await wrapper.find('[data-testid="cc-open-7"]').trigger('click');
   await flushPromises();
@@ -81,7 +86,7 @@ describe('冷链超温批次页', () => {
 
   it('不能转的批次禁选; 勾选可转的批次后转质检, 请求体只带选中的批次', async () => {
     await openDrawer();
-    const boxes = Array.from(document.querySelectorAll('[data-testid="cc-affected-table"] tbody .el-checkbox__original')) as HTMLInputElement[];
+    const boxes = Array.from(document.querySelectorAll<HTMLInputElement>('[data-testid="cc-affected-table"] tbody input[type="checkbox"]'));
     expect(boxes).toHaveLength(3);
     expect(boxes[2].disabled).toBe(true);
     const holdBtn = document.querySelector('[data-testid="cc-hold"]') as HTMLButtonElement;
@@ -103,7 +108,7 @@ describe('冷链超温批次页', () => {
   it('取消确认框 → 不发请求', async () => {
     state.confirm.mockRejectedValue('cancel');
     await openDrawer();
-    const boxes = Array.from(document.querySelectorAll('[data-testid="cc-affected-table"] tbody .el-checkbox__original')) as HTMLInputElement[];
+    const boxes = Array.from(document.querySelectorAll<HTMLInputElement>('[data-testid="cc-affected-table"] tbody input[type="checkbox"]'));
     boxes[0].click();
     await flushPromises();
     (document.querySelector('[data-testid="cc-hold"]') as HTMLButtonElement).click();

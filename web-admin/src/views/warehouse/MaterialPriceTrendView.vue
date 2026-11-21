@@ -1,9 +1,14 @@
 <script setup lang="ts">
+import { useCompatMessages } from '@/components/compat/messages';
+const { ElMessage } = useCompatMessages();
+import { useT } from '@/i18n-pilot/useT';
+const { t } = useT();
+
 import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get } from '@/api/request';
-import { ElMessage } from 'element-plus';
+
 import { Search, Refresh } from '@element-plus/icons-vue';
 import echarts from '@/utils/echarts';
 import type { ECharts } from 'echarts/core';
@@ -84,7 +89,7 @@ async function loadMaterials() {
     }
   } catch (error) {
     console.error('Failed to load materials:', error);
-    ElMessage.error('加载物料列表失败');
+    ElMessage.error(t('warehouse.materialpricetrendview.message_920e3fe31a20'));
   } finally {
     loading.value = false;
   }
@@ -242,12 +247,12 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="page-wrapper">
-    <el-card class="page-card" shadow="never">
+    <UCard class="page-card" >
       <template #header>
         <div class="card-header">
           <div class="header-left">
-            <span class="page-title">物料移动均价趋势</span>
-            <span class="data-count">共 {{ filteredData.length }} 种物料</span>
+            <span class="page-title">{{ t('warehouse.materialpricetrendview.text_1333cd2b5cfc') }}</span>
+            <span class="data-count">{{ t('warehouse.materialpricetrendview.text_76e547a8fa54') }} {{ filteredData.length }} {{ t('warehouse.materialpricetrendview.text_daa5fa29876b') }}</span>
           </div>
         </div>
       </template>
@@ -256,21 +261,21 @@ onBeforeUnmount(() => {
       <div class="search-bar">
         <el-input
           v-model="searchKeyword"
-          placeholder="搜索物料名称 / 编号 / 类别"
+          :placeholder="t('warehouse.materialpricetrendview.placeholder_8b475ed78923')"
           :prefix-icon="Search"
           clearable
           style="width: 300px"
           @keyup.enter="handleSearch"
         />
-        <el-button type="primary" :icon="Search" @click="handleSearch">搜索</el-button>
-        <el-button :icon="Refresh" @click="handleReset">重置</el-button>
+        <el-button type="primary" :icon="Search" @click="handleSearch">{{ t('warehouse.materialpricetrendview.action_44ce7ae909bb') }}</el-button>
+        <el-button :icon="Refresh" @click="handleReset">{{ t('warehouse.materialpricetrendview.action_cb5d682bac3d') }}</el-button>
       </div>
 
       <!-- Main Table -->
       <el-table
         :data="filteredData"
         v-loading="loading"
-        empty-text="暂无物料数据"
+        :empty-text="t('warehouse.materialpricetrendview.empty_text_dc708c82bb4d')"
         stripe
         border
         style="width: 100%"
@@ -284,41 +289,41 @@ onBeforeUnmount(() => {
                 v-if="expandBatches[row.id] && expandBatches[row.id].filter((b: BatchData) => b.unitPrice != null && b.unitPrice > 0).length > 0"
                 class="chart-container"
               >
-                <div class="chart-title">采购单价趋势</div>
+                <div class="chart-title">{{ t('warehouse.materialpricetrendview.text_e07d8385e8cc') }}</div>
                 <div :id="`price-chart-${row.id}`" class="chart-box"></div>
                 <ChartInsight :insight="priceInsight(row)" depth="detailed" class="price-insight" :data-testid="`price-insight-${row.id}`" />
               </div>
               <el-empty
                 v-else-if="!expandLoading[row.id]"
-                description="暂无价格趋势数据"
+                :description="t('warehouse.materialpricetrendview.description_037eb2b53b27')"
                 :image-size="60"
               />
             </div>
           </template>
         </el-table-column>
 
-        <el-table-column prop="name" label="物料名称" min-width="160" show-overflow-tooltip />
-        <el-table-column prop="category" label="类别" width="120" show-overflow-tooltip>
+        <el-table-column prop="name" :label="t('warehouse.materialpricetrendview.label_fa53c33f04aa')" min-width="160" show-overflow-tooltip />
+        <el-table-column prop="category" :label="t('warehouse.materialpricetrendview.label_0d12cbd6562b')" width="120" show-overflow-tooltip>
           <template #default="{ row }">
-            <el-tag v-if="row.category" size="small" type="info" effect="plain">
+            <UBadge v-if="row.category" size="sm" color="info" variant="outline">
               {{ row.category }}
-            </el-tag>
+            </UBadge>
             <span v-else>-</span>
           </template>
         </el-table-column>
-        <el-table-column v-if="canViewPrice" label="当前均价" width="130" align="right">
+        <el-table-column v-if="canViewPrice" :label="t('warehouse.materialpricetrendview.label_61a83fd55d6f')" width="130" align="right">
           <template #default="{ row }">
             <span class="price-value">
               {{ formatPrice(row.movingAvgPrice ?? row.unitPrice) }}
             </span>
           </template>
         </el-table-column>
-        <el-table-column v-if="canViewPrice" label="最近入库价" width="130" align="right">
+        <el-table-column v-if="canViewPrice" :label="t('warehouse.materialpricetrendview.label_eaabe18d641f')" width="130" align="right">
           <template #default="{ row }">
             {{ formatPrice(row.unitPrice) }}
           </template>
         </el-table-column>
-        <el-table-column label="库存量" width="120" align="right">
+        <el-table-column :label="t('warehouse.materialpricetrendview.label_5254a4ea9783')" width="120" align="right">
           <template #default="{ row }">
             {{ row.currentStock ?? row.totalStock ?? '-' }}
             <span v-if="row.unit && (row.currentStock ?? row.totalStock) != null" class="unit-text">
@@ -327,7 +332,7 @@ onBeforeUnmount(() => {
           </template>
         </el-table-column>
       </el-table>
-    </el-card>
+    </UCard>
   </div>
 </template>
 

@@ -43,12 +43,18 @@ vi.mock('element-plus', async (importOriginal) => {
     ElMessageBox: { ...actual.ElMessageBox, confirm: (...args: unknown[]) => boxMock(...args) },
   };
 });
+vi.mock('@/components/compat/messages', async () => {
+  const { ElMessage, ElMessageBox } = await import('element-plus');
+  return { useCompatMessages: () => ({ ElMessage, ElMessageBox }) };
+});
 
 import AiPurchasePage from './index.vue';
+import { nuxtPilotStubs } from '@/components/compat/testStubs';
 import { menuConfig } from '@/components/layout/menuConfig';
 import router from '@/router';
 
 const stubs = {
+  ...nuxtPilotStubs,
   'el-card': { template: '<div><slot /></div>' },
   'el-form': { template: '<form><slot /></form>' },
   'el-form-item': { template: '<label><slot /></label>' },

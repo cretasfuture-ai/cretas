@@ -1,4 +1,10 @@
 <script setup lang="ts">
+import { CompatDatePicker, CompatDescriptions, CompatDescriptionsItem, CompatDialog, CompatForm, CompatFormItem, CompatOption, CompatPagination, CompatSelect, CompatTable, CompatTableColumn } from '@/components/compat';
+import { useCompatMessages } from '@/components/compat/messages';
+const { ElMessageBox } = useCompatMessages();
+import { useT } from '@/i18n-pilot/useT';
+const { t } = useT();
+
 import ListEmptyExplain from '@/components/common/ListEmptyExplain.vue';
 import { ref, reactive, computed, onMounted, watch } from 'vue';
 import { displayUnit } from '@/utils/unitPricing';
@@ -7,7 +13,7 @@ import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post, put } from '@/api/request';
 import { listManufacturers, type ManufacturerRegistry } from '@/api/manufacturer';
-import { ElMessage, ElMessageBox } from 'element-plus';
+
 import CanvasAwareWrapper from '@/components/canvas/CanvasAwareWrapper.vue';
 import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
 import { Search, Refresh } from '@element-plus/icons-vue';
@@ -15,6 +21,9 @@ import { formatDateTimeCell, fmtQty, formatAmount } from '@/utils/tableFormatter
 import { batchStatusDisplay, formatDateTimeMinute, isDepletedAvailableBatch } from './batchDisplay';
 import { enumLabel, MATERIAL_BATCH_STATUS_LABELS } from '@/utils/enumDisplay';
 import type { FormInstance } from 'element-plus';
+// The synchronous stock-price notice is covered by the existing scheduler
+// re-entry regression. Keep that call path for the compatibility pilot.
+import { ElMessage } from 'element-plus';
 import type { TableRow } from '@/types/api';
 import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
 import PendingPurchaseReceivingPanel from './PendingPurchaseReceivingPanel.vue';
@@ -130,7 +139,7 @@ async function loadSummaryData() {
     }
   } catch (error) {
     console.error('加载汇总失败:', error);
-    ElMessage.error('加载按物料汇总数据失败，请重试');
+    ElMessage.error(t('warehouse.materials_list.message_4fc332c7bd23'));
     summaryRows.value = [];
   } finally {
     summaryLoading.value = false;
@@ -372,7 +381,7 @@ const scanResultVisible = computed({
 async function handleScanQuery() {
   const code = scanCode.value.trim();
   if (!code) {
-    ElMessage.warning('请输入或扫描条码');
+    ElMessage.warning(t('warehouse.materials_list.message_bdf6a2c9cc90'));
     return;
   }
   scanLoading.value = true;
@@ -385,7 +394,7 @@ async function handleScanQuery() {
       ElMessage({ message: res.message || '未找到对应批次', type: 'warning', duration: 0, showClose: true });
     }
   } catch {
-    ElMessage({ message: '扫码查询失败，请重试', type: 'error', duration: 0, showClose: true });
+    ElMessage({ message: t('warehouse.materials_list.message_fbc1dd005b6b'), type: 'error', duration: 0, showClose: true });
   } finally {
     scanLoading.value = false;
   }
@@ -396,12 +405,12 @@ const selectedMaterialUnit = ref<string | null>(null);
 
 const formRules = {
   // 一物一码: 批次号由系统自动生成, 非手填, 故无 required 校验 (转录 6.9 行68/105 防手敲重码)
-  materialTypeId: [{ required: true, message: '请选择原料类型', trigger: 'change' }],
-  supplierId: [{ required: true, message: '请选择供应商', trigger: 'change' }],
-  receiptQuantity: [{ required: true, message: '请输入数量', trigger: 'blur' }],
-  receiptDate: [{ required: true, message: '请选择入库日期', trigger: 'change' }],
-  totalWeight: [{ required: true, message: '请输入总重量(kg)', trigger: 'blur' }],
-  totalValue: [{ required: true, message: '请输入总价值(元)', trigger: 'blur' }],
+  materialTypeId: [{ required: true, message: t('warehouse.materials_list.message_c23b611e58ad'), trigger: 'change' }],
+  supplierId: [{ required: true, message: t('warehouse.materials_list.message_ade9f5ce860c'), trigger: 'change' }],
+  receiptQuantity: [{ required: true, message: t('warehouse.materials_list.message_ec6ac20e4abe'), trigger: 'blur' }],
+  receiptDate: [{ required: true, message: t('warehouse.materials_list.message_a16b0d9f77a8'), trigger: 'change' }],
+  totalWeight: [{ required: true, message: t('warehouse.materials_list.message_d7ba056c7f22'), trigger: 'blur' }],
+  totalValue: [{ required: true, message: t('warehouse.materials_list.message_8fae187bda19'), trigger: 'blur' }],
 };
 
 // Bug C5: auto-calculate totalWeight and totalValue from selected material's base info
@@ -551,11 +560,11 @@ async function handleUnlinkSourceIndividual() {
   let reason: string;
   try {
     const result = await ElMessageBox.prompt(
-      '解除后，这批原料在溯源里不再追到该个体。请填写原因（会记入操作日志）。',
-      '解除来源个体挂载',
+      t('warehouse.materials_list.message_83584b26616a'),
+      t('warehouse.materials_list.message_c77b8d95ba13'),
       {
-        confirmButtonText: '解除挂载',
-        cancelButtonText: '取消',
+        confirmButtonText: t('warehouse.materials_list.confirmbuttontext_a21a394ffd2c'),
+        cancelButtonText: t('warehouse.materials_list.cancelbuttontext_2cd0f3be8738'),
         inputType: 'textarea',
         inputPlaceholder: `例如：挂错了个体（最多 ${UNLINK_REASON_MAX_LENGTH} 字）`,
         inputValidator: validateUnlinkReason,
@@ -569,7 +578,7 @@ async function handleUnlinkSourceIndividual() {
   try {
     const res = await post(unlinkSourceIndividualPath(factoryId.value, batchId), { reason });
     if (res.success) {
-      ElMessage.success('已解除来源个体挂载，已记录原因');
+      ElMessage.success(t('warehouse.materials_list.message_54ae0ab603e4'));
       editingSourceIndividualId.value = null;
       editingSourceIndividualCode.value = null;
       loadData();
@@ -579,7 +588,7 @@ async function handleUnlinkSourceIndividual() {
     }
   } catch (error) {
     console.error('解除来源个体挂载失败:', error);
-    ElMessage({ message: '解除失败，请重试', type: 'error', duration: 0, showClose: true });
+    ElMessage({ message: t('warehouse.materials_list.message_25e72cc5e030'), type: 'error', duration: 0, showClose: true });
   } finally {
     unlinkingSourceIndividual.value = false;
   }
@@ -691,12 +700,12 @@ async function submitCostCorrection() {
   const price = Number(costCorrectionForm.unitPrice);
   const reason = costCorrectionForm.reason.trim();
   if (!batchId) return;
-  if (!Number.isFinite(price) || price <= 0) { ElMessage.warning('估值单价必须大于 0'); return; }
+  if (!Number.isFinite(price) || price <= 0) { ElMessage.warning(t('warehouse.materials_list.message_f3355c533db1')); return; }
   if (costCorrectionOriginal.value != null && Math.abs(price - costCorrectionOriginal.value) < 0.000001) {
-    ElMessage.warning('估值单价没有变化，无需更正'); return;
+    ElMessage.warning(t('warehouse.materials_list.message_47a14c95e281')); return;
   }
-  if (!reason) { ElMessage.warning('请填写估值依据，它会写入审计台账'); return; }
-  if (reason.length > CORRECTION_REASON_MAX_LENGTH) { ElMessage.warning('估值依据不能超过 255 字'); return; }
+  if (!reason) { ElMessage.warning(t('warehouse.materials_list.message_1fa994cae9b0')); return; }
+  if (reason.length > CORRECTION_REASON_MAX_LENGTH) { ElMessage.warning(t('warehouse.materials_list.message_6b0e81ecf61c')); return; }
   costCorrectionSaving.value = true;
   try {
     const res = await post(`/${factoryId.value}/material-batches/${batchId}/cost-correction`, {
@@ -707,7 +716,7 @@ async function submitCostCorrection() {
       ElMessage({ message: res.message || '估值更正失败', type: 'error', duration: 0, showClose: true });
       return;
     }
-    ElMessage.success('批次估值已更正，已记录新旧单价、原因和操作人');
+    ElMessage.success(t('warehouse.materials_list.message_911788e724b3'));
     costCorrectionDialogVisible.value = false;
     if (formData.receiptQuantity != null) {
       formData.totalValue = Number((formData.receiptQuantity * price).toFixed(2));
@@ -717,7 +726,7 @@ async function submitCostCorrection() {
     if (isAggregateView()) await loadSummaryData();
   } catch (error) {
     console.error('更正批次估值失败:', error);
-    ElMessage({ message: '估值更正失败，请重试', type: 'error', duration: 0, showClose: true });
+    ElMessage({ message: t('warehouse.materials_list.message_507bb61d5934'), type: 'error', duration: 0, showClose: true });
   } finally {
     costCorrectionSaving.value = false;
   }
@@ -729,10 +738,10 @@ async function submitCorrectReceiptDate() {
   const newDate = String(correctDateForm.receiptDate || '');
   const reason = correctDateForm.reason.trim();
   // 三条前置判据与后端逐条对应。在这里拦是为了少一次往返, ⛔ 不是"前端拦了后端就可以不拦"。
-  if (!newDate) { ElMessage.warning('请选择更正后的入库日期'); return; }
-  if (newDate === correctDateOriginal.value) { ElMessage.warning('入库日期没有变化，无需更正'); return; }
-  if (newDate > todayIso) { ElMessage.warning('入库日期不能晚于今天'); return; }
-  if (!reason) { ElMessage.warning('请填写更正原因，它会写入审计记录'); return; }
+  if (!newDate) { ElMessage.warning(t('warehouse.materials_list.message_5e44ec7956e4')); return; }
+  if (newDate === correctDateOriginal.value) { ElMessage.warning(t('warehouse.materials_list.message_361b35746274')); return; }
+  if (newDate > todayIso) { ElMessage.warning(t('warehouse.materials_list.message_c4d210173c74')); return; }
+  if (!reason) { ElMessage.warning(t('warehouse.materials_list.message_af8329e9763d')); return; }
   if (reason.length > CORRECTION_REASON_MAX_LENGTH) {
     ElMessage.warning(`更正原因不能超过 ${CORRECTION_REASON_MAX_LENGTH} 字`);
     return;
@@ -745,7 +754,7 @@ async function submitCorrectReceiptDate() {
       { receiptDate: newDate, reason },
     );
     if (res.success) {
-      ElMessage.success('入库日期已更正，已记录更正原因与改前改后的日期');
+      ElMessage.success(t('warehouse.materials_list.message_6bd96efb5c08'));
       correctDateDialogVisible.value = false;
       formData.receiptDate = newDate;
       correctDateOriginal.value = newDate;
@@ -757,7 +766,7 @@ async function submitCorrectReceiptDate() {
     }
   } catch (error) {
     console.error('更正入库日期失败:', error);
-    ElMessage({ message: '更正失败，请重试', type: 'error', duration: 0, showClose: true });
+    ElMessage({ message: t('warehouse.materials_list.message_53e76e3b3eaf'), type: 'error', duration: 0, showClose: true });
   } finally {
     correctDateSaving.value = false;
   }
@@ -792,7 +801,7 @@ async function handleFormSubmit() {
     }
   } catch (error) {
     console.error('保存失败:', error);
-    ElMessage.error('保存失败，请重试');
+    ElMessage.error(t('warehouse.materials_list.message_f42a1238b44a'));
   } finally {
     formSaving.value = false;
   }
@@ -803,12 +812,12 @@ const labelGenerating = ref<string | null>(null); // batchId 正在生成中
 
 async function handleGenerateLabel(row: TableRow) {
   const batchId = String(row.id || '');
-  if (!batchId) { ElMessage.warning('无效批次 ID'); return; }
+  if (!batchId) { ElMessage.warning(t('warehouse.materials_list.message_1b204332830f')); return; }
   try {
     await ElMessageBox.confirm(
       `确认为批次「${row.batchNumber || batchId}」生成物料标签？\n\n标签已存在则会提示先作废旧标签。`,
-      '生成物料标签',
-      { confirmButtonText: '生成', cancelButtonText: '取消', type: 'info' }
+      t('warehouse.materials_list.message_04a517d29df3'),
+      { confirmButtonText: t('warehouse.materials_list.confirmbuttontext_1ad1463fe16f'), cancelButtonText: t('warehouse.materials_list.cancelbuttontext_2cd0f3be8738'), type: 'info' }
     );
   } catch { return; } // user cancelled
 
@@ -834,28 +843,28 @@ async function handleGenerateLabel(row: TableRow) {
 <template>
   <CanvasAwareWrapper module-code="material_batch">
   <div class="page-wrapper">
-    <el-card class="page-card" shadow="never">
+    <UCard class="page-card" >
       <template #header>
         <div class="card-header">
           <div class="header-left">
-            <span class="page-title">入库任务与批次</span>
-            <span class="data-count">当前 {{ currentRecordCount }}</span>
+            <span class="page-title">{{ t('warehouse.materials_list.text_963b21a278e0') }}</span>
+            <span class="data-count">{{ t('warehouse.materials_list.text_cb62ebd689ee') }} {{ currentRecordCount }}</span>
           </div>
           <div class="header-right">
             <el-input
               v-model="scanCode"
-              placeholder="扫码/输入条码查询"
+              :placeholder="t('warehouse.materials_list.placeholder_f6917c970079')"
               clearable
               style="width: 200px"
               @keyup.enter="handleScanQuery"
             />
-            <el-button :loading="scanLoading" @click="handleScanQuery">扫码查询</el-button>
-            <el-button v-if="canWrite" @click="router.push('/warehouse/material-types')">
-              管理原料类型字典
-            </el-button>
-            <el-button v-if="canWrite" @click="router.push('/warehouse/manufacturers')">
-              厂商登记表
-            </el-button>
+            <UButton color="neutral" variant="outline" :loading="scanLoading" @click="handleScanQuery">{{ t('warehouse.materials_list.action_c6ba7dcc62a5') }}</UButton>
+            <UButton color="neutral" variant="outline" v-if="canWrite" @click="router.push('/warehouse/material-types')">
+              {{ t('warehouse.materials_list.action_c00f17d23ce9') }}
+            </UButton>
+            <UButton color="neutral" variant="outline" v-if="canWrite" @click="router.push('/warehouse/manufacturers')">
+              {{ t('warehouse.materials_list.action_9a29a90329d1') }}
+            </UButton>
           </div>
         </div>
       </template>
@@ -881,34 +890,34 @@ async function handleGenerateLabel(row: TableRow) {
       <template v-else>
       <div class="search-bar batch-toolbar">
         <el-radio-group v-model="viewMode" @change="handleViewModeChange">
-          <el-radio-button label="detail">按批次明细</el-radio-button>
-          <el-radio-button label="summary">按物料汇总</el-radio-button>
-          <el-radio-button label="byDocument">按收货单分组</el-radio-button>
+          <el-radio-button label="detail">{{ t('warehouse.materials_list.text_9b87b7ef3027') }}</el-radio-button>
+          <el-radio-button label="summary">{{ t('warehouse.materials_list.text_ca5759abe4c8') }}</el-radio-button>
+          <el-radio-button label="byDocument">{{ t('warehouse.materials_list.text_8f363d265e16') }}</el-radio-button>
         </el-radio-group>
         <el-input
           v-model="searchKeyword"
-          placeholder="搜索批次号/原料名称/合同号/供应商批次号/厂号"
+          :placeholder="t('warehouse.materials_list.placeholder_e776c01c6e12')"
           :prefix-icon="Search"
           clearable
           style="width: 280px"
           @keyup.enter="handleSearch"
         />
-        <el-button type="primary" :icon="Search" @click="handleSearch">搜索</el-button>
-        <el-button :icon="Refresh" @click="handleRefresh">重置</el-button>
+        <el-button type="primary" :icon="Search" @click="handleSearch">{{ t('warehouse.materials_list.action_44ce7ae909bb') }}</el-button>
+        <el-button :icon="Refresh" @click="handleRefresh">{{ t('warehouse.materials_list.action_cb5d682bac3d') }}</el-button>
       </div>
 
       <!-- 按物料汇总视图 (F006 客户原话痛点: 同一原料入库多次, 看着一堆散批次) -->
       <template v-if="viewMode === 'summary'">
         <div class="summary-hint">
-          <span>共 <strong>{{ groupedSummary.length }}</strong> 种原料在库</span>
+          <span>{{ t('warehouse.materials_list.text_76e547a8fa54') }} <strong>{{ groupedSummary.length }}</strong> {{ t('warehouse.materials_list.text_814a7c60903b') }}</span>
           <span v-if="summaryTruncated" class="summary-warning">
-            数据量较大, 当前汇总仅基于前 {{ summaryRows.length }} 条批次记录, 如有遗漏请缩小搜索范围重新汇总
+            {{ t('warehouse.materials_list.text_13ff7222eb45') }} {{ summaryRows.length }} {{ t('warehouse.materials_list.text_5d427fe2324e') }}
           </span>
         </div>
         <el-table
           :data="groupedSummary"
           v-loading="summaryLoading"
-          empty-text="暂无库存数据"
+          :empty-text="t('warehouse.materials_list.empty_text_b6185aa71e19')"
           stripe
           border
           row-key="materialTypeId"
@@ -916,52 +925,52 @@ async function handleGenerateLabel(row: TableRow) {
         >
           <el-table-column type="expand">
             <template #default="{ row }">
-              <el-table :data="row.batches" size="small" border stripe class="nested-batch-table">
-                <el-table-column prop="batchNumber" label="批次号" width="160" />
-                <el-table-column prop="supplierName" label="供应商" min-width="140" show-overflow-tooltip />
-                <el-table-column label="数量" width="120" align="right">
+              <CompatTable :data="row.batches" size="small" border stripe class="nested-batch-table">
+                <CompatTableColumn prop="batchNumber" :label="t('warehouse.materials_list.label_cb5386f1a98a')" width="160" />
+                <CompatTableColumn prop="supplierName" :label="t('warehouse.materials_list.label_033ed5945254')" min-width="140" show-overflow-tooltip />
+                <CompatTableColumn :label="t('warehouse.materials_list.label_5e29d121dda0')" width="120" align="right">
                   <template #default="{ row: b }">
                     {{ b.quantity ?? b.currentQuantity ?? b.receiptQuantity ?? '-' }} {{ displayUnit(b.quantityUnit || b.unit) }}
                   </template>
-                </el-table-column>
-                <el-table-column label="状态" width="100" align="center">
+                </CompatTableColumn>
+                <CompatTableColumn :label="t('warehouse.materials_list.label_6320b4a8722a')" width="100" align="center">
                   <template #default="{ row: b }">
                     <el-tag :type="batchTagType(b)" size="small">{{ batchStatusDisplay(b, getStatusText).text }}</el-tag>
                   </template>
-                </el-table-column>
-                <el-table-column prop="expiryDate" label="过期日期" width="120" />
-                <el-table-column prop="createdAt" label="入库时间" width="180" :formatter="formatDateTimeCell" />
-                <el-table-column label="操作" width="180" fixed="right" align="center">
+                </CompatTableColumn>
+                <CompatTableColumn prop="expiryDate" :label="t('warehouse.materials_list.label_a75622e03fcd')" width="120" />
+                <CompatTableColumn prop="createdAt" :label="t('warehouse.materials_list.label_fd184c2ce046')" width="180" :formatter="formatDateTimeCell" />
+                <CompatTableColumn :label="t('warehouse.materials_list.label_ed31fbb483ee')" width="180" fixed="right" align="center">
                   <template #default="{ row: b }">
-                    <el-button type="primary" link size="small" @click="handleView(b)">查看</el-button>
-                    <el-button v-if="canWrite" type="primary" link size="small" @click="handleEdit(b)">编辑</el-button>
-                    <el-button
+                    <UButton color="primary" variant="link" size="sm" @click="handleView(b)">{{ t('warehouse.materials_list.action_db8db0530432') }}</UButton>
+                    <UButton v-if="canWrite" color="primary" variant="link" size="sm" @click="handleEdit(b)">{{ t('warehouse.materials_list.action_051836569928') }}</UButton>
+                    <UButton
                       v-if="canWrite"
-                      type="success"
-                      link
-                      size="small"
+                      color="success"
+                      variant="link"
+                      size="sm"
                       :loading="labelGenerating === String(b.id)"
                       @click="handleGenerateLabel(b)"
-                    >生成标签</el-button>
+                    >{{ t('warehouse.materials_list.action_9d9cf609f6ea') }}</UButton>
                   </template>
-                </el-table-column>
-              </el-table>
+                </CompatTableColumn>
+              </CompatTable>
             </template>
           </el-table-column>
-          <el-table-column label="原料名称" min-width="180" show-overflow-tooltip>
+          <el-table-column :label="t('warehouse.materials_list.label_a27f31ef6fa4')" min-width="180" show-overflow-tooltip>
             <template #default="{ row }">{{ row.materialName }}</template>
           </el-table-column>
-          <el-table-column label="合计可用量" width="150" align="right">
+          <el-table-column :label="t('warehouse.materials_list.label_6ecebeaf912f')" width="150" align="right">
             <template #default="{ row }"><strong>{{ fmtQty(row.totalQuantity) }}</strong></template>
           </el-table-column>
-          <el-table-column label="单位" width="90" align="center">
+          <el-table-column :label="t('warehouse.materials_list.label_80b19d68b149')" width="90" align="center">
             <template #default="{ row }">{{ row.unit }}</template>
           </el-table-column>
-          <el-table-column v-if="canViewPrice" label="合计价值" width="140" align="right">
+          <el-table-column v-if="canViewPrice" :label="t('warehouse.materials_list.label_e6764062e67f')" width="140" align="right">
             <template #default="{ row }">{{ formatAmount(row.totalValue) }}</template>
           </el-table-column>
-          <el-table-column label="批次数" width="120" align="right">
-            <template #default="{ row }">{{ row.batchCount }} 个批次</template>
+          <el-table-column :label="t('warehouse.materials_list.label_2f69582f9147')" width="120" align="right">
+            <template #default="{ row }">{{ row.batchCount }} {{ t('warehouse.materials_list.text_adc46b52038f') }}</template>
           </el-table-column>
         </el-table>
       </template>
@@ -974,15 +983,15 @@ async function handleGenerateLabel(row: TableRow) {
       -->
       <template v-if="viewMode === 'byDocument'">
         <div class="summary-hint">
-          <span>共 <strong>{{ groupedByDocument.length }}</strong> 个收货单据分组</span>
+          <span>{{ t('warehouse.materials_list.text_76e547a8fa54') }} <strong>{{ groupedByDocument.length }}</strong> {{ t('warehouse.materials_list.text_57bd16e398b1') }}</span>
           <span v-if="summaryTruncated" class="summary-warning">
-            数据量较大, 当前分组仅基于前 {{ summaryRows.length }} 条批次记录, 如有遗漏请缩小搜索范围重新分组
+            {{ t('warehouse.materials_list.text_f5ca2d7a6acf') }} {{ summaryRows.length }} {{ t('warehouse.materials_list.text_1c8991e83864') }}
           </span>
         </div>
         <el-table
           :data="groupedByDocument"
           v-loading="summaryLoading"
-          empty-text="暂无库存数据"
+          :empty-text="t('warehouse.materials_list.empty_text_b6185aa71e19')"
           stripe
           border
           row-key="key"
@@ -990,55 +999,55 @@ async function handleGenerateLabel(row: TableRow) {
         >
           <el-table-column type="expand">
             <template #default="{ row }">
-              <el-table :data="row.batches" size="small" border stripe class="nested-batch-table">
-                <el-table-column prop="batchNumber" label="批次号" width="160" />
-                <el-table-column label="原料类型" min-width="140" show-overflow-tooltip>
+              <CompatTable :data="row.batches" size="small" border stripe class="nested-batch-table">
+                <CompatTableColumn prop="batchNumber" :label="t('warehouse.materials_list.label_cb5386f1a98a')" width="160" />
+                <CompatTableColumn :label="t('warehouse.materials_list.label_1eab99853e63')" min-width="140" show-overflow-tooltip>
                   <template #default="{ row: b }">{{ b.materialTypeName || b.materialName || '-' }}</template>
-                </el-table-column>
-                <el-table-column prop="supplierName" label="供应商" min-width="140" show-overflow-tooltip />
-                <el-table-column label="数量" width="120" align="right">
+                </CompatTableColumn>
+                <CompatTableColumn prop="supplierName" :label="t('warehouse.materials_list.label_033ed5945254')" min-width="140" show-overflow-tooltip />
+                <CompatTableColumn :label="t('warehouse.materials_list.label_5e29d121dda0')" width="120" align="right">
                   <template #default="{ row: b }">
                     {{ b.receiptQuantity ?? b.inboundQuantity ?? b.currentQuantity ?? '-' }} {{ displayUnit(b.quantityUnit || b.unit) }}
                   </template>
-                </el-table-column>
-                <el-table-column label="状态" width="100" align="center">
+                </CompatTableColumn>
+                <CompatTableColumn :label="t('warehouse.materials_list.label_6320b4a8722a')" width="100" align="center">
                   <template #default="{ row: b }">
                     <el-tag :type="batchTagType(b)" size="small">{{ batchStatusDisplay(b, getStatusText).text }}</el-tag>
                   </template>
-                </el-table-column>
-                <el-table-column prop="createdAt" label="入库时间" width="180" :formatter="formatDateTimeCell" />
-                <el-table-column label="操作" width="180" fixed="right" align="center">
+                </CompatTableColumn>
+                <CompatTableColumn prop="createdAt" :label="t('warehouse.materials_list.label_fd184c2ce046')" width="180" :formatter="formatDateTimeCell" />
+                <CompatTableColumn :label="t('warehouse.materials_list.label_ed31fbb483ee')" width="180" fixed="right" align="center">
                   <template #default="{ row: b }">
-                    <el-button type="primary" link size="small" @click="handleView(b)">查看</el-button>
-                    <el-button v-if="canWrite" type="primary" link size="small" @click="handleEdit(b)">编辑</el-button>
-                    <el-button
+                    <UButton color="primary" variant="link" size="sm" @click="handleView(b)">{{ t('warehouse.materials_list.action_db8db0530432') }}</UButton>
+                    <UButton v-if="canWrite" color="primary" variant="link" size="sm" @click="handleEdit(b)">{{ t('warehouse.materials_list.action_051836569928') }}</UButton>
+                    <UButton
                       v-if="canWrite"
-                      type="success"
-                      link
-                      size="small"
+                      color="success"
+                      variant="link"
+                      size="sm"
                       :loading="labelGenerating === String(b.id)"
                       @click="handleGenerateLabel(b)"
-                    >生成标签</el-button>
+                    >{{ t('warehouse.materials_list.action_9d9cf609f6ea') }}</UButton>
                   </template>
-                </el-table-column>
-              </el-table>
+                </CompatTableColumn>
+              </CompatTable>
             </template>
           </el-table-column>
-          <el-table-column label="收货单号" min-width="200" show-overflow-tooltip>
+          <el-table-column :label="t('warehouse.materials_list.label_bfe9311ee679')" min-width="200" show-overflow-tooltip>
             <template #default="{ row }">
               <span>{{ row.docLabel }}</span>
-              <el-tag v-if="row.isUnlinked" type="info" size="small" class="doc-group-unlinked-tag">
-                无来源单据
-              </el-tag>
+              <UBadge variant="soft" v-if="row.isUnlinked" color="info" size="sm" class="doc-group-unlinked-tag">
+                {{ t('warehouse.materials_list.text_2651a679b819') }}
+              </UBadge>
             </template>
           </el-table-column>
-          <el-table-column label="收货时间" width="130" align="center">
+          <el-table-column :label="t('warehouse.materials_list.label_41e78d51282b')" width="130" align="center">
             <template #default="{ row }">{{ row.receivedAt || '-' }}</template>
           </el-table-column>
-          <el-table-column label="批次数" width="110" align="right">
-            <template #default="{ row }">{{ row.batchCount }} 个批次</template>
+          <el-table-column :label="t('warehouse.materials_list.label_2f69582f9147')" width="110" align="right">
+            <template #default="{ row }">{{ row.batchCount }} {{ t('warehouse.materials_list.text_adc46b52038f') }}</template>
           </el-table-column>
-          <el-table-column label="本次总量" min-width="220">
+          <el-table-column :label="t('warehouse.materials_list.label_b9babe8735b9')" min-width="220">
             <template #default="{ row }">
               <!--
                 ⛔ 一次收货可能混不同单位/物料, 绝不把不同单位的数量直接相加成一个假总数
@@ -1048,7 +1057,7 @@ async function handleGenerateLabel(row: TableRow) {
               <div v-for="t in (row.totalsByUnit as any[])" :key="t.unit" class="doc-group-unit-line">
                 {{ fmtQty(t.total) }} {{ displayUnit(t.unit) }}
                 <span v-if="t.unknownCount > 0" class="text-secondary">
-                  (另有 {{ t.unknownCount }} 批数量未知)
+                  {{ t('warehouse.materials_list.text_696d559002b1') }} {{ t.unknownCount }} {{ t('warehouse.materials_list.text_710f3cdd8f86') }}
                 </span>
               </div>
             </template>
@@ -1056,72 +1065,72 @@ async function handleGenerateLabel(row: TableRow) {
         </el-table>
       </template>
 
-      <el-table v-if="viewMode === 'detail'" :data="tableData" v-loading="loading" stripe border style="width: 100%">
+      <CompatTable v-if="viewMode === 'detail'" :data="tableData" v-loading="loading" stripe border style="width: 100%">
         <template #empty><ListEmptyExplain empty-title="还没有入库批次" empty-hint="采购到货验收或生产完工入库后，批次会出现在这里；也可点「入库」手动登记。" /></template>
-        <el-table-column prop="batchNumber" label="批次号" width="160" />
-        <el-table-column label="原料类型" min-width="150" show-overflow-tooltip>
+        <CompatTableColumn prop="batchNumber" :label="t('warehouse.materials_list.label_cb5386f1a98a')" width="160" />
+        <CompatTableColumn :label="t('warehouse.materials_list.label_1eab99853e63')" min-width="150" show-overflow-tooltip>
           <template #default="{ row }">{{ row.materialTypeName || row.materialName || '-' }}</template>
-        </el-table-column>
-        <el-table-column prop="supplierName" label="供应商" min-width="150" show-overflow-tooltip />
-        <el-table-column label="数量" width="100" align="right">
+        </CompatTableColumn>
+        <CompatTableColumn prop="supplierName" :label="t('warehouse.materials_list.label_033ed5945254')" min-width="150" show-overflow-tooltip />
+        <CompatTableColumn :label="t('warehouse.materials_list.label_5e29d121dda0')" width="100" align="right">
           <template #default="{ row }">{{ row.quantity ?? row.currentQuantity ?? row.receiptQuantity ?? '-' }}</template>
-        </el-table-column>
+        </CompatTableColumn>
         <!-- T159-A foldable #1: 显示批次实际称重/入库单位 (quantityUnit), 非主数据 unit
              Steve反馈: "改批次单位列表不变" — row.unit=主数据unit(箱/kg等), row.quantityUnit=实际入库单位 -->
-        <el-table-column label="单位" width="80" align="center">
+        <CompatTableColumn :label="t('warehouse.materials_list.label_80b19d68b149')" width="80" align="center">
           <template #default="{ row }">{{ displayUnit(row.quantityUnit || row.unit) || '-' }}</template>
-        </el-table-column>
-        <el-table-column label="箱数" width="90" align="right">
+        </CompatTableColumn>
+        <CompatTableColumn :label="t('warehouse.materials_list.label_e9722902ed67')" width="90" align="right">
           <template #default="{ row }">
-            <span v-if="row.boxCount != null">约 {{ row.boxCount }} 箱</span>
+            <span v-if="row.boxCount != null">{{ t('warehouse.materials_list.text_5890c084b931') }} {{ row.boxCount }} {{ t('warehouse.materials_list.text_702dff992262') }}</span>
             <span v-else class="text-secondary">-</span>
           </template>
-        </el-table-column>
-        <el-table-column prop="status" label="状态" width="100" align="center">
+        </CompatTableColumn>
+        <CompatTableColumn prop="status" :label="t('warehouse.materials_list.label_6320b4a8722a')" width="100" align="center">
           <template #default="{ row }">
             <el-tag :type="batchTagType(row)" size="small">
               {{ batchStatusDisplay(row, getStatusText).text }}
             </el-tag>
           </template>
-        </el-table-column>
-        <el-table-column prop="expiryDate" label="过期日期" width="120" />
-        <el-table-column prop="createdAt" label="入库时间" width="180" :formatter="formatDateTimeCell" />
+        </CompatTableColumn>
+        <CompatTableColumn prop="expiryDate" :label="t('warehouse.materials_list.label_a75622e03fcd')" width="120" />
+        <CompatTableColumn prop="createdAt" :label="t('warehouse.materials_list.label_fd184c2ce046')" width="180" :formatter="formatDateTimeCell" />
         <!--
           ⛔ 2026-08-06: 合同号/供应商批次号是 V20261029_61 加的, 收货时能填了,
           但列表和详情**一个都没渲染** —— 写进去没人看得见, 等于没写。
           客户按合同号追溯来料正是这个功能存在的理由。
         -->
-        <el-table-column prop="contractNumber" label="合同号" width="130" show-overflow-tooltip>
+        <CompatTableColumn prop="contractNumber" :label="t('warehouse.materials_list.label_a9d0edf1196c')" width="130" show-overflow-tooltip>
           <template #default="{ row }">{{ row.contractNumber || '-' }}</template>
-        </el-table-column>
-        <el-table-column prop="supplierBatchNumber" label="供应商批次号" width="130" show-overflow-tooltip>
+        </CompatTableColumn>
+        <CompatTableColumn prop="supplierBatchNumber" :label="t('warehouse.materials_list.label_07ece109f912')" width="130" show-overflow-tooltip>
           <template #default="{ row }">{{ row.supplierBatchNumber || '-' }}</template>
-        </el-table-column>
-        <el-table-column prop="factoryNumber" label="厂号" width="110" show-overflow-tooltip>
+        </CompatTableColumn>
+        <CompatTableColumn prop="factoryNumber" :label="t('warehouse.materials_list.label_3b1242372913')" width="110" show-overflow-tooltip>
           <template #default="{ row }">{{ row.factoryNumber || '-' }}</template>
-        </el-table-column>
-        <el-table-column prop="originPlace" label="产地" width="110" show-overflow-tooltip>
+        </CompatTableColumn>
+        <CompatTableColumn prop="originPlace" :label="t('warehouse.materials_list.label_f4807f3dc756')" width="110" show-overflow-tooltip>
           <template #default="{ row }">{{ row.originPlace || '-' }}</template>
-        </el-table-column>
-        <el-table-column label="操作" width="180" fixed="right" align="center">
+        </CompatTableColumn>
+        <CompatTableColumn :label="t('warehouse.materials_list.label_ed31fbb483ee')" width="180" fixed="right" align="center">
           <template #default="{ row }">
-            <el-button type="primary" link size="small" @click="handleView(row)">查看</el-button>
-            <el-button v-if="canWrite" type="primary" link size="small" @click="handleEdit(row)">编辑</el-button>
+            <UButton color="primary" variant="link" size="sm" @click="handleView(row)">{{ t('warehouse.materials_list.action_db8db0530432') }}</UButton>
+            <UButton v-if="canWrite" color="primary" variant="link" size="sm" @click="handleEdit(row)">{{ t('warehouse.materials_list.action_051836569928') }}</UButton>
             <!-- A5: 生成物料批次标签 (SP4) -->
-            <el-button
+            <UButton
               v-if="canWrite"
-              type="success"
-              link
-              size="small"
+              color="success"
+              variant="link"
+              size="sm"
               :loading="labelGenerating === String(row.id)"
               @click="handleGenerateLabel(row)"
-            >生成标签</el-button>
+            >{{ t('warehouse.materials_list.action_9d9cf609f6ea') }}</UButton>
           </template>
-        </el-table-column>
-      </el-table>
+        </CompatTableColumn>
+      </CompatTable>
 
       <div v-if="viewMode === 'detail'" class="pagination-wrapper">
-        <el-pagination
+        <CompatPagination
           v-model:current-page="pagination.page"
           v-model:page-size="pagination.size"
           :page-sizes="[10, 20, 50, 100]"
@@ -1132,91 +1141,90 @@ async function handleGenerateLabel(row: TableRow) {
         />
       </div>
       </template>
-    </el-card>
+    </UCard>
 
     <!-- View Dialog -->
-    <el-dialog v-model="viewDialogVisible" title="批次详情" width="500px" destroy-on-close>
-      <el-descriptions v-if="viewRecord" :column="1" border>
-        <el-descriptions-item label="批次号">{{ viewRecord.batchNumber || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="原料类型">{{ viewRecord.materialTypeName || viewRecord.materialName || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="供应商">{{ viewRecord.supplierName || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="数量">{{ viewRecord.quantity ?? viewRecord.currentQuantity ?? '-' }} {{ displayUnit(viewRecord.quantityUnit || viewRecord.unit) || '' }}</el-descriptions-item>
-        <el-descriptions-item label="箱数">
-          <span v-if="viewRecord.boxCount != null">约 {{ viewRecord.boxCount }} 箱 <span class="text-secondary">(粗略统计, 实际库存以称重 kg 为准)</span></span>
+    <CompatDialog v-model="viewDialogVisible" :title="t('warehouse.materials_list.title_525d4710b5e4')" width="500px" destroy-on-close>
+      <CompatDescriptions v-if="viewRecord" :column="1" border>
+        <CompatDescriptionsItem :label="t('warehouse.materials_list.label_cb5386f1a98a')">{{ viewRecord.batchNumber || '-' }}</CompatDescriptionsItem>
+        <CompatDescriptionsItem :label="t('warehouse.materials_list.label_1eab99853e63')">{{ viewRecord.materialTypeName || viewRecord.materialName || '-' }}</CompatDescriptionsItem>
+        <CompatDescriptionsItem :label="t('warehouse.materials_list.label_033ed5945254')">{{ viewRecord.supplierName || '-' }}</CompatDescriptionsItem>
+        <CompatDescriptionsItem :label="t('warehouse.materials_list.label_5e29d121dda0')">{{ viewRecord.quantity ?? viewRecord.currentQuantity ?? '-' }} {{ displayUnit(viewRecord.quantityUnit || viewRecord.unit) || '' }}</CompatDescriptionsItem>
+        <CompatDescriptionsItem :label="t('warehouse.materials_list.label_e9722902ed67')">
+          <span v-if="viewRecord.boxCount != null">{{ t('warehouse.materials_list.text_5890c084b931') }} {{ viewRecord.boxCount }} {{ t('warehouse.materials_list.text_702dff992262') }} <span class="text-secondary">{{ t('warehouse.materials_list.text_d32ffb8ab72e') }}</span></span>
           <span v-else>-</span>
-        </el-descriptions-item>
-        <el-descriptions-item label="状态">
+        </CompatDescriptionsItem>
+        <CompatDescriptionsItem :label="t('warehouse.materials_list.label_6320b4a8722a')">
           <el-tag :type="batchTagType(viewRecord)">{{ batchStatusDisplay(viewRecord, getStatusText).text }}</el-tag>
-        </el-descriptions-item>
-        <el-descriptions-item label="过期日期">{{ viewRecord.expiryDate || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="入库时间">{{ formatDateTimeMinute(viewRecord.createdAt) }}</el-descriptions-item>
-        <el-descriptions-item label="备注">{{ viewRecord.notes || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="合同号">{{ viewRecord.contractNumber || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="供应商批次号">{{ viewRecord.supplierBatchNumber || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="厂号">{{ viewRecord.factoryNumber || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="产地">{{ viewRecord.originPlace || '-' }}</el-descriptions-item>
-      </el-descriptions>
-    </el-dialog>
+        </CompatDescriptionsItem>
+        <CompatDescriptionsItem :label="t('warehouse.materials_list.label_a75622e03fcd')">{{ viewRecord.expiryDate || '-' }}</CompatDescriptionsItem>
+        <CompatDescriptionsItem :label="t('warehouse.materials_list.label_fd184c2ce046')">{{ formatDateTimeMinute(viewRecord.createdAt) }}</CompatDescriptionsItem>
+        <CompatDescriptionsItem :label="t('warehouse.materials_list.label_daede9881787')">{{ viewRecord.notes || '-' }}</CompatDescriptionsItem>
+        <CompatDescriptionsItem :label="t('warehouse.materials_list.label_a9d0edf1196c')">{{ viewRecord.contractNumber || '-' }}</CompatDescriptionsItem>
+        <CompatDescriptionsItem :label="t('warehouse.materials_list.label_07ece109f912')">{{ viewRecord.supplierBatchNumber || '-' }}</CompatDescriptionsItem>
+        <CompatDescriptionsItem :label="t('warehouse.materials_list.label_3b1242372913')">{{ viewRecord.factoryNumber || '-' }}</CompatDescriptionsItem>
+        <CompatDescriptionsItem :label="t('warehouse.materials_list.label_f4807f3dc756')">{{ viewRecord.originPlace || '-' }}</CompatDescriptionsItem>
+      </CompatDescriptions>
+    </CompatDialog>
 
     <!-- 扫码查询结果 Dialog -->
-    <el-dialog v-model="scanResultVisible" title="扫码查询结果" width="480px" destroy-on-close>
-      <el-descriptions v-if="scanResult" :column="1" border>
-        <el-descriptions-item v-for="(val, key) in scanResult" :key="String(key)" :label="String(key)">
+    <CompatDialog v-model="scanResultVisible" :title="t('warehouse.materials_list.title_31327964e1fd')" width="480px" destroy-on-close>
+      <CompatDescriptions v-if="scanResult" :column="1" border>
+        <CompatDescriptionsItem v-for="(val, key) in scanResult" :key="String(key)" :label="String(key)">
           {{ val ?? '-' }}
-        </el-descriptions-item>
-      </el-descriptions>
+        </CompatDescriptionsItem>
+      </CompatDescriptions>
       <template #footer>
-        <el-button @click="scanResult = null">关闭</el-button>
+        <UButton color="neutral" variant="outline" @click="scanResult = null">{{ t('warehouse.materials_list.action_3fd47edce45b') }}</UButton>
       </template>
-    </el-dialog>
+    </CompatDialog>
 
     <!-- Create / Edit Dialog -->
-    <el-dialog v-model="formDialogVisible" :title="formDialogTitle" width="500px" destroy-on-close>
-      <el-form ref="formRef" :model="formData" :rules="formRules" label-width="80px">
-        <el-form-item label="批次号" prop="batchNumber">
+    <CompatDialog v-model="formDialogVisible" :title="formDialogTitle" width="500px" destroy-on-close>
+      <CompatForm ref="formRef" :model="formData" :rules="editingId ? undefined : formRules" label-width="80px">
+        <CompatFormItem :label="t('warehouse.materials_list.label_cb5386f1a98a')" prop="batchNumber">
           <el-tooltip
             :content="editingId ? '批次号作为追溯标识, 创建后不可修改' : '批次号由系统自动生成 (一物一码), 防手敲重码, 无需填写'"
             placement="top-start"
           >
-            <el-input
+            <UInput
               v-model="formData.batchNumber"
-              :placeholder="editingId ? '' : '系统自动生成'"
+              :placeholder="editingId ? '' : t('warehouse.materials_list.placeholder_6f51aa18270e')"
               :disabled="true"
             />
           </el-tooltip>
-        </el-form-item>
+        </CompatFormItem>
         <!--
           账实红线 (owner 2026-08-20): 编辑既有批次时, 账实字段一律只读。
           ⛔ 不做成"只 disable 不说去哪" —— 那是 dead-end。下面那块 locked-hint 给出唯一正路。
         -->
         <div v-if="editingId" class="locked-hint">
-          <div class="locked-hint__title">数量、单位、总重量、总价值、原料类型、供应商、入库日期不能在这里改</div>
+          <div class="locked-hint__title">{{ t('warehouse.materials_list.text_d261a293c237') }}</div>
           <div class="locked-hint__body">
-            这些是账实数据，改动会直接改写库存台账、成本或先进先出的消耗顺序，且不留调整痕迹。
-            实盘对不上请走「盘点与期初库存」发起盘点单，盘点生效会记录调整前后的数量和原因。
+            {{ t('warehouse.materials_list.text_c2e91ea6da87') }}
           </div>
-          <el-button type="primary" link size="small" @click="goStocktake">去盘点与期初库存 →</el-button>
+          <UButton color="primary" variant="link" size="sm" @click="goStocktake">{{ t('warehouse.materials_list.action_95cdfb20f8e8') }}</UButton>
           <!--
             ⛔ 入库日期**不能**混在上面那句里指向盘点 —— 盘点只改数量, 改不了日期。
             指错去处比不指更糟: 用户会走一趟、发现改不了、然后认定系统坏了。
           -->
           <div class="locked-hint__body locked-hint__aside">
-            入库日期是例外：盘点改不了它，请用下面「入库日期」那一行的「更正入库日期」，需填写原因。
+            {{ t('warehouse.materials_list.text_1b1f308c547f') }}
           </div>
         </div>
-        <el-form-item label="原料类型" prop="materialTypeId">
-          <el-select v-model="formData.materialTypeId" placeholder="选择原料类型" filterable :disabled="!!editingId" style="width: 100%">
-            <el-option v-for="mt in materialTypes" :key="mt.id" :label="mt.name" :value="mt.id" />
-          </el-select>
-          <UpstreamMissingHint v-if="materialTypes.length === 0 && !editingId" description="本工厂暂无物料类型" target-module="warehouse" require-write action-text="去创建物料类型" contact-text="请联系仓库管理员先创建物料类型" @action="goCreate('/warehouse/material-types')" />
-        </el-form-item>
-        <el-form-item label="供应商" prop="supplierId">
-          <el-select v-model="formData.supplierId" placeholder="选择供应商" filterable :disabled="!!editingId" style="width: 100%">
-            <el-option v-for="s in suppliers" :key="s.id" :label="s.name" :value="s.id" />
-          </el-select>
-          <UpstreamMissingHint v-if="suppliers.length === 0 && !editingId" description="本工厂暂无供应商" target-module="procurement" require-write action-text="去创建供应商" contact-text="请联系采购或管理员先创建供应商" @action="goCreate('/procurement/suppliers')" />
-        </el-form-item>
-        <el-form-item label="数量" prop="receiptQuantity">
+        <CompatFormItem :label="t('warehouse.materials_list.label_1eab99853e63')" prop="materialTypeId">
+          <CompatSelect v-model="formData.materialTypeId" :placeholder="t('warehouse.materials_list.placeholder_656b207c73ef')" filterable :disabled="!!editingId" style="width: 100%">
+            <CompatOption v-for="mt in materialTypes" :key="mt.id" :label="mt.name" :value="mt.id" />
+          </CompatSelect>
+          <UpstreamMissingHint v-if="materialTypes.length === 0 && !editingId" :description="t('warehouse.materials_list.description_f799fa762fed')" target-module="warehouse" require-write action-text="去创建物料类型" contact-text="请联系仓库管理员先创建物料类型" @action="goCreate('/warehouse/material-types')" />
+        </CompatFormItem>
+        <CompatFormItem :label="t('warehouse.materials_list.label_033ed5945254')" prop="supplierId">
+          <CompatSelect v-model="formData.supplierId" :placeholder="t('warehouse.materials_list.placeholder_a0106ac4aa3d')" filterable :disabled="!!editingId" style="width: 100%">
+            <CompatOption v-for="s in suppliers" :key="s.id" :label="s.name" :value="s.id" />
+          </CompatSelect>
+          <UpstreamMissingHint v-if="suppliers.length === 0 && !editingId" :description="t('warehouse.materials_list.description_e9c8318df7aa')" target-module="procurement" require-write action-text="去创建供应商" contact-text="请联系采购或管理员先创建供应商" @action="goCreate('/procurement/suppliers')" />
+        </CompatFormItem>
+        <CompatFormItem :label="t('warehouse.materials_list.label_5e29d121dda0')" prop="receiptQuantity">
           <!--
             缺陷 B (2026-09-01, LIUSHANMEN 批次 MT-20260901-3312 实测): 这里原来是
             `:precision="1"`。el-input-number 的 displayValue 用 `currentValue.toFixed(precision)`
@@ -1235,180 +1243,179 @@ async function handleGenerateLabel(row: TableRow) {
             不再用一个与本字段无关的固定小数位截断真实收货量。
           -->
           <el-input-number v-model="formData.receiptQuantity" :min="0" :disabled="!!editingId" style="width: 100%" />
-        </el-form-item>
-        <el-form-item label="单位">
-          <el-select v-model="formData.quantityUnit" :disabled="!!editingId" style="width: 100%">
-            <el-option label="kg" value="kg" />
-            <el-option label="g" value="g" />
-            <el-option label="L" value="L" />
-            <el-option label="个" value="个" />
-            <el-option label="箱" value="箱" />
+        </CompatFormItem>
+        <CompatFormItem :label="t('warehouse.materials_list.label_80b19d68b149')">
+          <CompatSelect v-model="formData.quantityUnit" :disabled="!!editingId" style="width: 100%">
+            <CompatOption label="kg" value="kg" />
+            <CompatOption label="g" value="g" />
+            <CompatOption label="L" value="L" />
+            <CompatOption :label="t('warehouse.materials_list.label_3a116815bc9d')" value="个" />
+            <CompatOption :label="t('warehouse.materials_list.label_702dff992262')" value="箱" />
             <!-- T158: include master unit as an option if it's not in the standard list above -->
-            <el-option
+            <CompatOption
               v-if="selectedMaterialUnit && !['kg','g','L','个','箱'].includes(selectedMaterialUnit)"
               :label="selectedMaterialUnit"
               :value="selectedMaterialUnit"
             />
-          </el-select>
+          </CompatSelect>
           <div v-if="selectedMaterialUnit && editingId === null" class="field-hint">
-            已自动锁定为原料主数据单位「{{ selectedMaterialUnit }}」，如有特殊情况可手动修改
+            {{ t('warehouse.materials_list.text_3dd17eac2c88') }}{{ selectedMaterialUnit }}{{ t('warehouse.materials_list.text_59acdc369f8b') }}
           </div>
-        </el-form-item>
-        <el-form-item label="箱数">
-          <el-input-number v-model="formData.boxCount" :min="0" :precision="0" :controls="true" placeholder="可选" style="width: 100%" />
-          <div class="field-hint">粗略统计用, 实际库存以称重(kg)为准</div>
-        </el-form-item>
-        <el-form-item label="入库日期" prop="receiptDate">
-          <el-date-picker v-model="formData.receiptDate" type="date" value-format="YYYY-MM-DD" placeholder="选择入库日期" :disabled="!!editingId" style="width: 100%" />
+        </CompatFormItem>
+        <CompatFormItem :label="t('warehouse.materials_list.label_e9722902ed67')">
+          <el-input-number v-model="formData.boxCount" :min="0" :precision="0" :controls="true" :placeholder="t('warehouse.materials_list.placeholder_537352400c49')" style="width: 100%" />
+          <div class="field-hint">{{ t('warehouse.materials_list.text_506ffbf8ccf2') }}</div>
+        </CompatFormItem>
+        <CompatFormItem :label="t('warehouse.materials_list.label_12adbd42e7c9')" prop="receiptDate">
+          <CompatDatePicker v-model="formData.receiptDate" type="date" value-format="YYYY-MM-DD" :placeholder="t('warehouse.materials_list.placeholder_a031d31dacf3')" :disabled="!!editingId" style="width: 100%" />
           <!--
             只读 + 正路入口必须同屏。⛔ 没资格的人看到的是"该找谁", 不是一个点下去必 403 的按钮
             (后端 RECEIPT_DATE_CORRECTION_ROLES 才是唯一 enforce 处, 这里只管展示)。
           -->
           <template v-if="editingId">
-            <el-button v-if="canCorrectReceiptDate" type="primary" link size="small" @click="openCorrectReceiptDate">
-              更正入库日期 →
-            </el-button>
+            <UButton v-if="canCorrectReceiptDate" color="primary" variant="link" size="sm" @click="openCorrectReceiptDate">
+              {{ t('warehouse.materials_list.action_1db1f7b724b0') }}
+            </UButton>
             <div v-else class="field-hint">
-              登记错了要改？入库日期决定先进先出的消耗顺序，需财务经理或工厂管理员更正（会记录原因）。
+              {{ t('warehouse.materials_list.text_09b09ff58a64') }}
             </div>
           </template>
-        </el-form-item>
-        <el-form-item label="总重量(kg)" prop="totalWeight">
+        </CompatFormItem>
+        <CompatFormItem :label="t('warehouse.materials_list.label_084681bd2276')" prop="totalWeight">
           <el-input-number v-model="formData.totalWeight" :min="0" :precision="3" :disabled="!!editingId" style="width: 100%" />
-        </el-form-item>
-        <el-form-item v-if="canViewPrice" label="总价值(元)" prop="totalValue">
+        </CompatFormItem>
+        <CompatFormItem v-if="canViewPrice" :label="t('warehouse.materials_list.label_cb3aaa7607be')" prop="totalValue">
           <el-input-number v-model="formData.totalValue" :min="0" :precision="2" :disabled="!!editingId" style="width: 100%" />
           <template v-if="editingId">
-            <el-button v-if="canCorrectReceiptDate" type="primary" link size="small" @click="openCostCorrection">
-              更正批次估值 →
-            </el-button>
-            <div v-else class="field-hint">估值会影响库存成本，需财务经理或工厂管理员更正（会记录新旧单价与原因）。</div>
+            <UButton v-if="canCorrectReceiptDate" color="primary" variant="link" size="sm" @click="openCostCorrection">
+              {{ t('warehouse.materials_list.action_c232a6bccac1') }}
+            </UButton>
+            <div v-else class="field-hint">{{ t('warehouse.materials_list.text_d3665c421a6b') }}</div>
           </template>
-        </el-form-item>
-        <el-form-item label="过期日期">
-          <el-date-picker v-model="formData.expireDate" type="date" value-format="YYYY-MM-DD" placeholder="选择过期日期" style="width: 100%" />
-        </el-form-item>
-        <el-form-item label="备注">
+        </CompatFormItem>
+        <CompatFormItem :label="t('warehouse.materials_list.label_a75622e03fcd')">
+          <CompatDatePicker v-model="formData.expireDate" type="date" value-format="YYYY-MM-DD" :placeholder="t('warehouse.materials_list.placeholder_6f5e8f0ed63a')" style="width: 100%" />
+        </CompatFormItem>
+        <CompatFormItem :label="t('warehouse.materials_list.label_daede9881787')">
           <el-input v-model="formData.notes" type="textarea" :rows="2" />
-        </el-form-item>
-        <el-form-item label="厂号">
-          <el-select
+        </CompatFormItem>
+        <CompatFormItem :label="t('warehouse.materials_list.label_3b1242372913')">
+          <CompatSelect
             v-model="formData.factoryNumber"
-            placeholder="选择厂号"
+            :placeholder="t('warehouse.materials_list.placeholder_aa8c31eb7340')"
             filterable
             clearable
             style="width: 100%"
             @change="handleManufacturerChange"
           >
-            <el-option
+            <CompatOption
               v-for="manufacturer in manufacturers"
               :key="manufacturer.id"
               :label="`${manufacturer.code} · ${manufacturer.name}`"
               :value="manufacturer.code"
             />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="产地">
-          <el-input v-model="formData.originPlace" placeholder="原料产地（如：山东寿光，可选）" />
-        </el-form-item>
+          </CompatSelect>
+        </CompatFormItem>
+        <CompatFormItem :label="t('warehouse.materials_list.label_f4807f3dc756')">
+          <UInput v-model="formData.originPlace" :placeholder="t('warehouse.materials_list.placeholder_9d5414736191')" />
+        </CompatFormItem>
         <!--
           #1844 L-d: 挂错了个体要有一条能走的路。解除走独立端点(原因必填、写操作日志),
           ⛔ 不放进编辑提交体 —— 那里 sourceIndividualId 空白会 400, null 是「不改」。
         -->
-        <el-form-item v-if="editingId && editingSourceIndividualId" label="来源个体">
+        <CompatFormItem v-if="editingId && editingSourceIndividualId" :label="t('warehouse.materials_list.label_13bb29369dab')">
           <div class="source-individual-link" data-testid="batch-source-individual">
-            <span v-if="editingSourceIndividualCode">档案 {{ editingSourceIndividualCode }}</span>
-            <span v-else class="text-secondary">已挂个体（档案编号未读到）</span>
-            <el-button
+            <span v-if="editingSourceIndividualCode">{{ t('warehouse.materials_list.text_b03d2fbde903') }} {{ editingSourceIndividualCode }}</span>
+            <span v-else class="text-secondary">{{ t('warehouse.materials_list.text_1c60e8b479fc') }}</span>
+            <UButton
               v-if="canWrite"
-              type="danger"
-              link
-              size="small"
+              color="error"
+              variant="link"
+              size="sm"
               :loading="unlinkingSourceIndividual"
               data-testid="batch-source-individual-unlink"
               @click="handleUnlinkSourceIndividual"
             >
-              解除挂载
-            </el-button>
+              {{ t('warehouse.materials_list.action_a21a394ffd2c') }}
+            </UButton>
           </div>
-          <div class="field-hint">挂错了个体可在这里解除，需填写原因并记入操作日志。</div>
-        </el-form-item>
-      </el-form>
+          <div class="field-hint">{{ t('warehouse.materials_list.text_a41dce9c8879') }}</div>
+        </CompatFormItem>
+      </CompatForm>
       <template #footer>
-        <el-button @click="formDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="formSaving" @click="handleFormSubmit">确定</el-button>
+        <UButton color="neutral" variant="outline" @click="formDialogVisible = false">{{ t('warehouse.materials_list.action_2cd0f3be8738') }}</UButton>
+        <UButton color="primary" :loading="formSaving" @click="handleFormSubmit">{{ t('warehouse.materials_list.action_fac2a67ad878') }}</UButton>
       </template>
-    </el-dialog>
+    </CompatDialog>
 
-    <el-dialog v-model="costCorrectionDialogVisible" title="更正批次估值" width="460px" destroy-on-close append-to-body>
+    <CompatDialog v-model="costCorrectionDialogVisible" :title="t('warehouse.materials_list.title_04610ccd2512')" width="460px" destroy-on-close append-to-body>
       <div class="locked-hint">
-        <div class="locked-hint__title">估值更正会影响该批次参与的生产成本</div>
-        <div class="locked-hint__body">系统会保存改前 / 改后的单位价格、估值依据、操作人和操作时间。历史成品成本需在生产计划中执行“重算已结单成本”。</div>
+        <div class="locked-hint__title">{{ t('warehouse.materials_list.text_3e8a667cc31e') }}</div>
+        <div class="locked-hint__body">{{ t('warehouse.materials_list.text_6995924ac8b0') }}</div>
       </div>
-      <el-form label-width="110px">
-        <el-form-item label="批次号"><el-input :model-value="costCorrectionBatchNumber" disabled /></el-form-item>
-        <el-form-item label="当前单价"><el-input :model-value="costCorrectionOriginal ?? '未估值'" disabled /></el-form-item>
-        <el-form-item label="更正为" required>
+      <CompatForm label-width="110px">
+        <CompatFormItem :label="t('warehouse.materials_list.label_cb5386f1a98a')"><el-input :model-value="costCorrectionBatchNumber" disabled /></CompatFormItem>
+        <CompatFormItem :label="t('warehouse.materials_list.label_f7615229414c')"><el-input :model-value="costCorrectionOriginal ?? '未估值'" disabled /></CompatFormItem>
+        <CompatFormItem :label="t('warehouse.materials_list.label_eaf7eed714e3')" required>
           <el-input-number v-model="costCorrectionForm.unitPrice" :min="0.000001" :precision="6" style="width: 100%" />
-        </el-form-item>
-        <el-form-item label="估值依据" required>
-          <el-input v-model="costCorrectionForm.reason" type="textarea" :rows="3" :maxlength="CORRECTION_REASON_MAX_LENGTH" show-word-limit placeholder="例如：客户确认的本批结算参考价" />
-        </el-form-item>
-      </el-form>
+        </CompatFormItem>
+        <CompatFormItem :label="t('warehouse.materials_list.label_2e5a23e8f191')" required>
+          <el-input v-model="costCorrectionForm.reason" type="textarea" :rows="3" :maxlength="CORRECTION_REASON_MAX_LENGTH" show-word-limit :placeholder="t('warehouse.materials_list.placeholder_341f740046ee')" />
+        </CompatFormItem>
+      </CompatForm>
       <template #footer>
-        <el-button @click="costCorrectionDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="costCorrectionSaving" @click="submitCostCorrection">确认更正</el-button>
+        <UButton color="neutral" variant="outline" @click="costCorrectionDialogVisible = false">{{ t('warehouse.materials_list.action_2cd0f3be8738') }}</UButton>
+        <UButton color="primary" :loading="costCorrectionSaving" @click="submitCostCorrection">{{ t('warehouse.materials_list.action_b5258814d894') }}</UButton>
       </template>
-    </el-dialog>
+    </CompatDialog>
 
     <!--
       更正入库日期 —— 入库日期被锁之后唯一的正路。
       与「编辑批次」刻意分开: 编辑是随手改描述, 这里是一次有原因、要留痕的更正。
     -->
-    <el-dialog v-model="correctDateDialogVisible" title="更正入库日期" width="460px" destroy-on-close append-to-body>
+    <CompatDialog v-model="correctDateDialogVisible" :title="t('warehouse.materials_list.title_7b70f0c11c34')" width="460px" destroy-on-close append-to-body>
       <div class="locked-hint">
-        <div class="locked-hint__title">这次更正会被记录下来</div>
+        <div class="locked-hint__title">{{ t('warehouse.materials_list.text_f7a90973a4ab') }}</div>
         <div class="locked-hint__body">
-          系统会保存改前 / 改后的日期、更正原因、操作人和操作时间。
-          入库日期决定先进先出的消耗顺序和数据归属的期间，请按实际到货日期填写。
+          {{ t('warehouse.materials_list.text_25ade7482200') }}
         </div>
       </div>
-      <el-form label-width="110px">
-        <el-form-item label="批次号">
+      <CompatForm label-width="110px">
+        <CompatFormItem :label="t('warehouse.materials_list.label_cb5386f1a98a')">
           <el-input :model-value="correctDateBatchNumber" disabled />
-        </el-form-item>
-        <el-form-item label="当前入库日期">
+        </CompatFormItem>
+        <CompatFormItem :label="t('warehouse.materials_list.label_487e34b8b62c')">
           <el-input :model-value="correctDateOriginal || '—'" disabled />
-        </el-form-item>
-        <el-form-item label="更正为" required>
+        </CompatFormItem>
+        <CompatFormItem :label="t('warehouse.materials_list.label_eaf7eed714e3')" required>
           <el-date-picker
             v-model="correctDateForm.receiptDate"
             type="date"
             value-format="YYYY-MM-DD"
-            placeholder="选择实际入库日期"
+            :placeholder="t('warehouse.materials_list.placeholder_b73ad2297cde')"
             :disabled-date="disableFutureDate"
             style="width: 100%"
           />
-          <div class="field-hint">不能晚于今天 —— 货不可能在将来收到</div>
-        </el-form-item>
-        <el-form-item label="更正原因" required>
+          <div class="field-hint">{{ t('warehouse.materials_list.text_67bd5a636cad') }}</div>
+        </CompatFormItem>
+        <CompatFormItem :label="t('warehouse.materials_list.label_e1a5e211ea1c')" required>
           <el-input
             v-model="correctDateForm.reason"
             type="textarea"
             :rows="3"
             :maxlength="CORRECTION_REASON_MAX_LENGTH"
             show-word-limit
-            placeholder="例如：收货当天漏登记，送货单显示 8-01 到仓"
+            :placeholder="t('warehouse.materials_list.placeholder_85b7c69cc725')"
           />
-        </el-form-item>
-      </el-form>
+        </CompatFormItem>
+      </CompatForm>
       <template #footer>
-        <el-button @click="correctDateDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="correctDateSaving" @click="submitCorrectReceiptDate">
-          确认更正
-        </el-button>
+        <UButton color="neutral" variant="outline" @click="correctDateDialogVisible = false">{{ t('warehouse.materials_list.action_2cd0f3be8738') }}</UButton>
+        <UButton color="primary" :loading="correctDateSaving" @click="submitCorrectReceiptDate">
+          {{ t('warehouse.materials_list.action_b5258814d894') }}
+        </UButton>
       </template>
-    </el-dialog>
+    </CompatDialog>
 
   </div>
   </CanvasAwareWrapper>

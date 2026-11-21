@@ -1,4 +1,10 @@
 <script setup lang="ts">
+import { CompatDatePicker, CompatForm, CompatFormItem, CompatOption, CompatPagination, CompatSelect } from '@/components/compat';
+import { useCompatMessages } from '@/components/compat/messages';
+const { ElMessage, ElMessageBox } = useCompatMessages();
+import { useT } from '@/i18n-pilot/useT';
+const { t } = useT();
+
 import { useAiEntryLink } from '@/composables/useAiEntryLink';
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
@@ -8,7 +14,7 @@ import { useBusinessMode } from '@/composables/useBusinessMode';
 import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
 import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
 import request, { get, post, put } from '@/api/request';
-import { ElMessage, ElMessageBox } from 'element-plus';
+
 import { pickPrefilled, readReadinessPrefill } from '@/views/factory-readiness/readinessPrefill';
 import { Plus, Search, Refresh, ChatDotRound, Download, QuestionFilled } from '@element-plus/icons-vue';
 import AiEntryDrawer from '@/components/ai-entry/AiEntryDrawer.vue';
@@ -104,11 +110,11 @@ const {
 } = useBusinessTableColumns({
   storageKey: 'cretas:purchase-orders:visible-columns:v1',
   columns: () => [
-    { key: 'purchaseType', label: '类型' },
-    { key: 'orderDate', label: '下单日期' },
+    { key: 'purchaseType', label: t('procurement.orders_list.label_ba40014ff496') },
+    { key: 'orderDate', label: t('procurement.orders_list.label_c0fe7b93ff48') },
     // PROTO-DEMO-PO-TAX: totalAmount 是未税总额 (含税 = totalAmount + taxAmount), 标签照实写。
-    ...(canViewPrice.value ? [{ key: 'totalAmount', label: '未税总额' }] : []),
-    { key: 'attachments', label: '附件' },
+    ...(canViewPrice.value ? [{ key: 'totalAmount', label: t('procurement.orders_list.label_5443cff8d7ae') }] : []),
+    { key: 'attachments', label: t('procurement.orders_list.label_c7225dbf105e') },
   ],
   defaults: PROCUREMENT_DEFAULT_COLUMNS,
   max: 4,
@@ -200,8 +206,8 @@ async function handleCopyOrder(row: TableRow): Promise<void> {
   try {
     await ElMessageBox.confirm(
       `确认复制采购单 ${orderNumber} 为新草稿？复制内容包含供应商、品项和价格，不复制审批/到货状态。`,
-      '复制采购单',
-      { confirmButtonText: '复制', cancelButtonText: '取消', type: 'info' }
+      t('procurement.orders_list.message_7e1af26f6c73'),
+      { confirmButtonText: t('procurement.orders_list.confirmbuttontext_63d90d977348'), cancelButtonText: t('procurement.orders_list.cancelbuttontext_2cd0f3be8738'), type: 'info' }
     );
   } catch {
     return; // 用户取消
@@ -299,7 +305,7 @@ async function confirmFractionalTaxRate(rate: number, materialName: string): Pro
     await ElMessageBox.confirm(
       `税率请按百分数填写。输入的是 ${rate}，是否指 ${percent}%？`,
       materialName ? `确认采购税率 · ${materialName}` : '确认采购税率',
-      { confirmButtonText: `使用 ${percent}%`, cancelButtonText: '取消', type: 'warning' },
+      { confirmButtonText: `使用 ${percent}%`, cancelButtonText: t('procurement.orders_list.cancelbuttontext_2cd0f3be8738'), type: 'warning' },
     );
     return percent;
   } catch {
@@ -831,7 +837,7 @@ async function applyReadinessPrefill(): Promise<void> {
   await refreshDropdownSources();
   const supplier = pickPrefilled(suppliers.value, prefill.supplierId);
   if (!supplier) {
-    ElMessage.warning('就绪页指定的供应商已不在可选范围，请手动选择');
+    ElMessage.warning(t('procurement.orders_list.message_8f104ecc2c67'));
     return;
   }
   form.value.supplierId = String(supplier.id);
@@ -973,10 +979,10 @@ async function handleCreate() {
     try {
       const result = await createAttachmentRef.value?.uploadQueued(createdOrderId.value);
       if ((result?.failed ?? 0) > 0) {
-        ElMessage.error('采购订单已创建，但仍有附件上传失败；请重试失败文件，系统不会重复创建订单');
+        ElMessage.error(t('procurement.orders_list.message_df1193adf643'));
         return;
       }
-      ElMessage.success('采购订单及附件已保存');
+      ElMessage.success(t('procurement.orders_list.message_a171ef03bc11'));
       dialogVisible.value = false;
       resetForm();
       loadData();
@@ -985,18 +991,18 @@ async function handleCreate() {
     }
     return;
   }
-  if (!form.value.supplierId) return ElMessage.warning('请选择供应商');
+  if (!form.value.supplierId) return ElMessage.warning(t('procurement.orders_list.message_ade9f5ce860c'));
   if (!Array.isArray(form.value.items) || form.value.items.length === 0) {
-    return ElMessage.warning('请至少添加一行原料明细');
+    return ElMessage.warning(t('procurement.orders_list.message_3907c70c9e30'));
   }
-  if (form.value.items.some(i => !i.supplierMaterialId || !i.materialTypeId)) return ElMessage.warning('请选择当前供应商可供的所有原料');
+  if (form.value.items.some(i => !i.supplierMaterialId || !i.materialTypeId)) return ElMessage.warning(t('procurement.orders_list.message_123b3448cfd6'));
   const missingSpecIndex = form.value.items.findIndex(requiresPurchaseSpec);
   if (missingSpecIndex >= 0) return ElMessage.warning(`第 ${missingSpecIndex + 1} 行已配置采购规格，请选择规格`);
   const invalidQtyIndex = form.value.items.findIndex(i => !(Number(i.quantity) > 0));
   if (invalidQtyIndex >= 0) {
     return ElMessage.warning(`第 ${invalidQtyIndex + 1} 行采购数量必须大于 0`);
   }
-  if (form.value.items.some(i => !i.unit)) return ElMessage.warning('请填写所有明细的单位');
+  if (form.value.items.some(i => !i.unit)) return ElMessage.warning(t('procurement.orders_list.message_166b103cb567'));
   const invalidTaxRateIndex = form.value.items.findIndex((i) => validateTaxRate(i.taxRate));
   if (invalidTaxRateIndex >= 0) {
     return ElMessage.warning(`第 ${invalidTaxRateIndex + 1} 行${validateTaxRate(form.value.items[invalidTaxRateIndex].taxRate)}`);
@@ -1011,7 +1017,7 @@ async function handleCreate() {
   // 把「个」/「只」的返回值从 'pcs' 换成原字面), !x 的真值结果对所有输入完全一致 ——
   // 换了没有任何行为差异, 不引入无意义 diff。
   if (form.value.items.some(i => !canonicalUnitCode(i.priceUnit))) {
-    return ElMessage.warning('采购价必须绑定明确的计价单位');
+    return ElMessage.warning(t('procurement.orders_list.message_a12f2bac9536'));
   }
   submitting.value = true;
   try {
@@ -1056,13 +1062,13 @@ async function handleCreate() {
       const savedOrderId = String((res.data as TableRow | undefined)?.id || editingOrderId.value || '');
       if (!isEditing.value && attachmentQueue.value.total > 0) {
         if (!savedOrderId) {
-          ElMessage.error('采购订单已创建，但响应缺少订单 ID，附件无法安全绑定；请从订单详情上传附件');
+          ElMessage.error(t('procurement.orders_list.message_4dd69b5bc441'));
           return;
         }
         createdOrderId.value = savedOrderId;
         const uploadResult = await createAttachmentRef.value?.uploadQueued(savedOrderId);
         if ((uploadResult?.failed ?? 0) > 0) {
-          ElMessage.error('采购订单已创建一次，但部分附件上传失败；请重试附件，勿再次创建订单');
+          ElMessage.error(t('procurement.orders_list.message_1f0822dd5555'));
           return;
         }
       }
@@ -1168,9 +1174,9 @@ async function closeOrderEditor() {
   if (createdOrderId.value && (attachmentQueue.value.pending > 0 || attachmentQueue.value.failed > 0)) {
     try {
       await ElMessageBox.confirm(
-        '采购订单已经创建，但附件尚未全部上传。关闭后可在订单详情继续上传，订单不会回滚或重复创建。',
-        '附件尚未完成',
-        { type: 'warning', confirmButtonText: '仍然关闭', cancelButtonText: '继续处理附件' },
+        t('procurement.orders_list.message_7e38a19bc8f7'),
+        t('procurement.orders_list.message_a7fb4a0a1864'),
+        { type: 'warning', confirmButtonText: t('procurement.orders_list.confirmbuttontext_5e7c85092474'), cancelButtonText: t('procurement.orders_list.cancelbuttontext_272a062f3921') },
       );
     } catch { return; }
   }
@@ -1280,8 +1286,8 @@ async function openEditDialog(orderId: string) {
 
 async function handleAction(orderId: string, action: string) {
   const actionMap: Record<string, { label: string; url: string }> = {
-    submit: { label: '提交', url: `/${factoryId.value}/purchase/orders/${orderId}/submit` },
-    cancel: { label: '取消', url: `/${factoryId.value}/purchase/orders/${orderId}/cancel` },
+    submit: { label: t('procurement.orders_list.label_08a85f4ab4ba'), url: `/${factoryId.value}/purchase/orders/${orderId}/submit` },
+    cancel: { label: t('procurement.orders_list.label_2cd0f3be8738'), url: `/${factoryId.value}/purchase/orders/${orderId}/cancel` },
   };
   const a = actionMap[action];
   if (!a) return;
@@ -1296,7 +1302,7 @@ async function handleAction(orderId: string, action: string) {
     await ElMessageBox.confirm(
       ctx ? `确认${a.label}采购订单 ${ctx}？` : `确认${a.label}此${label('purchaseOrder')}？`,
       `${a.label}采购订单`,
-      { type: 'warning', confirmButtonText: `确认${a.label}`, cancelButtonText: '取消' },
+      { type: 'warning', confirmButtonText: `确认${a.label}`, cancelButtonText: t('procurement.orders_list.cancelbuttontext_2cd0f3be8738') },
     );
     const res = await post(a.url);
     if (res.success) {
@@ -1336,10 +1342,10 @@ async function handleDownloadPdf(row: TableRow) {
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
-    ElMessage.success('PDF 下载成功');
+    ElMessage.success(t('procurement.orders_list.message_f133eb3c65f4'));
   } catch (e) {
     console.error('[PDF 下载失败]', e);
-    ElMessage.error('PDF 下载失败,请稍后重试');
+    ElMessage.error(t('procurement.orders_list.message_a0e81cb79614'));
   } finally {
     pdfDownloadingIds.value.delete(id);
   }
@@ -1479,7 +1485,7 @@ async function handleAiFill(params: TableRow) {
     <WorkflowBar
       :nodes="workflowStats?.nodes ?? []"
       :loading="workflowLoading"
-      title="采购工作流"
+      :title="t('procurement.orders_list.title_a46a618608d9')"
       :ai-trigger-enabled="true"
       @node-click="handleWorkflowNodeClick"
       @ai-trigger="aiEntryVisible = true"
@@ -1491,19 +1497,19 @@ async function handleAiFill(params: TableRow) {
       other="客户向我们下的订单（出货方向、应收账款）"
       other-path="/sales/orders"
     />
-    <el-card class="page-card" shadow="never">
+    <UCard class="page-card" >
       <template #header>
         <div class="card-header">
           <div class="header-left">
-            <span class="page-title">{{ label('purchaseOrder') }}管理</span>
-            <span class="data-count">共 {{ pagination.total }} 条记录</span>
+            <span class="page-title">{{ label('purchaseOrder') }}{{ t('procurement.orders_list.text_bb6d995724f4') }}</span>
+            <span class="data-count">{{ t('procurement.orders_list.text_76e547a8fa54') }} {{ pagination.total }} {{ t('procurement.orders_list.text_6016bf63b0ff') }}</span>
           </div>
           <div class="header-right">
             <el-button v-if="canWrite" type="success" :icon="ChatDotRound" @click="aiEntryVisible = true">
-              AI录入
+              {{ t('procurement.orders_list.action_43f57b81b263') }}
             </el-button>
             <el-button v-if="canWrite" type="primary" :icon="Plus" @click="openCreateDialog">
-              新建{{ label('purchaseOrder') }}
+              {{ t('procurement.orders_list.action_50ef2f4cf6a4') }}{{ label('purchaseOrder') }}
             </el-button>
           </div>
         </div>
@@ -1512,32 +1518,32 @@ async function handleAiFill(params: TableRow) {
       <div class="search-bar">
         <el-input
           v-model="searchKeyword"
-          placeholder="搜索 订单号 / 供应商"
+          :placeholder="t('procurement.orders_list.placeholder_15a4b9dd53fc')"
           clearable
           style="width: 220px"
           @keyup.enter="handleSearch"
           @clear="handleSearch"
         />
-        <el-date-picker
+        <CompatDatePicker
           v-model="dateRange"
           type="daterange"
           range-separator="至"
-          start-placeholder="下单起始"
-          end-placeholder="下单结束"
+          :start-placeholder="t('procurement.orders_list.start_placeholder_3865d3e91785')"
+          :end-placeholder="t('procurement.orders_list.end_placeholder_227208c5328e')"
           value-format="YYYY-MM-DD"
           style="width: 280px"
           @change="handleSearch"
         />
-        <el-select v-model="statusFilter" placeholder="按状态筛选" clearable style="width: 160px" @change="handleStatusChange">
-          <el-option
+        <CompatSelect v-model="statusFilter" :placeholder="t('procurement.orders_list.placeholder_df92cab4c6f3')" clearable style="width: 160px" @change="handleStatusChange">
+          <CompatOption
             v-for="s in ALL_PURCHASE_ORDER_STATUSES"
             :key="s"
             :label="PURCHASE_ORDER_STATUS_LABELS[s].text"
             :value="s"
           />
-        </el-select>
-        <el-button type="primary" @click="handleSearch">搜索</el-button>
-        <el-button :icon="Refresh" @click="handleRefresh">重置</el-button>
+        </CompatSelect>
+        <UButton color="primary" @click="handleSearch">{{ t('procurement.orders_list.action_44ce7ae909bb') }}</UButton>
+        <el-button :icon="Refresh" @click="handleRefresh">{{ t('procurement.orders_list.action_cb5d682bac3d') }}</el-button>
         <ListColumnSelector
           v-model="procurementVisibleColumns"
           :columns="procurementColumnOptions"
@@ -1574,7 +1580,7 @@ async function handleAiFill(params: TableRow) {
         v-else
         :data="tableData"
         v-loading="loading"
-        empty-text="暂无数据"
+        :empty-text="t('procurement.orders_list.empty_text_497c85690c4c')"
         stripe
         border
         table-layout="fixed"
@@ -1582,14 +1588,14 @@ async function handleAiFill(params: TableRow) {
         :scrollbar-always-on="true"
         class="wide-table business-list-table"
       >
-        <el-table-column prop="orderNumber" label="订单编号" width="170" sortable />
-        <el-table-column prop="supplierName" label="供应商" min-width="150" show-overflow-tooltip sortable>
+        <el-table-column prop="orderNumber" :label="t('procurement.orders_list.label_fbcefbb4c11a')" width="170" sortable />
+        <el-table-column prop="supplierName" :label="t('procurement.orders_list.label_033ed5945254')" min-width="150" show-overflow-tooltip sortable>
           <template #default="{ row }">{{ row.supplierName || row.supplier?.name || row.supplierId || '-' }}</template>
         </el-table-column>
         <el-table-column
           v-if="procurementColumnVisible('purchaseType')"
           prop="purchaseType"
-          label="类型"
+          :label="t('procurement.orders_list.label_ba40014ff496')"
           width="120"
           align="center"
           :filters="purchaseTypeColumnFilters"
@@ -1598,14 +1604,14 @@ async function handleAiFill(params: TableRow) {
         >
           <template #default="{ row }">
             <el-tag size="small" :type="row.purchaseType === 'URGENT' ? 'danger' : ''">
-              {{ row.purchaseType === 'DIRECT' ? '直接' : row.purchaseType === 'URGENT' ? '紧急' : '统一' }}
+              {{ row.purchaseType === 'DIRECT' ? t('procurement.orders_list.text_3f995fd2410c') : row.purchaseType === 'URGENT' ? t('procurement.orders_list.text_0efa477b24b1') : t('procurement.orders_list.text_a1108b489091') }}
             </el-tag>
           </template>
         </el-table-column>
         <el-table-column
           v-if="procurementColumnVisible('orderDate')"
           prop="orderDate"
-          label="下单日期"
+          :label="t('procurement.orders_list.label_c0fe7b93ff48')"
           width="120"
           sortable
         />
@@ -1621,7 +1627,7 @@ async function handleAiFill(params: TableRow) {
         <el-table-column
           v-if="canViewPrice && procurementColumnVisible('totalAmount')"
           prop="totalAmount"
-          label="未税总额"
+          :label="t('procurement.orders_list.label_5443cff8d7ae')"
           width="130"
           align="right"
           sortable
@@ -1633,7 +1639,7 @@ async function handleAiFill(params: TableRow) {
         </el-table-column>
         <el-table-column
           prop="status"
-          label="状态"
+          :label="t('procurement.orders_list.label_6320b4a8722a')"
           width="120"
           align="center"
           :filters="purchaseStatusColumnFilters"
@@ -1651,20 +1657,20 @@ async function handleAiFill(params: TableRow) {
           数据源: POST /attachments/batch-3chip-counts (batch, 避免 N+1).
           EntityType=PURCHASE_ORDER 由 useLinkChipCounts composable 锁定.
         -->
-        <el-table-column v-if="procurementColumnVisible('attachments')" label="附件" width="200" align="center">
+        <el-table-column v-if="procurementColumnVisible('attachments')" :label="t('procurement.orders_list.label_c7225dbf105e')" width="200" align="center">
           <template #header>
             <span style="display: inline-flex; align-items: center; gap: 4px;">
-              附件
+              {{ t('procurement.orders_list.text_c7225dbf105e') }}
               <el-tooltip placement="top">
                 <template #content>
                   <div style="line-height: 1.6;">
-                    <div><b>文件</b>: 通用文档 (PDF / Word / Excel / OTHER)</div>
-                    <div><b>图片</b>: 照片 / 视频 (PHOTO / VIDEO)</div>
-                    <div><b>合同</b>: 采购合同 / 法律文件 (CONTRACT)</div>
-                    <div style="margin-top: 4px; color: var(--text-color-secondary);">点详情查看附件清单</div>
+                    <div><b>{{ t('procurement.orders_list.text_39932f24fe11') }}</b>{{ t('procurement.orders_list.text_65fa9a98700e') }}</div>
+                    <div><b>{{ t('procurement.orders_list.text_d24c10d37db0') }}</b>{{ t('procurement.orders_list.text_2a8890cfe701') }}</div>
+                    <div><b>{{ t('procurement.orders_list.text_06c891807ee3') }}</b>{{ t('procurement.orders_list.text_4e73d1ccee22') }}</div>
+                    <div style="margin-top: 4px; color: var(--text-color-secondary);">{{ t('procurement.orders_list.text_937588fcf8ac') }}</div>
                   </div>
                 </template>
-                <el-icon style="cursor: help; color: var(--text-color-secondary, #909399); font-size: 12px;"><QuestionFilled /></el-icon>
+                <span style="cursor: help; color: var(--text-color-secondary, #909399); font-size: 12px;"><QuestionFilled /></span>
               </el-tooltip>
             </span>
           </template>
@@ -1673,7 +1679,7 @@ async function handleAiFill(params: TableRow) {
           </template>
         </el-table-column>
         <el-table-column
-          label="操作"
+          :label="t('procurement.orders_list.label_ed31fbb483ee')"
           width="260"
           fixed="right"
           align="center"
@@ -1681,13 +1687,13 @@ async function handleAiFill(params: TableRow) {
         >
           <template #default="{ row }">
             <div class="business-action-row">
-              <el-button type="primary" link size="small" @click="goDetail(row.id)">详情</el-button>
+              <UButton color="primary" variant="link" size="sm" @click="goDetail(row.id)">{{ t('procurement.orders_list.action_979a332955c8') }}</UButton>
               <!-- P0 (六扇门 May 7 transcript): 下载 PDF 供货单 (含 Code128 + QR 条码) -->
               <!-- M-3 (2026-08-20): DRAFT 还没提交/审批, 不能先把对外供货单发出去 -->
               <el-button v-if="canDownloadSupplyOrder(row.status)" type="info" link size="small" :icon="Download"
                 :loading="pdfDownloadingIds.has(String(row.id))"
-                @click="handleDownloadPdf(row)">对外供货单</el-button>
-              <el-button v-if="canSubmitPurchaseOrder(row.status, canWrite)" type="warning" link size="small" @click="handleAction(row.id, 'submit')">提交</el-button>
+                @click="handleDownloadPdf(row)">{{ t('procurement.orders_list.action_2e38b5feb804') }}</el-button>
+              <UButton v-if="canSubmitPurchaseOrder(row.status, canWrite)" color="warning" variant="link" size="sm" @click="handleAction(row.id, 'submit')">{{ t('procurement.orders_list.action_08a85f4ab4ba') }}</UButton>
               <RowActionMenu
                 :actions="moreRowActionsFor(row)"
                 button-label="更多"
@@ -1708,21 +1714,21 @@ async function handleAiFill(params: TableRow) {
       />
 
       <div class="pagination-wrapper">
-        <el-pagination v-model:current-page="pagination.page" v-model:page-size="pagination.size"
+        <CompatPagination v-model:current-page="pagination.page" v-model:page-size="pagination.size"
           :page-sizes="[10, 20, 50]" :total="pagination.total"
           layout="total, sizes, prev, pager, next, jumper"
           @current-change="handlePageChange" @size-change="handleSizeChange" />
       </div>
-    </el-card>
+    </UCard>
 
     <!-- May 7 2026 用户反馈: "新建采购订单需要把页面放大,要不然很多明细的话是很小的".
          改全屏 dialog (full-screen modal),明细行有充足空间. -->
     <el-dialog :model-value="dialogVisible" :title="`${isEditing ? '编辑草稿' : '新建'}${label('purchaseOrder')}`" fullscreen destroy-on-close @update:model-value="(open: boolean) => { if (!open) closeOrderEditor() }">
-      <el-form :model="form" label-width="100px">
-        <el-form-item :label="label('supplier')" required>
+      <CompatForm :model="form" label-width="100px">
+        <CompatFormItem :label="label('supplier')" required>
           <el-select
             v-model="form.supplierId"
-            placeholder="请选择（支持拼音/首字母，如 bjfx / beijing）"
+            :placeholder="t('procurement.orders_list.placeholder_bb51358fc7b9')"
             filterable
             :filter-method="handleSupplierFilter"
             :disabled="supplierLocked"
@@ -1746,7 +1752,7 @@ async function handleAiFill(params: TableRow) {
           </el-select>
           <UpstreamMissingHint
             v-if="suppliers.length === 0"
-            description="本工厂暂无供应商，无法下采购单"
+            :description="t('procurement.orders_list.description_43e4597fea53')"
             target-module="procurement"
             require-write
             action-text="去创建供应商"
@@ -1772,16 +1778,16 @@ async function handleAiFill(params: TableRow) {
             :title="`该供应商没有启用以下原料的供应关系：${unmatchedDraftMaterials.join('、')}。请换一家供应商，或在下方明细里重新选择/删除这些行。`"
             style="margin-top: 8px"
           />
-        </el-form-item>
-        <el-form-item label="采购类型">
+        </CompatFormItem>
+        <CompatFormItem :label="t('procurement.orders_list.label_de15b8bf38f4')">
           <el-radio-group v-model="form.purchaseType">
-            <el-radio value="DIRECT">直接采购</el-radio>
-            <el-radio value="HQ_UNIFIED">总部统采</el-radio>
-            <el-radio value="URGENT">紧急采购</el-radio>
+            <el-radio value="DIRECT">{{ t('procurement.orders_list.text_ba6852c021fe') }}</el-radio>
+            <el-radio value="HQ_UNIFIED">{{ t('procurement.orders_list.text_8b53dd35dea5') }}</el-radio>
+            <el-radio value="URGENT">{{ t('procurement.orders_list.text_3560617612dd') }}</el-radio>
           </el-radio-group>
-        </el-form-item>
-        <el-form-item label="关联销售订单">
-          <el-select v-model="form.relatedSalesOrderId" placeholder="可选 - 选择关联的销售订单" filterable clearable :loading="dropdownsRefreshing" loading-text="正在更新销售订单列表…" style="width: 100%">
+        </CompatFormItem>
+        <CompatFormItem :label="t('procurement.orders_list.label_bb3f0d3c2355')">
+          <el-select v-model="form.relatedSalesOrderId" :placeholder="t('procurement.orders_list.placeholder_b59956f513d9')" filterable clearable :loading="dropdownsRefreshing" loading-text="正在更新销售订单列表…" style="width: 100%">
             <el-option
               v-for="so in salesOrders"
               :key="so.id"
@@ -1789,51 +1795,51 @@ async function handleAiFill(params: TableRow) {
               :value="so.id"
             />
           </el-select>
-        </el-form-item>
-        <el-form-item label="期望交货">
-          <el-date-picker v-model="form.expectedDeliveryDate" type="date" value-format="YYYY-MM-DD" />
-        </el-form-item>
-        <el-form-item label="合同号">
+        </CompatFormItem>
+        <CompatFormItem :label="t('procurement.orders_list.label_d57fee96cba3')">
+          <CompatDatePicker v-model="form.expectedDeliveryDate" type="date" value-format="YYYY-MM-DD" />
+        </CompatFormItem>
+        <CompatFormItem :label="t('procurement.orders_list.label_a9d0edf1196c')">
           <el-input
             v-model="form.contractNumber"
-            placeholder="选填 — 纸质合同号或框架合同编号，如 HT-2026-001"
+            :placeholder="t('procurement.orders_list.placeholder_be41dc7930b7')"
             :maxlength="100"
             clearable
             style="width: 100%"
           />
-        </el-form-item>
-        <el-form-item label="结算方式">
-          <el-select v-model="form.settlementType" placeholder="选填 — 选择结算方式" clearable style="width: 100%">
-            <el-option label="预付" value="PREPAID" />
-            <el-option label="赊销先入库" value="CREDIT_FIRST" />
-            <el-option label="未到票" value="NO_INVOICE" />
-            <el-option label="月结" value="MONTHLY" />
-            <el-option label="账期" value="CREDIT_PERIOD" />
-            <el-option label="现结" value="IMMEDIATE" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="开票提醒天数">
+        </CompatFormItem>
+        <CompatFormItem :label="t('procurement.orders_list.label_f9566f7ae4b4')">
+          <CompatSelect v-model="form.settlementType" :placeholder="t('procurement.orders_list.placeholder_93d2a458006c')" clearable style="width: 100%">
+            <CompatOption :label="t('procurement.orders_list.label_7d408814c09e')" value="PREPAID" />
+            <CompatOption :label="t('procurement.orders_list.label_00ec98b6f366')" value="CREDIT_FIRST" />
+            <CompatOption :label="t('procurement.orders_list.label_f2bd678ab386')" value="NO_INVOICE" />
+            <CompatOption :label="t('procurement.orders_list.label_a9c723716612')" value="MONTHLY" />
+            <CompatOption :label="t('procurement.orders_list.label_09b3b6651f3c')" value="CREDIT_PERIOD" />
+            <CompatOption :label="t('procurement.orders_list.label_53bb7e4df73d')" value="IMMEDIATE" />
+          </CompatSelect>
+        </CompatFormItem>
+        <CompatFormItem :label="t('procurement.orders_list.label_fed85d90aa29')">
           <el-input-number
             v-model="form.invoiceReminderDays"
             :min="0"
             :max="365"
-            placeholder="选填 — 收货后 N 天未收票则提醒"
+            :placeholder="t('procurement.orders_list.placeholder_e607e34b7faa')"
             style="width: 200px"
           />
-          <span style="margin-left: 8px; color: #909399; font-size: 13px">天（0 = 不提醒，空 = 使用工厂默认）</span>
-        </el-form-item>
-        <el-form-item label="备注">
+          <span style="margin-left: 8px; color: #909399; font-size: 13px">{{ t('procurement.orders_list.text_34d5797b088b') }}</span>
+        </CompatFormItem>
+        <CompatFormItem :label="t('procurement.orders_list.label_daede9881787')">
           <el-input v-model="form.remark" type="textarea" :rows="2" />
-        </el-form-item>
+        </CompatFormItem>
         <CanvasDynamicFields v-model="form.customFields" module-code="purchase_order" />
         <template v-if="!isEditing">
-          <el-divider>附件</el-divider>
+          <USeparator>{{ t('procurement.orders_list.text_c7225dbf105e') }}</USeparator>
           <el-alert
             v-if="createdOrderId"
             type="warning"
             :closable="false"
             show-icon
-            title="采购订单已经创建，当前只处理附件重试；不会再次创建订单。"
+            :title="t('procurement.orders_list.title_3bcf0ec2fad4')"
             style="margin-bottom: 10px"
           />
           <AttachmentDropZone
@@ -1846,13 +1852,13 @@ async function handleAiFill(params: TableRow) {
             @queue-change="attachmentQueue = $event"
           />
         </template>
-        <el-divider>{{ label('rawMaterial') }}明细</el-divider>
+        <USeparator>{{ label('rawMaterial') }}{{ t('procurement.orders_list.text_206ea896472e') }}</USeparator>
         <el-alert
           v-if="form.supplierId && supplierMaterialRelations.length === 0"
           type="warning"
           :closable="false"
           show-icon
-          title="该供应商尚未维护可采购原料，请先在供应商详情的“供应原料”中建立关系。"
+          :title="t('procurement.orders_list.title_0d601a5591ff')"
           style="margin-bottom: 12px"
         />
         <div class="item-detail-scroll">
@@ -1874,14 +1880,14 @@ async function handleAiFill(params: TableRow) {
                税额/含税金额, 合计 410px) 从主行移到本行下方的次要行, 主行只留可编辑列
                8 列 1088px, 首屏放得下.
                ⚠️ 只读列没有消失, 4 个读数一个不少 —— 只是换了位置, 见 .item-derived. -->
-          <span style="width: 210px"><span class="req-star">*</span>供应原料</span>
-          <span style="width: 170px"><span class="req-star">*</span>采购规格</span>
-          <span style="width: 140px"><span class="req-star">*</span>采购数量</span>
-          <span style="width: 90px">采购单位</span>
-          <span style="width: 158px">含税单价</span>
-          <span style="width: 110px"><span class="req-star">*</span>税点(%)</span>
-          <span style="width: 150px">合同号</span>
-          <span style="width: 60px">操作</span>
+          <span style="width: 210px"><span class="req-star">*</span>{{ t('procurement.orders_list.text_e2151456d1f6') }}</span>
+          <span style="width: 170px"><span class="req-star">*</span>{{ t('procurement.orders_list.text_2014e78d64d0') }}</span>
+          <span style="width: 140px"><span class="req-star">*</span>{{ t('procurement.orders_list.text_0388491a3039') }}</span>
+          <span style="width: 90px">{{ t('procurement.orders_list.text_7023dd8f558a') }}</span>
+          <span style="width: 158px">{{ t('procurement.orders_list.text_b1c9b1474367') }}</span>
+          <span style="width: 110px"><span class="req-star">*</span>{{ t('procurement.orders_list.text_ff337a8d557c') }}</span>
+          <span style="width: 150px">{{ t('procurement.orders_list.text_a9d0edf1196c') }}</span>
+          <span style="width: 60px">{{ t('procurement.orders_list.text_ed31fbb483ee') }}</span>
         </div>
         <div v-for="(item, idx) in form.items" :key="idx" class="item-block">
         <div class="item-row">
@@ -1889,7 +1895,7 @@ async function handleAiFill(params: TableRow) {
                filter-method 关掉内建过滤 ⇒ v-for 走 filteredMaterialRelations。 -->
           <el-select
             v-model="item.supplierMaterialId"
-            placeholder="选择该供应商的原料 (支持拼音)"
+            :placeholder="t('procurement.orders_list.placeholder_32754003b885')"
             filterable
             :filter-method="handleMaterialRelationFilter"
             :loading="dropdownsRefreshing"
@@ -1909,7 +1915,7 @@ async function handleAiFill(params: TableRow) {
                  不给的话加载中也会显示空态文案, 用户会截图「它说这家供应商没有原料」——
                  而那家其实有一堆(见 ProcessDataTable.vue:3502 同形教训)。 -->
             <template #loading>
-              <div class="material-relation-empty">正在加载该供应商的原料…</div>
+              <div class="material-relation-empty">{{ t('procurement.orders_list.text_853f228a1cdc') }}</div>
             </template>
             <!-- 缺陷: 空态原来只能挂 no-data-text 字符串 ⇒ (a) 塞不下动作,
                  (b) 210px 宽的下拉里被截断。改用 #empty 插槽自己控制 markup:
@@ -1922,62 +1928,62 @@ async function handleAiFill(params: TableRow) {
                   v-if="materialRelationEmpty.suggestSearchTips"
                   class="material-relation-empty__hint"
                 >
-                  换个原料名关键字或拼音首字母试试（如 老抽 / laochou / lc）
+                  {{ t('procurement.orders_list.text_a5e2889f974c') }}
                 </p>
                 <!-- ⛔ 不用 router.push: 本下拉在 fullscreen + destroy-on-close 的弹窗里,
                      跳走会把填了一半的采购单不可恢复地丢掉。
                      新标签页打开 + 回焦刷新, 形状照 SeasoningBindingDialog.vue:232-239。 -->
-                <el-button
+                <UButton
                   v-if="materialRelationEmpty.showConfigureAction"
-                  type="primary"
-                  link
+                  color="primary"
+                  variant="link"
                   class="material-relation-empty__action"
                   @click="goConfigureSupplierMaterials"
                 >
-                  去配置供应原料（新标签页打开）
-                </el-button>
+                  {{ t('procurement.orders_list.action_b186da676207') }}
+                </UButton>
               </div>
             </template>
           </el-select>
-          <el-select
+          <CompatSelect
             v-model="item.purchasePackagingSpecId"
-            :placeholder="specsForItem(item).length > 0 ? '选择采购规格' : '不涉及（按基本单位）'"
+            :placeholder="specsForItem(item).length > 0 ? t('procurement.orders_list.placeholder_5828fdf4112f') : t('procurement.orders_list.placeholder_b95ca25b9550')"
             :disabled="!item.supplierMaterialId || specsForItem(item).length === 0"
             style="width: 170px"
             @change="onPurchaseSpecChange(item)"
           >
-            <el-option
+            <CompatOption
               v-for="spec in specsForItem(item)"
               :key="spec.id"
               :label="`${spec.name} · 1${displayUnit(spec.purchasePackageUnit)}=${spec.factor}${displayUnit(spec.inventoryBaseUnit)}`"
               :value="spec.id"
             />
-          </el-select>
-          <el-input-number v-model="item.quantity" :min="0.01" :precision="3" placeholder="最小 0.01" controls-position="right" style="width: 140px" />
+          </CompatSelect>
+          <el-input-number v-model="item.quantity" :min="0.01" :precision="3" :placeholder="t('procurement.orders_list.placeholder_f26eddda0778')" controls-position="right" style="width: 140px" />
           <el-input :model-value="displayUnit(item.unit) || '-'" disabled style="width: 90px" />
           <div class="price-input-cell" style="width: 158px">
             <el-input-number
               v-model="item.taxIncludedUnitPrice"
               :min="0"
               :precision="2"
-              placeholder="未配置含税采购价"
+              :placeholder="t('procurement.orders_list.placeholder_ad1564f69aee')"
               controls-position="right"
               style="width: 130px"
               @update:model-value="onTaxIncludedPriceEdited(item)"
             />
             <el-tooltip placement="top">
               <template #content>
-                {{ priceSourceLabel(item.priceSource) }} · 未税单价
-                {{ item.unitPrice == null ? '-' : item.unitPrice }} 元/{{ displayUnit(item.priceUnit) || '-' }}
+                {{ priceSourceLabel(item.priceSource) }} {{ t('procurement.orders_list.text_e5cf618beb9a') }}
+                {{ item.unitPrice == null ? '-' : item.unitPrice }} {{ t('procurement.orders_list.text_b8adbb848752') }}{{ displayUnit(item.priceUnit) || '-' }}
               </template>
-              <el-icon :class="['price-source-icon', { 'price-source-icon--missing': item.priceSource === 'MISSING' }]"><QuestionFilled /></el-icon>
+              <span :class="['price-source-icon', { 'price-source-icon--missing': item.priceSource === 'MISSING' }]"><QuestionFilled /></span>
             </el-tooltip>
           </div>
           <div class="tax-select-cell" style="width: 110px">
             <el-tooltip :disabled="!validateTaxRate(item.taxRate)" :content="validateTaxRate(item.taxRate) || ''" placement="top">
               <el-select
                 :model-value="item.taxRate"
-                placeholder="请选择税率"
+                :placeholder="t('procurement.orders_list.placeholder_dda4ec5efe8b')"
                 filterable
                 allow-create
                 default-first-option
@@ -1994,40 +2000,40 @@ async function handleAiFill(params: TableRow) {
               </el-select>
             </el-tooltip>
           </div>
-          <el-input
+          <UInput
             v-model="item.contractNumber"
             maxlength="64"
-            placeholder="选填 如 SAN-16572"
+            :placeholder="t('procurement.orders_list.placeholder_be1af7555d1c')"
             style="width: 150px"
           />
-          <el-button type="danger" link @click="removeItem(idx)" :disabled="form.items.length <= 1" style="width: 60px">删除</el-button>
+          <UButton color="error" variant="link" @click="removeItem(idx)" :disabled="form.items.length <= 1" style="width: 60px">{{ t('procurement.orders_list.action_2f9daa828907') }}</UButton>
         </div>
         <!-- 系统算出来的只读读数 —— 从主行移下来 (缺陷 20)。四个读数一个不少,
              各自带标签, 所以不需要跟表头对齐, 也就不再占主行的横向预算。 -->
         <div class="item-derived">
-          <span class="derived-cell"><em>折合入库量</em>{{ inventoryQuantityPreview(item) }}</span>
+          <span class="derived-cell"><em>{{ t('procurement.orders_list.text_7bdc1283688b') }}</em>{{ inventoryQuantityPreview(item) }}</span>
           <span class="derived-cell">
-            <em>未税金额</em>
+            <em>{{ t('procurement.orders_list.text_f58a43633141') }}</em>
             <template v-if="itemAmountPreview(item).amount != null">{{ itemAmountPreview(item).amount?.toFixed(2) }}</template>
             <span v-else class="amount-cell--pending">{{ itemAmountPreview(item).message }}</span>
           </span>
-          <span class="derived-cell"><em>税额</em>{{ itemTaxPreview(item) ? itemTaxPreview(item)?.tax.toFixed(2) : '-' }}</span>
-          <span class="derived-cell"><em>含税金额</em>{{ itemTaxPreview(item) ? itemTaxPreview(item)?.taxed.toFixed(2) : '-' }}</span>
+          <span class="derived-cell"><em>{{ t('procurement.orders_list.text_6b7628bb89b8') }}</em>{{ itemTaxPreview(item) ? itemTaxPreview(item)?.tax.toFixed(2) : '-' }}</span>
+          <span class="derived-cell"><em>{{ t('procurement.orders_list.text_bd4bee32ac89') }}</em>{{ itemTaxPreview(item) ? itemTaxPreview(item)?.taxed.toFixed(2) : '-' }}</span>
         </div>
         </div>
         <div v-if="formMoneyTotal" class="item-money-total" data-testid="po-form-money-total">
-          <span>未税合计 <strong data-testid="po-form-untaxed">{{ formMoneyTotal.untaxed.toFixed(2) }}</strong></span>
-          <span>税额合计 <strong data-testid="po-form-tax">{{ formMoneyTotal.tax.toFixed(2) }}</strong></span>
-          <span>含税合计 <strong data-testid="po-form-tax-included">{{ formMoneyTotal.taxed.toFixed(2) }}</strong></span>
+          <span>{{ t('procurement.orders_list.text_17e1c38a68f6') }} <strong data-testid="po-form-untaxed">{{ formMoneyTotal.untaxed.toFixed(2) }}</strong></span>
+          <span>{{ t('procurement.orders_list.text_265a5a504b1a') }} <strong data-testid="po-form-tax">{{ formMoneyTotal.tax.toFixed(2) }}</strong></span>
+          <span>{{ t('procurement.orders_list.text_44e2738ea40f') }} <strong data-testid="po-form-tax-included">{{ formMoneyTotal.taxed.toFixed(2) }}</strong></span>
         </div>
-        <el-button style="width: 100%; margin-top: 8px" @click="addItem">+ 添加行</el-button>
+        <UButton color="neutral" variant="outline" style="width: 100%; margin-top: 8px" @click="addItem">{{ t('procurement.orders_list.action_a27f5e856e12') }}</UButton>
         </div>
-      </el-form>
+      </CompatForm>
       <template #footer>
-        <el-button @click="closeOrderEditor">取消</el-button>
-        <el-button :data-testid="isEditing ? 'purchase-link-sales-submit' : 'purchase-create-submit'" type="primary" :loading="submitting" :disabled="confirmingTaxRate" @click="handleCreate">
-          {{ createdOrderId ? (attachmentQueue.failed ? '重试附件并完成' : '完成') : (isEditing ? '保存修改' : '创建') }}
-        </el-button>
+        <UButton color="neutral" variant="outline" @click="closeOrderEditor">{{ t('procurement.orders_list.action_2cd0f3be8738') }}</UButton>
+        <UButton :data-testid="isEditing ? 'purchase-link-sales-submit' : 'purchase-create-submit'" color="primary" :loading="submitting" :disabled="confirmingTaxRate" @click="handleCreate">
+          {{ createdOrderId ? (attachmentQueue.failed ? t('procurement.orders_list.text_5cf264614b94') : t('procurement.orders_list.text_c0b3fbff51cc')) : (isEditing ? t('procurement.orders_list.text_991bb7cfe5a8') : t('procurement.orders_list.text_cde2cd071d25')) }}
+        </UButton>
       </template>
     </el-dialog>
 

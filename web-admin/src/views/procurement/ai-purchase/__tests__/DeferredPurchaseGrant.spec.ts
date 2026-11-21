@@ -1,6 +1,7 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { defineComponent, h, nextTick, reactive, ref } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { nuxtPilotStubs } from '@/components/compat/testStubs'
 
 const harness = vi.hoisted(() => ({
   factoryId: 'F006', userId: '42', get: vi.fn(), post: vi.fn(), push: vi.fn(),
@@ -13,6 +14,10 @@ vi.mock('@/router', () => ({ useRouter: () => ({ push: harness.push }) }))
 vi.mock('vue-router', () => ({ useRouter: () => ({ push: harness.push }) }))
 vi.mock('@/api/request', () => ({ default: { get: (...args: unknown[]) => harness.get(...args), post: (...args: unknown[]) => harness.post(...args) }, get: (...args: unknown[]) => harness.get(...args), post: (...args: unknown[]) => harness.post(...args) }))
 vi.mock('element-plus', () => ({ ElMessage: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() } }))
+vi.mock('@/components/compat/messages', async () => {
+  const { ElMessage } = await import('element-plus')
+  return { useCompatMessages: () => ({ ElMessage }) }
+})
 
 import PurchasePage from '../index.vue'
 import { executeDeferredControlledPurchase } from '@/api/controlledPurchase'
@@ -31,7 +36,7 @@ const Pass = (name: string) => defineComponent({ name, setup(_p, { slots }) { re
 const ElAlertStub = defineComponent({ name: 'ElAlert', props: { title: String }, setup(props) { return () => h('div', { role: 'alert' }, props.title) } })
 const AiCardStub = defineComponent({ name: 'AiOperationCard', setup() { return () => h('div', { 'data-ai-card': 'true' }) } })
 
-const stubs = { ElButton: ElButtonStub, ElInput: ElInputStub, ElSelect: ElSelectStub, ElDatePicker: ElDateStub, ElOption: Pass('ElOption'), ElForm: Pass('ElForm'), ElFormItem: Pass('ElFormItem'), ElCard: Pass('ElCard'), ElAlert: ElAlertStub, AiOperationCard: AiCardStub }
+const stubs = { ...nuxtPilotStubs, ElButton: ElButtonStub, ElInput: ElInputStub, ElSelect: ElSelectStub, ElDatePicker: ElDateStub, ElOption: Pass('ElOption'), ElForm: Pass('ElForm'), ElFormItem: Pass('ElFormItem'), ElCard: Pass('ElCard'), ElAlert: ElAlertStub, AiOperationCard: AiCardStub }
 
 const preview = { status: 'PREVIEW', intentCode: 'PURCHASE_ORDER_CREATE', resultData: { grantId: 'preview-7' }, confirmableAction: { confirmToken: 'proof', commandDigest: 'digest', expiresAt: '2026-10-20T23:59:00Z', previewData: { grantId: 'preview-7' } } }
 

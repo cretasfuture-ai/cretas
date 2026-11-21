@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { sourceWithChinese } from '@/i18n-pilot/sourceForTests';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -11,7 +12,7 @@ import { describe, expect, it } from 'vitest';
 // 源码字符串断言钉住"接线正确"(entry 换成了 taxIncludedUnitPrice, 旧 entry
 // 彻底消失), 而"算出来的数对不对"由 salesOrderNewLineContract.spec.ts 里对
 // derivedUntaxedPriceOrNull 的正/负对照单测覆盖 (两个文件合起来才是完整证据链)。
-const source = readFileSync(resolve(import.meta.dirname, '../list.vue'), 'utf8');
+const source = sourceWithChinese(readFileSync(resolve(import.meta.dirname, '../list.vue'), 'utf8'));
 
 describe('sales order list.vue pricing UI (primary order-creation surface)', () => {
   it('takes tax-inclusive price as the entry field and untaxed price as a read-only derived display', () => {

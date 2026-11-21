@@ -1,0 +1,14 @@
+export { default as CompatTable } from './CompatTable.vue';
+export { CompatTableColumn } from './table';
+export { CompatDescriptions, CompatDescriptionsItem } from './descriptions';
+export { default as CompatForm } from './CompatForm.vue';
+export { default as CompatFormItem } from './CompatFormItem.vue';
+export { default as CompatDialog } from './CompatDialog.vue';
+export { default as CompatDatePicker } from './CompatDatePicker.vue';
+export { default as CompatPagination } from './CompatPagination.vue';
+export { default as CompatSelect } from './CompatSelect.vue';
+export { default as CompatOption } from './CompatOption';
+export { default as CompatRadio } from './CompatRadio.vue';
+export { default as CompatAlert } from './CompatAlert.vue';
+export { default as CompatBadge } from './CompatBadge.vue';
+export { default as CompatSkeleton } from './CompatSkeleton.vue';

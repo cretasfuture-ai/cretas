@@ -7,20 +7,20 @@
     </div>
 
     <!-- 过滤栏 -->
-    <el-card class="filter-card" shadow="never">
+    <UCard class="filter-card" >
       <el-row :gutter="16" align="middle">
         <el-col :span="6">
-          <el-select
+          <CompatSelect
             v-model="filterStatus"
             placeholder="状态"
             clearable
             style="width: 100%"
             @change="handleFilterChange"
           >
-            <el-option label="全部" value="" />
-            <el-option label="待处理" value="PENDING" />
-            <el-option label="已处理" value="RESOLVED" />
-          </el-select>
+            <CompatOption label="全部" value="" />
+            <CompatOption label="待处理" value="PENDING" />
+            <CompatOption label="已处理" value="RESOLVED" />
+          </CompatSelect>
         </el-col>
         <el-col :span="6">
           <el-input
@@ -33,62 +33,62 @@
           />
         </el-col>
         <el-col :span="4">
-          <el-button type="primary" @click="handleFilterChange">查询</el-button>
-          <el-button @click="resetFilter">重置</el-button>
+          <UButton color="primary" @click="handleFilterChange">查询</UButton>
+          <UButton color="neutral" variant="outline" @click="resetFilter">重置</UButton>
         </el-col>
       </el-row>
-    </el-card>
+    </UCard>
 
     <!-- 数据表格 -->
-    <el-card class="data-card" shadow="never">
-      <el-table
+    <UCard class="data-card" >
+      <CompatTable
         v-loading="loading"
         :data="tableData"
         stripe
         row-key="id"
         style="width: 100%"
       >
-        <el-table-column label="异常单号" prop="exceptionNumber" width="160" />
-        <el-table-column label="采购单ID" prop="purchaseOrderId" width="160" />
-        <el-table-column label="供应商ID" prop="supplierId" min-width="120" />
-        <el-table-column label="物料名称" prop="materialName" min-width="120" />
-        <el-table-column label="异常类型" prop="exceptionType" width="120">
+        <CompatTableColumn label="异常单号" prop="exceptionNumber" width="160" />
+        <CompatTableColumn label="采购单ID" prop="purchaseOrderId" width="160" />
+        <CompatTableColumn label="供应商ID" prop="supplierId" min-width="120" />
+        <CompatTableColumn label="物料名称" prop="materialName" min-width="120" />
+        <CompatTableColumn label="异常类型" prop="exceptionType" width="120">
           <template #default="{ row }">
             <el-tag :type="exceptionTypeTag(row.exceptionType)" size="small">
               {{ exceptionTypeLabel(row.exceptionType) }}
             </el-tag>
           </template>
-        </el-table-column>
-        <el-table-column label="异常数量" prop="exceptionQty" width="100">
+        </CompatTableColumn>
+        <CompatTableColumn label="异常数量" prop="exceptionQty" width="100">
           <template #default="{ row }">
             {{ row.exceptionQty }} {{ row.unit }}
           </template>
-        </el-table-column>
-        <el-table-column label="责任人" prop="ownerName" width="110">
+        </CompatTableColumn>
+        <CompatTableColumn label="责任人" prop="ownerName" width="110">
           <template #default="{ row }">
             <span v-if="row.ownerName">{{ row.ownerName }}</span>
             <span v-else class="text-muted">—</span>
           </template>
-        </el-table-column>
-        <el-table-column label="状态" prop="status" width="90">
+        </CompatTableColumn>
+        <CompatTableColumn label="状态" prop="status" width="90">
           <template #default="{ row }">
             <el-tag :type="statusTag(row.status)" size="small">
               {{ statusLabel(row.status) }}
             </el-tag>
           </template>
-        </el-table-column>
-        <el-table-column label="处理决定" prop="decision" width="120">
+        </CompatTableColumn>
+        <CompatTableColumn label="处理决定" prop="decision" width="120">
           <template #default="{ row }">
             <span v-if="row.decision">{{ decisionLabel(row.decision) }}</span>
             <span v-else class="text-muted">—</span>
           </template>
-        </el-table-column>
-        <el-table-column label="创建时间" prop="createdAt" width="150">
+        </CompatTableColumn>
+        <CompatTableColumn label="创建时间" prop="createdAt" width="150">
           <template #default="{ row }">
             {{ formatDate(row.createdAt) }}
           </template>
-        </el-table-column>
-        <el-table-column label="操作" width="160" fixed="right">
+        </CompatTableColumn>
+        <CompatTableColumn label="操作" width="160" fixed="right">
           <template #default="{ row }">
             <!-- D-6: 处理按钮仅责任人本人或主管角色可点（Fool-proof Rule 2 + Rule 5） -->
             <el-tooltip
@@ -97,28 +97,28 @@
               placement="top"
             >
               <span>
-                <el-button type="primary" link size="small" disabled>处理</el-button>
+                <UButton color="primary" variant="link" size="sm" disabled>处理</UButton>
               </span>
             </el-tooltip>
-            <el-button
+            <UButton
               v-else-if="row.status === 'PENDING' && canWrite"
-              type="primary"
-              link
-              size="small"
+              color="primary"
+              variant="link"
+              size="sm"
               @click="openDecisionDialog(row)"
             >
               处理
-            </el-button>
-            <el-button type="info" link size="small" @click="openDetailDialog(row)">
+            </UButton>
+            <UButton color="info" variant="link" size="sm" @click="openDetailDialog(row)">
               详情
-            </el-button>
+            </UButton>
           </template>
-        </el-table-column>
-      </el-table>
+        </CompatTableColumn>
+      </CompatTable>
 
       <!-- 分页 -->
       <div class="pagination-wrap">
-        <el-pagination
+        <CompatPagination
           v-model:current-page="page"
           v-model:page-size="pageSize"
           :total="total"
@@ -128,121 +128,125 @@
           @size-change="fetchData"
         />
       </div>
-    </el-card>
+    </UCard>
 
     <!-- 处理决定 Dialog（Fool-proof Rule 2: 标题含 PO 号+供应商; Rule 3: dropdown原因） -->
-    <el-dialog
+    <CompatDialog
       v-model="decisionDialogVisible"
       :title="`处理异常 — ${currentRow?.materialName || ''} (${currentRow?.purchaseOrderId || ''})`"
       width="520px"
       :close-on-click-modal="false"
     >
       <div v-if="currentRow" class="decision-context">
-        <el-descriptions :column="2" border size="small" class="mb-16">
-          <el-descriptions-item label="供应商ID">{{ currentRow.supplierId }}</el-descriptions-item>
-          <el-descriptions-item label="异常类型">{{ exceptionTypeLabel(currentRow.exceptionType) }}</el-descriptions-item>
-          <el-descriptions-item label="异常数量">{{ currentRow.exceptionQty }} {{ currentRow.unit }}</el-descriptions-item>
-          <el-descriptions-item label="物料名称">{{ currentRow.materialName || '—' }}</el-descriptions-item>
-        </el-descriptions>
+        <CompatDescriptions :column="2" border size="small" class="mb-16">
+          <CompatDescriptionsItem label="供应商ID">{{ currentRow.supplierId }}</CompatDescriptionsItem>
+          <CompatDescriptionsItem label="异常类型">{{ exceptionTypeLabel(currentRow.exceptionType) }}</CompatDescriptionsItem>
+          <CompatDescriptionsItem label="异常数量">{{ currentRow.exceptionQty }} {{ currentRow.unit }}</CompatDescriptionsItem>
+          <CompatDescriptionsItem label="物料名称">{{ currentRow.materialName || '—' }}</CompatDescriptionsItem>
+        </CompatDescriptions>
       </div>
 
-      <el-form ref="decisionFormRef" :model="decisionForm" :rules="decisionRules" label-width="100px">
-        <el-form-item label="处理决定" prop="decision">
+      <CompatForm ref="decisionFormRef" :model="decisionForm" :rules="decisionRules" label-width="100px">
+        <CompatFormItem label="处理决定" prop="decision">
           <!-- Rule 3: 约束选择 dropdown 而非自由文本 -->
           <!-- ExceptionDecision enum: ACCEPT_OVER / RETURN_OVER / ACCEPT_SHORT / REQUEST_RESUPPLY -->
-          <el-select v-model="decisionForm.decision" placeholder="请选择处理方式" style="width: 100%">
-            <el-option label="接收（数量偏差，全部入库）" value="ACCEPT_OVER" />
-            <el-option label="退货（拒收，退回供应商）" value="RETURN_OVER" />
-            <el-option label="按实收（短少，按实际数量入库）" value="ACCEPT_SHORT" />
-            <el-option label="补货（缺货，要求供应商补发）" value="REQUEST_RESUPPLY" />
-          </el-select>
-        </el-form-item>
-        <el-alert
+          <CompatSelect v-model="decisionForm.decision" placeholder="请选择处理方式" style="width: 100%">
+            <CompatOption label="接收（数量偏差，全部入库）" value="ACCEPT_OVER" />
+            <CompatOption label="退货（拒收，退回供应商）" value="RETURN_OVER" />
+            <CompatOption label="按实收（短少，按实际数量入库）" value="ACCEPT_SHORT" />
+            <CompatOption label="补货（缺货，要求供应商补发）" value="REQUEST_RESUPPLY" />
+          </CompatSelect>
+        </CompatFormItem>
+        <CompatAlert
           v-if="decisionForm.decision === 'REQUEST_RESUPPLY'"
           title="补发沿用原采购单"
           description="记录决定后，由仓储按原采购单的剩余待收数量办理补发收货；决定本身不会生成库存、应付或新采购单。"
-          type="info"
-          :closable="false"
+          color="info"
+          :close="false"
           class="mb-16"
         />
-        <el-form-item label="备注" prop="notes">
+        <CompatFormItem label="备注" prop="notes">
           <el-input
             v-model="decisionForm.notes"
             type="textarea"
             :rows="3"
             placeholder="请填写处理说明（可选）"
           />
-        </el-form-item>
-      </el-form>
+        </CompatFormItem>
+      </CompatForm>
 
       <template #footer>
-        <el-button @click="decisionDialogVisible = false">取消</el-button>
-        <el-button
-          type="primary"
+        <UButton color="neutral" variant="outline" @click="decisionDialogVisible = false">取消</UButton>
+        <UButton
+          color="primary"
           :loading="submitting"
           :disabled="!decisionForm.decision"
           @click="submitDecision"
         >
           确认处理
-        </el-button>
+        </UButton>
       </template>
-    </el-dialog>
+    </CompatDialog>
 
     <!-- 详情 Dialog -->
-    <el-dialog
+    <CompatDialog
       v-model="detailDialogVisible"
       :title="`异常详情 — ${currentRow?.exceptionNumber || ''}`"
       width="560px"
     >
       <div v-if="currentRow">
-        <el-descriptions :column="2" border>
-          <el-descriptions-item label="异常单号">{{ currentRow.exceptionNumber }}</el-descriptions-item>
-          <el-descriptions-item label="采购单ID">{{ currentRow.purchaseOrderId }}</el-descriptions-item>
-          <el-descriptions-item label="供应商ID">{{ currentRow.supplierId }}</el-descriptions-item>
-          <el-descriptions-item label="物料名称">{{ currentRow.materialName }}</el-descriptions-item>
-          <el-descriptions-item label="异常类型">{{ exceptionTypeLabel(currentRow.exceptionType) }}</el-descriptions-item>
-          <el-descriptions-item label="异常数量">{{ currentRow.exceptionQty }} {{ currentRow.unit }}</el-descriptions-item>
-          <el-descriptions-item label="责任人">
+        <CompatDescriptions :column="2" border>
+          <CompatDescriptionsItem label="异常单号">{{ currentRow.exceptionNumber }}</CompatDescriptionsItem>
+          <CompatDescriptionsItem label="采购单ID">{{ currentRow.purchaseOrderId }}</CompatDescriptionsItem>
+          <CompatDescriptionsItem label="供应商ID">{{ currentRow.supplierId }}</CompatDescriptionsItem>
+          <CompatDescriptionsItem label="物料名称">{{ currentRow.materialName }}</CompatDescriptionsItem>
+          <CompatDescriptionsItem label="异常类型">{{ exceptionTypeLabel(currentRow.exceptionType) }}</CompatDescriptionsItem>
+          <CompatDescriptionsItem label="异常数量">{{ currentRow.exceptionQty }} {{ currentRow.unit }}</CompatDescriptionsItem>
+          <CompatDescriptionsItem label="责任人">
             {{ currentRow.ownerName || '—' }}
-          </el-descriptions-item>
-          <el-descriptions-item label="状态">
+          </CompatDescriptionsItem>
+          <CompatDescriptionsItem label="状态">
             <el-tag :type="statusTag(currentRow.status)" size="small">
               {{ statusLabel(currentRow.status) }}
             </el-tag>
-          </el-descriptions-item>
-          <el-descriptions-item label="处理决定">
+          </CompatDescriptionsItem>
+          <CompatDescriptionsItem label="处理决定">
             {{ currentRow.decision ? decisionLabel(currentRow.decision) : '—' }}
-          </el-descriptions-item>
-          <el-descriptions-item label="关联退货单" :span="2">
+          </CompatDescriptionsItem>
+          <CompatDescriptionsItem label="关联退货单" :span="2">
             <template v-if="currentRow.returnOrderId">
               <el-link type="primary" underline="hover" @click="goToReturns">采购退货单（点击前往审批）</el-link>
               <span class="text-muted" style="margin-left: 8px">待财务审批</span>
             </template>
             <span v-else class="text-muted">—</span>
-          </el-descriptions-item>
-          <el-descriptions-item label="处理备注" :span="2">{{ currentRow.decisionNotes || '—' }}</el-descriptions-item>
-          <el-descriptions-item v-if="currentRow.decision === 'REQUEST_RESUPPLY'" label="补发收货" :span="2">
+          </CompatDescriptionsItem>
+          <CompatDescriptionsItem label="处理备注" :span="2">{{ currentRow.decisionNotes || '—' }}</CompatDescriptionsItem>
+          <CompatDescriptionsItem v-if="currentRow.decision === 'REQUEST_RESUPPLY'" label="补发收货" :span="2">
             <el-link v-if="canAccessWarehouse && currentRow.purchaseOrderId" type="primary" @click="goToResupply(currentRow.purchaseOrderId)">
               前往原采购单待收任务
             </el-link>
             <span v-else>请联系仓储按原采购单办理补发收货。</span>
             <p class="text-muted">按剩余待收数量补收；已收齐或已关闭的订单不会再次生成待收任务。</p>
-          </el-descriptions-item>
-          <el-descriptions-item label="创建时间">{{ formatDate(currentRow.createdAt) }}</el-descriptions-item>
-          <el-descriptions-item label="处理时间">{{ formatDate(currentRow.decisionAt) }}</el-descriptions-item>
-        </el-descriptions>
+          </CompatDescriptionsItem>
+          <CompatDescriptionsItem label="创建时间">{{ formatDate(currentRow.createdAt) }}</CompatDescriptionsItem>
+          <CompatDescriptionsItem label="处理时间">{{ formatDate(currentRow.decisionAt) }}</CompatDescriptionsItem>
+        </CompatDescriptions>
       </div>
       <template #footer>
-        <el-button @click="detailDialogVisible = false">关闭</el-button>
+        <UButton color="neutral" variant="outline" @click="detailDialogVisible = false">关闭</UButton>
       </template>
-    </el-dialog>
+    </CompatDialog>
   </div>
 </template>
 
 <script setup lang="ts">
+import { CompatAlert, CompatDescriptions, CompatDescriptionsItem, CompatDialog, CompatForm, CompatFormItem, CompatOption, CompatPagination, CompatSelect, CompatTable, CompatTableColumn } from '@/components/compat';
+import { useCompatMessages } from '@/components/compat/messages';
+const { ElMessage, ElMessageBox } = useCompatMessages();
+
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+
 import type { FormInstance, FormRules } from 'element-plus'
 import { get, post } from '@/api/request'
 import { useAuthStore } from '@/store/modules/auth'

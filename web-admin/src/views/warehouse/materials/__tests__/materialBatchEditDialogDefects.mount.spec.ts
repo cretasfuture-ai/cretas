@@ -1,6 +1,7 @@
 import { flushPromises, mount } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ElementPlus, { ElMessage } from 'element-plus';
+import { nuxtPilotStubs } from '@/components/compat/testStubs';
 
 /**
  * 缺陷 B / A / C —— 批次编辑弹窗 (LIUSHANMEN 客户真实批次 MT-20260901-3312 实测)
@@ -119,6 +120,7 @@ function mountList() {
     global: {
       plugins: [ElementPlus],
       stubs: {
+        ...nuxtPilotStubs,
         teleport: true,
         transition: false,
         // 与本仓 SeasoningBindingDialog.spec.ts / PackagingBindingDialog.spec.ts 同一配方:
@@ -152,8 +154,8 @@ function mockApiGet(rows: Record<string, unknown>[]) {
 
 /** 找编辑弹窗里"数量"那一格的原生 `<input>` (真实 ElInputNumber 渲染出来的)。 */
 function findQuantityInput(wrapper: ReturnType<typeof mountList>) {
-  const items = wrapper.findAll('.el-form-item');
-  const qtyItem = items.find((item) => item.find('.el-form-item__label').text() === '数量');
+  const items = wrapper.findAll('.el-form-item, .compat-field');
+  const qtyItem = items.find((item) => item.find('label').text() === '数量');
   return qtyItem?.find('input');
 }
 

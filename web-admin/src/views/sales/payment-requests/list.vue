@@ -2,36 +2,36 @@
   <div class="page-container">
     <!-- 页面标题 -->
     <div class="page-header">
-      <h2 class="page-title">销售付款申请</h2>
-      <p class="page-subtitle">对客户的 outbound 付款（退款/返利/销售费用） — 销售方向</p>
+      <h2 class="page-title">{{ t('sales.payment_requests_list.text_3a05ab16ab6a') }}</h2>
+      <p class="page-subtitle">{{ t('sales.payment_requests_list.text_92e1c7738fd7') }}</p>
     </div>
 
     <!-- 过滤栏 -->
-    <el-card class="filter-card" shadow="never">
+    <UCard class="filter-card" >
       <el-row :gutter="16" align="middle">
         <el-col :span="5">
-          <el-select
+          <CompatSelect
             v-model="filterStatus"
-            placeholder="状态"
+            :placeholder="t('sales.payment_requests_list.placeholder_6320b4a8722a')"
             clearable
             style="width: 100%"
             @change="handleFilterChange"
           >
-            <el-option label="全部" value="" />
+            <CompatOption :label="t('sales.payment_requests_list.label_5c55a67935af')" value="" />
             <!-- 由 PAYMENT_REQUEST_STATUS_META 生成 —— 手写第二份就是 CANCELLED
                  从筛选器里漏掉的原因(被撤回的单子筛不出来)。 -->
-            <el-option
+            <CompatOption
               v-for="meta in PAYMENT_REQUEST_STATUS_META"
               :key="meta.value"
               :label="meta.label"
               :value="meta.value"
             />
-          </el-select>
+          </CompatSelect>
         </el-col>
         <el-col :span="6">
           <el-input
             v-model="filterKeyword"
-            placeholder="搜索客户名/申请单号"
+            :placeholder="t('sales.payment_requests_list.placeholder_6bdf887a22cb')"
             clearable
             prefix-icon="Search"
             @clear="handleFilterChange"
@@ -39,25 +39,25 @@
           />
         </el-col>
         <el-col :span="4">
-          <el-button type="primary" @click="handleFilterChange">查询</el-button>
-          <el-button @click="resetFilter">重置</el-button>
+          <UButton color="primary" @click="handleFilterChange">{{ t('sales.payment_requests_list.action_bcd6771e08ec') }}</UButton>
+          <UButton color="neutral" variant="outline" @click="resetFilter">{{ t('sales.payment_requests_list.action_cb5d682bac3d') }}</UButton>
         </el-col>
         <el-col :span="9" style="text-align: right">
           <!-- Rule 4: 仅销售员可发起 sales:read_write -->
-          <el-button
+          <UButton
             v-if="canSalesWrite"
-            type="success"
+            color="success"
             @click="openCreateDialog"
           >
-            + 新建销售付款申请
-          </el-button>
+            {{ t('sales.payment_requests_list.action_c5ebe78b7f14') }}
+          </UButton>
         </el-col>
       </el-row>
-    </el-card>
+    </UCard>
 
     <!-- 数据表格 -->
-    <el-card class="data-card" shadow="never">
-      <el-table
+    <UCard class="data-card" >
+      <CompatTable
         v-loading="loading"
         :data="tableData"
         stripe
@@ -65,91 +65,91 @@
         style="width: 100%"
       >
         <template #empty><ListEmptyExplain empty-title="还没有销售付款申请" empty-hint="客户需要预付或分期付款时，点右上角新建付款申请并关联销售订单；财务审批后进入收款。" /></template>
-        <el-table-column label="申请单号" prop="requestNumber" width="170" />
+        <CompatTableColumn :label="t('sales.payment_requests_list.label_ef8e791a45ca')" prop="requestNumber" width="170" />
         <!-- 销售方向: 显示销售订单号和客户名 -->
-        <el-table-column label="销售订单" prop="salesOrderId" width="160">
+        <CompatTableColumn :label="t('sales.payment_requests_list.label_68bd4b5a1bf2')" prop="salesOrderId" width="160">
           <template #default="{ row }">
             {{ row.salesOrderId || '—' }}
           </template>
-        </el-table-column>
-        <el-table-column label="客户" prop="customerName" min-width="120">
+        </CompatTableColumn>
+        <CompatTableColumn :label="t('sales.payment_requests_list.label_ad4af312dbc2')" prop="customerName" min-width="120">
           <template #default="{ row }">
             {{ row.customerName || row.customerId || '—' }}
           </template>
-        </el-table-column>
-        <el-table-column label="付款类型">
+        </CompatTableColumn>
+        <CompatTableColumn :label="t('sales.payment_requests_list.label_ec4b5671e3af')">
           <template #default>
-            <el-tag type="warning" size="small">销售付款</el-tag>
+            <UBadge variant="soft" color="warning" size="sm">{{ t('sales.payment_requests_list.text_c949b27ea438') }}</UBadge>
           </template>
-        </el-table-column>
+        </CompatTableColumn>
         <!-- @PriceSensitive: amount 字段后端对无权限角色返回 null -->
-        <el-table-column label="申请金额" prop="amount" width="120">
+        <CompatTableColumn :label="t('sales.payment_requests_list.label_10d91e07c599')" prop="amount" width="120">
           <template #default="{ row }">
             <span v-if="row.amount !== null && row.amount !== undefined">
               ¥{{ formatAmount(row.amount) }}
             </span>
             <span v-else class="price-hidden">—</span>
           </template>
-        </el-table-column>
-        <el-table-column label="付款方式" prop="paymentMethod" width="100">
+        </CompatTableColumn>
+        <CompatTableColumn :label="t('sales.payment_requests_list.label_4e3c13589f98')" prop="paymentMethod" width="100">
           <template #default="{ row }">
             {{ row.paymentMethod || '—' }}
           </template>
-        </el-table-column>
-        <el-table-column label="状态" prop="status" width="110">
+        </CompatTableColumn>
+        <CompatTableColumn :label="t('sales.payment_requests_list.label_6320b4a8722a')" prop="status" width="110">
           <template #default="{ row }">
             <el-tag :type="statusTag(row.status)" size="small">
               {{ statusLabel(row.status) }}
             </el-tag>
           </template>
-        </el-table-column>
-        <el-table-column label="创建时间" prop="createdAt" width="155">
+        </CompatTableColumn>
+        <CompatTableColumn :label="t('sales.payment_requests_list.label_07ec86e0f1d4')" prop="createdAt" width="155">
           <template #default="{ row }">
             {{ formatDate(row.createdAt) }}
           </template>
-        </el-table-column>
-        <el-table-column label="操作" width="260" fixed="right">
+        </CompatTableColumn>
+        <CompatTableColumn :label="t('sales.payment_requests_list.label_ed31fbb483ee')" width="260" fixed="right">
           <template #default="{ row }">
             <!-- 提交审核：PENDING → FINANCE_REVIEW (sales:read_write) -->
-            <el-button
+            <UButton
               v-if="row.status === 'PENDING' && canSalesWrite"
-              type="primary"
-              link
-              size="small"
+              color="primary"
+              variant="link"
+              size="sm"
               @click="openSubmitDialog(row)"
             >
-              提交审核
-            </el-button>
+              {{ t('sales.payment_requests_list.action_034829aca81d') }}
+            </UButton>
             <!-- 财务审批：FINANCE_REVIEW (finance:read_write) -->
-            <el-button
+            <UButton
               v-if="row.status === 'FINANCE_REVIEW' && isFinanceManager"
-              type="success"
-              link
-              size="small"
+              color="success"
+              variant="link"
+              size="sm"
               @click="openApproveDialog(row)"
             >
-              审批
-            </el-button>
+              {{ t('sales.payment_requests_list.action_64d021080a5f') }}
+            </UButton>
             <!-- 出纳付款：APPROVED → PAID (finance:read_write / cashier) -->
-            <el-button
+            <UButton
               v-if="row.status === 'APPROVED' && isCashier"
-              type="warning"
-              link
-              size="small"
+              color="warning"
+              variant="link"
+              size="sm"
               @click="openMarkPaidDialog(row)"
             >
-              确认付款
-            </el-button>
-            <el-button type="info" link size="small" @click="openDetailDialog(row)">
-              详情
-            </el-button>
+              {{ t('sales.payment_requests_list.action_92f779b599b4') }}
+            </UButton>
+            <UButton color="info" variant="link" size="sm" @click="openDetailDialog(row)">
+              {{ t('sales.payment_requests_list.action_979a332955c8') }}
+            </UButton>
           </template>
-        </el-table-column>
-      </el-table>
+        </CompatTableColumn>
+      </CompatTable>
 
       <!-- 分页 -->
       <div class="pagination-wrap">
-        <el-pagination
+        <CompatPagination
           v-model:current-page="page"
           v-model:page-size="pageSize"
           :total="total"
@@ -159,13 +159,13 @@
           @size-change="fetchData"
         />
       </div>
-    </el-card>
+    </UCard>
 
     <!-- ===== 新建销售付款申请 Dialog ===== -->
     <!-- Rule 2: 含销售订单号、客户、金额上下文 -->
-    <el-dialog
+    <CompatDialog
       v-model="createDialogVisible"
-      title="新建销售付款申请"
+      :title="t('sales.payment_requests_list.title_c16f7e88833a')"
       width="560px"
       :close-on-click-modal="false"
     >
@@ -174,36 +174,34 @@
         :closable="false"
         style="margin-bottom: 16px"
       >
-        销售方向付款：对客户的 outbound 退款/返利/销售费用。
-        销售订单号可空（无单退款/费用场景）；客户必填。
-        同一销售订单已有活跃销售付款申请时系统自动返回 409。
+        {{ t('sales.payment_requests_list.text_3d688e907233') }}
       </el-alert>
 
-      <el-form
+      <CompatForm
         ref="createFormRef"
         :model="createForm"
         :rules="createRules"
         label-width="110px"
       >
-        <el-form-item label="客户" prop="customerId">
+        <CompatFormItem :label="t('sales.payment_requests_list.label_ad4af312dbc2')" prop="customerId">
           <el-select
             v-model="createForm.customerId"
             filterable
-            placeholder="搜索客户名称（必填）"
+            :placeholder="t('sales.payment_requests_list.placeholder_a38c27a62e70')"
             style="width: 100%"
           >
             <el-option v-for="c in customerOptions" :key="c.id" :label="c.name" :value="c.id" />
             <template #empty>
-              <div style="padding:8px 12px;color:#909399">暂无客户，请先在客户管理创建</div>
+              <div style="padding:8px 12px;color:#909399">{{ t('sales.payment_requests_list.text_cac2886c1596') }}</div>
             </template>
           </el-select>
-        </el-form-item>
-        <el-form-item label="销售订单" prop="salesOrderId">
+        </CompatFormItem>
+        <CompatFormItem :label="t('sales.payment_requests_list.label_68bd4b5a1bf2')" prop="salesOrderId">
           <el-select
             v-model="createForm.salesOrderId"
             filterable
             clearable
-            placeholder="搜索订单号（选填，无单付款可不填）"
+            :placeholder="t('sales.payment_requests_list.placeholder_e1c8e50bfd61')"
             style="width: 100%"
           >
             <el-option
@@ -213,53 +211,53 @@
               :label="o.customerName ? `${o.orderNumber} · ${o.customerName}` : o.orderNumber"
             />
             <template #empty>
-              <div style="padding:8px 12px;color:#909399">暂无销售订单</div>
+              <div style="padding:8px 12px;color:#909399">{{ t('sales.payment_requests_list.text_6d169952d4a7') }}</div>
             </template>
           </el-select>
-        </el-form-item>
-        <el-form-item label="申请金额" prop="amount">
+        </CompatFormItem>
+        <CompatFormItem :label="t('sales.payment_requests_list.label_10d91e07c599')" prop="amount">
           <el-input-number
             v-model="createForm.amount"
             :min="0.01"
             :precision="2"
             :step="100"
             style="width: 100%"
-            placeholder="申请金额（元）"
+            :placeholder="t('sales.payment_requests_list.placeholder_2125b861d6c3')"
           />
-        </el-form-item>
+        </CompatFormItem>
         <!-- Rule 3: 付款方式 dropdown -->
-        <el-form-item label="付款方式" prop="paymentMethod">
-          <el-select
+        <CompatFormItem :label="t('sales.payment_requests_list.label_4e3c13589f98')" prop="paymentMethod">
+          <CompatSelect
             v-model="createForm.paymentMethod"
-            placeholder="请选择付款方式"
+            :placeholder="t('sales.payment_requests_list.placeholder_c8a85d23db36')"
             style="width: 100%"
           >
-            <el-option label="银行转账" value="BANK_TRANSFER" />
-            <el-option label="现金" value="CASH" />
-            <el-option label="微信" value="WECHAT" />
-            <el-option label="支付宝" value="ALIPAY" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="备注" prop="remark">
+            <CompatOption :label="t('sales.payment_requests_list.label_597b930d5c89')" value="BANK_TRANSFER" />
+            <CompatOption :label="t('sales.payment_requests_list.label_118f18e68405')" value="CASH" />
+            <CompatOption :label="t('sales.payment_requests_list.label_81b430b69643')" value="WECHAT" />
+            <CompatOption :label="t('sales.payment_requests_list.label_276a8bc45803')" value="ALIPAY" />
+          </CompatSelect>
+        </CompatFormItem>
+        <CompatFormItem :label="t('sales.payment_requests_list.label_daede9881787')" prop="remark">
           <el-input
             v-model="createForm.remark"
             type="textarea"
             :rows="2"
-            placeholder="付款用途说明（建议填写，便于财务审批）"
+            :placeholder="t('sales.payment_requests_list.placeholder_be74ee4b74d8')"
           />
-        </el-form-item>
-      </el-form>
+        </CompatFormItem>
+      </CompatForm>
 
       <template #footer>
-        <el-button @click="createDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="createSubmitting" @click="doCreate">
-          提交申请
-        </el-button>
+        <UButton color="neutral" variant="outline" @click="createDialogVisible = false">{{ t('sales.payment_requests_list.action_2cd0f3be8738') }}</UButton>
+        <UButton color="primary" :loading="createSubmitting" @click="doCreate">
+          {{ t('sales.payment_requests_list.action_9cc5e4d81ec2') }}
+        </UButton>
       </template>
-    </el-dialog>
+    </CompatDialog>
 
     <!-- ===== 提交审核 Dialog ===== -->
-    <el-dialog
+    <CompatDialog
       v-model="submitDialogVisible"
       :title="`提交审核 — ${currentRow?.customerName || currentRow?.customerId || ''} (${currentRow?.requestNumber || ''})`"
       width="440px"
@@ -267,87 +265,87 @@
     >
       <div v-if="currentRow" class="dialog-context">
         <el-alert type="info" :closable="false" style="margin-bottom: 16px">
-          申请金额：<strong>{{ currentRow.amount !== null && currentRow.amount !== undefined ? `¥${formatAmount(currentRow.amount)}` : '—' }}</strong>
-          &nbsp;| 销售订单：{{ currentRow.salesOrderId || '无单付款' }}
+          {{ t('sales.payment_requests_list.text_6e5b87eed291') }}<strong>{{ currentRow.amount !== null && currentRow.amount !== undefined ? `¥${formatAmount(currentRow.amount)}` : '—' }}</strong>
+          {{ t('sales.payment_requests_list.text_77827f2b8b31') }}{{ currentRow.salesOrderId || t('sales.payment_requests_list.text_2ae6e10bd9f9') }}
         </el-alert>
-        <p style="color: #606266; font-size: 14px; margin: 0">提交后将进入财务审核流程，是否确认？</p>
+        <p style="color: #606266; font-size: 14px; margin: 0">{{ t('sales.payment_requests_list.text_a01b9b0bd187') }}</p>
       </div>
       <template #footer>
-        <el-button @click="submitDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="submitting" @click="doSubmit">确认提交</el-button>
+        <UButton color="neutral" variant="outline" @click="submitDialogVisible = false">{{ t('sales.payment_requests_list.action_2cd0f3be8738') }}</UButton>
+        <UButton color="primary" :loading="submitting" @click="doSubmit">{{ t('sales.payment_requests_list.action_9ebe36f8cf23') }}</UButton>
       </template>
-    </el-dialog>
+    </CompatDialog>
 
     <!-- ===== 财务审批 Dialog ===== -->
     <!-- Rule 2: 含客户+金额+单号; Rule 3: 拒绝原因 dropdown -->
-    <el-dialog
+    <CompatDialog
       v-model="approveDialogVisible"
       :title="`财务审批 — ${currentRow?.customerName || currentRow?.customerId || ''} (${currentRow?.requestNumber || ''})`"
       width="520px"
       :close-on-click-modal="false"
     >
       <div v-if="currentRow" class="dialog-context">
-        <el-descriptions :column="2" border size="small" style="margin-bottom: 16px">
-          <el-descriptions-item label="客户">{{ currentRow.customerName || currentRow.customerId }}</el-descriptions-item>
-          <el-descriptions-item label="销售订单">{{ currentRow.salesOrderId || '无单付款' }}</el-descriptions-item>
-          <el-descriptions-item label="申请金额">
+        <CompatDescriptions :column="2" border size="small" style="margin-bottom: 16px">
+          <CompatDescriptionsItem :label="t('sales.payment_requests_list.label_ad4af312dbc2')">{{ currentRow.customerName || currentRow.customerId }}</CompatDescriptionsItem>
+          <CompatDescriptionsItem :label="t('sales.payment_requests_list.label_68bd4b5a1bf2')">{{ currentRow.salesOrderId || t('sales.payment_requests_list.text_2ae6e10bd9f9') }}</CompatDescriptionsItem>
+          <CompatDescriptionsItem :label="t('sales.payment_requests_list.label_10d91e07c599')">
             {{ currentRow.amount !== null && currentRow.amount !== undefined ? `¥${formatAmount(currentRow.amount)}` : '—' }}
-          </el-descriptions-item>
-          <el-descriptions-item label="付款方式">{{ currentRow.paymentMethod || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="申请备注" :span="2">{{ currentRow.remark || '—' }}</el-descriptions-item>
-        </el-descriptions>
+          </CompatDescriptionsItem>
+          <CompatDescriptionsItem :label="t('sales.payment_requests_list.label_4e3c13589f98')">{{ currentRow.paymentMethod || '—' }}</CompatDescriptionsItem>
+          <CompatDescriptionsItem :label="t('sales.payment_requests_list.label_fe1f2b577fda')" :span="2">{{ currentRow.remark || '—' }}</CompatDescriptionsItem>
+        </CompatDescriptions>
       </div>
 
-      <el-form ref="approveFormRef" :model="approveForm" :rules="approveRules" label-width="90px">
-        <el-form-item label="审批结果" prop="action" required>
+      <CompatForm ref="approveFormRef" :model="approveForm" :rules="approveRules" label-width="90px">
+        <CompatFormItem :label="t('sales.payment_requests_list.label_b9625f9948e3')" prop="action" required>
           <el-radio-group v-model="approveForm.action">
-            <el-radio value="approve">批准</el-radio>
-            <el-radio value="reject">拒绝</el-radio>
+            <el-radio value="approve">{{ t('sales.payment_requests_list.text_8cbe697b1573') }}</el-radio>
+            <el-radio value="reject">{{ t('sales.payment_requests_list.text_136de7a8c46f') }}</el-radio>
           </el-radio-group>
-        </el-form-item>
+        </CompatFormItem>
         <!-- Rule 3: 拒绝原因 dropdown -->
-        <el-form-item
+        <CompatFormItem
           v-if="approveForm.action === 'reject'"
-          label="拒绝原因"
+          :label="t('sales.payment_requests_list.label_570043ae3396')"
           prop="rejectReason"
         >
-          <el-select v-model="approveForm.rejectReason" placeholder="请选择拒绝原因" style="width: 100%">
-            <el-option label="金额不符" value="金额不符" />
-            <el-option label="客户信息有误" value="客户信息有误" />
-            <el-option label="缺少凭证" value="缺少凭证" />
-            <el-option label="超出预算" value="超出预算" />
-            <el-option label="不符合付款条件" value="不符合付款条件" />
-            <el-option label="其他原因" value="_other" />
-          </el-select>
-        </el-form-item>
-        <el-form-item
+          <CompatSelect v-model="approveForm.rejectReason" :placeholder="t('sales.payment_requests_list.placeholder_4cb2089d2209')" style="width: 100%">
+            <CompatOption :label="t('sales.payment_requests_list.label_a213ba14e7dd')" value="金额不符" />
+            <CompatOption :label="t('sales.payment_requests_list.label_b42f41b2c46a')" value="客户信息有误" />
+            <CompatOption :label="t('sales.payment_requests_list.label_c9cf52bd1516')" value="缺少凭证" />
+            <CompatOption :label="t('sales.payment_requests_list.label_59d2bc7827c1')" value="超出预算" />
+            <CompatOption :label="t('sales.payment_requests_list.label_8e56c595ca14')" value="不符合付款条件" />
+            <CompatOption :label="t('sales.payment_requests_list.label_e1144b690ef5')" value="_other" />
+          </CompatSelect>
+        </CompatFormItem>
+        <CompatFormItem
           v-if="approveForm.action === 'reject' && approveForm.rejectReason === '_other'"
-          label="补充说明"
+          :label="t('sales.payment_requests_list.label_6f3ebd2d3e87')"
           prop="rejectNote"
         >
-          <el-input v-model="approveForm.rejectNote" type="textarea" :rows="2" placeholder="请说明具体原因" />
-        </el-form-item>
-        <el-form-item label="审批意见" prop="reviewNote">
-          <el-input v-model="approveForm.reviewNote" type="textarea" :rows="2" placeholder="审批意见（可选）" />
-        </el-form-item>
-      </el-form>
+          <el-input v-model="approveForm.rejectNote" type="textarea" :rows="2" :placeholder="t('sales.payment_requests_list.placeholder_05a4801b1dbd')" />
+        </CompatFormItem>
+        <CompatFormItem :label="t('sales.payment_requests_list.label_97d012369eab')" prop="reviewNote">
+          <el-input v-model="approveForm.reviewNote" type="textarea" :rows="2" :placeholder="t('sales.payment_requests_list.placeholder_641f9e32d738')" />
+        </CompatFormItem>
+      </CompatForm>
 
       <template #footer>
-        <el-button @click="approveDialogVisible = false">取消</el-button>
+        <UButton color="neutral" variant="outline" @click="approveDialogVisible = false">{{ t('sales.payment_requests_list.action_2cd0f3be8738') }}</UButton>
         <el-button
           :type="approveForm.action === 'reject' ? 'danger' : 'success'"
           :loading="submitting"
           :disabled="!approveForm.action"
           @click="doApprove"
         >
-          {{ approveForm.action === 'reject' ? '确认拒绝' : '确认批准' }}
+          {{ approveForm.action === 'reject' ? t('sales.payment_requests_list.text_de45b8ac34f3') : t('sales.payment_requests_list.text_38034be43042') }}
         </el-button>
       </template>
-    </el-dialog>
+    </CompatDialog>
 
     <!-- ===== 确认付款 Dialog ===== -->
     <!-- Rule 1: 金额上限显示; Rule 2: 含客户+金额+单号 -->
-    <el-dialog
+    <CompatDialog
       v-model="markPaidDialogVisible"
       :title="`确认付款 — ${currentRow?.customerName || currentRow?.customerId || ''} (${currentRow?.requestNumber || ''})`"
       width="480px"
@@ -355,67 +353,73 @@
     >
       <div v-if="currentRow" class="dialog-context">
         <el-alert type="warning" :closable="false" style="margin-bottom: 16px">
-          <strong>付款金额：{{ currentRow.amount !== null && currentRow.amount !== undefined ? `¥${formatAmount(currentRow.amount)}` : '—' }}</strong>
-          &nbsp; 客户：{{ currentRow.customerName || currentRow.customerId }}
+          <strong>{{ t('sales.payment_requests_list.text_6b89860dca8c') }}{{ currentRow.amount !== null && currentRow.amount !== undefined ? `¥${formatAmount(currentRow.amount)}` : '—' }}</strong>
+          {{ t('sales.payment_requests_list.text_5a630b25fe4f') }}{{ currentRow.customerName || currentRow.customerId }}
         </el-alert>
         <el-alert type="info" :closable="false" style="margin-bottom: 16px">
-          确认后将自动记录到应收账款并更新客户余额，此操作不可撤销。
+          {{ t('sales.payment_requests_list.text_2ade8d5926dd') }}
         </el-alert>
       </div>
 
-      <el-form ref="markPaidFormRef" :model="markPaidForm" :rules="markPaidRules" label-width="90px">
-        <el-form-item label="付款凭证" prop="evidence">
-          <el-input v-model="markPaidForm.evidence" placeholder="请填写付款凭证号或说明" />
-        </el-form-item>
-      </el-form>
+      <CompatForm ref="markPaidFormRef" :model="markPaidForm" :rules="markPaidRules" label-width="90px">
+        <CompatFormItem :label="t('sales.payment_requests_list.label_d88919a0b082')" prop="evidence">
+          <UInput v-model="markPaidForm.evidence" :placeholder="t('sales.payment_requests_list.placeholder_017440a55d12')" />
+        </CompatFormItem>
+      </CompatForm>
 
       <template #footer>
-        <el-button @click="markPaidDialogVisible = false">取消</el-button>
-        <el-button type="warning" :loading="submitting" @click="doMarkPaid">
-          确认已付款
-        </el-button>
+        <UButton color="neutral" variant="outline" @click="markPaidDialogVisible = false">{{ t('sales.payment_requests_list.action_2cd0f3be8738') }}</UButton>
+        <UButton color="warning" :loading="submitting" @click="doMarkPaid">
+          {{ t('sales.payment_requests_list.action_9a01377d202a') }}
+        </UButton>
       </template>
-    </el-dialog>
+    </CompatDialog>
 
     <!-- ===== 详情 Dialog ===== -->
-    <el-dialog
+    <CompatDialog
       v-model="detailDialogVisible"
       :title="`销售付款申请详情 — ${currentRow?.requestNumber || ''}`"
       width="620px"
     >
       <div v-if="currentRow">
-        <el-descriptions :column="2" border>
-          <el-descriptions-item label="申请单号">{{ currentRow.requestNumber }}</el-descriptions-item>
-          <el-descriptions-item label="付款方向">
-            <el-tag type="warning" size="small">销售付款</el-tag>
-          </el-descriptions-item>
-          <el-descriptions-item label="客户">{{ currentRow.customerName || currentRow.customerId }}</el-descriptions-item>
-          <el-descriptions-item label="销售订单">{{ currentRow.salesOrderId || '无单付款' }}</el-descriptions-item>
-          <el-descriptions-item label="申请金额">
+        <CompatDescriptions :column="2" border>
+          <CompatDescriptionsItem :label="t('sales.payment_requests_list.label_ef8e791a45ca')">{{ currentRow.requestNumber }}</CompatDescriptionsItem>
+          <CompatDescriptionsItem :label="t('sales.payment_requests_list.label_3ebcf74d8bd4')">
+            <UBadge variant="soft" color="warning" size="sm">{{ t('sales.payment_requests_list.text_c949b27ea438') }}</UBadge>
+          </CompatDescriptionsItem>
+          <CompatDescriptionsItem :label="t('sales.payment_requests_list.label_ad4af312dbc2')">{{ currentRow.customerName || currentRow.customerId }}</CompatDescriptionsItem>
+          <CompatDescriptionsItem :label="t('sales.payment_requests_list.label_68bd4b5a1bf2')">{{ currentRow.salesOrderId || t('sales.payment_requests_list.text_2ae6e10bd9f9') }}</CompatDescriptionsItem>
+          <CompatDescriptionsItem :label="t('sales.payment_requests_list.label_10d91e07c599')">
             {{ currentRow.amount !== null && currentRow.amount !== undefined ? `¥${formatAmount(currentRow.amount)}` : '—' }}
-          </el-descriptions-item>
-          <el-descriptions-item label="付款方式">{{ currentRow.paymentMethod || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="状态">
+          </CompatDescriptionsItem>
+          <CompatDescriptionsItem :label="t('sales.payment_requests_list.label_4e3c13589f98')">{{ currentRow.paymentMethod || '—' }}</CompatDescriptionsItem>
+          <CompatDescriptionsItem :label="t('sales.payment_requests_list.label_6320b4a8722a')">
             <el-tag :type="statusTag(currentRow.status)" size="small">{{ statusLabel(currentRow.status) }}</el-tag>
-          </el-descriptions-item>
-          <el-descriptions-item label="创建时间">{{ formatDate(currentRow.createdAt) }}</el-descriptions-item>
-          <el-descriptions-item label="申请备注" :span="2">{{ currentRow.remark || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="审批意见" :span="2">{{ currentRow.financeReviewNote || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="拒绝原因" :span="2">{{ currentRow.rejectReason || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="付款凭证" :span="2">{{ currentRow.arapTransactionId || '—' }}</el-descriptions-item>
-        </el-descriptions>
+          </CompatDescriptionsItem>
+          <CompatDescriptionsItem :label="t('sales.payment_requests_list.label_07ec86e0f1d4')">{{ formatDate(currentRow.createdAt) }}</CompatDescriptionsItem>
+          <CompatDescriptionsItem :label="t('sales.payment_requests_list.label_fe1f2b577fda')" :span="2">{{ currentRow.remark || '—' }}</CompatDescriptionsItem>
+          <CompatDescriptionsItem :label="t('sales.payment_requests_list.label_97d012369eab')" :span="2">{{ currentRow.financeReviewNote || '—' }}</CompatDescriptionsItem>
+          <CompatDescriptionsItem :label="t('sales.payment_requests_list.label_570043ae3396')" :span="2">{{ currentRow.rejectReason || '—' }}</CompatDescriptionsItem>
+          <CompatDescriptionsItem :label="t('sales.payment_requests_list.label_d88919a0b082')" :span="2">{{ currentRow.arapTransactionId || '—' }}</CompatDescriptionsItem>
+        </CompatDescriptions>
       </div>
       <template #footer>
-        <el-button @click="detailDialogVisible = false">关闭</el-button>
+        <UButton color="neutral" variant="outline" @click="detailDialogVisible = false">{{ t('sales.payment_requests_list.action_3fd47edce45b') }}</UButton>
       </template>
-    </el-dialog>
+    </CompatDialog>
   </div>
 </template>
 
 <script setup lang="ts">
+import { CompatDescriptions, CompatDescriptionsItem, CompatDialog, CompatForm, CompatFormItem, CompatOption, CompatPagination, CompatSelect, CompatTable, CompatTableColumn } from '@/components/compat';
+import { useCompatMessages } from '@/components/compat/messages';
+const { ElMessage } = useCompatMessages();
+import { useT } from '@/i18n-pilot/useT';
+const { t } = useT();
+
 import ListEmptyExplain from '@/components/common/ListEmptyExplain.vue';
 import { ref, computed, onMounted } from 'vue'
-import { ElMessage } from 'element-plus'
+
 import type { FormInstance, FormRules } from 'element-plus'
 import { get, post, put } from '@/api/request'
 import { useAuthStore } from '@/store/modules/auth'
@@ -488,9 +492,9 @@ const createForm = ref({
   remark: ''
 })
 const createRules: FormRules = {
-  customerId: [{ required: true, message: '请选择客户', trigger: 'change' }],
-  amount: [{ required: true, message: '请输入申请金额', trigger: 'blur' }],
-  paymentMethod: [{ required: true, message: '请选择付款方式', trigger: 'change' }]
+  customerId: [{ required: true, message: t('sales.payment_requests_list.message_4dbaecc55e14'), trigger: 'change' }],
+  amount: [{ required: true, message: t('sales.payment_requests_list.message_71369f107fc6'), trigger: 'blur' }],
+  paymentMethod: [{ required: true, message: t('sales.payment_requests_list.message_c8a85d23db36'), trigger: 'change' }]
 }
 
 // fool-proof-design Rule 2 (身份而非裸 UUID): 客户 / 销售订单 由裸 UUID 输入改为按名称/单号
@@ -546,13 +550,13 @@ const filteredSalesOrderOptions = computed(() => {
 const approveFormRef = ref<FormInstance>()
 const approveForm = ref({ action: '', rejectReason: '', rejectNote: '', reviewNote: '' })
 const approveRules: FormRules = {
-  action: [{ required: true, message: '请选择审批结果', trigger: 'change' }]
+  action: [{ required: true, message: t('sales.payment_requests_list.message_16bcc3d17a2d'), trigger: 'change' }]
 }
 
 const markPaidFormRef = ref<FormInstance>()
 const markPaidForm = ref({ evidence: '' })
 const markPaidRules: FormRules = {
-  evidence: [{ required: true, message: '请填写付款凭证', trigger: 'blur' }]
+  evidence: [{ required: true, message: t('sales.payment_requests_list.message_5dbeef6d973e'), trigger: 'blur' }]
 }
 
 // ─── 标签映射 ────────────────────────────────────────────────
@@ -571,12 +575,12 @@ const markPaidRules: FormRules = {
  * enumDisplay.ts 分层规则里的「同码不同义必须分域」, 不是漂移。
  */
 const PAYMENT_REQUEST_STATUS_META = [
-  { value: 'PENDING', label: '待提交', tag: 'info' },
-  { value: 'FINANCE_REVIEW', label: '财务审核中', tag: 'warning' },
-  { value: 'APPROVED', label: '已批准', tag: '' },
-  { value: 'PAID', label: '已付款', tag: 'success' },
-  { value: 'REJECTED', label: '已拒绝', tag: 'danger' },
-  { value: 'CANCELLED', label: '已撤回', tag: 'info' },
+  { value: 'PENDING', label: t('sales.payment_requests_list.label_bb6b135bd5c1'), tag: 'info' },
+  { value: 'FINANCE_REVIEW', label: t('sales.payment_requests_list.label_43f7b35f5b99'), tag: 'warning' },
+  { value: 'APPROVED', label: t('sales.payment_requests_list.label_b42cb548c1d4'), tag: '' },
+  { value: 'PAID', label: t('sales.payment_requests_list.label_73dd345ef1c8'), tag: 'success' },
+  { value: 'REJECTED', label: t('sales.payment_requests_list.label_f098218a3032'), tag: 'danger' },
+  { value: 'CANCELLED', label: t('sales.payment_requests_list.label_0462a8aa7036'), tag: 'info' },
 ] as const satisfies ReadonlyArray<{
   value: string
   label: string
@@ -683,7 +687,7 @@ async function doCreate() {
 
       const res = await post(`/${factoryId.value}/payment-requests/sales`, body)
       if (res.success) {
-        ElMessage({ message: '销售付款申请已创建', type: 'success', duration: 3000 })
+        ElMessage({ message: t('sales.payment_requests_list.message_3f23513934d2'), type: 'success', duration: 3000 })
         createDialogVisible.value = false
         fetchData()
       } else {
@@ -711,7 +715,7 @@ async function doSubmit() {
     // 后端端点: PUT /api/mobile/{factoryId}/payment-requests/{id}/submit
     const res = await put(`/${factoryId.value}/payment-requests/${currentRow.value.id}/submit`, {})
     if (res.success) {
-      ElMessage({ message: '已提交财务审核', type: 'success', duration: 3000 })
+      ElMessage({ message: t('sales.payment_requests_list.message_feebf68541dd'), type: 'success', duration: 3000 })
       submitDialogVisible.value = false
       fetchData()
     } else {
@@ -796,7 +800,7 @@ async function doMarkPaid() {
         { evidence: markPaidForm.value.evidence }
       )
       if (res.success) {
-        ElMessage({ message: '付款已确认，账款已更新', type: 'success', duration: 3000 })
+        ElMessage({ message: t('sales.payment_requests_list.message_93db8147f29e'), type: 'success', duration: 3000 })
         markPaidDialogVisible.value = false
         fetchData()
       } else {

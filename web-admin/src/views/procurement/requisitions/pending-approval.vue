@@ -1,4 +1,10 @@
 <script setup lang="ts">
+import { CompatAlert, CompatDialog, CompatForm, CompatFormItem, CompatOption, CompatPagination, CompatSelect, CompatTable, CompatTableColumn } from '@/components/compat';
+import { useCompatMessages } from '@/components/compat/messages';
+const { ElMessage, ElMessageBox } = useCompatMessages();
+import { useT } from '@/i18n-pilot/useT';
+const { t } = useT();
+
 import ListEmptyExplain from '@/components/common/ListEmptyExplain.vue';
 /**
  * 待审批请购单 — Sprint 6 W2-A.
@@ -16,7 +22,7 @@ import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { useUserDirectory } from '@/composables/useUserDirectory';
-import { ElMessage, ElMessageBox } from 'element-plus';
+
 import { Refresh } from '@element-plus/icons-vue';
 import {
   listRequisitions,
@@ -45,12 +51,12 @@ const rejectReasonCode = ref<string>('');
 const rejectReasonOther = ref<string>('');
 
 const REJECT_REASONS: { code: string; label: string }[] = [
-  { code: 'BUDGET_EXCEEDED', label: '预算超支' },
-  { code: 'STOCK_AVAILABLE', label: '现有库存可满足, 暂不采购' },
-  { code: 'SUPPLIER_ISSUE', label: '建议供应商不合格 / 替换' },
-  { code: 'NEED_MORE_INFO', label: '信息不全, 请补充后再提' },
-  { code: 'TIMING_ISSUE', label: '时间不合适 (排程冲突 / 节假日)' },
-  { code: 'OTHER', label: '其他原因 (请说明)' },
+  { code: 'BUDGET_EXCEEDED', label: t('procurement.requisitions_pending_approval.label_c0e2fd261ba0') },
+  { code: 'STOCK_AVAILABLE', label: t('procurement.requisitions_pending_approval.label_43dc5c656a08') },
+  { code: 'SUPPLIER_ISSUE', label: t('procurement.requisitions_pending_approval.label_3c157f52fc27') },
+  { code: 'NEED_MORE_INFO', label: t('procurement.requisitions_pending_approval.label_99b62bf1306d') },
+  { code: 'TIMING_ISSUE', label: t('procurement.requisitions_pending_approval.label_7bb6d42b4c4d') },
+  { code: 'OTHER', label: t('procurement.requisitions_pending_approval.label_855302f641e8') },
 ];
 
 async function loadData() {
@@ -109,8 +115,8 @@ async function handleApprove(row: PurchaseRequisition) {
       `确认审批通过请购单 ${row.requisitionNumber}?\n\n` +
       `明细 ${lines} 行 · 请购人 #${row.requesterId}` +
       `${row.expectedDate ? ' · 期望交货 ' + row.expectedDate : ''}`,
-      '审批通过',
-      { type: 'success', confirmButtonText: '通过' },
+      t('procurement.requisitions_pending_approval.message_642cfa74e9d8'),
+      { type: 'success', confirmButtonText: t('procurement.requisitions_pending_approval.confirmbuttontext_1e9f2561b7cf') },
     );
   } catch {
     return;
@@ -175,32 +181,32 @@ async function confirmReject() {
 
 <template>
   <div class="page-wrapper">
-    <el-card class="page-card" shadow="never">
+    <UCard class="page-card" >
       <template #header>
         <div class="card-header">
           <div class="header-left">
-            <span class="page-title">待审批请购单</span>
+            <span class="page-title">{{ t('procurement.requisitions_pending_approval.text_309d71433218') }}</span>
             <span class="data-count">
-              共 {{ pagination.total }} 条待审
-              <span v-if="pagination.total > 0" class="urgent">· 待处理</span>
+              {{ t('procurement.requisitions_pending_approval.text_76e547a8fa54') }} {{ pagination.total }} {{ t('procurement.requisitions_pending_approval.text_63bccfbae41c') }}
+              <span v-if="pagination.total > 0" class="urgent">{{ t('procurement.requisitions_pending_approval.text_46427598a504') }}</span>
             </span>
           </div>
           <div class="header-right">
-            <el-button :icon="Refresh" @click="handleRefresh">刷新</el-button>
+            <el-button :icon="Refresh" @click="handleRefresh">{{ t('procurement.requisitions_pending_approval.action_aee887434131') }}</el-button>
           </div>
         </div>
       </template>
 
-      <el-alert
+      <CompatAlert
         v-if="!canWrite"
-        title="您没有审批权限"
-        description="只有 procurement:read_write 角色 (采购经理) 可以审批 / 驳回. 请联系管理员开通权限."
-        type="warning"
-        :closable="false"
+        :title="t('procurement.requisitions_pending_approval.title_d64e87e27ed6')"
+        :description="t('procurement.requisitions_pending_approval.description_ac4e583259bd')"
+        color="warning"
+        :close="false"
         style="margin-bottom: 16px"
       />
 
-      <el-table
+      <CompatTable
         v-loading="loading"
         :data="tableData"
         stripe
@@ -208,17 +214,17 @@ async function confirmReject() {
         style="width: 100%"
       >
         <template #empty><ListEmptyExplain empty-title="当前没有待审批的请购单" empty-hint="请购单提交后会出现在这里等待审批；没有则说明都已处理。" /></template>
-        <el-table-column prop="requisitionNumber" label="单号" width="200" />
-        <el-table-column prop="requesterId" label="请购人" width="100" align="center">
+        <CompatTableColumn prop="requisitionNumber" :label="t('procurement.requisitions_pending_approval.label_5c2eb0883fd7')" width="200" />
+        <CompatTableColumn prop="requesterId" :label="t('procurement.requisitions_pending_approval.label_a81fcb4a6474')" width="100" align="center">
           <template #default="{ row }">{{ personLabel(row.requesterId) }}</template>
-        </el-table-column>
-        <el-table-column label="明细" min-width="240">
+        </CompatTableColumn>
+        <CompatTableColumn :label="t('procurement.requisitions_pending_approval.label_206ea896472e')" min-width="240">
           <template #default="{ row }">
             <span v-if="!row.requestedItems || row.requestedItems.length === 0">
               -
             </span>
             <span v-else>
-              {{ row.requestedItems.length }} 项 ·
+              {{ row.requestedItems.length }} {{ t('procurement.requisitions_pending_approval.text_f2a069e1d7fa') }}
               <span class="muted">
                 {{ row.requestedItems
                   .slice(0, 2)
@@ -227,9 +233,9 @@ async function confirmReject() {
               </span>
             </span>
           </template>
-        </el-table-column>
-        <el-table-column prop="expectedDate" label="期望交货" width="120" />
-        <el-table-column label="状态" width="100" align="center">
+        </CompatTableColumn>
+        <CompatTableColumn prop="expectedDate" :label="t('procurement.requisitions_pending_approval.label_d57fee96cba3')" width="120" />
+        <CompatTableColumn :label="t('procurement.requisitions_pending_approval.label_6320b4a8722a')" width="100" align="center">
           <template #default="{ row }">
             <el-tag
               :type="REQUISITION_STATUS_MAP[row.status as PurchaseRequisitionStatus]?.type || 'info'"
@@ -238,41 +244,41 @@ async function confirmReject() {
               {{ REQUISITION_STATUS_MAP[row.status as PurchaseRequisitionStatus]?.text || row.status }}
             </el-tag>
           </template>
-        </el-table-column>
-        <el-table-column prop="createdAt" label="提交时间" width="170">
+        </CompatTableColumn>
+        <CompatTableColumn prop="createdAt" :label="t('procurement.requisitions_pending_approval.label_6bc352ca0ce0')" width="170">
           <template #default="{ row }">
             {{ row.createdAt ? String(row.createdAt).replace('T', ' ').slice(0, 16) : '-' }}
           </template>
-        </el-table-column>
-        <el-table-column label="操作" width="260" fixed="right" align="center">
+        </CompatTableColumn>
+        <CompatTableColumn :label="t('procurement.requisitions_pending_approval.label_ed31fbb483ee')" width="260" fixed="right" align="center">
           <template #default="{ row }">
-            <el-button type="primary" link size="small" @click="goDetail(row.id)">
-              详情
-            </el-button>
-            <el-button
+            <UButton color="primary" variant="link" size="sm" @click="goDetail(row.id)">
+              {{ t('procurement.requisitions_pending_approval.action_979a332955c8') }}
+            </UButton>
+            <UButton
               v-if="canWrite"
-              type="success"
-              link
-              size="small"
+              color="success"
+              variant="link"
+              size="sm"
               @click="handleApprove(row)"
             >
-              通过
-            </el-button>
-            <el-button
+              {{ t('procurement.requisitions_pending_approval.action_1e9f2561b7cf') }}
+            </UButton>
+            <UButton
               v-if="canWrite"
-              type="danger"
-              link
-              size="small"
+              color="error"
+              variant="link"
+              size="sm"
               @click="openRejectDialog(row)"
             >
-              驳回
-            </el-button>
+              {{ t('procurement.requisitions_pending_approval.action_089e6ed3f55f') }}
+            </UButton>
           </template>
-        </el-table-column>
-      </el-table>
+        </CompatTableColumn>
+      </CompatTable>
 
       <div class="pagination-wrapper">
-        <el-pagination
+        <CompatPagination
           v-model:current-page="pagination.page"
           v-model:page-size="pagination.size"
           :page-sizes="[10, 20, 50]"
@@ -282,40 +288,39 @@ async function confirmReject() {
           @size-change="handleSizeChange"
         />
       </div>
-    </el-card>
+    </UCard>
 
     <!-- 驳回 dialog — Fool-proof Rule 3: dropdown + 'other' textarea -->
-    <el-dialog
+    <CompatDialog
       v-model="rejectDialogVisible"
-      title="驳回请购单"
+      :title="t('procurement.requisitions_pending_approval.title_b90c4c545755')"
       width="520px"
       destroy-on-close
       :close-on-click-modal="false"
     >
       <template v-if="rejectingRow">
         <div class="reject-context">
-          单号: <strong>{{ rejectingRow.requisitionNumber }}</strong> ·
-          请购人: <strong>{{ personLabel(rejectingRow.requesterId) }}</strong>
+          {{ t('procurement.requisitions_pending_approval.text_0a2c04dac49d') }} <strong>{{ rejectingRow.requisitionNumber }}</strong> {{ t('procurement.requisitions_pending_approval.text_8ba62d4a6481') }} <strong>{{ personLabel(rejectingRow.requesterId) }}</strong>
         </div>
       </template>
-      <el-form label-width="100px" style="margin-top: 12px">
-        <el-form-item label="驳回原因" required>
-          <el-select
+      <CompatForm label-width="100px" style="margin-top: 12px">
+        <CompatFormItem :label="t('procurement.requisitions_pending_approval.label_1245e49f52f3')" required>
+          <CompatSelect
             v-model="rejectReasonCode"
-            placeholder="请选择"
+            :placeholder="t('procurement.requisitions_pending_approval.placeholder_da590a8fe3ce')"
             style="width: 100%"
           >
-            <el-option
+            <CompatOption
               v-for="r in REJECT_REASONS"
               :key="r.code"
               :label="r.label"
               :value="r.code"
             />
-          </el-select>
-        </el-form-item>
-        <el-form-item
+          </CompatSelect>
+        </CompatFormItem>
+        <CompatFormItem
           v-if="rejectReasonCode === 'OTHER'"
-          label="详细说明"
+          :label="t('procurement.requisitions_pending_approval.label_b110d4b5ef2f')"
           required
         >
           <el-input
@@ -324,21 +329,21 @@ async function confirmReject() {
             :rows="3"
             maxlength="500"
             show-word-limit
-            placeholder="请填写至少 5 字的具体原因"
+            :placeholder="t('procurement.requisitions_pending_approval.placeholder_c5c12c4ec850')"
           />
-        </el-form-item>
-      </el-form>
+        </CompatFormItem>
+      </CompatForm>
       <template #footer>
-        <el-button @click="rejectDialogVisible = false">取消</el-button>
-        <el-button
-          type="danger"
+        <UButton color="neutral" variant="outline" @click="rejectDialogVisible = false">{{ t('procurement.requisitions_pending_approval.action_2cd0f3be8738') }}</UButton>
+        <UButton
+          color="error"
           :disabled="!canConfirmReject"
           @click="confirmReject"
         >
-          确认驳回
-        </el-button>
+          {{ t('procurement.requisitions_pending_approval.action_c68e99e0908b') }}
+        </UButton>
       </template>
-    </el-dialog>
+    </CompatDialog>
   </div>
 </template>
 

@@ -13,6 +13,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import { nextTick } from 'vue';
 import ElementPlus from 'element-plus';
+import { nuxtPilotStubs } from '@/components/compat/testStubs';
 
 const apiGet = vi.fn();
 
@@ -47,6 +48,7 @@ function mountList() {
     global: {
       plugins: [ElementPlus],
       stubs: {
+        ...nuxtPilotStubs,
         teleport: true,
         transition: false,
         ConceptDisambiguationAlert: true,

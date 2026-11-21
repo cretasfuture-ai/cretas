@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { sourceWithChinese } from '@/i18n-pilot/sourceForTests';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
@@ -47,8 +48,8 @@ describe('批次编辑弹窗接上了解除入口', () => {
   });
 
   it('按钮只在「编辑已挂个体的批次」且有写权限时出现', () => {
-    expect(SOURCE).toMatch(/<el-form-item v-if="editingId && editingSourceIndividualId" label="来源个体">/);
-    const button = SOURCE.match(/<el-button[^>]*data-testid="batch-source-individual-unlink"[^>]*>/);
+    expect(sourceWithChinese(SOURCE)).toMatch(/<(?:el-form-item|CompatFormItem) v-if="editingId && editingSourceIndividualId" label="来源个体">/);
+    const button = SOURCE.match(/<(?:el-button|UButton)[^>]*data-testid="batch-source-individual-unlink"[^>]*>/);
     expect(button, '没抓到解除按钮').not.toBeNull();
     expect(button![0]).toContain('v-if="canWrite"');
     expect(button![0]).toContain('@click="handleUnlinkSourceIndividual"');

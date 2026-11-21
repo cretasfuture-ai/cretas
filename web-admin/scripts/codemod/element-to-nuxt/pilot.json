@@ -1,0 +1,22 @@
+[
+  { "route": "/production/batches", "file": "src/views/production/batches/list.vue", "reason": "生产批次列表、分页和创建表单", "interaction": "创建批次", "validateEmpty": true },
+  { "route": "/production/plans", "file": "src/views/production/plans/list.vue", "reason": "生产计划大表格、多对话框、混用组件", "interaction": "新建计划" },
+  { "route": "/production/shortage-cases", "file": "src/views/production/shortage-cases/index.vue", "reason": "跨生产、采购、销售、质量共享的缺料列表和详情" },
+  { "route": "/production/bom/price-adjustments", "file": "src/views/production/bom/PriceAdjustmentList.vue", "reason": "BOM 调价详情和审批确认" },
+  { "route": "/production/weigh", "file": "src/views/production/weigh/WeighPage.vue", "reason": "分组导航的称重报工、表单校验和日期筛选" },
+  { "route": "/procurement/orders", "file": "src/views/procurement/orders/list.vue", "reason": "采购订单日期范围、分页、创建表单，混用组件", "interaction": "新建采购订单" },
+  { "route": "/procurement/ai-purchase", "file": "src/views/procurement/ai-purchase/index.vue", "reason": "采购草稿表单与单日期" },
+  { "route": "/procurement/requisitions/pending-approval", "file": "src/views/procurement/requisitions/pending-approval.vue", "reason": "请购待审批列表和审核表单" },
+  { "route": "/procurement/exceptions", "file": "src/views/procurement/exceptions/list.vue", "reason": "采购执行的入库异常下钻、详情和确认" },
+  { "route": "/warehouse/material-types", "file": "src/views/warehouse/material-types/list.vue", "reason": "物料字典表格和带校验的编辑对话框，混用组件", "interaction": "新建原料类型" },
+  { "route": "/warehouse/materials", "file": "src/views/warehouse/materials/list.vue", "reason": "入库任务与批次大表格、详情和日期范围，混用组件" },
+  { "route": "/warehouse/storage-locations", "file": "src/views/warehouse/storage-locations/index.vue", "reason": "仓储空间和现场盘点表单，混用组件" },
+  { "route": "/warehouse/material-price-trend", "file": "src/views/warehouse/MaterialPriceTrendView.vue", "reason": "物料均价表格、展开列和价格权限" },
+  { "route": "/sales/customers", "file": "src/views/sales/customers/list.vue", "reason": "客户列表、固定列和创建表单", "interaction": "新增客户", "validateEmpty": true },
+  { "route": "/sales/orders", "file": "src/views/sales/orders/list.vue", "reason": "销售订单大表格、创建弹窗和日期区间" },
+  { "route": "/sales/returns", "file": "src/views/sales/returns/list.vue", "reason": "销售退货列表和分页，混用组件" },
+  { "route": "/sales/payment-requests", "file": "src/views/sales/payment-requests/list.vue", "reason": "销售付款申请、详情与操作确认" },
+  { "route": "/quality/cold-chain", "file": "src/views/quality/cold-chain/index.vue", "reason": "冷链超温批次、确认弹窗、详情与日期时间" },
+  { "route": "/quality/label-qc", "file": "src/views/quality/label-qc/index.vue", "reason": "包装标签拍检大表格、日期区间和分页" },
+  { "route": "/quality/param-deviation", "file": "src/views/quality/param-deviation/index.vue", "reason": "工艺参数偏离的日期选择和局部迁移" }
+]

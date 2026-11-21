@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { sourceWithChinese } from '@/i18n-pilot/sourceForTests';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -75,7 +76,7 @@ describe('isNotSettledPayload —— 后端如实回答「没有仓库确认单�
  * 和「合法空态又被标成加载失败」, 挡不住渲染层被别的东西盖掉。
  */
 describe('接线: 列表批量拉状态不许再弹全局红条', () => {
-  const view = readFileSync(LIST_VIEW, 'utf8');
+  const view = sourceWithChinese(readFileSync(LIST_VIEW, 'utf8'));
   const api = readFileSync(API, 'utf8');
 
   it('批量拉取必须传 _silent —— 它是尽力而为的增强, 失败已经逐行接住了', () => {

@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { sourceWithChinese } from '@/i18n-pilot/sourceForTests';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -16,7 +17,7 @@ const ENTRY = resolve(HERE, '../assignProcessOperatorEntry.ts');
  * 纯逻辑(候选解析/目标路由)已抽到 assignProcessOperatorEntry.ts 并有独立单测。
  */
 describe('生产计划列表「分配工序操作员」入口 —— 接线契约', () => {
-  const view = readFileSync(LIST, 'utf8');
+  const view = sourceWithChinese(readFileSync(LIST, 'utf8'));
   const entry = readFileSync(ENTRY, 'utf8');
 
   it('菜单项接到 productionMoreActions 的唯一判据, 不另起一套 v-if', () => {

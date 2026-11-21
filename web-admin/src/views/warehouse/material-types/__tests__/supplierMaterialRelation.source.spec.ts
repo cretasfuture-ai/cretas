@@ -1,11 +1,12 @@
 import { readFileSync } from 'node:fs';
+import { sourceWithChinese } from '@/i18n-pilot/sourceForTests';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-const materialSource = readFileSync(
+const materialSource = sourceWithChinese(readFileSync(
   resolve(process.cwd(), 'src/views/warehouse/material-types/list.vue'),
   'utf8',
-);
+));
 const supplierSource = readFileSync(
   resolve(process.cwd(), 'src/views/procurement/suppliers/SupplierDetailDrawer.vue'),
   'utf8',
@@ -76,7 +77,7 @@ describe('supplier material bidirectional relation contract', () => {
     expect(supplierSource).not.toContain('不动这一栏就不会被拦');
 
     expect(supplierSource).not.toContain('usage-scope="PURCHASE"');
-    expect(supplierSource).not.toContain('<el-input v-model="relationForm.purchaseUnit"');
+    expect(supplierSource).not.toMatch(/<(?:el-input|UInput) v-model="relationForm.purchaseUnit"/);
   });
 
   it('resolves the material dimension before defaulting or exposing purchase units', () => {
@@ -87,7 +88,7 @@ describe('supplier material bidirectional relation contract', () => {
       expect(source).toContain('purchaseUnitSelectionReason(');
       expect(source).toContain(':options=');
     }
-    expect(materialSource).toContain('<el-alert');
+    expect(materialSource).toMatch(/<(?:el-alert|CompatAlert)\b/);
     // 抽屉侧: 单位不兼容的提示仍然渲染（Nuxt UI 的 UAlert，绑 relationUnitReason）
     expect(supplierSource).toContain('<UAlert');
     expect(supplierSource).toContain('v-if="relationUnitReason"');
