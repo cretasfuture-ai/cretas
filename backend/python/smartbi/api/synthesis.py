@@ -37,6 +37,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from smartbi.agent.synthesis_engine import ComprehensiveSynthesisEngine
+from common.smartbi_analysis_cache import request_scope
 from smartbi.config import get_pg_pool
 from smartbi.shared.retired_tenants import is_retired_tenant
 from smartbi.gold import data_range
@@ -277,6 +278,8 @@ async def comprehensive(request: Request, body: SynthesisRequest):
         conversation_history=conversation_history,
         page_context=body.page_context,
         dimension_hints=body.dimension_hints,
+        cache_scope=request_scope(request),
+        allow_legacy_cache=False,
     )
     await _write_conversation_turn(
         pool,
@@ -340,6 +343,8 @@ async def comprehensive_stream(request: Request, body: SynthesisRequest):
                 conversation_history=conversation_history,
                 page_context=body.page_context,
                 dimension_hints=body.dimension_hints,
+                cache_scope=request_scope(request),
+                allow_legacy_cache=False,
             )
             # Stream the (already redaction-restored) answer in fixed slices.
             answer = resp.answer or ""
@@ -348,7 +353,8 @@ async def comprehensive_stream(request: Request, body: SynthesisRequest):
                 yield _sse("chunk", answer[i:i + chunk_size])
                 # Pace the slices so the (already-computed, reconciled) answer
                 # visibly types out on the client instead of arriving in one blob.
-                await asyncio.sleep(0.04)
+                if not resp.cache_hit:
+                    await asyncio.sleep(0.04)
             if resp.charts:
                 yield _sse("charts", resp.charts)
             if resp.alerts:
@@ -362,6 +368,8 @@ async def comprehensive_stream(request: Request, body: SynthesisRequest):
                 "plan": resp.plan,
                 "tokens": resp.tokens,
                 "fact_check": resp.fact_check,
+                "cacheHit": resp.cache_hit,
+                **({"cacheToken": resp.cache_token} if resp.cache_token else {}),
                 "processingTimeMs": int((time.time() - t0) * 1000),
             })
             await _write_conversation_turn(

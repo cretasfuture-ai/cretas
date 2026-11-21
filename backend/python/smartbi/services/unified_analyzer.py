@@ -52,8 +52,8 @@ from services.chart_builder import ChartBuilder
 from services.insight_generator import InsightGenerator
 from services.forecast_service import ForecastService
 from services.context_extractor import ContextExtractor, ContextInfo
-from services.utils.json_parser import robust_json_parse
-from services.utils.dataframe_utils import deduplicate_columns
+from common.utils.json_parser import robust_json_parse
+from common.utils.dataframe_utils import deduplicate_columns
 
 logger = logging.getLogger(__name__)
 
@@ -159,6 +159,7 @@ class Insight:
     importance: float                # Importance score (1-10)
     recommendation: Optional[str] = None  # Action recommendation
     related_data: Optional[Dict] = None   # Supporting data
+    model_generated: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -1513,7 +1514,8 @@ class UnifiedAnalyzer:
                         sentiment=i.get("sentiment", "neutral"),
                         importance=i.get("importance", 5),
                         recommendation=i.get("recommendation"),
-                        related_data=i.get("related_data")
+                        related_data=i.get("related_data"),
+                        model_generated=i.get("source") == "llm",
                     ))
 
         except Exception as e:
@@ -1707,7 +1709,8 @@ class UnifiedAnalyzer:
                         metric=i.get("metric"),
                         sentiment=i.get("sentiment", "neutral"),
                         importance=i.get("importance", 5),
-                        recommendation=i.get("recommendation")
+                        recommendation=i.get("recommendation"),
+                        model_generated=True,
                     ))
 
             return insights
@@ -1918,7 +1921,9 @@ class UnifiedAnalyzer:
         file_bytes: bytes,
         question: Optional[str] = None,
         options: Optional[AnalysisOptions] = None,
-        max_parallel: int = 5
+        max_parallel: int = 5,
+        *,
+        cache_scope=None,
     ):
         """
         Analyze all sheets, yielding SSE events as each sheet completes.
@@ -1942,22 +1947,39 @@ class UnifiedAnalyzer:
         semaphore = asyncio.Semaphore(max_parallel)
         success_count = 0
         error_count = 0
+        cache_hits = 0
+        single_sheet_token = None
+        from hashlib import sha256
+        from common.smartbi_analysis_cache import analysis_result, result_key
+
+        workbook_hash = sha256(file_bytes).hexdigest() if cache_scope is not None else None
 
         async def analyze_one(idx: int):
             async with semaphore:
-                return idx, await self.analyze(
-                    file_bytes, sheet_index=idx, question=question, options=options
-                )
+                key = result_key(cache_scope, "excel-workbook-sheet", (workbook_hash, idx, options.to_dict()),
+                                 prompt_version="excel-workbook-sheet-v1", model_version="workbook-routing-v1",
+                                 question=question or "")
+                async with analysis_result(key) as cached:
+                    if cached.entry.hit:
+                        return idx, {**cached.entry.value, **cached.response_fields}
+                    result = await self.analyze(file_bytes, sheet_index=idx, question=question, options=options)
+                    value = result.to_dict()
+                    if result.success and not result.error and any(item.model_generated for item in result.insights):
+                        await cached.store(value)
+                    return idx, {**value, **cached.response_fields}
 
         tasks = [asyncio.ensure_future(analyze_one(i)) for i in range(total_sheets)]
 
         for coro in asyncio.as_completed(tasks):
             try:
                 idx, result = await coro
-                if result.success:
+                if result["success"]:
                     success_count += 1
-                if result.error:
+                if result["error"]:
                     error_count += 1
+                cache_hits += int(result["cacheHit"])
+                if total_sheets == 1:
+                    single_sheet_token = result.get("cacheToken")
                 yield {
                     "event": "sheet",
                     "data": {
@@ -1981,7 +2003,9 @@ class UnifiedAnalyzer:
                 "total_sheets": total_sheets,
                 "success_count": success_count,
                 "error_count": error_count,
-                "processing_time_ms": processing_time_ms
+                "processing_time_ms": processing_time_ms,
+                "cacheHit": total_sheets > 0 and cache_hits == total_sheets,
+                **({"cacheToken": single_sheet_token} if single_sheet_token else {}),
             }
         }
 

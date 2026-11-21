@@ -376,6 +376,13 @@
                 :cache-hint="getCacheHint(sheet)"
                 :format-analysis="formatAnalysis"
               />
+              <el-button
+                v-if="sheet.flowResult?.aiCacheToken && !enrichingSheets.has(sheet.sheetIndex)"
+                size="small"
+                link
+                :loading="sheetFeedbackPending.has(sheet.sheetIndex)"
+                @click="sendSheetAnalysisFeedback(sheet)"
+              >无帮助</el-button>
 
               <!-- 敏感性分析 — extracted to analysis/SensitivityAnalysisTable.vue (Item 1 phase 4b) -->
               <SensitivityAnalysisTable :rows="getSensitivityAnalysis(sheet) || []" />
@@ -478,6 +485,7 @@ import { getUploadTableData, getUploadHistory, deduplicateUploads, enrichSheetAn
 import type { FoodTemplate } from '@/api/smartbi';
 import type { UploadHistoryItem, EnrichResult, EnrichProgress, ColumnSummary, StructuredAIData, SmartKPI, DrillDownResult as DrillDownResultType, CrossSheetResult as CrossSheetResultType, FinancialMetrics, YoYResult, YoYComparisonItem, StatisticalResult, PythonHealthStatus } from '@/api/smartbi';
 import { ElMessage } from 'element-plus';
+import { markAnalysisUnhelpful } from '@/api/smartbi/analysis-feedback';
 import { UploadFilled, Upload, Refresh, CircleCheckFilled, CircleCloseFilled, Loading, List, Document, Tickets, InfoFilled, ArrowRight, Pointer, DataAnalysis, TrendCharts, Download, Filter, Warning, WarningFilled, QuestionFilled, Share, CopyDocument, Link, Timer, Operation, Plus, Rank, Top, Bottom, Close } from '@element-plus/icons-vue';
 import type { UploadFile, UploadUserFile } from 'element-plus';
 import echarts from '@/utils/echarts';
@@ -766,6 +774,7 @@ interface SheetResult {
     recommendedChartType?: string;
     chartConfig?: Record<string, unknown>;
     aiAnalysis?: string;
+    aiCacheToken?: string;
     recommendedTemplates?: Record<string, unknown>[];
     charts?: Array<{ chartType: string; title: string; config: Record<string, unknown>; xField?: string; totalItems?: number; meta?: ChartMeta | null }>;
     kpiSummary?: { rowCount: number; columnCount: number; columns: ColumnSummary[] };
@@ -829,6 +838,23 @@ const enrichPhases = ref<Map<number, EnrichPhaseState>>(new Map());
 const sheetRawDataCache = new Map<number, Record<string, unknown>[]>();
 // 缓存时间戳：uploadId → cachedAt ISO string
 const cachedAtMap = ref<Map<number, string>>(new Map());
+const sheetFeedbackPending = ref(new Set<number>());
+
+async function sendSheetAnalysisFeedback(sheet: SheetResult) {
+  const token = sheet.flowResult?.aiCacheToken;
+  if (!token || sheetFeedbackPending.value.has(sheet.sheetIndex)) return;
+  sheetFeedbackPending.value.add(sheet.sheetIndex);
+  try {
+    if (await markAnalysisUnhelpful(token)) {
+      if (sheet.flowResult?.aiCacheToken === token) sheet.flowResult.aiCacheToken = undefined;
+      ElMessage.success('感谢反馈，下次查看时会重新生成分析');
+    } else {
+      ElMessage.warning('反馈未提交，请重试');
+    }
+  } finally {
+    sheetFeedbackPending.value.delete(sheet.sheetIndex);
+  }
+}
 
 // A6: 食品行业检测结果
 const foodIndustryDetection = ref<{
@@ -2941,6 +2967,7 @@ const idleEnrichNext = (currentSheetIndex: number) => {
             if (result.aiAnalysis) {
               sheet.flowResult.aiAnalysis = result.aiAnalysis;
             }
+            sheet.flowResult.aiCacheToken = result.aiCacheToken;
             // 更新结构化 AI
             if (result.structuredAI) {
               sheet.flowResult.structuredAI = result.structuredAI;
@@ -3012,6 +3039,9 @@ const enrichSheet = async (sheet: SheetResult, forceRefresh = false) => {
       }
 
       // T1.1: Handle streaming AI text chunks — show progressively before final parse
+      if (progress.phase === 'ai-streaming' && progress.partial.aiAnalysis) {
+        currentSheet.flowResult.aiAnalysis = progress.partial.aiAnalysis;
+      }
       if (progress.phase === 'ai-streaming' && progress.partial.aiStreamChunk) {
         if (!currentSheet.flowResult._streamingAIText) {
           currentSheet.flowResult._streamingAIText = '';
@@ -3022,6 +3052,7 @@ const enrichSheet = async (sheet: SheetResult, forceRefresh = false) => {
       }
 
       if (progress.phase === 'ai') {
+        currentSheet.flowResult.aiCacheToken = progress.partial.aiCacheToken;
         if (progress.partial.aiAnalysis) {
           currentSheet.flowResult.aiAnalysis = progress.partial.aiAnalysis;
         }
@@ -3076,6 +3107,7 @@ const enrichSheet = async (sheet: SheetResult, forceRefresh = false) => {
         }
         if (result.kpiSummary) currentSheet.flowResult.kpiSummary = result.kpiSummary;
         if (result.aiAnalysis) currentSheet.flowResult.aiAnalysis = result.aiAnalysis;
+        currentSheet.flowResult.aiCacheToken = result.aiCacheToken;
         if (result.structuredAI) currentSheet.flowResult.structuredAI = result.structuredAI;
         if (result.displayNameMap) currentSheet.flowResult.displayNameMap = result.displayNameMap;
         // Persist rawData for cross-filtering & Excel export

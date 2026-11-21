@@ -73,7 +73,7 @@ import logging
 from common.process_secret_harness import with_process_secret_harness
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Dict, List, Optional, Tuple
@@ -116,6 +116,7 @@ from smartbi.agent.factbook import (
     factbook_to_dataframe,
     _money,
 )
+from common.smartbi_analysis_cache import AnalysisScope, analysis_result, normalize_question, result_key
 from smartbi.agent.narrative_cache import (
     NarrativeCacheService,
     compute_question_hash,
@@ -1157,6 +1158,8 @@ class SynthesisResponse:
     insight_summary: Optional[str] = None
     fact_check: Optional[Dict[str, Any]] = None
     dimension_coverage: Optional[Dict[str, Any]] = None
+    cache_hit: bool = False
+    cache_token: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -1173,6 +1176,8 @@ class SynthesisResponse:
             "insight_summary": self.insight_summary,
             "fact_check": self.fact_check,
             "dimension_coverage": self.dimension_coverage,
+            "cacheHit": self.cache_hit,
+            **({"cacheToken": self.cache_token} if self.cache_token else {}),
         }
 
 
@@ -1316,6 +1321,8 @@ class ComprehensiveSynthesisEngine:
         conversation_history: Optional[List[Dict[str, Any]]] = None,
         page_context: Optional[str] = None,
         dimension_hints: Optional[List[str]] = None,
+        cache_scope: AnalysisScope | None = None,
+        allow_legacy_cache: bool = True,
     ) -> SynthesisResponse:
         """
         P2 multi-turn memory (2026-07-09): conversation_history is an
@@ -1344,6 +1351,9 @@ class ComprehensiveSynthesisEngine:
         resolved reference. Budget consumption still happens either way.
         """
         t0 = time.monotonic()
+        use_legacy_cache = allow_legacy_cache and cache_scope is None
+        if cache_scope is not None:
+            question = normalize_question(question)
         start, end = date_range
         start_iso, end_iso = start.isoformat(), end.isoformat()
         if _is_retired_restaurant_tenant(factory_id):
@@ -1383,7 +1393,7 @@ class ComprehensiveSynthesisEngine:
         # 1. Cache check — same answer for same question+range+factory.
         # Skipped entirely when conversation_history is present (see
         # docstring above) — no history → identical behavior to before.
-        if not conversation_history:
+        if use_legacy_cache and not conversation_history:
             hit = await self._cache.get(factory_id, q_hash)
             if hit is not None:
                 budget = await self._budget.check_budget(factory_id)
@@ -1441,7 +1451,8 @@ class ComprehensiveSynthesisEngine:
         )
         q_emb: Optional[List[float]] = None
         if (
-            not conversation_history
+            use_legacy_cache
+            and not conversation_history
             and not page_context
             and not normalized_hints
             and scope_store_names is None
@@ -1477,215 +1488,232 @@ class ComprehensiveSynthesisEngine:
             store_names=scope_store_names,
         )
 
-        # 5. Structured multi-dim insights (deterministic correlations).
-        #
-        # Restaurant FactBooks are flattened to a single cross-sectional row.
-        # The shared analyzer's generic "total" heuristic may otherwise treat
-        # any unrelated numeric column as a component of a column whose name
-        # contains "合计" (for example: 总营业额 / 折扣金额合计).  That produces
-        # mathematically computable but semantically invalid "contribution"
-        # claims.  Keep the factory analyzer contract unchanged and make the
-        # restaurant branch explicit.
-        insight_summary = self._analyze(
-            factbook,
-            period=f"{start_iso} 至 {end_iso}",
-        )
+        key = result_key(cache_scope, "comprehensive-synthesis", {
+            "window": date_range, "facts": asdict(factbook) if cache_scope is not None else None,
+            "plan": plan, "history": conversation_history, "focus": page_context,
+        }, prompt_version=SYNTHESIS_CONTRACT_VERSION, model_version="synthesis-routing-v1", question=question)
+        async with analysis_result(key) as cached:
+            if cached.entry.hit:
+                result = SynthesisResponse(**cached.entry.value)
+                return replace(result, source=RESULT_SOURCE_CACHE, tokens=0,
+                               tokens_used_today=budget.tokens_used, tokens_cap=budget.tokens_cap,
+                               elapsed_ms=int((time.monotonic() - t0) * 1000),
+                               cache_hit=True, cache_token=cached.entry.token)
 
-        if budget.blocked:
-            return self._deterministic_fallback_response(
+            # 5. Structured multi-dim insights (deterministic correlations).
+            #
+            # Restaurant FactBooks are flattened to a single cross-sectional row.
+            # The shared analyzer's generic "total" heuristic may otherwise treat
+            # any unrelated numeric column as a component of a column whose name
+            # contains "合计" (for example: 总营业额 / 折扣金额合计).  That produces
+            # mathematically computable but semantically invalid "contribution"
+            # claims.  Keep the factory analyzer contract unchanged and make the
+            # restaurant branch explicit.
+            insight_summary = self._analyze(
                 factbook,
-                plan,
-                insight_summary,
-                budget,
-                t0,
-                reason="叙述模型预算已用完",
+                period=f"{start_iso} 至 {end_iso}",
             )
 
-        # 5b. P4 v2: pure-attribution → try a cheap thin restate of the
-        # deterministic 客流×客单价 decomposition. Grounded by a numeric-closure
-        # whitelist; on ANY doubt (reject / LLM fail) fall through to the full
-        # synthesis below — never a robotic template.
-        if (_is_thin_restate_eligible(plan) and factbook.attribution
-                and not factbook.attribution.get("no_data")):
-            thin_answer = thin_tokens = None
-            with redaction_scope():
-                register_values_for_egress(factbook.collect_sensitive_names())
-                thin = await self._try_thin_restate(question, factbook.attribution, factory_id)
-                if thin is not None:
-                    thin_answer = restore_in_scope(thin[0])
-                    thin_tokens = thin[1]
-            if thin_answer is not None:
-                thin_answer, fc_meta = self._reconciler.reconcile(thin_answer, factbook)
-                grounding_violations = _narrative_grounding_violations(
-                    thin_answer, factbook, question,
+            if budget.blocked:
+                return self._deterministic_fallback_response(
+                    factbook,
+                    plan,
+                    insight_summary,
+                    budget,
+                    t0,
+                    reason="叙述模型预算已用完",
                 )
-                if grounding_violations:
-                    # 🔴 违规**不再直接丢弃整份答案** —— 先只删触发违规的那几行。
-                    #    见 `_keep_what_is_grounded` / `strip_ungrounded_lines`
-                    #    的 docstring（含两轮 prod 实测）。⛔ 绝不静默删。
-                    thin_answer, grounding_violations = _keep_what_is_grounded(
-                        thin_answer, grounding_violations, factbook, question,
+
+            # 5b. P4 v2: pure-attribution → try a cheap thin restate of the
+            # deterministic 客流×客单价 decomposition. Grounded by a numeric-closure
+            # whitelist; on ANY doubt (reject / LLM fail) fall through to the full
+            # synthesis below — never a robotic template.
+            if (_is_thin_restate_eligible(plan) and factbook.attribution
+                    and not factbook.attribution.get("no_data")):
+                thin_answer = thin_tokens = None
+                with redaction_scope():
+                    register_values_for_egress(factbook.collect_sensitive_names())
+                    thin = await self._try_thin_restate(question, factbook.attribution, factory_id)
+                    if thin is not None:
+                        thin_answer = restore_in_scope(thin[0])
+                        thin_tokens = thin[1]
+                if thin_answer is not None:
+                    thin_answer, fc_meta = self._reconciler.reconcile(thin_answer, factbook)
+                    grounding_violations = _narrative_grounding_violations(
+                        thin_answer, factbook, question,
                     )
-                if grounding_violations:
-                    logger.warning(
-                        "thin synthesis rejected by narrative grounding gate: "
-                        "factory=%s violations=%s",
-                        factory_id,
-                        grounding_violations,
-                    )
-                    fc_meta["reconciled"] = True
-                    fc_meta["violations"] = (
-                        list(fc_meta.get("violations") or []) + grounding_violations
-                    )
+                    if grounding_violations:
+                        # 🔴 违规**不再直接丢弃整份答案** —— 先只删触发违规的那几行。
+                        #    见 `_keep_what_is_grounded` / `strip_ungrounded_lines`
+                        #    的 docstring（含两轮 prod 实测）。⛔ 绝不静默删。
+                        thin_answer, grounding_violations = _keep_what_is_grounded(
+                            thin_answer, grounding_violations, factbook, question,
+                        )
+                    if grounding_violations:
+                        logger.warning(
+                            "thin synthesis rejected by narrative grounding gate: "
+                            "factory=%s violations=%s",
+                            factory_id,
+                            grounding_violations,
+                        )
+                        fc_meta["reconciled"] = True
+                        fc_meta["violations"] = (
+                            list(fc_meta.get("violations") or []) + grounding_violations
+                        )
+                        post_budget = await self._budget.consume(factory_id, thin_tokens)
+                        return self._deterministic_fallback_response(
+                            factbook,
+                            plan,
+                            insight_summary,
+                            post_budget,
+                            t0,
+                            reason="叙述未通过数据因果门禁",
+                            tokens=thin_tokens,
+                            fact_check=fc_meta,
+                        )
+                    thin_answer = self._append_store_comparison_table(thin_answer, factbook)
+                    thin_answer = self._append_traffic_trend(thin_answer, factbook)
+                    thin_answer = self._append_investigation_directions(thin_answer, factbook)
+                    thin_answer = self._append_dimension_guidance(thin_answer, factbook)
+                    charts = self.collect_charts(factbook, plan)
+                    alerts = self.collect_alerts(factbook)
+                    dimension_coverage = factbook.dimension_coverage()
                     post_budget = await self._budget.consume(factory_id, thin_tokens)
-                    return self._deterministic_fallback_response(
-                        factbook,
-                        plan,
-                        insight_summary,
-                        post_budget,
-                        t0,
-                        reason="叙述未通过数据因果门禁",
-                        tokens=thin_tokens,
-                        fact_check=fc_meta,
-                    )
-                thin_answer = self._append_store_comparison_table(thin_answer, factbook)
-                thin_answer = self._append_traffic_trend(thin_answer, factbook)
-                thin_answer = self._append_investigation_directions(thin_answer, factbook)
-                thin_answer = self._append_dimension_guidance(thin_answer, factbook)
-                charts = self.collect_charts(factbook, plan)
-                alerts = self.collect_alerts(factbook)
-                dimension_coverage = factbook.dimension_coverage()
-                post_budget = await self._budget.consume(factory_id, thin_tokens)
-                await self._capture_distillation(
-                    question, factbook, thin_answer, fc_meta, plan, factory_id)
-                if not conversation_history:
-                    cache_cfg = {}
-                    if charts:
-                        cache_cfg["charts"] = charts
-                    if alerts:
-                        cache_cfg["alerts"] = alerts
-                    cache_cfg["dimension_coverage"] = dimension_coverage
-                    await self._cache.put(
-                        factory_id, q_hash, thin_answer,
-                        chart_config=cache_cfg or None,
-                        tokens=thin_tokens, ttl_hours=cache_ttl_hours,
-                        question_embedding=q_emb, window_key=window_key, plan_key=plan_key)
-                return SynthesisResponse(
-                    answer=thin_answer, source=RESULT_SOURCE_THIN_RESTATE, tokens=thin_tokens,
-                    tokens_used_today=post_budget.tokens_used, tokens_cap=post_budget.tokens_cap,
-                    elapsed_ms=int((time.monotonic() - t0) * 1000),
-                    charts=charts, alerts=alerts, plan=plan, factbook_text=factbook.to_prompt_text(),
-                    insight_summary=insight_summary, fact_check=fc_meta,
-                    dimension_coverage=dimension_coverage)
+                    await self._capture_distillation(
+                        question, factbook, thin_answer, fc_meta, plan, factory_id)
+                    if use_legacy_cache and not conversation_history:
+                        cache_cfg = {}
+                        if charts:
+                            cache_cfg["charts"] = charts
+                        if alerts:
+                            cache_cfg["alerts"] = alerts
+                        cache_cfg["dimension_coverage"] = dimension_coverage
+                        await self._cache.put(
+                            factory_id, q_hash, thin_answer,
+                            chart_config=cache_cfg or None,
+                            tokens=thin_tokens, ttl_hours=cache_ttl_hours,
+                            question_embedding=q_emb, window_key=window_key, plan_key=plan_key)
+                    result = SynthesisResponse(
+                        answer=thin_answer, source=RESULT_SOURCE_THIN_RESTATE, tokens=thin_tokens,
+                        tokens_used_today=post_budget.tokens_used, tokens_cap=post_budget.tokens_cap,
+                        elapsed_ms=int((time.monotonic() - t0) * 1000),
+                        charts=charts, alerts=alerts, plan=plan, factbook_text=factbook.to_prompt_text(),
+                        insight_summary=insight_summary, fact_check=fc_meta,
+                        dimension_coverage=dimension_coverage)
+                    await cached.store(asdict(result))
+                    return replace(result, cache_token=cached.response_fields.get("cacheToken"))
 
-        # 6. LLM grounded narrative — inside RedactionScope (P0 数据主权).
-        prompt = self._build_prompt(
-            question,
-            factbook,
-            insight_summary,
-            conversation_history,
-            page_context=page_context,
-        )
-        try:
-            with redaction_scope():
-                register_values_for_egress(factbook.collect_sensitive_names())
-                answer, tokens = await self._call_llm(prompt, factory_id)
-                answer = restore_in_scope(answer)
-        except Exception as e:
-            logger.exception("synthesis LLM call failed: %s", e)
-            return self._deterministic_fallback_response(
+            # 6. LLM grounded narrative — inside RedactionScope (P0 数据主权).
+            prompt = self._build_prompt(
+                question,
                 factbook,
-                plan,
                 insight_summary,
-                budget,
-                t0,
-                reason="叙述模型暂时不可用",
+                conversation_history,
+                page_context=page_context,
             )
+            try:
+                with redaction_scope():
+                    register_values_for_egress(factbook.collect_sensitive_names())
+                    answer, tokens = await self._call_llm(prompt, factory_id)
+                    answer = restore_in_scope(answer)
+            except Exception as e:
+                logger.exception("synthesis LLM call failed: %s", e)
+                return self._deterministic_fallback_response(
+                    factbook,
+                    plan,
+                    insight_summary,
+                    budget,
+                    t0,
+                    reason="叙述模型暂时不可用",
+                )
 
-        # 7. Grounding hard-check (backfill真值 + flag fabricated names).
-        answer, fc_meta = self._reconciler.reconcile(answer, factbook)
-        grounding_violations = _narrative_grounding_violations(
-            answer, factbook, question,
-        )
-        if grounding_violations:
-            # 🔴 同上：先只删触发违规的那几行，⛔ 不直接丢弃整份答案。
-            answer, grounding_violations = _keep_what_is_grounded(
-                answer, grounding_violations, factbook, question,
+            # 7. Grounding hard-check (backfill真值 + flag fabricated names).
+            answer, fc_meta = self._reconciler.reconcile(answer, factbook)
+            grounding_violations = _narrative_grounding_violations(
+                answer, factbook, question,
             )
-        if grounding_violations:
-            logger.warning(
-                "synthesis rejected by narrative grounding gate: "
-                "factory=%s violations=%s",
-                factory_id,
-                grounding_violations,
-            )
-            fc_meta["reconciled"] = True
-            fc_meta["violations"] = (
-                list(fc_meta.get("violations") or []) + grounding_violations
-            )
+            if grounding_violations:
+                # 🔴 同上：先只删触发违规的那几行，⛔ 不直接丢弃整份答案。
+                answer, grounding_violations = _keep_what_is_grounded(
+                    answer, grounding_violations, factbook, question,
+                )
+            if grounding_violations:
+                logger.warning(
+                    "synthesis rejected by narrative grounding gate: "
+                    "factory=%s violations=%s",
+                    factory_id,
+                    grounding_violations,
+                )
+                fc_meta["reconciled"] = True
+                fc_meta["violations"] = (
+                    list(fc_meta.get("violations") or []) + grounding_violations
+                )
+                post_budget = await self._budget.consume(factory_id, tokens)
+                return self._deterministic_fallback_response(
+                    factbook,
+                    plan,
+                    insight_summary,
+                    post_budget,
+                    t0,
+                    reason="叙述未通过数据因果门禁",
+                    tokens=tokens,
+                    fact_check=fc_meta,
+                )
+            # ⑥⑦ 排查方向要排在「还可补充的方面」**之前** —— 它是结论的一部分，
+            # 那张 12 条的清单是附录。⚠️ 三处接线数量逐一对应（硬约束 8），
+            # 有一道 AST 断言钉着这件事。
+            # 顺序: 门店对比表（证据）→ 排查方向（结论的一部分）→ 缺什么（附录）。
+            answer = self._append_store_comparison_table(answer, factbook)
+            answer = self._append_traffic_trend(answer, factbook)
+            answer = self._append_investigation_directions(answer, factbook)
+            answer = self._append_dimension_guidance(answer, factbook)
+
+            # 8. Charts + 🔒 反回扣 alerts (both gated by plan/factbook; alerts derive
+            # solely from grounded FactBook signals — see collect_alerts).
+            charts = self.collect_charts(factbook, plan)
+            alerts = self.collect_alerts(factbook)
+            dimension_coverage = factbook.dimension_coverage()
+
+            # 9. Bookkeeping. Cache write skipped for history-bearing turns — a
+            # context-resolved answer must not be replayed as the generic cached
+            # answer for that literal question text (see synthesize docstring).
             post_budget = await self._budget.consume(factory_id, tokens)
-            return self._deterministic_fallback_response(
-                factbook,
-                plan,
-                insight_summary,
-                post_budget,
-                t0,
-                reason="叙述未通过数据因果门禁",
-                tokens=tokens,
-                fact_check=fc_meta,
+            if use_legacy_cache and not conversation_history:
+                cache_cfg = {}
+                if charts:
+                    cache_cfg["charts"] = charts
+                if alerts:
+                    cache_cfg["alerts"] = alerts
+                cache_cfg["dimension_coverage"] = dimension_coverage
+                await self._cache.put(
+                    factory_id, q_hash, answer,
+                    chart_config=cache_cfg or None,
+                    tokens=tokens, ttl_hours=cache_ttl_hours,
+                    question_embedding=q_emb, window_key=window_key, plan_key=plan_key,
+                )
+
+            # 10. Distillation capture (G1) — make the synthesis answer observable to
+            # the learning flywheel (family_breakdown demand signal) and the training
+            # corpus. Only the freshly-generated LLM path reaches here (cache hit /
+            # degraded returned above), so there is no double-capture. Tenant isolation
+            # + anonymization happen at EXPORT (mirrors the other 5 capture points):
+            # the raw row stores factory_id + the grounded answer; consent-gated,
+            # value-bucketed, entity-pseudonymized export is what crosses tenants.
+            # persist_distillation_sample never raises; the try/except is
+            # belt-and-suspenders and never touches the user-facing response.
+            await self._capture_distillation(question, factbook, answer, fc_meta, plan, factory_id)
+
+            result = SynthesisResponse(
+                answer=answer, source=RESULT_SOURCE_LLM, tokens=tokens,
+                tokens_used_today=post_budget.tokens_used, tokens_cap=post_budget.tokens_cap,
+                elapsed_ms=int((time.monotonic() - t0) * 1000),
+                charts=charts, alerts=alerts, plan=plan, factbook_text=factbook.to_prompt_text(),
+                insight_summary=insight_summary, fact_check=fc_meta,
+                dimension_coverage=dimension_coverage,
             )
-        # ⑥⑦ 排查方向要排在「还可补充的方面」**之前** —— 它是结论的一部分，
-        # 那张 12 条的清单是附录。⚠️ 三处接线数量逐一对应（硬约束 8），
-        # 有一道 AST 断言钉着这件事。
-        # 顺序: 门店对比表（证据）→ 排查方向（结论的一部分）→ 缺什么（附录）。
-        answer = self._append_store_comparison_table(answer, factbook)
-        answer = self._append_traffic_trend(answer, factbook)
-        answer = self._append_investigation_directions(answer, factbook)
-        answer = self._append_dimension_guidance(answer, factbook)
-
-        # 8. Charts + 🔒 反回扣 alerts (both gated by plan/factbook; alerts derive
-        # solely from grounded FactBook signals — see collect_alerts).
-        charts = self.collect_charts(factbook, plan)
-        alerts = self.collect_alerts(factbook)
-        dimension_coverage = factbook.dimension_coverage()
-
-        # 9. Bookkeeping. Cache write skipped for history-bearing turns — a
-        # context-resolved answer must not be replayed as the generic cached
-        # answer for that literal question text (see synthesize docstring).
-        post_budget = await self._budget.consume(factory_id, tokens)
-        if not conversation_history:
-            cache_cfg = {}
-            if charts:
-                cache_cfg["charts"] = charts
-            if alerts:
-                cache_cfg["alerts"] = alerts
-            cache_cfg["dimension_coverage"] = dimension_coverage
-            await self._cache.put(
-                factory_id, q_hash, answer,
-                chart_config=cache_cfg or None,
-                tokens=tokens, ttl_hours=cache_ttl_hours,
-                question_embedding=q_emb, window_key=window_key, plan_key=plan_key,
-            )
-
-        # 10. Distillation capture (G1) — make the synthesis answer observable to
-        # the learning flywheel (family_breakdown demand signal) and the training
-        # corpus. Only the freshly-generated LLM path reaches here (cache hit /
-        # degraded returned above), so there is no double-capture. Tenant isolation
-        # + anonymization happen at EXPORT (mirrors the other 5 capture points):
-        # the raw row stores factory_id + the grounded answer; consent-gated,
-        # value-bucketed, entity-pseudonymized export is what crosses tenants.
-        # persist_distillation_sample never raises; the try/except is
-        # belt-and-suspenders and never touches the user-facing response.
-        await self._capture_distillation(question, factbook, answer, fc_meta, plan, factory_id)
-
-        return SynthesisResponse(
-            answer=answer, source=RESULT_SOURCE_LLM, tokens=tokens,
-            tokens_used_today=post_budget.tokens_used, tokens_cap=post_budget.tokens_cap,
-            elapsed_ms=int((time.monotonic() - t0) * 1000),
-            charts=charts, alerts=alerts, plan=plan, factbook_text=factbook.to_prompt_text(),
-            insight_summary=insight_summary, fact_check=fc_meta,
-            dimension_coverage=dimension_coverage,
-        )
+            if result.answer.strip():
+                await cached.store(asdict(result))
+            return replace(result, cache_token=cached.response_fields.get("cacheToken"))
 
     # =====================================================================
     # Step 1: dimension planning (rules-first, no LLM per feedback_rules_first)

@@ -14,6 +14,7 @@ import {
   type ColumnSummary,
   type ChartPlanItem,
 } from './common';
+import { parseSseFrame, splitSseFrames } from './sse';
 
 // ==================== Chart Building ====================
 
@@ -177,6 +178,14 @@ export async function batchBuildCharts(plans: Array<{
 
 // ==================== AI Insights ====================
 
+interface InsightsResult {
+  success: boolean;
+  insights?: Array<{ type: string; text: string; recommendation?: string; sentiment?: string; importance?: number }>;
+  error?: string;
+  cacheHit?: boolean;
+  cacheToken?: string;
+}
+
 /**
  * AI insight generation - generate analysis insights from data
  */
@@ -184,11 +193,7 @@ export async function generateInsights(params: {
   data: unknown[];
   analysisContext?: string;
   maxInsights?: number;
-}): Promise<{
-  success: boolean;
-  insights?: Array<{ type: string; text: string; recommendation?: string; sentiment?: string; importance?: number }>;
-  error?: string;
-}> {
+}): Promise<InsightsResult> {
   try {
     return await pythonFetch('/api/insight/generate', {
       method: 'POST',
@@ -198,7 +203,7 @@ export async function generateInsights(params: {
         analysisContext: params.analysisContext,
         maxInsights: params.maxInsights || 5
       })
-    }) as { success: boolean; insights?: Array<{ type: string; text: string; recommendation?: string; sentiment?: string; importance?: number }>; error?: string };
+    }) as InsightsResult;
   } catch (error) {
     console.error('generateInsights 失败:', error);
     return {
@@ -318,6 +323,7 @@ export async function getCachedAnalysis(uploadId: number): Promise<{
   charts?: unknown;
   kpiSummary?: unknown;
   aiAnalysis?: string;
+  aiCacheToken?: string;
   structuredAI?: unknown;
   financialMetrics?: unknown;
   chartConfig?: unknown;
@@ -339,6 +345,7 @@ export async function getCachedAnalysis(uploadId: number): Promise<{
         charts: data.charts,
         kpiSummary: data.kpiSummary,
         aiAnalysis: data.aiAnalysis as string,
+        aiCacheToken: typeof data.aiCacheToken === 'string' ? data.aiCacheToken : undefined,
         structuredAI: data.structuredAI,
         financialMetrics: data.financialMetrics,
         chartConfig: data.chartConfig,
@@ -363,6 +370,7 @@ export async function saveAnalysisToCache(
     charts?: unknown;
     kpiSummary?: unknown;
     aiAnalysis?: string;
+    aiCacheToken?: string;
     structuredAI?: unknown;
     financialMetrics?: unknown;
   }
@@ -375,6 +383,7 @@ export async function saveAnalysisToCache(
         charts: result.charts,
         kpiSummary: result.kpiSummary,
         aiAnalysis: result.aiAnalysis,
+        aiCacheToken: result.aiCacheToken,
         structuredAI: result.structuredAI,
         financialMetrics: result.financialMetrics,
       }),
@@ -411,12 +420,8 @@ export async function generateInsightsStream(params: {
   maxInsights?: number;
   signal?: AbortSignal;
   onChunk?: (text: string) => void;
-}): Promise<{
-  success: boolean;
-  insights?: Array<{ type: string; text: string; recommendation?: string; sentiment?: string; importance?: number }>;
-  error?: string;
-  _streamingUsed?: boolean;
-}> {
+  onPreview?: (text: string) => void;
+}): Promise<InsightsResult & { _streamingUsed?: boolean }> {
   try {
     const response = await fetch(`${PYTHON_SMARTBI_URL}/api/insight/generate-stream`, {
       method: 'POST',
@@ -438,44 +443,30 @@ export async function generateInsightsStream(params: {
 
     const decoder = new TextDecoder();
     let buffer = '';
-    let finalResult: { success: boolean; insights?: unknown[]; error?: string } | null = null;
+    let finalResult: InsightsResult | null = null;
 
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
 
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-
-      let eventType = '';
-      for (const line of lines) {
-        if (line.startsWith('event: ')) {
-          eventType = line.slice(7).trim();
-        } else if (line.startsWith('data: ')) {
-          const data = line.slice(6).replace(/\\n/g, '\n');
-          if (eventType === 'chunk' && params.onChunk) {
-            params.onChunk(data);
-          } else if (eventType === 'done') {
-            try {
-              finalResult = JSON.parse(data);
-            } catch {
-              console.warn('Failed to parse SSE done event');
-            }
-          }
+      const { frames, rest } = splitSseFrames(buffer + decoder.decode(value, { stream: true }));
+      buffer = rest;
+      for (const frame of frames) {
+        const event = parseSseFrame(frame);
+        if (event?.event === 'chunk') {
+          params.onChunk?.(event.data.replace(/\\n/g, '\n'));
+        } else if (event?.event === 'preview') {
+          const preview: Pick<InsightsResult, 'insights'> = JSON.parse(event.data);
+          const text = preview.insights?.map(item => item.text).filter(Boolean).join('\n');
+          if (text) params.onPreview?.(text);
+        } else if (event?.event === 'done') {
+          finalResult = JSON.parse(event.data);
         }
       }
     }
 
     if (finalResult) {
-      return {
-        ...(finalResult as {
-          success: boolean;
-          insights?: Array<{ type: string; text: string; recommendation?: string; sentiment?: string; importance?: number }>;
-          error?: string;
-        }),
-        _streamingUsed: true
-      };
+      return { ...finalResult, _streamingUsed: true };
     }
     return { success: false, error: 'Stream ended without result', _streamingUsed: false };
   } catch (error) {

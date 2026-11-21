@@ -17,14 +17,13 @@ import os
 import re
 import secrets
 import time
-import unicodedata
-from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any, Mapping, Optional, Sequence
 
 from fastapi import HTTPException
 
+from common.smartbi_analysis_cache import AnalysisScope, analysis_result, normalize_question, result_key
 from .blacklake_ask import UNIT_COST_LIMIT as _BLACKLAKE_UNIT_COST_GAP
 from .planner_catalog import catalog_limit, rule_selection, shortlist
 
@@ -35,13 +34,11 @@ MAX_CONTEXTS = 128
 MAX_HISTORY = 8
 MAX_SELECTED_CHARTS = 4
 MAX_PLANNER_CATALOG = 512
-PLANNER_CACHE_TTL_SECONDS = 600.0
-MAX_PLANNER_CACHE_ENTRIES = 128
+PLANNER_PROMPT_VERSION = "factory-chart-planner-v2"
+PLANNER_MODEL_VERSION = "factory-chart-routing-v1"
 PLANNER_DEADLINE_SECONDS = 20.0
 BACKGROUND_PLANNER_DEADLINE_SECONDS = 60.0
-_PLAN_CACHE: OrderedDict[tuple[str, str], tuple[float, tuple[str, ...], dict[str, str]]] = OrderedDict()
 _planner_monotonic = time.monotonic
-_cache_monotonic = time.monotonic
 
 
 class _OwnedHistory(list):
@@ -85,7 +82,6 @@ _CONTEXTS: dict[str, ConversationContext] = {}
 def clear_contexts() -> None:
     """Clear in-process contexts for tests and worker lifecycle hooks."""
     _CONTEXTS.clear()
-    _PLAN_CACHE.clear()
 
 
 def _purge(now: Optional[float] = None) -> None:
@@ -243,31 +239,58 @@ def _sanitized_history(history: Sequence[Mapping[str, Any]] | None,
     return result
 
 
-def _plan_cache_key(factory_id, question, catalog, history, subjects, required_families, limit, background):
-    owner = history.owner if isinstance(history, _OwnedHistory) else None
-    return factory_id, hashlib.sha256(json.dumps({
-        "owner": owner,
-        "question": question,
-        "catalog": catalog,
-        "subjects": subjects,
-        "requiredFamilies": sorted(required_families),
-        "history": _sanitized_history(history),
-        "limit": limit,
-        "background": background,
-    }, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
-
-
 async def plan(question: str, catalog: Sequence[Mapping[str, Any]],
                history: Sequence[Mapping[str, Any]] | None = None,
                factory_id: Optional[str] = None,
                authorized_subjects: Sequence[Mapping[str, Any]] = (),
                authorized_recommendations: Sequence[Mapping[str, Any]] = (),
-               *, background: bool | None = None) -> tuple[list[str], dict[str, Any]]:
+               *, background: bool | None = None, data_version: Any = None,
+               cache_scope: AnalysisScope | None = None, allow_cache: bool = True) -> tuple[list[str], dict[str, Any]]:
+    question = normalize_question(question)
+    if background is None:
+        background = os.getenv("SMARTBI_CHART_PLANNER_BACKGROUND") == "1"
+    limit = catalog_limit(MAX_PLANNER_CATALOG)
+    owner = history.owner if isinstance(history, _OwnedHistory) else None
+    prior_turns = list(history or [])
+    while prior_turns and normalize_question(str(prior_turns[-1].get("question", ""))) == question:
+        prior_turns.pop()
+    if allow_cache and cache_scope is None and factory_id and owner:
+        permission = str(owner[1]).strip().lower() if owner else "planner:service"
+        cache_scope = AnalysisScope(factory_id, permission)
+    key = result_key(cache_scope, "factory-analysis", {
+        "owner": owner if prior_turns else None,
+        "catalog": catalog,
+        "recommendations": [
+            {name: value for name, value in item.items()
+             if name not in {"detailContext", "detailSnapshotKey", "detailStatus"}}
+            for item in authorized_recommendations
+        ],
+        "subjects": authorized_subjects,
+        "history": prior_turns,
+        "dataVersion": data_version,
+        "limit": limit,
+        "background": background,
+    }, prompt_version=PLANNER_PROMPT_VERSION, model_version=PLANNER_MODEL_VERSION, question=question)
+    async with analysis_result(key) as cached:
+        if cached.entry.hit:
+            logger.info("Factory conversation planner cache hit")
+            saved = cached.entry.value
+            return saved["selected"], {**saved["mode"], "cache": "hit", **cached.response_fields}
+        selected, mode = await _plan_once(question, catalog, prior_turns, factory_id,
+                                          authorized_subjects, authorized_recommendations, background, limit)
+        if mode.get("mode") == "ai":
+            await cached.store({"selected": selected, "mode": mode})
+        if mode.get("mode") == "unavailable":
+            return selected, mode
+        return selected, {**mode, "cache": "miss", **cached.response_fields}
+
+
+async def _plan_once(question, catalog, history, factory_id, authorized_subjects,
+                     authorized_recommendations, background, catalog_limit_value):
     """Plan with Rex by default, or with Aurora for designated background callers."""
     started = _planner_monotonic()
     if not catalog:
         return [], {"mode": "unavailable", "reason": "当前授权数据没有合格图表"}
-    question = unicodedata.normalize("NFC", question.strip())
     authorized_catalog = list(catalog)
     semantic = authorized_catalog
     required_families: set[str] = set()
@@ -284,18 +307,7 @@ async def plan(question: str, catalog: Sequence[Mapping[str, Any]],
         if not required_families.issubset({item.get("familyId") for item in semantic}):
             return [], {"mode": "unavailable", "reason": "当前授权目录缺少本问题所需的已验证联合关系"}
         semantic = [item for item in semantic if item.get("familyId") in required_families]
-    limit = max(len(required_families), catalog_limit(MAX_PLANNER_CATALOG))
-    if background is None:
-        background = os.getenv("SMARTBI_CHART_PLANNER_BACKGROUND") == "1"
-    cache_key = None
-    if factory_id:
-        cache_key = _plan_cache_key(factory_id, question, authorized_catalog, history,
-                                    authorized_subjects, required_families, limit, background)
-        cached = _PLAN_CACHE.pop(cache_key, None)
-        if cached is not None and cached[0] > _cache_monotonic():
-            _PLAN_CACHE[cache_key] = cached
-            logger.info("Factory conversation planner cache hit")
-            return list(cached[1]), {**cached[2], "cache": "hit"}
+    limit = max(len(required_families), catalog_limit_value)
     rule_catalog = semantic
     semantic = shortlist(question, semantic, required_families, limit)
     logger.info("Factory conversation planner catalogue prefilter: %d -> %d",
@@ -486,12 +498,7 @@ async def plan(question: str, catalog: Sequence[Mapping[str, Any]],
             reason = "AI 规划超时，关键词规则未命中" if timed_out else unavailable_reason
             return [], {"mode": "unavailable", "reason": reason}
         mode = {"mode": "rule", "reason": "按问题关键词从授权图表目录选择"}
-    if cache_key is not None:
-        _PLAN_CACHE[cache_key] = (_cache_monotonic() + PLANNER_CACHE_TTL_SECONDS, tuple(selected), mode)
-        _PLAN_CACHE.move_to_end(cache_key)
-        if len(_PLAN_CACHE) > MAX_PLANNER_CACHE_ENTRIES:
-            _PLAN_CACHE.popitem(last=False)
-    return selected, {**mode, "cache": "miss"}
+    return selected, mode
 
 
 def facts_for(selected: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:

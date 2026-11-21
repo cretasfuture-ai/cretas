@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
-from services.utils.json_parser import robust_json_parse
+from common.utils.json_parser import robust_json_parse
 
 logger = logging.getLogger(__name__)
 

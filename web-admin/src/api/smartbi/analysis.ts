@@ -1782,7 +1782,11 @@ async function _doEnrichSheetAnalysis(
     })();
 
     // ---------- Right lane: AI insights (SSE streaming) ----------
-    const insightsLane = (async (): Promise<{ aiAnalysis: string; structuredAI: StructuredAIData | undefined }> => {
+    const insightsLane = (async (): Promise<{
+      aiAnalysis: string;
+      structuredAI: StructuredAIData | undefined;
+      aiCacheToken?: string;
+    }> => {
       let aiAnalysis = '';
       let structuredAI: StructuredAIData | undefined;
       // Humanize column keys in data sent to LLM so AI text uses display names
@@ -1810,6 +1814,9 @@ async function _doEnrichSheetAnalysis(
         analysisContext: contextParts.join('\n'),
         maxInsights: 5,
         signal: abortController.signal,
+        onPreview: (text: string) => {
+          onProgress?.({ phase: 'ai-streaming', partial: { aiAnalysis: text } });
+        },
         onChunk: (chunk: string) => {
           // Emit each SSE text chunk so the UI can render progressively (typewriter effect)
           onProgress?.({ phase: 'ai-streaming', partial: { aiStreamChunk: chunk } });
@@ -1850,15 +1857,16 @@ async function _doEnrichSheetAnalysis(
 
       // Notify AI analysis ready (fires as soon as insights lane completes,
       // independent of chart lane)
-      onProgress?.({ phase: 'ai', partial: { aiAnalysis: aiAnalysis || undefined, structuredAI } });
+      const aiCacheToken = insightRes.cacheToken;
+      onProgress?.({ phase: 'ai', partial: { aiAnalysis: aiAnalysis || undefined, structuredAI, aiCacheToken } });
 
-      return { aiAnalysis, structuredAI };
+      return { aiAnalysis, structuredAI, aiCacheToken };
     })();
 
     // Await both lanes — Promise.all blocks until both done (each lane already
     // fires its own onProgress for streaming UI updates).
     const [charts, insightsResult] = await Promise.all([chartsLane, insightsLane]);
-    const { aiAnalysis, structuredAI } = insightsResult;
+    const { aiAnalysis, structuredAI, aiCacheToken } = insightsResult;
     tick('charts+insights(parallel)', t0);
 
     // 9. Assemble KPI summary
@@ -1879,6 +1887,7 @@ async function _doEnrichSheetAnalysis(
       kpiSummary,
       financialMetrics,
       aiAnalysis: aiAnalysis || undefined,
+      aiCacheToken,
       structuredAI,
       chartConfig: charts.length ? charts[0].config : undefined,
       error: hasContent ? undefined : '未能生成图表或 AI 洞察',

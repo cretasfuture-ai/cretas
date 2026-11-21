@@ -3,8 +3,7 @@ import asyncio
 import json
 import logging
 import re
-import hashlib
-import time
+from common.smartbi_analysis_cache import analysis_result, result_key
 
 logger = logging.getLogger(__name__)
 REASONS = {
@@ -14,7 +13,6 @@ REASONS = {
     'plan': '用于核对实际与来源明确的计划目标',
     'trace': '用于核对已记录流程与批次，保留来源边界',
 }
-_CACHE = {}
 
 
 def allowed_codes(candidate):
@@ -32,21 +30,29 @@ def allowed_codes(candidate):
     return {'compare','observe'}
 
 
-async def rank(candidates: list[dict], use_ai: bool, cache_scope=None):
+async def rank(candidates: list[dict], use_ai: bool, cache_scope=None, *, data_version=None):
     fallback = {'mode': 'rule', 'reason': '未经AI排序，按规则优先级显示'}
     if not use_ai or not candidates:
         return candidates, fallback
     if len(candidates) > 60:
         return candidates, {**fallback, 'reason': '未经AI排序：合格候选较多，按规则优先级显示'}
-    key = None
-    if cache_scope:
-        snapshot = json.dumps(candidates, ensure_ascii=False, sort_keys=True, default=str)
-        key = (str(cache_scope), hashlib.sha256(snapshot.encode()).hexdigest())
-        cached = _CACHE.get(key)
-        if cached and time.monotonic() - cached[0] < 600:
-            lookup = {c['id']:c for c in candidates}
-            ordered = [{**lookup[cid], 'aiReason':REASONS[code]} for cid,code in cached[1]]
-            return ordered, {'mode':'ai','reason':'AI仅对合格图表排序；复用本厂相同数据的已校验排序','cacheHit':True}
+    key = result_key(cache_scope, "factory-chart-order", (candidates, data_version),
+                     prompt_version="factory-chart-order-v1", model_version="chart-routing-v1")
+    async with analysis_result(key) as cached:
+        lookup = {c["id"]: c for c in candidates}
+        if cached.entry.hit:
+            rows = cached.entry.value["rows"]
+        else:
+            rows = await _rank_rows(candidates, lookup)
+            if rows is None:
+                return candidates, {**fallback, 'reason': '未经AI排序：AI暂不可用或回复未通过候选校验'}
+            await cached.store({"rows": rows})
+        ordered = [{**lookup[row["id"]], "aiReason": REASONS[row["reason_code"]]} for row in rows]
+        return ordered, {'mode': 'ai', 'reason': 'AI仅对合格图表排序；数值与结论均来自规则',
+                         **cached.response_fields}
+
+
+async def _rank_rows(candidates, lookup):
     from common.llm_router import call_chain, SLOT
     payload = {
         'messages': [
@@ -58,7 +64,7 @@ async def rank(candidates: list[dict], use_ai: bool, cache_scope=None):
         ], 'temperature': 0, 'max_tokens': 3000, 'enable_thinking': False,
     }
     if len(json.dumps(payload, ensure_ascii=False).encode()) > 16000:
-        return candidates, fallback
+        return None
     try:
         response = await asyncio.wait_for(call_chain(SLOT.CHART, payload), timeout=12)
         text = response['choices'][0]['message']['content'].strip()
@@ -69,25 +75,18 @@ async def rank(candidates: list[dict], use_ai: bool, cache_scope=None):
             if set(rows) != {'rankings'}:
                 raise ValueError('invalid ranking envelope')
             rows = rows['rankings']
-        lookup = {c['id']: c for c in candidates}
         if not isinstance(rows, list) or len(rows) != len(lookup):
             raise ValueError('incomplete ranking')
         ids = [r['id'] for r in rows]
         if len(set(ids)) != len(ids) or set(ids) != set(lookup):
             raise ValueError('outside eligible set')
-        ordered = []
         for r in rows:
             code = r.get('reason_code')
             if set(r) != {'id', 'reason_code'} or code not in allowed_codes(lookup[r['id']]):
                 raise ValueError('invalid reason code')
-            ordered.append({**lookup[r['id']], 'aiReason': REASONS[code]})
         # Required entries remain the first delivery group, even if AI put an optional first.
-        ordered.sort(key=lambda c: c['priority'] != 'required')
-        if key:
-            if len(_CACHE) >= 32: _CACHE.pop(next(iter(_CACHE)))
-            codes = {r['id']:r['reason_code'] for r in rows}
-            _CACHE[key] = (time.monotonic(),[(c['id'],codes[c['id']]) for c in ordered])
-        return ordered, {'mode': 'ai', 'reason': 'AI仅对合格图表排序；数值与结论均来自规则'}
+        rows.sort(key=lambda row: lookup[row["id"]]["priority"] != "required")
+        return rows
     except Exception as exc:
         logger.info('Factory chart AI ordering unavailable (%s)', type(exc).__name__)
-        return candidates, {**fallback, 'reason': '未经AI排序：AI暂不可用或回复未通过候选校验'}
+        return None

@@ -133,7 +133,7 @@ def previous_context(jobs, current_job, analysis):
             'message': '历史分析仅用于发现重复提醒与安排核对；本期金额重新按原始工单计算，不相加日报单价或重复汇总重叠日期。未再命中不代表业务问题已经解决。'}
 
 
-async def compile_report(job, history, actor):
+async def compile_report(job, history, actor, *, cache_scope=None):
     analysis = job['facts']
     period = analysis['periodMetadata']
     fingerprint = period['fingerprint']
@@ -149,7 +149,11 @@ async def compile_report(job, history, actor):
     analysis['analysisHistory']=context
     if projects:
         from smartbi.services.alert_local_ai import enrich
-        await enrich(report, actor,analysis_context=analysis)
+        if cache_scope is None:
+            await enrich(report, actor, analysis_context=analysis)
+        else:
+            await enrich(report, actor, analysis_context=analysis, cache_scope=cache_scope, allow_local_cache=False)
+            report['ai'].pop('cacheToken', None)
     else:
         report['ai'] = {'status': 'not_applicable', 'message': '本期没有可归属工单，未调用AI猜测成本或生产原因。'}
     configured_model=os.environ.get('SMARTBI_ALERT_AI_MODEL')
@@ -223,7 +227,8 @@ async def run_one(config):
         else:
             job['facts']['analysisValidationFeedback']=previous.get('ai',{}).get('validationFeedback')
             history = await asyncio.to_thread(db.history, key, job, 100)
-            result = await compile_report(job, history, actor)
+            from common.smartbi_analysis_cache import AnalysisScope
+            result = await compile_report(job, history, actor, cache_scope=AnalysisScope(key['tenant_id'], 'system:blacklake-period'))
         from smartbi.services.local_analyst import retain_usage
         retain_usage(result['ai'],(job.get('result') or {}).get('ai',{}))
         ai_status=result['ai'].get('status')

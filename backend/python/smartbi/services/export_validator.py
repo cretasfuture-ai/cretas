@@ -17,12 +17,30 @@ Export Validator - LLM 二次核对导出完整性
 import json
 import logging
 import io
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 import openpyxl
 
+from common.smartbi_analysis_cache import AnalysisScope, cached_response, result_key
+
 logger = logging.getLogger(__name__)
+
+
+def _response_object(content: str) -> dict:
+    match = re.search(r'```json\s*([\s\S]*?)\s*```', content)
+    if match:
+        content = match.group(1)
+    else:
+        match = re.search(r'\{[\s\S]*\}', content)
+        if match:
+            content = match.group(0)
+    try:
+        value = json.loads(content)
+    except json.JSONDecodeError:
+        return {}
+    return value if isinstance(value, dict) else {}
 
 
 @dataclass
@@ -429,25 +447,11 @@ class ExportValidator:
 
     def _parse_llm_response(self, response: str) -> Dict[str, Any]:
         """解析 LLM 响应"""
-        import re
-
-        # 尝试提取 JSON
-        json_match = re.search(r'```json\s*([\s\S]*?)\s*```', response)
-        if json_match:
-            response = json_match.group(1)
-        else:
-            brace_match = re.search(r'\{[\s\S]*\}', response)
-            if brace_match:
-                response = brace_match.group(0)
-
-        try:
-            return json.loads(response)
-        except json.JSONDecodeError:
-            return {
-                "overall_ok": True,
-                "overall_summary": "LLM响应解析失败",
-                "issues": []
-            }
+        return _response_object(response) or {
+            "overall_ok": True,
+            "overall_summary": "LLM响应解析失败",
+            "issues": [],
+        }
 
 
 # ============================================================
@@ -461,10 +465,23 @@ class SimpleLLMClient:
     实际使用时替换为真实的 API 调用
     """
 
-    def __init__(self, api_key: str = None, base_url: str = None, model: str = "gpt-4"):
+    def __init__(self, api_key: str = None, base_url: str = None, model: str = "gpt-4", *,
+                 cache_scope: AnalysisScope | None = None, data_version: str = ""):
         self.api_key = api_key
         self.base_url = base_url or "https://api.openai.com/v1"
         self.model = model
+        self.cache_scope = cache_scope
+        self.data_version = data_version
+        self._responses: list[dict] = []
+
+    @property
+    def cache_fields(self) -> dict:
+        tokens = list(dict.fromkeys(result["cacheToken"] for result in self._responses if "cacheToken" in result))
+        return {
+            "cacheHit": bool(self._responses) and all(result["cacheHit"] for result in self._responses),
+            "cacheToken": tokens[0] if len(tokens) == 1 else None,
+            "cacheTokens": tokens,
+        }
 
     async def chat(self, prompt: str) -> str:
         """
@@ -483,9 +500,29 @@ class SimpleLLMClient:
             "temperature": 0.1
         }
 
-        with llm_caller_context("export_validator_fix"):
-            data = await call_chain(SLOT.INSIGHTS, payload, timeout=60.0)
-        return data["choices"][0]["message"]["content"]
+        async def generate():
+            with llm_caller_context("export_validator_fix"):
+                data = await call_chain(SLOT.INSIGHTS, payload, timeout=60.0)
+            return {"content": data["choices"][0]["message"]["content"]}
+
+        def cacheable(result):
+            value = _response_object(result["content"])
+            if "fixes_applied" in value:
+                fixes = value["fixes_applied"]
+                return isinstance(fixes, list) and all(isinstance(fix, dict) for fix in fixes)
+            issues = value.get("issues")
+            return (isinstance(value.get("overall_ok"), bool) and isinstance(issues, list)
+                    and all(isinstance(issue, str) for issue in issues))
+
+        key = result_key(self.cache_scope, "export-review", (self.data_version, prompt),
+                         prompt_version="export-review-v1", model_version=f"insights-v1:{self.model}")
+        try:
+            result = await cached_response(key, generate, cacheable=cacheable)
+        except Exception:
+            self._responses.append({"cacheHit": False})
+            raise
+        self._responses.append({name: result[name] for name in ("cacheHit", "cacheToken") if name in result})
+        return result["content"]
 
 
 # ============================================================
@@ -646,20 +683,7 @@ class ExportFixer:
 
     def _parse_fix_response(self, response: str) -> Dict[str, Any]:
         """解析 LLM 修复响应"""
-        import re
-
-        json_match = re.search(r'```json\s*([\s\S]*?)\s*```', response)
-        if json_match:
-            response = json_match.group(1)
-        else:
-            brace_match = re.search(r'\{[\s\S]*\}', response)
-            if brace_match:
-                response = brace_match.group(0)
-
-        try:
-            return json.loads(response)
-        except json.JSONDecodeError:
-            return {"fixes_applied": [], "fix_summary": "解析失败"}
+        return _response_object(response) or {"fixes_applied": [], "fix_summary": "解析失败"}
 
     def _apply_fixes(
         self,

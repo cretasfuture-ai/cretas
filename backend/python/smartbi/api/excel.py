@@ -6,15 +6,18 @@ Endpoints for Excel file parsing and processing.
 Includes Zero-Code auto-parse functionality.
 """
 import asyncio
+from hashlib import sha256
 import logging
 import time
 from typing import Optional, List, Dict, Any
 
-from fastapi import APIRouter, File, UploadFile, Form, HTTPException, Query
+from fastapi import APIRouter, File, UploadFile, Form, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, PrivateAttr
 
 from common.responses import ApiException, ErrorCode
+from common.smartbi_analysis_cache import analysis_result, cached_response, request_scope, result_key
+from common.tenant_identity import require_same_factory
 
 from services.excel_parser import ExcelParser
 from services.field_detector import FieldDetector
@@ -2632,10 +2635,14 @@ class ExportWithValidationResponse(BaseModel):
     # 错误信息
     error: Optional[str] = None
     processing_time_ms: int = 0
+    cacheHit: bool = False
+    cacheToken: Optional[str] = None
+    cacheTokens: List[str] = Field(default_factory=list)
 
 
 @router.post("/export/validate", response_model=ExportWithValidationResponse)
 async def export_with_validation(
+    request: Request,
     file: UploadFile = File(...),
     sheet_index: Optional[int] = Form(0),
     sheetIndex: Optional[int] = Form(None),
@@ -2697,7 +2704,9 @@ async def export_with_validation(
                     llm_client = SimpleLLMClient(
                         api_key=api_key,
                         base_url=base_url,
-                        model=model
+                        model=model,
+                        cache_scope=request_scope(request),
+                        data_version=sha256(content).hexdigest(),
                     )
             except Exception as e:
                 logger.warning(f"LLM client init failed, skipping LLM validation: {e}")
@@ -2742,7 +2751,8 @@ async def export_with_validation(
             column_count=data.column_count,
             preview_rows=preview,
             validation=validation_model,
-            processing_time_ms=processing_time
+            processing_time_ms=processing_time,
+            **(llm_client.cache_fields if llm_client else {}),
         )
 
     except Exception as e:
@@ -2756,6 +2766,7 @@ async def export_with_validation(
 
 @router.post("/export/validate-fix", response_model=ExportWithValidationResponse)
 async def export_with_validation_and_fix(
+    request: Request,
     file: UploadFile = File(...),
     sheet_index: Optional[int] = Form(0),
     sheetIndex: Optional[int] = Form(None),
@@ -2818,7 +2829,9 @@ async def export_with_validation_and_fix(
                 llm_client = SimpleLLMClient(
                     api_key=api_key,
                     base_url=base_url,
-                    model=model
+                    model=model,
+                    cache_scope=request_scope(request),
+                    data_version=sha256(content).hexdigest(),
                 )
         except Exception as e:
             logger.warning(f"LLM client init failed: {e}")
@@ -2889,7 +2902,8 @@ async def export_with_validation_and_fix(
             preview_rows=preview,
             validation=validation_model,
             fix_log=fix_log if fix_log else None,
-            processing_time_ms=processing_time
+            processing_time_ms=processing_time,
+            **(llm_client.cache_fields if llm_client else {}),
         )
 
     except Exception as e:
@@ -2903,6 +2917,7 @@ async def export_with_validation_and_fix(
 
 @router.post("/export/batch/validate")
 async def batch_export_with_validation(
+    request: Request,
     file: UploadFile = File(...),
     use_llm: bool = Form(True),
     max_rows_per_md: int = Form(500)
@@ -2950,7 +2965,9 @@ async def batch_export_with_validation(
                     llm_client = SimpleLLMClient(
                         api_key=api_key,
                         base_url=base_url,
-                        model=model
+                        model=model,
+                        cache_scope=request_scope(request),
+                        data_version=sha256(content).hexdigest(),
                     )
             except Exception as e:
                 logger.warning(f"LLM client init failed: {e}")
@@ -3009,7 +3026,8 @@ async def batch_export_with_validation(
             "sheets_with_errors": sheets_with_errors,
             "sheets_with_warnings": sheets_with_warnings,
             "validation_results": validation_results,
-            "processing_time_ms": processing_time
+            "processing_time_ms": processing_time,
+            **(llm_client.cache_fields if llm_client else {"cacheHit": False}),
         }
 
     except Exception as e:
@@ -3255,15 +3273,37 @@ class LLMAnalysisResponse(BaseModel):
     warnings: List[str] = []
     error: Optional[str] = None
     processing_time_ms: int = 0
+    cacheHit: bool = False
+    cacheToken: Optional[str] = None
 
 
 @router.post("/analyze-structure", response_model=LLMAnalysisResponse)
 async def analyze_excel_structure(
+    http_request: Request,
     file: UploadFile = File(...),
     sheet_index: Optional[int] = Form(0),
     sheetIndex: Optional[int] = Form(None),
     include_recommendations: bool = Form(True)
 ):
+    filename = _fix_filename(file.filename or "")
+    content = await file.read()
+    effective_index = sheet_index if sheet_index is not None else (sheetIndex or 0)
+    key = result_key(request_scope(http_request), "excel-structure-analysis",
+                     (sha256(content).hexdigest(), filename, effective_index, include_recommendations),
+                     prompt_version="excel-structure-analysis-v1", model_version="workbook-routing-v1")
+
+    async def generate():
+        result = await _analyze_excel_structure(content, filename, effective_index, include_recommendations)
+        return result.model_dump()
+
+    return await cached_response(
+        key, generate,
+        cacheable=lambda result: result["success"] and bool(result["structure"])
+        and result["structure"]["success"] and result["structure"]["method"] == "llm",
+    )
+
+
+async def _analyze_excel_structure(content, filename, effective_index, include_recommendations):
     """
     使用LLM分析Excel结构
 
@@ -3290,7 +3330,6 @@ async def analyze_excel_structure(
     start_time = time.time()
 
     try:
-        filename = _fix_filename(file.filename or "")
         ext = "." + filename.split(".")[-1].lower() if "." in filename else ""
 
         if ext not in [".xlsx", ".xls"]:
@@ -3298,13 +3337,6 @@ async def analyze_excel_structure(
                 "Supported file types: .xlsx, .xls",
                 ErrorCode.VALIDATION_ERROR, 400,
             )
-
-        content = await file.read()
-
-        # 确定sheet索引
-        effective_index = sheet_index if sheet_index is not None else sheetIndex
-        if effective_index is None:
-            effective_index = 0
 
         # 分析结构
         analyzer = LLMStructureAnalyzer()
@@ -3382,11 +3414,24 @@ async def analyze_excel_structure(
 
 @router.post("/smart-analyze")
 async def smart_analyze_excel(
+    http_request: Request,
     file: UploadFile = File(...),
     sheet_index: Optional[int] = Form(0),
     sheetIndex: Optional[int] = Form(None),
     max_analyses: int = Form(5)
 ):
+    content = await file.read()
+    effective_index = sheet_index if sheet_index is not None else (sheetIndex or 0)
+    key = result_key(request_scope(http_request), "excel-smart-analysis",
+                     (sha256(content).hexdigest(), effective_index, max_analyses),
+                     prompt_version="excel-smart-analysis-v1", model_version="workbook-routing-v1")
+    return await cached_response(
+        key, lambda: _smart_analyze_excel(content, effective_index, max_analyses),
+        cacheable=lambda result: result.get("success") and result.get("structure", {}).get("method") == "llm",
+    )
+
+
+async def _smart_analyze_excel(content, effective_index, max_analyses):
     """
     智能分析Excel - 完整流程
 
@@ -3410,13 +3455,6 @@ async def smart_analyze_excel(
     start_time = time.time()
 
     try:
-        content = await file.read()
-
-        # 确定sheet索引
-        effective_index = sheet_index if sheet_index is not None else sheetIndex
-        if effective_index is None:
-            effective_index = 0
-
         # 1. 原始导出
         raw_exporter = RawExporter()
         raw_data = raw_exporter.export_sheet(content, sheet_index=effective_index)
@@ -3575,6 +3613,8 @@ class SheetAnalysisResultModel(BaseModel):
 class MultiSheetAnalysisResponse(BaseModel):
     """Response for multi-sheet workbook analysis"""
     success: bool
+    cacheHit: bool = False
+    cacheToken: Optional[str] = None
     totalSheets: int = 0
     successCount: int = 0
     failedCount: int = 0
@@ -3584,10 +3624,12 @@ class MultiSheetAnalysisResponse(BaseModel):
     indexMetadata: Optional[IndexMetadataModel] = None
     processingTimeMs: int = 0
     error: Optional[str] = None
+    _complete_structure: bool = PrivateAttr(default=False)
 
 
 @router.post("/analyze-workbook", response_model=MultiSheetAnalysisResponse)
 async def analyze_workbook(
+    http_request: Request,
     file: UploadFile = File(...),
     factory_id: Optional[str] = Form(None),
     skip_empty: bool = Form(True),
@@ -3597,6 +3639,28 @@ async def analyze_workbook(
     generate_charts: bool = Form(True),
     generate_insights: bool = Form(True)
 ):
+    content = await file.read()
+    filename = _fix_filename(file.filename or "")
+    scope = request_scope(http_request)
+    if scope is not None:
+        factory_id = require_same_factory(http_request, factory_id)
+    options = (skip_empty, skip_index_sheets, extract_index_metadata, max_rows_per_sheet,
+               generate_charts, generate_insights)
+    key = result_key(scope, "excel-workbook-analysis", (sha256(content).hexdigest(), filename, options),
+                     prompt_version="excel-workbook-analysis-v1", model_version="workbook-routing-v1")
+
+    async with analysis_result(key) as cached:
+        if cached.entry.hit:
+            return {**cached.entry.value, **cached.response_fields}
+        result = await _analyze_workbook(content, filename, factory_id, *options)
+        response = result.model_dump()
+        if result.success and result.successCount > 0 and result.failedCount == 0 and result._complete_structure:
+            await cached.store(response)
+        return {**response, **cached.response_fields}
+
+
+async def _analyze_workbook(content, filename, factory_id, skip_empty, skip_index_sheets, extract_index_metadata,
+                            max_rows_per_sheet, generate_charts, generate_insights):
     """
     Analyze all sheets in an Excel workbook with index metadata extraction.
 
@@ -3628,7 +3692,6 @@ async def analyze_workbook(
 
     try:
         # Validate file type
-        filename = _fix_filename(file.filename or "")
         ext = "." + filename.split(".")[-1].lower() if "." in filename else ""
 
         if ext not in [".xlsx", ".xls"]:
@@ -3637,7 +3700,6 @@ async def analyze_workbook(
                 ErrorCode.VALIDATION_ERROR, 400,
             )
 
-        content = await file.read()
         logger.info(f"Analyze workbook: {filename}, size={len(content)}")
 
         # Initialize parallel processor
@@ -3873,7 +3935,7 @@ async def analyze_workbook(
 
             processing_time = int((time.time() - start_time) * 1000)
 
-            return MultiSheetAnalysisResponse(
+            result = MultiSheetAnalysisResponse(
                 success=workbook_result.success,
                 totalSheets=workbook_result.total_sheets,
                 successCount=workbook_result.processed_sheets,
@@ -3885,6 +3947,11 @@ async def analyze_workbook(
                 processingTimeMs=processing_time,
                 error=workbook_result.error
             )
+            result._complete_structure = all(
+                sheet.detection_method and sheet.detection_method != "fallback"
+                for sheet in workbook_result.sheets if sheet.success
+            )
+            return result
 
         finally:
             processor.close()
@@ -3902,6 +3969,7 @@ async def analyze_workbook(
 
 @router.post("/analyze-workbook-stream")
 async def analyze_workbook_stream(
+    http_request: Request,
     file: UploadFile = File(...),
     question: Optional[str] = Form(None),
     max_parallel: int = Form(3)
@@ -3930,31 +3998,22 @@ async def analyze_workbook_stream(
 
     from services.unified_analyzer import UnifiedAnalyzer, AnalysisOptions
 
+    cache_scope = request_scope(http_request)
+
     async def event_generator():
         analyzer = UnifiedAnalyzer()
         try:
-            options = AnalysisOptions()
+            options = AnalysisOptions(use_cache=False, save_to_cache=False)
             async for event in analyzer.analyze_all_sheets_stream(
-                file_bytes=content,
-                question=question,
-                options=options,
-                max_parallel=max_parallel
+                file_bytes=content, question=question, options=options, max_parallel=max_parallel,
+                cache_scope=cache_scope,
             ):
-                evt_type = event.get("event", "info")
-                evt_data = event.get("data", {})
-
-                # Convert dataclass results to dicts for JSON serialization
-                if evt_type == "sheet" and "result" in evt_data:
-                    result_obj = evt_data["result"]
-                    if hasattr(result_obj, "to_dict"):
-                        evt_data = {**evt_data, "result": result_obj.to_dict()}
-
-                safe_data = json.dumps(evt_data, ensure_ascii=False, default=str)
-                yield f"event: {evt_type}\ndata: {safe_data}\n\n"
+                kind = event["event"]
+                data = json.dumps(event["data"], ensure_ascii=False, default=str)
+                yield f"event: {kind}\ndata: {data}\n\n"
         except Exception as e:
             logger.error(f"Workbook stream error: {e}", exc_info=True)
-            err_data = json.dumps({"error": "Internal processing error"}, ensure_ascii=False)
-            yield f"event: error\ndata: {err_data}\n\n"
+            yield 'event: error\ndata: {"error":"Internal processing error"}\n\n'
         finally:
             await analyzer.close()
 

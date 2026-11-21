@@ -251,9 +251,7 @@ def timed_planner(configured_router, monkeypatch):
     monkeypatch.setattr(llm_router, "asyncio", router_waits)
     monkeypatch.setattr(conversation, "_planner_monotonic", lambda: 0.0)
     monkeypatch.setattr(llm_router, "_LOCAL_ATTEMPT_TIMEOUT_S", 8.0)
-    conversation._PLAN_CACHE.clear()
-    yield conversation, planner_waits, router_waits
-    conversation._PLAN_CACHE.clear()
+    return conversation, planner_waits, router_waits
 
 
 @pytest.mark.asyncio
@@ -391,20 +389,22 @@ async def test_shared_chart_callers_keep_cloud_fallback_and_timeouts(configured_
 async def test_planner_cache_keeps_main_rules_separate_from_background_ai(configured_router, monkeypatch):
     from smartbi.services.factory_charts import conversation
 
-    conversation._PLAN_CACHE.clear()
+    from common import smartbi_analysis_cache
+    from tests.analysis_cache_fixtures import MemoryCache
+
+    cache = MemoryCache()
+    monkeypatch.setattr(smartbi_analysis_cache, "get_cache", lambda: cache)
+    scope = smartbi_analysis_cache.AnalysisScope("F001", "test")
     client = _PlanningClient(model_seconds=0)
     monkeypatch.delenv("LLM_LOCAL_CANADA_API_KEY")
     monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
-    try:
-        _, main = await conversation.plan("今天的生产产量", CATALOG, factory_id="F001")
-        _, background = await conversation.plan("今天的生产产量", CATALOG, factory_id="F001", background=True)
-        _, cached_main = await conversation.plan("今天的生产产量", CATALOG, factory_id="F001")
-    finally:
-        conversation._PLAN_CACHE.clear()
+    _, main = await conversation.plan("今天的生产产量", CATALOG, factory_id="F001", cache_scope=scope)
+    _, background = await conversation.plan("今天的生产产量", CATALOG, factory_id="F001", background=True, cache_scope=scope)
+    _, main_again = await conversation.plan("今天的生产产量", CATALOG, factory_id="F001", cache_scope=scope)
 
     assert (main["mode"], main["cache"]) == ("rule", "miss")
     assert (background["mode"], background["cache"]) == ("ai", "miss")
-    assert (cached_main["mode"], cached_main["cache"]) == ("rule", "hit")
+    assert (main_again["mode"], main_again["cache"]) == ("rule", "miss")
     assert [call[:2] for call in client.calls] == [(BASE_URL + "/chat/completions", AURORA[1])]
 
 

@@ -59,6 +59,8 @@ export interface FactoryAnalysisData {
   question: string;
   status: 'answered' | 'clarification' | 'unavailable';
   answer: string;
+  cacheHit?: boolean;
+  cacheToken?: string;
   selectedIds: string[];
   recommendations: FactoryRecommendation[];
   catalog: FactoryAnalysisCatalogItem[];

@@ -54,6 +54,8 @@ export interface InsightResult {
   tier: 1 | 2;
   /** G4: corpus row key returned by Tier 2 endpoint; null/undefined for Tier 1 rules-based insights */
   input_hash?: string | null;
+  cacheHit?: boolean;
+  cacheToken?: string;
 }
 
 export interface UserPermissions {
@@ -1118,6 +1120,8 @@ interface Tier2ResponseData {
   tier: number;
   /** G4: corpus row key for the feedback endpoint */
   input_hash?: string | null;
+  cacheHit?: boolean;
+  cacheToken?: string;
 }
 
 interface Tier2Response {
@@ -1233,6 +1237,8 @@ export async function fetchTier2Insight(
       source: d.source,
       tier: 2,
       input_hash: d.input_hash ?? null,  // G4: carry corpus key for feedback
+      cacheHit: d.cacheHit,
+      cacheToken: d.cacheToken,
     };
   } catch (err) {
     console.warn('[chart-insight] Tier2 fetch failed (honest-null):', err);
@@ -1256,6 +1262,7 @@ export async function submitInsightFeedback(
   inputHash: string,
   vote: 'up' | 'down',
   factoryId: string,
+  cacheToken?: string,
 ): Promise<boolean> {
   try {
     const headers = await getPythonAuthHeaders();
@@ -1264,7 +1271,7 @@ export async function submitInsightFeedback(
       method: 'POST',
       headers,
       credentials: 'include',
-      body: JSON.stringify({ input_hash: inputHash, vote, factory_id: factoryId }),
+      body: JSON.stringify({ input_hash: inputHash, vote, factory_id: factoryId, cache_token: cacheToken }),
     });
 
     if (!response.ok) {

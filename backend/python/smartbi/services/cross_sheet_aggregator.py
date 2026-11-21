@@ -8,10 +8,8 @@ Aggregates data across multiple uploaded sheets for comprehensive analysis:
 3. Builds comparison charts (bar chart of KPIs across sheets)
 4. Calls LLM for cross-sheet AI insights
 """
-import hashlib
 import logging
 from common.process_secret_harness import with_process_secret_harness
-import time
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -20,94 +18,9 @@ import pandas as pd
 
 from config import get_settings
 from common.utils.llm_limiter import llm_rate_limit
+from common.smartbi_analysis_cache import AnalysisScope, analysis_result, result_key
 
 logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# AI summary cache (LRU, TTL-based)
-# ---------------------------------------------------------------------------
-
-class CrossSheetCache:
-    """In-memory cache for cross-sheet AI summaries.
-
-    Key:  MD5(upload_ids + sorted sheet names + sorted KPI keys)[:24]
-    TTL:  3600 s (1 hour)
-    Max:  200 entries, LRU eviction
-    """
-
-    def __init__(self, ttl_seconds: int = 3600, max_entries: int = 200):
-        self._cache: Dict[str, Dict[str, Any]] = {}
-        self._ttl = ttl_seconds
-        self._max = max_entries
-
-    # -- key helpers --------------------------------------------------------
-
-    @staticmethod
-    def _build_key(
-        kpi_comparison: List[Dict[str, Any]],
-        sheet_names: List[str],
-    ) -> str:
-        sheet_part = "|".join(sorted(sheet_names))
-        kpi_keys: List[str] = []
-        for item in kpi_comparison:
-            kpi_keys.extend(sorted(item.get("kpis", {}).keys()))
-        kpi_part = "|".join(sorted(set(kpi_keys)))
-        raw = f"{sheet_part}::{kpi_part}"
-        return hashlib.md5(raw.encode()).hexdigest()[:24]
-
-    # -- public API ---------------------------------------------------------
-
-    def get(
-        self,
-        kpi_comparison: List[Dict[str, Any]],
-        sheet_names: List[str],
-    ) -> Optional[str]:
-        key = self._build_key(kpi_comparison, sheet_names)
-        entry = self._cache.get(key)
-        if entry is None:
-            return None
-        if time.time() - entry["created_at"] > self._ttl:
-            del self._cache[key]
-            return None
-        entry["accessed_at"] = time.time()
-        entry["access_count"] += 1
-        logger.info("CrossSheetCache HIT key=%s", key)
-        return entry["value"]
-
-    def set(
-        self,
-        kpi_comparison: List[Dict[str, Any]],
-        sheet_names: List[str],
-        value: str,
-    ) -> None:
-        key = self._build_key(kpi_comparison, sheet_names)
-        now = time.time()
-        self._cache[key] = {
-            "value": value,
-            "created_at": now,
-            "accessed_at": now,
-            "access_count": 1,
-        }
-        if len(self._cache) > self._max:
-            self._evict()
-        logger.debug("CrossSheetCache SET key=%s", key)
-
-    def _evict(self) -> None:
-        """Remove oldest-accessed 10 % of entries."""
-        if len(self._cache) <= self._max:
-            return
-        sorted_keys = sorted(
-            self._cache, key=lambda k: self._cache[k]["accessed_at"]
-        )
-        to_remove = max(1, len(sorted_keys) // 10)
-        for k in sorted_keys[:to_remove]:
-            self._cache.pop(k, None)
-        logger.debug("CrossSheetCache evicted %d entries", to_remove)
-
-
-# Module-level singleton
-_cross_sheet_cache = CrossSheetCache()
 
 
 class CrossSheetAggregator:
@@ -125,7 +38,9 @@ class CrossSheetAggregator:
         self,
         upload_ids: List[int],
         sheet_names: List[str],
-        factory_id: str = "F001"
+        factory_id: str = "F001",
+        *,
+        cache_scope: AnalysisScope | None = None,
     ) -> Dict[str, Any]:
         """
         Main aggregation entry point.
@@ -171,38 +86,33 @@ class CrossSheetAggregator:
             # 3. Build comparison charts
             charts = self._build_comparison_charts(kpi_comparison, all_sheet_data)
 
-            # 4. Generate AI summary (cache → LLM → statistical fallback)
-            ai_summary = None
+            key = result_key(cache_scope, "cross-sheet-summary", (all_sheet_data, kpi_comparison),
+                             prompt_version="cross-sheet-summary-v1", model_version="insights-routing-v1")
             llm_fallback = False
-            cache_hit = False
-
-            # Try cache first
-            cached = _cross_sheet_cache.get(kpi_comparison, sheet_names)
-            if cached is not None:
-                ai_summary = cached
-                cache_hit = True
-            else:
-                try:
-                    ai_summary = await self._generate_ai_summary(kpi_comparison, all_sheet_data)
-                    if ai_summary:
-                        _cross_sheet_cache.set(kpi_comparison, sheet_names, ai_summary)
-                except Exception as e:
-                    logger.error(f"LLM summary failed, using statistical fallback: {e}")
-                    ai_summary = self._generate_statistical_summary(kpi_comparison)
-                    llm_fallback = True
+            async with analysis_result(key) as cached:
+                if cached.entry.hit:
+                    ai_summary = cached.entry.value["summary"]
+                else:
+                    try:
+                        ai_summary = await self._generate_ai_summary(kpi_comparison, all_sheet_data)
+                        if self.settings.llm_api_key and ai_summary and ai_summary.strip():
+                            await cached.store({"summary": ai_summary})
+                    except Exception as e:
+                        logger.error(f"LLM summary failed, using statistical fallback: {e}")
+                        ai_summary = self._generate_statistical_summary(kpi_comparison)
+                        llm_fallback = True
 
             result: Dict[str, Any] = {
                 "success": True,
                 "kpiComparison": kpi_comparison,
                 "charts": charts,
                 "aiSummary": ai_summary,
+                **cached.response_fields,
             }
             if fetch_errors:
                 result["fetchErrors"] = fetch_errors
             if llm_fallback:
                 result["llmFallback"] = True
-            if cache_hit:
-                result["cacheHit"] = True
             return result
 
         except Exception as e:

@@ -97,8 +97,12 @@ async def _trigger_materialization(upload_id: int, factory_id: Optional[str] = N
             from smartbi.services.materialized_analytics.llm_materializer import (
                 generate_llm_insights,
             )
+            from common.smartbi_analysis_cache import AnalysisScope
             t_llm = time.time()
-            exec_summary = await generate_llm_insights(results, domain_value, factory_id=factory_id)
+            exec_summary = await generate_llm_insights(
+                results, domain_value, factory_id=factory_id, data_version=upload_id,
+                cache_scope=AnalysisScope(factory_id, "system:materialization"),
+            )
             logger.info(
                 f"[hook] upload {upload_id}: LLM insight materialization done "
                 f"in {time.time() - t_llm:.1f}s"

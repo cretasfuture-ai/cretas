@@ -161,6 +161,7 @@ async def factory_recommendations(request: FactoryRecommendationRequest, http_re
     from smartbi.api.factory_production_gold import _can_view_cost
     from starlette.concurrency import run_in_threadpool
     from smartbi.services.factory_charts import blacklake_production, engine, sources, ranking, finance_sources, operational_sources, captured_sources, trusted_business_sources, detail_store, details
+    from common.smartbi_analysis_cache import request_scope
 
     factory_id = require_same_factory(http_request, request.factory_id)
     role = getattr(http_request.state, 'role', None)
@@ -236,7 +237,10 @@ async def factory_recommendations(request: FactoryRecommendationRequest, http_re
     if subject_gap:
         gaps.append(subject_gap)
     errors.extend({'source': gap['title'], 'message': gap['missing'][0]} for gap in gaps if gap.get('error'))
-    candidates, order = await ranking.rank(candidates, request.use_ai, cache_scope=f'{factory_id}:{role}')
+    candidates, order = await ranking.rank(
+        candidates, request.use_ai, cache_scope=request_scope(http_request),
+        data_version=request.model_dump(exclude={'factory_id', 'detail_candidate_ids'}),
+    )
     # These three legacy gaps describe missing capture, not missing data in
     # unrelated datasets. Remove each only after its trusted business adapter
     # has produced the corresponding real candidate for this period.
@@ -290,6 +294,8 @@ async def factory_recommendations(request: FactoryRecommendationRequest, http_re
         'sourceLabel': '本厂业务系统' if request.source == 'business' else f'本厂上传报表 #{request.upload_id}',
         'period': {'label': label, 'year': request.year, 'periodType': request.period_type,
                    'startMonth': request.start_month, 'endMonth': request.end_month}, 'ranking': order,
+        'cacheHit': order.get('cacheHit', False),
+        **({'cacheToken': order['cacheToken']} if order.get('cacheToken') else {}),
         'recommendations': candidates, 'defaultSelection': default_selection(candidates, guided=request.guided),
         'subjects': subjects,
         'analysisSubject': request.analysis_subject,
@@ -370,6 +376,8 @@ def _analysis_response(data: dict[str, Any], *, factory_id: str, source: str,
         'followUpQuestions': follow_up_questions,
         'contextId': context_id,
         'subjects': subjects,
+        'cacheHit': bool(planner_mode and planner_mode.get('cacheHit')),
+        **({'cacheToken': planner_mode['cacheToken']} if planner_mode and planner_mode.get('cacheToken') else {}),
         **({'plannerMode': planner_mode} if planner_mode is not None else {}),
     }, 'message': answer if status != 'answered' else '工厂分析完成'})
 
@@ -674,10 +682,21 @@ async def _render_factory_analysis_turn(request: FactoryAnalysisRequest, http_re
                                   recommendations=[], catalog=catalog, facts=[], limitations=[subject_error],
                                   context_id=context.context_id, subjects=subjects,
                                   follow_up_questions=['请指定一个明确的产品名称或SKU', '取消本轮分析'])
+    from common.smartbi_analysis_cache import request_scope
+
+    cache_scope = request_scope(http_request)
     selected_ids, planner_mode = await conversation.plan(
         request.question, catalog, context.history, factory_id=factory_id,
         authorized_subjects=subjects,
-        authorized_recommendations=recommendation_data.get('recommendations') or [])
+        authorized_recommendations=recommendation_data.get('recommendations') or [],
+        cache_scope=cache_scope,
+        allow_cache=cache_scope is not None,
+        data_version={
+            'scope': effective_scope, 'source': context.source, 'uploadId': context.upload_id,
+            'period': recommendation_data.get('period'), 'blacklake': report,
+            'unavailable': recommendation_data.get('unavailable'),
+            'sourceErrors': recommendation_data.get('sourceErrors'),
+        })
     if planner_mode.get('mode') not in {'ai', 'rule'} or not selected_ids:
         reason = planner_mode.get('reason', '图表规划不可用')
         conversation.touch_context(context, request.question, [], scope=scope)
@@ -1118,8 +1137,20 @@ async def batch_generate(request: FinancialDashboardRequest, http_request: Reque
 
 
 @router.post("/analyze")
-async def analyze_chart(request: AnalyzeRequest):
+async def analyze_chart(request: AnalyzeRequest, http_request: Request):
     """AI analysis for a single chart, with optional follow-up conversation."""
+    from common.smartbi_analysis_cache import cached_response, request_scope, result_key
+
+    key = result_key(
+        request_scope(http_request), "financial-chart-analysis", request.model_dump(exclude={'follow_up_question'}),
+        prompt_version="financial-analysis-v1", model_version="insights-routing-v1",
+        question=request.follow_up_question or "",
+    )
+    return await cached_response(key, lambda: _analyze_chart(request),
+                                 cacheable=lambda value: value["success"] and bool(value["analysis"].strip()))
+
+
+async def _analyze_chart(request: AnalyzeRequest):
     try:
         from common.llm_router import call_chain, SLOT
         from common.llm_metrics import llm_caller_context

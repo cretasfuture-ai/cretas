@@ -31,7 +31,8 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from common.smartbi_analysis_cache import is_current, request_scope
 
 from smartbi.database.connection import get_db_context, is_postgres_enabled
 from smartbi.database.models import SmartBiPgAnalysisResult, SmartBiPgExcelUpload
@@ -49,6 +50,7 @@ class SaveCacheRequest(BaseModel):
     charts: Optional[List[Dict[str, Any]]] = None
     kpiSummary: Optional[Dict[str, Any]] = None
     aiAnalysis: Optional[str] = None
+    aiCacheToken: Optional[str] = Field(default=None, max_length=97)
     structuredAI: Optional[Dict[str, Any]] = None
     financialMetrics: Optional[Dict[str, Any]] = None
 
@@ -105,23 +107,24 @@ async def get_analysis_cache(upload_id: int, request: Request):
 
             # We store all enrichment data in a single "enrichment_cache" record
             row = rows[0]
-            result = row.analysis_result or {}
+            result = dict(row.analysis_result or {})
+            cached_at = row.created_at.isoformat() if row.created_at else None
 
-            return {
-                "success": True,
-                "cached": True,
-                "cachedAt": row.created_at.isoformat() if row.created_at else None,
-                "charts": result.get("charts"),
-                "kpiSummary": result.get("kpiSummary"),
-                "aiAnalysis": result.get("aiAnalysis"),
-                "structuredAI": result.get("structuredAI"),
-                "financialMetrics": result.get("financialMetrics"),
-                "chartConfig": result.get("chartConfig"),
-                # Apr 25 2026 (Task C): pass-through partial-cache marker so FE
-                # knows it should still kick off the LLM enrichment pipeline to
-                # fill in charts / aiAnalysis / structuredAI after rendering KPIs.
-                "_partial": bool(result.get("_partial")),
-            }
+        token = result.get("aiCacheToken")
+        invalidated = bool(token) and not await is_current(request_scope(request), token)
+        return {
+            "success": True,
+            "cached": True,
+            "cachedAt": cached_at,
+            "charts": result.get("charts"),
+            "kpiSummary": result.get("kpiSummary"),
+            "aiAnalysis": None if invalidated else result.get("aiAnalysis"),
+            "aiCacheToken": None if invalidated else token,
+            "structuredAI": None if invalidated else result.get("structuredAI"),
+            "financialMetrics": result.get("financialMetrics"),
+            "chartConfig": result.get("chartConfig"),
+            "_partial": bool(result.get("_partial") or invalidated),
+        }
 
     except HTTPException:
         raise
@@ -156,6 +159,8 @@ async def save_analysis_cache(upload_id: int, body: SaveCacheRequest, request: R
             payload["kpiSummary"] = body.kpiSummary
         if body.aiAnalysis:
             payload["aiAnalysis"] = body.aiAnalysis
+        if body.aiCacheToken:
+            payload["aiCacheToken"] = body.aiCacheToken
         if body.structuredAI:
             payload["structuredAI"] = body.structuredAI
         if body.financialMetrics:

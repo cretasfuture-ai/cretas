@@ -645,12 +645,15 @@ async def test_chart_insight_request_upserts_own_derived_sample_without_delete(m
 
     from starlette.requests import Request
 
+    from common import smartbi_analysis_cache
     from smartbi.api import chart_insight as api
     from smartbi.services.insights.chart_insight_service import ChartInsightService
+    from tests.analysis_cache_fixtures import MemoryCache
 
     _patch_lists(monkeypatch, {"F006": _lists()})
     monkeypatch.setenv("CHART_INSIGHT_DETERMINISTIC_FIRST", "1")
     monkeypatch.setenv("SMARTBI_DISTILL_CAPTURE", "1")
+    monkeypatch.setattr(smartbi_analysis_cache, "get_cache", MemoryCache)
     statements = []
     service = ChartInsightService(_RecordingPool(statements, {"F006": "private"}), budget_tracker=None)
     monkeypatch.setattr(api, "_get_service", AsyncMock(return_value=service))

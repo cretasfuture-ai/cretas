@@ -20,8 +20,10 @@ from sqlalchemy.orm import sessionmaker
 from starlette.requests import Request
 
 import auth_middleware
+from common.smartbi_analysis_cache import analysis_result, invalidate, request_scope, result_key
 from smartbi.api import analysis_cache
 from smartbi.database.models import Base, SmartBiPgAnalysisResult, SmartBiPgExcelUpload
+from tests.analysis_cache_fixtures import analysis_cache as shared_cache  # noqa: F401
 
 
 @compiles(JSONB, "sqlite")
@@ -88,6 +90,31 @@ def test_route_is_no_longer_public():
 def test_own_factory_reads_its_cache(db):
     body = asyncio.run(analysis_cache.get_analysis_cache(OWN_UPLOAD, _request(OWN)))
     assert body["cached"] is True and body["aiAnalysis"] == f"secret of {OWN}"
+
+
+@pytest.mark.asyncio
+async def test_saved_ai_text_requires_current_role_scoped_revision(db, shared_cache):
+    owner = _request(OWN)
+    owner.state.auth_method = "jwt"
+    owner.state.role = "factory_super_admin"
+    peer = _request(OWN)
+    peer.state.auth_method = "jwt"
+    peer.state.role = "warehouse_worker"
+    scope = request_scope(owner)
+    key = result_key(scope, "workbook", [OWN_UPLOAD], prompt_version="v1", model_version="v1")
+    async with analysis_result(key) as cached:
+        await cached.store({"answer": "成本结论"})
+        token = cached.response_fields["cacheToken"]
+
+    await analysis_cache.save_analysis_cache(OWN_UPLOAD, analysis_cache.SaveCacheRequest(
+        aiAnalysis="成本结论", aiCacheToken=token, structuredAI={"summary": "成本结论"}, charts=[{"config": {}}],
+    ), owner)
+    assert (await analysis_cache.get_analysis_cache(OWN_UPLOAD, owner))["aiAnalysis"] == "成本结论"
+    peer_view = await analysis_cache.get_analysis_cache(OWN_UPLOAD, peer)
+    assert peer_view["aiAnalysis"] is None and peer_view["structuredAI"] is None and peer_view["_partial"]
+    assert await invalidate(scope, token)
+    revoked = await analysis_cache.get_analysis_cache(OWN_UPLOAD, owner)
+    assert revoked["aiAnalysis"] is None and revoked["aiCacheToken"] is None and revoked["charts"]
 
 
 @pytest.mark.parametrize(("factory", "upload_id", "status"), [

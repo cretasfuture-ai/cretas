@@ -466,7 +466,7 @@ class JWTAuthMiddleware:
         /api/food-kb/manual-chat* 时外发脱敏拿不到工厂 —— 现在没有工厂就拒绝外发, 这些请求会被拒。
         带了能验过的 Bearer: 按 token 的工厂设外发脱敏工厂 (_llm_factory) 和 RLS 租户 (PLATFORM 不算工厂)。
         操作手册问答 (ALL_FACTORIES_EGRESS_PREFIXES) 的内容是产品手册、不是某一家工厂的数据: 没有工厂时按
-        所有工厂的保密产品名脱敏, 不拒绝。只影响外发脱敏和 RLS, 不改 scope["state"] 里的身份。"""
+        所有工厂的保密产品名脱敏, 不拒绝。SmartBI 洞察也使用已验证工厂与角色隔离持久缓存。"""
         factory_id = None
         platform_caller = False
         auth_header = headers.get("authorization", "")
@@ -476,6 +476,19 @@ class JWTAuthMiddleware:
                 raw = claims.get("factoryId")
                 if raw and str(raw).strip() and str(raw).strip().upper() != "PLATFORM":
                     factory_id = str(raw)
+                    if path.startswith("/api/insight/") or path in {
+                        "/api/excel/analyze-structure",
+                        "/api/excel/smart-analyze",
+                        "/api/excel/analyze-workbook",
+                        "/api/excel/analyze-workbook-stream",
+                        "/api/excel/export/validate",
+                        "/api/excel/export/validate-fix",
+                        "/api/excel/export/batch/validate",
+                    }:
+                        scope.setdefault("state", {}).update(
+                            factory_id=factory_id, role=claims.get("role"),
+                            user_id=claims.get("userId"), auth_method="jwt",
+                        )
                 elif raw and str(raw).strip().upper() == "PLATFORM":
                     platform_caller = True
         llm_token = all_token = tenant_token = platform_token = None
