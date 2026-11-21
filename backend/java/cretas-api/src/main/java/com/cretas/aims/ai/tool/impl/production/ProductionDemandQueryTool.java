@@ -21,6 +21,7 @@ import com.cretas.aims.repository.ProductionLineRepository;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -154,7 +155,7 @@ public class ProductionDemandQueryTool extends AbstractBusinessTool {
                         item.getProductTypeId(),
                         k -> new ProductDemand(k, item.getProductName(),
                                 item.getUnit() != null ? item.getUnit() : "kg"));
-                pd.addOrderLine(so, item, pending);
+                pd.addOrderLine(so, pending);
             }
         }
 
@@ -179,37 +180,36 @@ public class ProductionDemandQueryTool extends AbstractBusinessTool {
 
         // 4b. 指定产品 (承接上一轮的「这几个产品」): 匹配不上就列出候选让用户选, 不猜
         List<String> wanted = requestedProductNames(params);
-        List<ProductDemand> nonEmpty;
-        if (wanted.isEmpty()) {
-            nonEmpty = shortage.stream().limit(maxRows).collect(Collectors.toList());
-        } else {
-            nonEmpty = shortage.stream()
-                    .filter(pd -> matchesAny(pd.getProductName(), wanted))
-                    .limit(maxRows)
-                    .collect(Collectors.toList());
-            if (nonEmpty.isEmpty()) {
-                String names = shortage.stream().limit(10)
-                        .map(pd -> pd.getProductName() != null ? pd.getProductName() : "(未命名)")
-                        .collect(Collectors.joining("、"));
-                Map<String, Object> data = buildEmptyEnvelope();
-                data.put("needProductChoice", true);
-                return buildSimpleResult("没有找到您指的产品。最近待排产的产品有：" + names
-                        + "。请告诉我是哪几个。", data);
-            }
+        List<ProductDemand> matching = wanted.isEmpty() ? shortage : shortage.stream()
+                .filter(pd -> matchesAny(pd.getProductName(), wanted)).toList();
+        if (matching.isEmpty()) {
+            String names = shortage.stream().limit(10)
+                    .map(pd -> pd.getProductName() != null ? pd.getProductName() : "(未命名)")
+                    .collect(Collectors.joining("、"));
+            Map<String, Object> data = buildEmptyEnvelope();
+            data.put("needProductChoice", true);
+            return buildSimpleResult("没有找到您指的产品。最近待排产的产品有：" + names
+                    + "。请告诉我是哪几个。", data);
         }
+        List<ProductDemand> nonEmpty = matching.subList(0, Math.min(matching.size(), maxRows));
 
         // 5. 构建结果 (人数/班次按产线配置折算)
         List<Map<String, Object>> rows = new ArrayList<>();
         StringBuilder text = new StringBuilder();
-        text.append(String.format("找到 %d 个待排产产品 (已扣已发货 + 在产)：\n", nonEmpty.size()));
-        int idx = 1;
+        text.append("建议安排 ").append(matching.size()).append(" 个产品生产。");
+        if (nonEmpty.size() < matching.size()) {
+            text.append("本次列出 ").append(nonEmpty.size()).append(" 项。");
+        }
+        text.append("\n\n| 产品 | 排多少 | 几人几班 | 最早交期 |\n")
+                .append("| --- | --- | --- | --- |\n");
+        StringBuilder details = new StringBuilder("\n客户与订单\n");
         for (ProductDemand pd : nonEmpty) {
             Map<String, Object> row = toRow(factoryId, pd);
             rows.add(row);
-            text.append(idx++).append(". ").append(describeRow(row)).append('\n');
+            appendScheduleRow(text, details, pd, row);
         }
-        text.append("口径：所需班次 = 待产量 ÷ 产线小时产能 ÷ ").append(SHIFT_HOURS.toPlainString())
-                .append(" 小时/班 (向上取整)；每班人数 = 产线标准人数。");
+        text.append(details).append("\n（排产量已扣除发货量和在产量。人数按产线配置，班次按每班 ")
+                .append(SHIFT_HOURS.toPlainString()).append(" 小时估算。）");
 
         Map<String, Object> data = new HashMap<>();
         data.put("totalCount", nonEmpty.size());
@@ -247,20 +247,49 @@ public class ProductionDemandQueryTool extends AbstractBusinessTool {
     }
 
     @SuppressWarnings("unchecked")
-    private String describeRow(Map<String, Object> row) {
-        StringBuilder sb = new StringBuilder();
-        sb.append(row.get("productName")).append("：待产 ")
-                .append(qtyWithUnit((BigDecimal) row.get("netShortage"), (String) row.get("unit")));
-        sb.append("，产线 ").append(row.get("recommendedLineName"));
+    private void appendScheduleRow(StringBuilder summary, StringBuilder details, ProductDemand demand,
+                                   Map<String, Object> row) {
+        List<PendingOrder> orders = demand.pendingOrders.values().stream()
+                .sorted(Comparator.comparing(PendingOrder::deliveryDate,
+                        Comparator.nullsLast(Comparator.naturalOrder())))
+                .toList();
+        String name = (String) row.get("productName");
         Object workers = row.get("requiredWorkersPerShift");
         Object shifts = row.get("requiredShifts");
-        if (workers != null) sb.append("，每班 ").append(workers).append(" 人");
-        if (shifts != null) sb.append("，约 ").append(shifts).append(" 个班");
+        summary.append("| ").append(tableCell(name)).append(" | ")
+                .append(tableCell(qtyWithUnit(demand.getNetShortage(), demand.getUnit())))
+                .append(" | ").append(shifts == null ? "班次待估" : shifts + " 个班")
+                .append("、").append(workers == null ? "人数待定" : "每班 " + workers + " 人")
+                .append(" | ").append(Objects.toString(orders.get(0).deliveryDate(), "未填交期")).append(" |\n");
+
+        details.append('\n').append(name).append("：");
+        for (int i = 0; i < Math.min(2, orders.size()); i++) {
+            PendingOrder order = orders.get(i);
+            if (i > 0) details.append("；");
+            if (order.customerName() != null && !order.customerName().isBlank()) {
+                details.append(order.customerName()).append(' ');
+            }
+            details.append(Objects.toString(order.orderNumber(), "未填单号")).append(" 待交 ")
+                    .append(qtyWithUnit(order.quantity(), demand.getUnit()))
+                    .append("（").append(Objects.toString(order.deliveryDate(), "未填交期")).append("）");
+        }
+        if (orders.size() > 2) details.append("；另 ").append(orders.size() - 2).append(" 单");
+        details.append("。产线：").append(row.get("recommendedLineName"));
         List<String> missing = (List<String>) row.get("staffingMissing");
         if (missing != null && !missing.isEmpty()) {
-            sb.append("；算不出完整人数/班次，缺：").append(String.join("、", missing));
+            details.append("（缺").append(String.join("、", missing)).append("）");
         }
-        return sb.toString();
+        details.append("。");
+        if (Set.of("盒", "袋", "件", "包", "箱", "个").contains(demand.getUnit())
+                && (demand.getNetShortage().stripTrailingZeros().scale() > 0
+                    || orders.stream().limit(2).anyMatch(order -> order.quantity().stripTrailingZeros().scale() > 0))) {
+            details.append("小数来自订单待交量和在产量的原始记录。");
+        }
+        details.append('\n');
+    }
+
+    private static String tableCell(String value) {
+        return value.replace("|", "\\|").replaceAll("\\R", " ");
     }
 
     private void deductInProgressProduction(String factoryId, Map<String, ProductDemand> map) {
@@ -366,6 +395,9 @@ public class ProductionDemandQueryTool extends AbstractBusinessTool {
         return data;
     }
 
+    private record PendingOrder(String orderNumber, String customerName, LocalDate deliveryDate,
+                                BigDecimal quantity) {}
+
     /** 单一产品的需求聚合状态. */
     private static class ProductDemand {
         private final String productTypeId;
@@ -374,6 +406,7 @@ public class ProductionDemandQueryTool extends AbstractBusinessTool {
         private BigDecimal totalDemand = BigDecimal.ZERO;
         private BigDecimal inProgressQuantity = BigDecimal.ZERO;
         private final List<Map<String, Object>> orderRefs = new ArrayList<>();
+        private final Map<String, PendingOrder> pendingOrders = new LinkedHashMap<>();
         private int orderLineCount = 0;
 
         ProductDemand(String productTypeId, String productName, String unit) {
@@ -382,9 +415,13 @@ public class ProductionDemandQueryTool extends AbstractBusinessTool {
             this.unit = unit;
         }
 
-        void addOrderLine(SalesOrder so, SalesOrderItem item, BigDecimal pending) {
+        void addOrderLine(SalesOrder so, BigDecimal pending) {
             totalDemand = totalDemand.add(pending);
             orderLineCount++;
+            pendingOrders.merge(so.getId(),
+                    new PendingOrder(so.getOrderNumber(), so.getCustomerName(), so.getRequiredDeliveryDate(), pending),
+                    (a, b) -> new PendingOrder(a.orderNumber(), a.customerName(), a.deliveryDate(),
+                            a.quantity().add(b.quantity())));
             if (orderRefs.size() < 5) {
                 Map<String, Object> ref = new LinkedHashMap<>();
                 ref.put("salesOrderId", so.getId());

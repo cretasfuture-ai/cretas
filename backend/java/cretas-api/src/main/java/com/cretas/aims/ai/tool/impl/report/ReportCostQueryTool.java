@@ -97,7 +97,10 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
                 ? ReportToolSchemas.resolveProduct(productTypeRepository, factoryId, productName)
                 : namedCostProduct(factoryId, sentence)
                         .orElseGet(() -> ReportToolSchemas.resolveProduct(productTypeRepository, factoryId, productName));
-        return ReportToolSchemas.withNote(answer(factoryId, params, context, product), product.leadIn(true));
+        boolean compact = product.scope() == ReportToolSchemas.ProductScope.MATCHED
+                && com.cretas.aims.config.BusinessQueryPhrases.costProductName(sentence).isPresent();
+        return ReportToolSchemas.withNote(answer(factoryId, params, context, product, compact),
+                compact ? null : product.leadIn(true));
     }
 
     public boolean matchesNamedCostQuestion(String factoryId, String sentence) {
@@ -115,7 +118,7 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
     }
 
     private Map<String, Object> answer(String factoryId, Map<String, Object> params, Map<String, Object> context,
-                                       ReportToolSchemas.ProductResolution product) throws Exception {
+                                       ReportToolSchemas.ProductResolution product, boolean compact) throws Exception {
         LocalDate today = today();
         LocalDate start;
         LocalDate end;
@@ -218,7 +221,10 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
             if (previous.costedBatches > 0) data.put("comparisonBasis", compareBasis(current, previous).label());
             data.put("charts", charts(current));
         }
-        return buildSimpleResult(buildMessage(current, previous, start, end, prevStart, prevEnd, productLabel, showAmounts, monthOverMonth), data);
+        String message = showAmounts && compact && current.costedBatches > 0
+                ? buildProductMessage(current, previous, start, end, prevStart, prevEnd, productLabel, monthOverMonth)
+                : buildMessage(current, previous, start, end, prevStart, prevEnd, productLabel, showAmounts, monthOverMonth);
+        return buildSimpleResult(message, data);
     }
 
     // ==================== 聚合 ====================
@@ -511,6 +517,64 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
             charts.add(Map.of("type", "bar", "title", "产品总成本（元，前 8）", "option", option));
         }
         return charts;
+    }
+
+    private String buildProductMessage(Aggregate cur, Aggregate prev, LocalDate start, LocalDate end,
+                                       LocalDate prevStart, LocalDate prevEnd, String name, boolean monthOverMonth) {
+        StringBuilder reply = new StringBuilder(name);
+        BigDecimal quantity = cur.singleUnitQuantity();
+        String costUnit = quantity != null && quantity.signum() > 0 && cur.batchesWithoutQuantity == 0
+                ? cur.singleUnit() : "";
+        if (!costUnit.isBlank()) {
+            reply.append(" 每").append(costUnit).append("成本 ¥")
+                    .append(money(cur.total.divide(quantity, 4, RoundingMode.HALF_UP)));
+        } else {
+            reply.append(" 总成本 ¥").append(money(cur.total));
+        }
+        String composition = cur.compositionList().stream()
+                .map(part -> part.get("name") + (part.get("sharePct") == null
+                        ? " ¥" + part.get("amount")
+                        : " " + ((BigDecimal) part.get("sharePct")).stripTrailingZeros().toPlainString() + "%"))
+                .collect(java.util.stream.Collectors.joining("、"));
+        reply.append("：").append(composition).append("。\n\n");
+        String prior = monthOverMonth ? "上月同期" : "上期";
+        List<Map<String, Object>> changes = comparison(cur, prev);
+        if (changes.isEmpty()) {
+            reply.append(prior).append("没有可用于比较的批次。");
+        } else {
+            CompareBasis basis = compareBasis(cur, prev);
+            Map<String, Object> total = changes.getLast();
+            if (!basis.perUnit()) {
+                if (prev.batchesWithoutQuantity > 0 && cur.batchesWithoutQuantity > 0) {
+                    reply.append("两期都有批次未记录产量");
+                } else if (prev.batchesWithoutQuantity > 0) {
+                    reply.append(prior).append("有批次未记录产量");
+                } else if (cur.batchesWithoutQuantity > 0) {
+                    reply.append("本期有批次未记录产量");
+                } else {
+                    reply.append("两期无法统一产出单位");
+                }
+                reply.append("，无法按").append(costUnit.isBlank() ? "产量" : "每" + costUnit)
+                        .append("比较，改按每批平均。");
+            }
+            reply.append("和").append(prior).append("相比，")
+                    .append(basis.perUnit() ? "每" + basis.unit() + "成本" : "每批平均成本")
+                    .append("从 ¥").append(total.get("previous")).append(" 到 ¥").append(total.get("current"));
+            if (total.get("changePct") instanceof BigDecimal pct) {
+                reply.append("（").append(signed(pct)).append("%）");
+            }
+            reply.append("。");
+        }
+        reply.append("\n\n（按完工日期统计：").append(start).append(" 至 ").append(end)
+                .append(" 计入 ").append(cur.costedBatches).append(" 批，").append(prior).append(' ')
+                .append(prevStart).append(" 至 ").append(prevEnd).append(" 计入 ").append(prev.costedBatches)
+                .append(" 批。");
+        if (cur.incompleteBatches > 0 || prev.incompleteBatches > 0) {
+            reply.append("成本未算全的批次未计入，本期 ").append(cur.incompleteBatches)
+                    .append(" 批，").append(prior).append(' ').append(prev.incompleteBatches).append(" 批。");
+        }
+        if (cur.withheldBatches > 0) reply.append(cur.withheldNote());
+        return reply.append("）").toString();
     }
 
     private String buildMessage(Aggregate cur, Aggregate prev, LocalDate start, LocalDate end, LocalDate prevStart,
