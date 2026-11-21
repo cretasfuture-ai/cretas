@@ -8,6 +8,7 @@ const props = defineProps<{
   factoryId: string;
   metric: string;
   basis: string;
+  dataVersion: string;
   canViewFinance?: boolean;
 }>();
 const permissions = computed(() => ({ canViewFinance: props.canViewFinance === true }));
@@ -18,7 +19,8 @@ const chart = computed(() => props.factoryId ? props.chart : null);
   <section class="blacklake-chart-analysis" :aria-label="`${metric}图表分析`">
     <p class="basis">分析指标：{{ metric }}。{{ basis }}</p>
     <ChartInsightProvider :chart="chart" :factory-id="factoryId" :perms="permissions"
-      require-tier2 depth="detailed" :unavailable-text="chart ? '分析暂不可用，请稍后重试' : '暂无可分析数据'" />
+      require-tier2 depth="detailed" :data-version="dataVersion"
+      :unavailable-text="chart ? '分析暂不可用，请稍后重试' : '暂无可分析数据'" />
   </section>
 </template>
 

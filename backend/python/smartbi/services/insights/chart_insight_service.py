@@ -27,6 +27,7 @@ Architecture (v4):
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -35,9 +36,11 @@ from common.process_secret_harness import with_process_secret_harness
 import os
 import re
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Any, Dict, List, Optional
+
+from cachetools import TTLCache
 
 from .claim_recompute import recompute_claim, infer_sign_from_prose
 from ..distillation_capture import persist_distillation_sample, compute_input_hash
@@ -78,6 +81,8 @@ _ABSOLUTE_AMOUNT_RE = re.compile(
 
 # Default promote threshold (retained for test import compatibility)
 DEFAULT_PROMOTE_THRESHOLD = 3
+_ANSWER_CACHE_TTL_SECONDS = 15 * 60
+_ANSWER_CACHE_MAX_ENTRIES = 1024
 
 
 # ---------------------------------------------------------------------------
@@ -97,6 +102,7 @@ class ChartInsightContext:
     factory_id: str          # tenant identifier (from request body — OVERRIDDEN by JWT)
     series_values: List[float] = field(default_factory=list)
     series_labels: List[str] = field(default_factory=list)
+    data_version: str = ""   # Optional source snapshot and requested date range
 
 
 @dataclass
@@ -108,6 +114,7 @@ class InsightResult:
     source: str = "template"   # "template" | "llm" | "cache" | "rules"
     tier: int = 2
     input_hash: Optional[str] = None  # G4: corpus row key — exposed so frontend can send feedback
+    cache_hit: bool = False
 
 
 class InsightUnavailable(str, Enum):
@@ -195,7 +202,7 @@ def _comparison_suggestion(
 
 
 def _comparison_insight(ctx: ChartInsightContext) -> Optional[InsightResult]:
-    """Describe the submitted points after an unusable model response."""
+    """Describe the submitted points using rules that also serve as the first stage."""
     if not _is_comparison_chart(ctx):
         return None
     if ctx.y_metric == "cost" and ctx.permission_tier != "finance_visible":
@@ -239,9 +246,14 @@ def _comparison_insight(ctx: ChartInsightContext) -> Optional[InsightResult]:
 
         suggestion = _comparison_suggestion(ctx, high_label, low_label, high, low)
 
-    if ctx.permission_tier == "finance_hidden" and _ABSOLUTE_AMOUNT_RE.search(finding):
+    if ctx.permission_tier == "finance_hidden" and _ABSOLUTE_AMOUNT_RE.search(f"{finding} {suggestion}"):
         return None
     return InsightResult(finding=finding, suggestion=suggestion, source="rules")
+
+
+def build_rule_preview(ctx: ChartInsightContext) -> Optional[InsightResult]:
+    result = _comparison_insight(ctx)
+    return replace(result, tier=1) if result is not None else None
 
 
 def _deterministic_insight(ctx: ChartInsightContext) -> Optional[InsightResult]:
@@ -799,41 +811,43 @@ def _map_domain(domain: Optional[str]) -> str:
     return _DOMAIN_TO_BUSINESS_TYPE.get(domain, "unknown")
 
 
-def _corpus_input_text(ctx: "ChartInsightContext") -> str:
-    """Build a stable, data-rich string that is used as corpus input_text and read-back cache key.
+def _chart_data(ctx: ChartInsightContext) -> dict:
+    return {
+        "chart_type": ctx.chart_type,
+        "x_dim": ctx.x_dim,
+        "y_metric": ctx.y_metric,
+        "aggregation": ctx.aggregation,
+        "domain": ctx.domain,
+        "data_pattern": ctx.data_pattern,
+        "series_values": ctx.series_values,
+        "series_labels": ctx.series_labels,
+        "data_version": ctx.data_version,
+    }
 
-    Spec §2 C2 (MF4): "input_text 含真实 series 绝对值: 避免同分布跨租户 input_hash 撞覆盖 + 给模型真数据".
 
-    Includes:
-    - chart structural features (chart_type, x_dim, y_metric, aggregation, domain, data_pattern)
-    - permission_tier (different tiers get different corpus rows)
-    - factory_id (tenant-specific: different factories → different hash → no cross-tenant collision)
-    - ABSOLUTE series_values and series_labels (key: prevents same-distribution different-tenant collision)
+def _json_key(value: dict) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
-    The resulting sha256 hash (compute_input_hash(text)) is used both:
-    - As the dedup key for INSERT ON CONFLICT in smart_bi_distillation_samples
-    - As the read-back cache lookup: SELECT WHERE input_hash=$1 AND created_at::date=CURRENT_DATE
-    """
-    labels_str = ",".join(ctx.series_labels) if ctx.series_labels else ""
-    values_str = ",".join(str(v) for v in ctx.series_values) if ctx.series_values else ""
-    return (
-        f"chart_insight|{ctx.chart_type}|{ctx.x_dim}|{ctx.y_metric}|{ctx.aggregation}"
-        f"|{ctx.domain}|{ctx.data_pattern}|{ctx.permission_tier}"
-        f"|factory:{ctx.factory_id}"
-        f"|labels:[{labels_str}]"
-        f"|values:[{values_str}]"
+
+def _corpus_input_text(ctx: ChartInsightContext) -> str:
+    """Canonical, tenant-scoped corpus input shared by capture and read-back."""
+    return "chart_insight:v2:" + _json_key(
+        {**_chart_data(ctx), "factory_id": ctx.factory_id, "permission_tier": ctx.permission_tier},
     )
 
 
 # SQL for reading back a today's corpus row by input_hash (MF4).
 # smart_bi_distillation_samples has NO RLS (per audit) — plain query is safe.
-# Filter by factory-baked input_hash so cross-tenant collision is impossible.
+# The canonical input hash includes tenant and visibility tier.
 # G4: also fetch metadata to check feedback_down signal; skip rows already demoted.
 _CORPUS_READ_SQL = """
     SELECT teacher_output, input_hash, metadata
     FROM smart_bi_distillation_samples
     WHERE input_hash = $1
+      AND source = 'chart_insight'
       AND created_at::date = CURRENT_DATE
+      AND NOT COALESCE(metadata ? 'secrecy_recheck', FALSE)
+      AND NOT COALESCE(metadata ? 'desensitized', FALSE)
     LIMIT 1
 """
 
@@ -883,6 +897,15 @@ class ChartInsightService:
         self._pool = pool
         self._budget_tracker = budget_tracker
         self._promote_threshold = promote_threshold
+        self._answers: TTLCache = TTLCache(
+            maxsize=_ANSWER_CACHE_MAX_ENTRIES, ttl=_ANSWER_CACHE_TTL_SECONDS,
+        )
+        self._pending_answers: dict[tuple[str, str, str], asyncio.Task] = {}
+
+    def invalidate_answer(self, factory_id: str, input_hash: str) -> None:
+        for key, result in list(self._answers.items()):
+            if key[0] == factory_id and result.input_hash == input_hash:
+                self._answers.pop(key, None)
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -917,42 +940,62 @@ class ChartInsightService:
             )
             return None
 
-        # Build resolved context with authoritative factory_id
-        resolved_ctx = ChartInsightContext(
-            chart_type=ctx.chart_type,
-            x_dim=ctx.x_dim,
-            y_metric=ctx.y_metric,
-            aggregation=ctx.aggregation,
-            domain=ctx.domain,
-            data_pattern=ctx.data_pattern,
-            permission_tier=ctx.permission_tier,
-            factory_id=effective_factory_id,
-            series_values=ctx.series_values,
-            series_labels=ctx.series_labels,
-        )
+        resolved_ctx = replace(ctx, factory_id=effective_factory_id)
 
         if _is_comparison_chart(resolved_ctx) and sum(map(math.isfinite, resolved_ctx.series_values)) < 2:
             return InsightUnavailable.INSUFFICIENT_DATA
 
+        # Scope the answer cache with the authenticated tenant and server-derived tier.
+        key = (
+            effective_factory_id,
+            resolved_ctx.permission_tier,
+            compute_input_hash(_json_key(_chart_data(resolved_ctx))),
+        )
+        cached = self._answers.get(key)
+        if cached is not None:
+            return replace(cached, cache_hit=True)
+
+        pending = self._pending_answers.get(key)
+        if pending is not None:
+            result = await asyncio.shield(pending)
+            return replace(result, cache_hit=True) if isinstance(result, InsightResult) else result
+
+        # A closed browser connection may stop reading SSE while the provider is
+        # still working. Finish accounting and caching under the captured tenant context.
+        pending = asyncio.create_task(self._generate_and_store(key, resolved_ctx))
+        self._pending_answers[key] = pending
+        pending.add_done_callback(self._observe_generation_failure)
+        return await asyncio.shield(pending)
+
+    async def _generate_and_store(
+        self, key: tuple[str, str, str], ctx: ChartInsightContext,
+    ) -> InsightResult | InsightUnavailable:
+        try:
+            result = await self._generate_insight(ctx)
+            if isinstance(result, InsightResult):
+                self._answers[key] = result
+            return result
+        finally:
+            self._pending_answers.pop(key, None)
+
+    @staticmethod
+    def _observe_generation_failure(pending: asyncio.Task) -> None:
+        # A disconnected request may no longer await this task.
+        if not pending.cancelled() and (error := pending.exception()) is not None:
+            logger.error("[chart-insight] generation failed", exc_info=error)
+
+    async def _generate_insight(self, resolved_ctx: ChartInsightContext) -> InsightResult | InsightUnavailable:
+        effective_factory_id = resolved_ctx.factory_id
         # Demo/common-chart flywheel: serve accepted corpus rows or deterministic
         # templates before any LLM budget gate. This keeps demo chart narration useful
         # even when teacher-model budget is blocked, and repeat calls become cache hits.
         input_text = _corpus_input_text(resolved_ctx)
         input_hash = compute_input_hash(input_text)
-        if os.getenv("CHART_INSIGHT_DETERMINISTIC_FIRST") == "1":
-            cache_result = await self._read_corpus_cache(input_hash)
-            if cache_result is not None:
-                cached_teacher_output, cached_row_hash = cache_result
-                cached_obj = _extract_json_object(cached_teacher_output)
-                if cached_obj is not None:
-                    return InsightResult(
-                        finding=cached_obj.get("finding"),
-                        implication=cached_obj.get("implication"),
-                        suggestion=cached_obj.get("suggestion"),
-                        source="cache",
-                        tier=2,
-                        input_hash=cached_row_hash,
-                    )
+        deterministic_first = os.getenv("CHART_INSIGHT_DETERMINISTIC_FIRST") == "1"
+        if deterministic_first:
+            cached = await self._serve_corpus_answer(input_hash, resolved_ctx.permission_tier)
+            if cached is not None:
+                return cached
 
             deterministic = _deterministic_insight(resolved_ctx)
             if deterministic is not None:
@@ -991,82 +1034,10 @@ class ChartInsightService:
             logger.info("[chart-insight] budget blocked for factory=%s", effective_factory_id)
             return InsightUnavailable.BUDGET_EXHAUSTED
 
-        # C2 MF4: compute stable data-rich input_text (used as corpus key + read-back cache key)
-        input_text = _corpus_input_text(resolved_ctx)
-        input_hash = compute_input_hash(input_text)
-
-        # C2 MF4: read-back cache — check if today's corpus already has an accepted output
-        # for this exact (factory-baked) input. If yes, re-run the ¥ serve-gate for the
-        # CURRENT caller's tier and return from cache (0 LLM).
-        # G4: _read_corpus_cache returns (teacher_output, row_input_hash) or None.
-        #     None means cache miss OR serve-skip (👎 demoted row).
-        cache_result = await self._read_corpus_cache(input_hash)
-        if cache_result is not None:
-            cached_teacher_output, cached_row_hash = cache_result
-            cached_obj = _extract_json_object(cached_teacher_output)
-            if cached_obj is not None:
-                # Re-run ¥ serve-gate for current caller's tier
-                permission_tier = resolved_ctx.permission_tier
-                if permission_tier == "finance_hidden":
-                    combined_text = " ".join(filter(None, [
-                        cached_obj.get("finding"),
-                        cached_obj.get("implication"),
-                        cached_obj.get("suggestion"),
-                    ]))
-                    if _ABSOLUTE_AMOUNT_RE.search(combined_text):
-                        # Cached output fails gate for this tier — fall through to LLM
-                        logger.info(
-                            "[chart-insight] corpus cache hit but ¥ gate fails for tier=%s, "
-                            "falling through to LLM", permission_tier
-                        )
-                    else:
-                        logger.debug("[chart-insight] corpus cache hit (input_hash=%s...)", input_hash[:12])
-                        return InsightResult(
-                            finding=cached_obj.get("finding"),
-                            implication=cached_obj.get("implication"),
-                            suggestion=cached_obj.get("suggestion"),
-                            source="cache",
-                            tier=2,
-                            input_hash=cached_row_hash,  # G4: expose for feedback
-                        )
-                else:
-                    logger.debug("[chart-insight] corpus cache hit (input_hash=%s...)", input_hash[:12])
-                    return InsightResult(
-                        finding=cached_obj.get("finding"),
-                        implication=cached_obj.get("implication"),
-                        suggestion=cached_obj.get("suggestion"),
-                        source="cache",
-                        tier=2,
-                        input_hash=cached_row_hash,  # G4: expose for feedback
-                    )
-
-        deterministic = (
-            _deterministic_insight(resolved_ctx)
-            if os.getenv("CHART_INSIGHT_DETERMINISTIC_FIRST") == "1"
-            else None
-        )
-        if deterministic is not None:
-            await persist_distillation_sample(
-                self._pool,
-                source="chart_insight",
-                task_type="insights",
-                input_text=input_text,
-                teacher_output=json.dumps({
-                    "finding": deterministic.finding,
-                    "implication": deterministic.implication,
-                    "suggestion": deterministic.suggestion,
-                }, ensure_ascii=False),
-                business_type=_map_domain(resolved_ctx.domain),
-                factory_id=resolved_ctx.factory_id,
-                system_prompt="deterministic chart insight",
-                teacher_model="deterministic-template",
-                quality=4,
-                metadata={
-                    "permission_tier": resolved_ctx.permission_tier,
-                    "gate": "deterministic",
-                },
-            )
-            return deterministic
+        if not deterministic_first:
+            cached = await self._serve_corpus_answer(input_hash, resolved_ctx.permission_tier)
+            if cached is not None:
+                return cached
 
         # LLM call: returns structured {claims, finding, implication, suggestion} or None
         llm_obj = await self._call_llm(resolved_ctx)
@@ -1136,6 +1107,25 @@ class ChartInsightService:
     # ------------------------------------------------------------------
     # C2 MF4 helpers: corpus read-back cache + teacher model name
     # ------------------------------------------------------------------
+
+    async def _serve_corpus_answer(self, input_hash: str, permission_tier: str) -> Optional[InsightResult]:
+        row = await self._read_corpus_cache(input_hash)
+        if row is None:
+            return None
+        teacher_output, row_hash = row
+        obj = _extract_json_object(teacher_output)
+        if not obj or not isinstance(obj.get("finding"), str) or not obj["finding"].strip():
+            return None
+        finding, implication, suggestion = (obj.get(field) for field in ("finding", "implication", "suggestion"))
+        fields = (finding, implication, suggestion)
+        if any(value is not None and not isinstance(value, str) for value in fields):
+            return None
+        if permission_tier == "finance_hidden" and _ABSOLUTE_AMOUNT_RE.search(" ".join(filter(None, fields))):
+            return None
+        return InsightResult(
+            finding=finding, implication=implication, suggestion=suggestion,
+            source="cache", input_hash=row_hash, cache_hit=True,
+        )
 
     async def _read_corpus_cache(self, input_hash: str) -> Optional[tuple]:
         """Read back today's corpus row by input_hash.

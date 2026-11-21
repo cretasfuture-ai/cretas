@@ -10,6 +10,7 @@ const props = defineProps<{
   title: string;
   factoryId: string;
   basis: string;
+  dataVersion?: string;
   cost?: boolean;
 }>();
 const order = ref<'desc' | 'asc' | 'name'>('desc');
@@ -77,7 +78,7 @@ onBeforeUnmount(() => {
     </el-select>
     <div ref="element" class="bar-chart" role="img" :aria-label="title" />
     <BlacklakeChartAnalysis :chart="insight" :factory-id="factoryId" :metric="title"
-      :basis="basis" :can-view-finance="cost" />
+      :basis="basis" :can-view-finance="cost" :data-version="dataVersion ?? ''" />
   </template>
 </template>
 

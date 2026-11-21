@@ -49,6 +49,7 @@ function getQueryDates() {
 
 const gold = useProductionGold(factoryId);
 const external = useExternalProduction(factoryId);
+const externalDateRange = ref('');
 
 const loading = ref(false);
 let loadRevision = 0;
@@ -84,6 +85,7 @@ async function loadData() {
     const source = await external.load(query);
     if (!current() || source === 'obsolete') return;
     if (source === 'external') {
+      externalDateRange.value = `${query.startDate}/${query.endDate}`;
       trendChart?.dispose();
       yieldChart?.dispose();
       productChart?.dispose();
@@ -449,7 +451,8 @@ onBeforeUnmount(() => {
     </div>
 
     <el-alert v-if="external.error.value" :title="external.error.value" type="warning" :closable="false" />
-    <BlacklakeProductionAnalysis v-if="external.data.value" :data="external.data.value" :factory-id="factoryId" />
+    <BlacklakeProductionAnalysis v-if="external.data.value" :data="external.data.value"
+      :factory-id="factoryId" :date-range="externalDateRange" />
     <template v-else>
     <!-- KPI 卡片 -->
     <div class="kpi-grid" v-if="dashboard?.kpis?.length">

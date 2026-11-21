@@ -7,11 +7,17 @@ import BlacklakeBarChart from './BlacklakeBarChart.vue';
 import BlacklakeChartAnalysis from './BlacklakeChartAnalysis.vue';
 import { blacklakeInsightChart } from './blacklakeChartData';
 
-const props = defineProps<{ data: ExternalProductionData; factoryId: string }>();
+const props = defineProps<{ data: ExternalProductionData; factoryId: string; dateRange?: string }>();
 const FINISHED = '成品入库';
 const unit = ref('');
 const process = ref('');
 const productCode = ref<string | undefined>();
+const rankingVersion = computed(() => JSON.stringify([
+  props.data.snapshotCollectedAt, props.dateRange, unit.value,
+]));
+const dailyVersion = computed(() => JSON.stringify([
+  props.data.snapshotCollectedAt, props.dateRange, unit.value, process.value, productCode.value,
+]));
 const chartElement = ref<HTMLDivElement>();
 let chart: echarts.ECharts | undefined;
 let resize: ResizeObserver | undefined;
@@ -138,7 +144,7 @@ onBeforeUnmount(() => {
         <p v-if="hasUnclassifiedRows" class="basis">缺少工序或单位的报工未计入汇总。</p>
         <div ref="chartElement" class="daily-chart" role="img" aria-label="每日良品与不良数量趋势图" />
         <BlacklakeChartAnalysis :chart="dailyInsight" :factory-id="factoryId" :metric="dailyMetric"
-          :basis="reportBasis" />
+          :basis="reportBasis" :data-version="dailyVersion" />
         <el-table :data="daily" max-height="320" stripe empty-text="所选产品暂无报工">
           <el-table-column prop="day" label="日期" min-width="112" />
           <el-table-column :label="`良品（${unit}）`" align="right" min-width="100">
@@ -156,7 +162,8 @@ onBeforeUnmount(() => {
       <el-card shadow="never" class="blacklake-card">
         <template #header><h3>成品入库良品排行（{{ unit }}）</h3></template>
         <BlacklakeBarChart :points="rankingPoints" :title="`成品入库良品排行（${unit}）`"
-          :factory-id="factoryId" :basis="`${reportBasis} 仅纳入有产品编码的成品入库记录。`" />
+          :factory-id="factoryId" :basis="`${reportBasis} 仅纳入有产品编码的成品入库记录。`"
+          :data-version="rankingVersion" />
         <el-table :data="ranking" max-height="320" stripe empty-text="该单位暂无有编码的成品入库记录">
           <el-table-column type="index" label="名次" width="68" />
           <el-table-column label="产品" min-width="175">

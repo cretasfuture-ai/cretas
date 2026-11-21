@@ -7,7 +7,10 @@ import BlacklakeBarChart from './BlacklakeBarChart.vue';
 import BlacklakeChartAnalysis from './BlacklakeChartAnalysis.vue';
 import { blacklakeInsightChart, sortBlacklakeRows, type BlacklakeSort } from './blacklakeChartData';
 
-const props = defineProps<{ data: ExternalCostData; canViewPrice: boolean; factoryId: string }>();
+const props = defineProps<{ data: ExternalCostData; canViewPrice: boolean; factoryId: string; dateRange?: string }>();
+const dataVersion = computed(() => JSON.stringify([
+  props.data.costCollectedAt, props.data.issueCollectedAt, props.dateRange,
+]));
 const trend = ref<HTMLDivElement>();
 const orderPage = ref(1);
 const issuePage = ref(1);
@@ -243,13 +246,15 @@ onBeforeUnmount(() => {
           这些日期的工单含黑湖材料负账，趋势按原始金额汇总。
         </p>
         <BlacklakeChartAnalysis :chart="trendInsight" :factory-id="factoryId" metric="每日工单总成本"
-          :basis="`${basis} 含冲销或负成本工单的日期保留在图上，未纳入分析。`" can-view-finance />
+          :basis="`${basis} 含冲销或负成本工单的日期保留在图上，未纳入分析。`"
+          :data-version="dataVersion" can-view-finance />
       </el-card>
 
       <el-card v-if="products.length" shadow="never">
         <template #header><h3>产品成本对比（元）</h3></template>
         <BlacklakeBarChart :points="productPoints" :analysis-points="productAnalysisPoints" title="产品工单总成本"
-          :factory-id="factoryId" :basis="`${basis} 含负成本工单的产品保留在图上，未纳入分析。`" cost />
+          :factory-id="factoryId" :basis="`${basis} 含负成本工单的产品保留在图上，未纳入分析。`"
+          :data-version="dataVersion" cost />
         <el-table :data="products" row-key="productCode" max-height="340" stripe
           :default-sort="{ prop: 'totalCost', order: 'descending' }" @sort-change="productSort = $event">
           <el-table-column prop="productName" label="产品" min-width="190" sortable="custom">

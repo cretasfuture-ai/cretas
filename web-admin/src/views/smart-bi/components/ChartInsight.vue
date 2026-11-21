@@ -14,26 +14,29 @@
   -->
 
   <!-- Loading state: no insight yet, Tier 2 in flight -->
-  <div v-if="loading && !insight" class="chart-insight-loading">
+  <div v-if="!progressive && loading && !insight" class="chart-insight-loading">
     <span class="loading-dot" aria-hidden="true"></span>
     AI 洞察生成中…
   </div>
 
   <!-- Insight present -->
-  <div v-else-if="insight" class="chart-insight-container">
+  <div v-else-if="insight || progressive" class="chart-insight-container"
+    :class="{ 'chart-insight-progressive': progressive }"
+    :aria-busy="progressive ? loading : undefined" :aria-live="progressive ? 'polite' : undefined">
     <div class="chart-insight-body">
-      <!-- Finding: always shown -->
-      <div class="chart-insight-finding">{{ insight.finding }}</div>
-
-      <!-- Detailed mode: implication + suggestion (when present) -->
-      <template v-if="depth === 'detailed'">
-        <div v-if="insight.implication" class="chart-insight-implication">
+      <template v-if="insight">
+        <div class="chart-insight-finding">{{ insight.finding }}</div>
+        <div v-if="depth === 'detailed' && insight.implication" class="chart-insight-implication">
           {{ insight.implication }}
         </div>
-        <div v-if="insight.suggestion" class="chart-insight-suggestion">
+        <div v-if="depth === 'detailed' && insight.suggestion" class="chart-insight-suggestion">
           <span class="suggestion-prefix">建议：</span>{{ insight.suggestion }}
         </div>
       </template>
+      <div v-else-if="loading" class="chart-insight-skeleton" aria-hidden="true"><span /><span /></div>
+      <p v-if="progressive && (loading || statusText)" class="chart-insight-status" role="status">
+        {{ loading ? (insight ? '正在补充分析…' : '正在分析这张图…') : statusText }}
+      </p>
     </div>
 
     <!--
@@ -84,7 +87,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import type { InsightResult } from './chartInsight';
 import { submitInsightFeedback } from './chartInsight';
 
@@ -107,6 +110,8 @@ const props = withDefaults(
      * When absent or insight has no input_hash, feedback buttons are hidden.
      */
     factoryId?: string;
+    progressive?: boolean;
+    statusText?: string;
   }>(),
   {
     depth: 'concise',
@@ -118,21 +123,27 @@ const props = withDefaults(
 // G4: feedback state machine — idle → submitting → done
 type VoteState = 'idle' | 'submitting' | 'done';
 const voteState = ref<VoteState>('idle');
+let voteRevision = 0;
+watch([() => props.factoryId, () => props.insight?.input_hash], () => {
+  voteRevision++;
+  voteState.value = 'idle';
+});
 
 /** Only show feedback buttons when the insight has a corpus key and we have a factoryId */
 const canVote = computed<boolean>(
-  () => !!(props.insight?.input_hash && props.factoryId),
+  () => !props.loading && !!(props.insight?.input_hash && props.factoryId),
 );
 
 async function handleVote(vote: 'up' | 'down'): Promise<void> {
   if (voteState.value !== 'idle') return;  // prevent double-submit
   if (!props.insight?.input_hash || !props.factoryId) return;
 
+  const revision = voteRevision;
   voteState.value = 'submitting';
   await submitInsightFeedback(props.insight.input_hash, vote, props.factoryId);
   // Always show confirmation even on network failure (honest-null principle —
   // user feedback was noted; backend failure is non-blocking)
-  voteState.value = 'done';
+  if (revision === voteRevision) voteState.value = 'done';
 }
 </script>
 
@@ -204,6 +215,59 @@ async function handleVote(vote: 'up' | 'down'): Promise<void> {
 .suggestion-prefix {
   font-weight: 600;
   color: #4a9f6e;
+}
+
+.chart-insight-progressive {
+  position: relative;
+  display: block;
+  box-sizing: border-box;
+  min-height: 10rem;
+  padding: 10px 12px 40px;
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+.chart-insight-progressive :is(.chart-insight-implication, .chart-insight-suggestion) {
+  font-size: 14px;
+}
+
+.chart-insight-progressive .chart-insight-feedback {
+  position: absolute;
+  inset-inline-end: 12px;
+  bottom: 4px;
+}
+
+.chart-insight-progressive .feedback-btn {
+  min-width: 32px;
+  min-height: 32px;
+}
+
+.chart-insight-status {
+  margin: 4px 0 0;
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+}
+
+.chart-insight-skeleton {
+  display: grid;
+  gap: 8px;
+  margin-block: 5px 8px;
+}
+
+.chart-insight-skeleton span {
+  width: min(72%, 320px);
+  height: 12px;
+  border-radius: 4px;
+  background: var(--el-fill-color);
+  animation: blink 1.5s infinite;
+}
+
+.chart-insight-skeleton span:last-child {
+  width: min(48%, 220px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chart-insight-skeleton span { animation: none; }
 }
 
 /* G4: feedback buttons */

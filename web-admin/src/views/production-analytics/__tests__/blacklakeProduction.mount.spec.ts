@@ -173,7 +173,7 @@ describe('黑湖生产分析页面', () => {
     }
     const bodies = request.mock.calls.map(([url, init]) => {
       expect(url).toContain('/api/smartbi/chart-insight');
-      expect(init.headers).toEqual({ Authorization: 'Bearer fixture' });
+      expect(init.headers).toEqual({ Authorization: 'Bearer fixture', Accept: 'text/event-stream' });
       return JSON.parse(String(init.body));
     });
     expect(bodies).toHaveLength(4);
@@ -186,6 +186,79 @@ describe('黑湖生产分析页面', () => {
     expect(cost.text()).toContain('有产出的零单价工单按缺失处理，未计入平均单位成本');
     cost.unmount();
     production.unmount();
+  });
+
+  it('先显示逐图规则结论，独立替换成最终分析，并按快照和区间取消旧请求', async () => {
+    const encoder = new TextEncoder();
+    const requests: Array<{
+      body: { x_dim: string; data_version: string };
+      signal: AbortSignal | null | undefined;
+      stream: ReadableStreamDefaultController<Uint8Array>;
+    }> = [];
+    const fetchInsight = vi.fn(async (url: string, init: RequestInit) => {
+      if (url.endsWith('/insight/feedback')) {
+        return Response.json({ success: true });
+      }
+      const response = new ReadableStream<Uint8Array>({
+        start(stream) {
+          requests.push({ body: JSON.parse(String(init.body)), signal: init.signal, stream });
+        },
+      });
+      return new Response(response, { headers: { 'Content-Type': 'text/event-stream' } });
+    });
+    vi.stubGlobal('fetch', fetchInsight);
+    const page = mount(BlacklakeProductionAnalysis, {
+      ...mountOptions(true), props: { data: snapshot, factoryId: 'LIUSHANMEN', dateRange: '2026-11-01/2026-11-21' },
+    });
+    await vi.advanceTimersByTimeAsync(300);
+    await flushPromises();
+    expect(requests).toHaveLength(2);
+    const daily = requests.find(row => row.body.x_dim === 'time')!;
+    const rank = requests.find(row => row.body.x_dim === 'product')!;
+    const [dailyBlock, rankBlock] = page.findAll('.blacklake-chart-analysis');
+    const send = (request: typeof daily, event: 'preview' | 'final', finding: string) => {
+      const data = event === 'preview'
+        ? { finding, source: 'rules', tier: 1 }
+        : { finding, source: 'llm', tier: 2, input_hash: finding, cacheHit: false };
+      const bytes = encoder.encode(`event: ${event}\ndata: ${JSON.stringify({ success: true, data })}\n\n`);
+      // Split through a multibyte character to exercise fetch streaming and decoding.
+      const split = bytes.indexOf(0xe5) + 1;
+      request.stream.enqueue(bytes.slice(0, split));
+      request.stream.enqueue(bytes.slice(split));
+      if (event === 'final') request.stream.close();
+    };
+
+    send(daily, 'preview', '每日图的规则结论');
+    send(rank, 'preview', '产品图的规则结论');
+    await flushPromises();
+    expect(dailyBlock.get('.chart-insight-finding').text()).toBe('每日图的规则结论');
+    expect(rankBlock.get('.chart-insight-finding').text()).toBe('产品图的规则结论');
+    expect(page.findAll('.chart-insight-feedback')).toHaveLength(0);
+
+    send(rank, 'final', '产品图的最终分析');
+    await flushPromises();
+    expect(rankBlock.get('.chart-insight-finding').text()).toBe('产品图的最终分析');
+    expect(rankBlock.get('.chart-insight-container').attributes('aria-busy')).toBe('false');
+    expect(dailyBlock.get('.chart-insight-finding').text()).toBe('每日图的规则结论');
+    expect(dailyBlock.get('.chart-insight-container').attributes('aria-busy')).toBe('true');
+    await rankBlock.get('.feedback-btn--up').trigger('click');
+    await flushPromises();
+    expect(rankBlock.get('.feedback-ack').text()).toBe('感谢反馈');
+
+    await page.setProps({ dateRange: '2026-11-03/2026-11-21' });
+    expect(daily.signal?.aborted).toBe(true);
+    send(daily, 'final', '旧区间的分析');
+    await vi.advanceTimersByTimeAsync(300);
+    await flushPromises();
+    expect(page.text()).not.toContain('旧区间的分析');
+    expect(requests).toHaveLength(4);
+    expect(requests.slice(2).every(row => row.body.data_version.includes('2026-11-03/2026-11-21'))).toBe(true);
+    expect(requests.slice(2).every(row => row.body.data_version.includes(snapshot.snapshotCollectedAt!))).toBe(true);
+    for (const request of requests.slice(2)) send(request, 'final', '新区间的最终分析');
+    await flushPromises();
+    expect(rankBlock.get('.feedback-btn--up').exists()).toBe(true);
+    expect(rankBlock.find('.feedback-ack').exists()).toBe(false);
+    page.unmount();
   });
 
   it('产品成本图的坐标轴仅为同名产品保留编码，图表类别和分析请求保留完整标签', async () => {

@@ -37,9 +37,11 @@
       Props are reactive. When the `chart` prop changes, the source getter re-fires
       and the watcher inside useChartInsight re-evaluates insight state.
   -->
-  <ChartInsight :insight="displayInsight" :loading="loading" :depth="depth" :factory-id="factoryId" />
+  <ChartInsight :insight="displayInsight" :loading="loading" :depth="depth" :factory-id="factoryId"
+    :progressive="dataVersion !== undefined && chart !== null"
+    :status-text="dataVersion !== undefined ? statusText : undefined" />
   <p v-if="emptyPie" role="status">暂无可计算占比的数据。</p>
-  <p v-else-if="statusText && !loading && !displayInsight" role="status">{{ statusText }}</p>
+  <p v-else-if="(dataVersion === undefined || !chart) && statusText && !loading && !displayInsight" role="status">{{ statusText }}</p>
 </template>
 
 <script setup lang="ts">
@@ -72,6 +74,7 @@ const props = withDefaults(
      */
     autoTier2?: boolean;
     requireTier2?: boolean;
+    dataVersion?: string;
     unavailableText?: string;
     /**
      * Display depth passed through to <ChartInsight>.
@@ -112,6 +115,7 @@ const { insight, loading, unavailableReason } = useChartInsight(
     factoryId: () => props.factoryId ?? '',
     autoTier2: props.autoTier2 !== false,
     requireTier2: props.requireTier2,
+    dataVersion: () => props.dataVersion,
   },
 );
 
@@ -130,7 +134,10 @@ const statusText = computed(() => {
   if (reason) {
     return unavailableMessages.get(reason) ?? unavailableMessages.get('RESULT_UNAVAILABLE');
   }
-  if (props.requireTier2 && props.chart) return unavailableMessages.get('RESULT_UNAVAILABLE');
+  if (props.requireTier2 && props.chart && !displayInsight.value) {
+    return unavailableMessages.get('RESULT_UNAVAILABLE');
+  }
+  if (props.dataVersion !== undefined && displayInsight.value) return undefined;
   return props.unavailableText;
 });
 
