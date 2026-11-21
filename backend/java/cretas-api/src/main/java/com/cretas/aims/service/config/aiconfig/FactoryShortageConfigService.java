@@ -102,7 +102,9 @@ public class FactoryShortageConfigService {
             }
             if (result.status() == ToolExecutionStatus.SUCCEEDED
                     || result.status() == ToolExecutionStatus.OUTCOME_UNKNOWN) {
-                throw new BusinessException(409, "暂时无法核实提交结果，请按操作编号查询回执");
+                throw new BusinessException(409, "暂时无法核实提交结果，请按操作编号查询回执")
+                        .withHint("请先按操作编号查询回执，核实结果后再决定是否发起新预览")
+                        .withHintTarget(binding.operationId());
             }
         }
         throw rejected(result);
@@ -229,9 +231,12 @@ public class FactoryShortageConfigService {
             return invalidToken();
         }
         if ("PREVIEW_STALE".equals(result.payload().path("status").asText())) {
-            return new BusinessException(409, "工厂设置已变化，请重新预览").withCode("PREVIEW_STALE");
+            return new BusinessException(409, "工厂设置已变化，请重新预览")
+                    .withCode("PREVIEW_STALE")
+                    .withHint("请重新预览当前工厂设置，再确认所需变更");
         }
-        return new BusinessException(409, "配置操作未通过，请查询回执或重新预览");
+        return new BusinessException(409, "配置操作未通过，请查询回执或重新预览")
+                .withHint("若已取得操作编号，请先查询对应回执，再按当前设置重新预览");
     }
 
     static BusinessException forbidden() {
@@ -239,7 +244,8 @@ public class FactoryShortageConfigService {
     }
 
     private static BusinessException invalidToken() {
-        return new BusinessException(409, "确认凭证无效、已过期或与本次操作不符");
+        return new BusinessException(409, "确认凭证无效、已过期或与本次操作不符")
+                .withHint("请在当前工厂重新生成预览，并使用该预览的新凭证确认");
     }
 
     public record Preview(FactoryShortageConfigStore.Plan plan, UUID operationId,

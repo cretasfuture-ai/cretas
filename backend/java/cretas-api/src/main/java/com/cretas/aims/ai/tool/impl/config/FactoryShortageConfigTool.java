@@ -20,7 +20,9 @@ public class FactoryShortageConfigTool extends AbstractBusinessTool {
 
     @Override
     public boolean isEnabled() {
-        return environment.acceptsProfiles(Profiles.of("test"))
+        // Catalog scans instantiate metadata-only tools without Spring injection.
+        return environment != null
+                && environment.acceptsProfiles(Profiles.of("test"))
                 && environment.getProperty(FactoryShortageConfigService.ENABLED_PROPERTY, Boolean.class, false);
     }
 

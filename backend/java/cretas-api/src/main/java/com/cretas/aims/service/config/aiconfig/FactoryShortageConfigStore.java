@@ -55,7 +55,8 @@ public class FactoryShortageConfigStore {
         Plan currentPlan = plan(factoryId, invocation.request(), before);
         if (!currentPlan.canDo() || !before.equals(binding.expected())
                 || currentPlan.newValue() != binding.newValue()) {
-            throw new BusinessException(409, "工厂设置已变化，请重新预览");
+            throw new BusinessException(409, "工厂设置已变化，请重新预览")
+                    .withHint("请读取最新配置后重新预览，再确认所需变更");
         }
         FactorySettings existing = row.orElseThrow();
         existing.setBlockStartOnOpenShortage(binding.newValue());
@@ -92,7 +93,9 @@ public class FactoryShortageConfigStore {
             if (Objects.equals(current.settingId(), after.settingId())
                     && (current.version() < after.version()
                     || (current.version().equals(after.version()) && current.enabled() != after.enabled()))) {
-                throw new BusinessException(409, "配置回读与已提交审计不符，请核查操作编号");
+                throw new BusinessException(409, "配置回读与已提交审计不符，请核查操作编号")
+                        .withHint("请凭操作编号核对当前配置与审计记录，核实前请勿重复提交")
+                        .withHintTarget(operationId);
             }
             return new Receipt(operationId, fromValues(log.getOldValue()), after, current,
                     (String) log.getNewValue().get(UNDO_OF), log.getCreatedAt().toString());
