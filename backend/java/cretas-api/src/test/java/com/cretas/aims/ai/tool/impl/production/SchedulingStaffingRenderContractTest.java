@@ -10,6 +10,7 @@ import com.cretas.aims.entity.ProductionLineCapacityConfig;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.entity.inventory.SalesOrderItem;
+import com.cretas.aims.repository.FactorySettingsRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionLineCapacityConfigRepository;
 import com.cretas.aims.repository.ProductionLineRepository;
@@ -69,6 +70,7 @@ class SchedulingStaffingRenderContractTest {
         lines = mock(ProductionLineRepository.class);
         caps = mock(ProductionLineCapacityConfigRepository.class);
         demandTool = new ProductionDemandQueryTool();
+        ReflectionTestUtils.setField(demandTool, "factorySettingsRepository", mock(FactorySettingsRepository.class));
         ReflectionTestUtils.setField(demandTool, "salesOrderRepository", orders);
         ReflectionTestUtils.setField(demandTool, "salesOrderItemRepository", items);
         ReflectionTestUtils.setField(demandTool, "productionBatchRepository", batches);

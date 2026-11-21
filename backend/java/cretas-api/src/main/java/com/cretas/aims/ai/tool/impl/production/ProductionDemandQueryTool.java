@@ -3,11 +3,14 @@ package com.cretas.aims.ai.tool.impl.production;
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.config.BusinessQueryPhrases;
 import com.cretas.aims.dto.ai.IntentExecuteResponse;
+import com.cretas.aims.entity.FactorySettings;
 import com.cretas.aims.entity.enums.ProductionBatchStatus;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.entity.inventory.SalesOrderItem;
+import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.FactorySettingsRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.inventory.SalesOrderItemRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
@@ -24,8 +27,12 @@ import com.fasterxml.jackson.databind.JsonNode;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Clock;
+import java.time.DateTimeException;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -48,6 +55,14 @@ import java.util.stream.Collectors;
 public class ProductionDemandQueryTool extends AbstractBusinessTool {
 
     private static final String TOOL_NAME = "production_demand_query";
+    private static final String DEFAULT_FACTORY_TIMEZONE = "Asia/Shanghai";
+    private static final Comparator<PendingOrder> BY_DELIVERY_DATE = Comparator.comparing(
+            PendingOrder::deliveryDate, Comparator.nullsLast(Comparator.naturalOrder()));
+
+    private Clock clock = Clock.systemUTC();
+
+    @Autowired
+    private FactorySettingsRepository factorySettingsRepository;
 
     /** The Skill executor supplies a JSON envelope. The caller's masked view may convert it to maps. */
     public static Optional<String> replyFromSkillResult(Object resultData) {
@@ -199,10 +214,12 @@ public class ProductionDemandQueryTool extends AbstractBusinessTool {
         // 3. 减去在产数量 (PLANNED/IN_PROGRESS 批次的 plannedQuantity - actualQuantity)
         deductInProgressProduction(factoryId, demandByProduct);
 
-        // 4. 过滤 net > 0, 排序 + 限制行数
+        // 4. 先排逾期最久的产品，同等紧急程度下优先处理缺口大的产品
+        LocalDate today = factoryToday(factoryId);
         List<ProductDemand> shortage = demandByProduct.values().stream()
                 .filter(pd -> pd.getNetShortage().compareTo(BigDecimal.ZERO) > 0)
-                .sorted(Comparator.comparing(ProductDemand::getNetShortage).reversed())
+                .sorted(Comparator.<ProductDemand>comparingLong(pd -> overdueDays(pd.earliestDelivery, today))
+                        .thenComparing(ProductDemand::getNetShortage).reversed())
                 .collect(Collectors.toList());
 
         if (shortage.isEmpty()) {
@@ -224,10 +241,14 @@ public class ProductionDemandQueryTool extends AbstractBusinessTool {
                     + "。请告诉我是哪几个。", data);
         }
         List<ProductDemand> nonEmpty = matching.subList(0, Math.min(matching.size(), maxRows));
+        var overdueOrders = overdueOrders(matching, today);
 
         // 5. 构建结果 (人数/班次按产线配置折算)
         List<Map<String, Object>> rows = new ArrayList<>();
         StringBuilder text = new StringBuilder();
+        if (!overdueOrders.isEmpty()) {
+            text.append("有 ").append(overdueOrders.size()).append(" 笔待交订单已逾期。");
+        }
         boolean schedulingQuestion = params.get("userQuery") instanceof String query
                 && BusinessQueryPhrases.productionDemandQuestion(query);
         text.append("建议安排 ").append(matching.size()).append(" 个产品生产。");
@@ -237,14 +258,18 @@ public class ProductionDemandQueryTool extends AbstractBusinessTool {
         text.append("\n\n| 产品 | 排多少 | 几人几班 | 最早交期 |\n")
                 .append("| --- | --- | --- | --- |\n");
         StringBuilder details = new StringBuilder("\n客户与订单\n");
+        appendOverdueOrders(details, overdueOrders, today);
         for (ProductDemand pd : nonEmpty) {
             Map<String, Object> row = toRow(factoryId, pd);
             rows.add(row);
-            appendScheduleRow(text, details, pd, row, schedulingQuestion);
+            appendScheduleRow(text, details, pd, row, schedulingQuestion, today);
         }
         text.append(details).append("\n（排产量已扣除发货量和在产量。人数按产线配置，班次按每班 ")
                 .append(SHIFT_HOURS.toPlainString()).append(" 小时估算。）");
-        if (schedulingQuestion) {
+        if (!overdueOrders.isEmpty()) {
+            text.append("\n\n先联系逾期订单的客户，确认能否改期或先补发一部分，再按交期安排其余订单。")
+                    .append("人数或班次待定的，补齐缺项后再排。");
+        } else if (schedulingQuestion) {
             text.append("\n\n先核对最早交期，再确认产线和班次。人数或班次待定的，补齐表中缺项后再排。");
         }
 
@@ -252,6 +277,64 @@ public class ProductionDemandQueryTool extends AbstractBusinessTool {
         data.put("totalCount", nonEmpty.size());
         data.put("products", rows);
         return buildSimpleResult(text.toString(), data);
+    }
+
+    private LocalDate factoryToday(String factoryId) {
+        String timezone = factorySettingsRepository.findByFactoryId(factoryId)
+                .map(FactorySettings::getTimezone)
+                .filter(value -> !value.isBlank())
+                .orElse(DEFAULT_FACTORY_TIMEZONE);
+        try {
+            return LocalDate.now(clock.withZone(ZoneId.of(timezone.trim())));
+        } catch (DateTimeException e) {
+            throw new BusinessException("工厂时区设置无效，请更正后再查询排产。");
+        }
+    }
+
+    private static long overdueDays(LocalDate delivery, LocalDate today) {
+        return delivery == null ? 0 : Math.max(0, ChronoUnit.DAYS.between(delivery, today));
+    }
+
+    private static String deliveryLabel(LocalDate delivery, LocalDate today) {
+        long days = overdueDays(delivery, today);
+        String date = Objects.toString(delivery, "未填交期");
+        return days > 0 ? date + "，已逾期 " + days + " 天" : date;
+    }
+
+    private static Map<String, List<PendingProduct>> overdueOrders(List<ProductDemand> demands, LocalDate today) {
+        Map<String, List<PendingProduct>> orders = new LinkedHashMap<>();
+        for (ProductDemand demand : demands) {
+            demand.pendingOrders.forEach((id, order) -> {
+                if (overdueDays(order.deliveryDate(), today) > 0) {
+                    orders.computeIfAbsent(id, key -> new ArrayList<>()).add(new PendingProduct(demand, order));
+                }
+            });
+        }
+        return orders;
+    }
+
+    private static void appendOverdueOrders(StringBuilder details, Map<String, List<PendingProduct>> orders,
+                                            LocalDate today) {
+        orders.values().stream()
+                .sorted(Comparator.comparing(products -> products.getFirst().order(), BY_DELIVERY_DATE))
+                .forEach(products -> {
+                    PendingOrder order = products.getFirst().order();
+                    details.append('\n');
+                    appendOrderName(details, order);
+                    details.append("（").append(deliveryLabel(order.deliveryDate(), today)).append("）待交 ");
+                    details.append(products.stream().map(product ->
+                            Objects.toString(product.demand().getProductName(), "(未命名)") + " "
+                                    + qtyWithUnit(product.order().quantity(), product.demand().getUnit()))
+                            .collect(Collectors.joining("、")));
+                    details.append("。\n");
+                });
+    }
+
+    private static void appendOrderName(StringBuilder details, PendingOrder order) {
+        if (order.customerName() != null && !order.customerName().isBlank()) {
+            details.append(order.customerName()).append(' ');
+        }
+        details.append(Objects.toString(order.orderNumber(), "未填单号"));
     }
 
     private List<String> requestedProductNames(Map<String, Object> params) {
@@ -285,10 +368,10 @@ public class ProductionDemandQueryTool extends AbstractBusinessTool {
 
     @SuppressWarnings("unchecked")
     private void appendScheduleRow(StringBuilder summary, StringBuilder details, ProductDemand demand,
-                                   Map<String, Object> row, boolean showMissingInTable) {
+                                   Map<String, Object> row, boolean showMissingInTable, LocalDate today) {
         List<PendingOrder> orders = demand.pendingOrders.values().stream()
-                .sorted(Comparator.comparing(PendingOrder::deliveryDate,
-                        Comparator.nullsLast(Comparator.naturalOrder())))
+                .filter(order -> overdueDays(order.deliveryDate(), today) == 0)
+                .sorted(BY_DELIVERY_DATE)
                 .toList();
         String name = (String) row.get("productName");
         Object workers = row.get("requiredWorkersPerShift");
@@ -301,28 +384,32 @@ public class ProductionDemandQueryTool extends AbstractBusinessTool {
         if (showMissingInTable && !missing.isEmpty()) {
             summary.append("（缺").append(tableCell(String.join("、", missing))).append("）");
         }
-        summary.append(" | ").append(Objects.toString(orders.get(0).deliveryDate(), "未填交期")).append(" |\n");
+        summary.append(" | ").append(deliveryLabel(demand.earliestDelivery, today)).append(" |\n");
 
-        details.append('\n').append(name).append("：");
-        for (int i = 0; i < Math.min(2, orders.size()); i++) {
-            PendingOrder order = orders.get(i);
-            if (i > 0) details.append("；");
-            if (order.customerName() != null && !order.customerName().isBlank()) {
-                details.append(order.customerName()).append(' ');
+        details.append('\n').append(name);
+        if (orders.isEmpty()) {
+            details.append("的");
+        } else {
+            details.append("：");
+            for (int i = 0; i < Math.min(2, orders.size()); i++) {
+                PendingOrder order = orders.get(i);
+                if (i > 0) details.append("；");
+                appendOrderName(details, order);
+                details.append(" 待交 ").append(qtyWithUnit(order.quantity(), demand.getUnit()))
+                        .append("（").append(deliveryLabel(order.deliveryDate(), today)).append("）");
             }
-            details.append(Objects.toString(order.orderNumber(), "未填单号")).append(" 待交 ")
-                    .append(qtyWithUnit(order.quantity(), demand.getUnit()))
-                    .append("（").append(Objects.toString(order.deliveryDate(), "未填交期")).append("）");
+            if (orders.size() > 2) details.append("；另 ").append(orders.size() - 2).append(" 单");
+            details.append("。");
         }
-        if (orders.size() > 2) details.append("；另 ").append(orders.size() - 2).append(" 单");
-        details.append("。产线：").append(row.get("recommendedLineName"));
+        details.append("产线：").append(row.get("recommendedLineName"));
         if (!showMissingInTable && !missing.isEmpty()) {
             details.append("（缺").append(String.join("、", missing)).append("）");
         }
         details.append("。");
         if (Set.of("盒", "袋", "件", "包", "箱", "个").contains(demand.getUnit())
                 && (demand.getNetShortage().stripTrailingZeros().scale() > 0
-                    || orders.stream().limit(2).anyMatch(order -> order.quantity().stripTrailingZeros().scale() > 0))) {
+                    || demand.pendingOrders.values().stream()
+                        .anyMatch(order -> order.quantity().stripTrailingZeros().scale() > 0))) {
             details.append("小数来自订单待交量和在产量的原始记录。");
         }
         details.append('\n');
@@ -438,6 +525,8 @@ public class ProductionDemandQueryTool extends AbstractBusinessTool {
     private record PendingOrder(String orderNumber, String customerName, LocalDate deliveryDate,
                                 BigDecimal quantity) {}
 
+    private record PendingProduct(ProductDemand demand, PendingOrder order) {}
+
     /** 单一产品的需求聚合状态. */
     private static class ProductDemand {
         private final String productTypeId;
@@ -447,6 +536,7 @@ public class ProductionDemandQueryTool extends AbstractBusinessTool {
         private BigDecimal inProgressQuantity = BigDecimal.ZERO;
         private final List<Map<String, Object>> orderRefs = new ArrayList<>();
         private final Map<String, PendingOrder> pendingOrders = new LinkedHashMap<>();
+        private LocalDate earliestDelivery;
         private int orderLineCount = 0;
 
         ProductDemand(String productTypeId, String productName, String unit) {
@@ -458,8 +548,12 @@ public class ProductionDemandQueryTool extends AbstractBusinessTool {
         void addOrderLine(SalesOrder so, BigDecimal pending) {
             totalDemand = totalDemand.add(pending);
             orderLineCount++;
+            LocalDate delivery = so.getRequiredDeliveryDate();
+            if (delivery != null && (earliestDelivery == null || delivery.isBefore(earliestDelivery))) {
+                earliestDelivery = delivery;
+            }
             pendingOrders.merge(so.getId(),
-                    new PendingOrder(so.getOrderNumber(), so.getCustomerName(), so.getRequiredDeliveryDate(), pending),
+                    new PendingOrder(so.getOrderNumber(), so.getCustomerName(), delivery, pending),
                     (a, b) -> new PendingOrder(a.orderNumber(), a.customerName(), a.deliveryDate(),
                             a.quantity().add(b.quantity())));
             if (orderRefs.size() < 5) {
