@@ -21,6 +21,13 @@ import com.cretas.aims.service.finance.FinanceOwnershipSql;
 @Repository
 public interface ArApTransactionRepository extends JpaRepository<ArApTransaction, String> {
 
+    String AR_NET_AMOUNT = "CASE WHEN t.transaction_type='AR_INVOICE' THEN t.amount "
+            + "WHEN t.transaction_type IN ('AR_ADJUSTMENT','AR_REFUND') AND t.approval_status='APPROVED' THEN t.amount "
+            + "WHEN t.transaction_type IN ('AR_PAYMENT','AR_CREDIT_NOTE') THEN -ABS(t.amount) ELSE 0 END";
+    String AP_NET_AMOUNT = "CASE WHEN t.transaction_type='AP_INVOICE' THEN t.amount "
+            + "WHEN t.transaction_type='AP_ADJUSTMENT' AND t.approval_status='APPROVED' THEN t.amount "
+            + "WHEN t.transaction_type IN ('AP_PAYMENT','AP_CREDIT_NOTE') THEN -ABS(t.amount) ELSE 0 END";
+
     Optional<ArApTransaction> findByIdAndFactoryId(String id, String factoryId);
 
     /** DB-side owner filter; source rows with unknown/cross-factory provenance evaluate to NULL. */
@@ -108,19 +115,30 @@ public interface ArApTransactionRepository extends JpaRepository<ArApTransaction
     List<ArApTransaction> findScopedOverduePayables(@Param("factoryId") String factoryId,
             @Param("today") LocalDate today, @Param("owners") List<Long> owners);
 
-    @Query(value = "SELECT COALESCE(SUM(CASE WHEN t.transaction_type='AR_INVOICE' THEN t.amount "
-            + "WHEN t.transaction_type IN ('AR_ADJUSTMENT','AR_REFUND') AND t.approval_status='APPROVED' THEN t.amount "
-            + "WHEN t.transaction_type IN ('AR_PAYMENT','AR_CREDIT_NOTE') THEN -ABS(t.amount) ELSE 0 END),0) "
+    @Query(value = "SELECT COALESCE(SUM(" + AR_NET_AMOUNT + "),0) "
             + "FROM ar_ap_transactions t WHERE t.factory_id=:factoryId AND t.counterparty_type='CUSTOMER' "
             + "AND t.deleted_at IS NULL AND " + FinanceOwnershipSql.AR_AP_OWNER_T + " IN (:owners)", nativeQuery = true)
     BigDecimal sumReceivablesScoped(@Param("factoryId") String factoryId, @Param("owners") List<Long> owners);
 
-    @Query(value = "SELECT COALESCE(SUM(CASE WHEN t.transaction_type='AP_INVOICE' THEN t.amount "
-            + "WHEN t.transaction_type='AP_ADJUSTMENT' AND t.approval_status='APPROVED' THEN t.amount "
-            + "WHEN t.transaction_type IN ('AP_PAYMENT','AP_CREDIT_NOTE') THEN -ABS(t.amount) ELSE 0 END),0) "
+    @Query(value = "SELECT COALESCE(SUM(" + AP_NET_AMOUNT + "),0) "
             + "FROM ar_ap_transactions t WHERE t.factory_id=:factoryId AND t.counterparty_type='SUPPLIER' "
             + "AND t.deleted_at IS NULL AND " + FinanceOwnershipSql.AR_AP_OWNER_T + " IN (:owners)", nativeQuery = true)
     BigDecimal sumPayablesScoped(@Param("factoryId") String factoryId, @Param("owners") List<Long> owners);
+
+    interface ScopedLedgerTotals {
+        BigDecimal getNet();
+        BigDecimal getPaid();
+    }
+
+    @Query(value = "SELECT COALESCE(SUM(CASE WHEN t.counterparty_type='CUSTOMER' THEN " + AR_NET_AMOUNT
+            + " ELSE " + AP_NET_AMOUNT + " END),0) AS net, "
+            + "COALESCE(SUM(CASE WHEN t.transaction_type=:paymentType THEN ABS(t.amount) ELSE 0 END),0) AS paid "
+            + "FROM ar_ap_transactions t WHERE t.factory_id=:factoryId AND t.deleted_at IS NULL "
+            + "AND t.counterparty_type=:counterpartyType AND t.counterparty_id=:counterpartyId "
+            + "AND " + FinanceOwnershipSql.AR_AP_OWNER_T + " IN (:owners)", nativeQuery = true)
+    ScopedLedgerTotals sumCounterpartyLedgerScoped(@Param("factoryId") String factoryId,
+            @Param("counterpartyType") String counterpartyType, @Param("counterpartyId") String counterpartyId,
+            @Param("paymentType") String paymentType, @Param("owners") List<Long> owners);
 
     @Query(value = "SELECT t.counterparty_id, t.counterparty_name, SUM(CASE "
             + "WHEN t.transaction_type IN ('AR_PAYMENT','AR_CREDIT_NOTE','AP_PAYMENT','AP_CREDIT_NOTE') THEN -ABS(t.amount) "

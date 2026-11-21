@@ -109,7 +109,7 @@ public class PurchaseOrderItem extends BaseEntity {
     @Column(name = "unit_price", precision = 15, scale = 4)
     private BigDecimal unitPrice;
 
-    /** 单价来源标签 (如 价目表 / 手改 / 手填); 原样保存客户端传入的标签 (G3). */
+    /** 服务端根据有效采购价目表与订单单价比对得出的标签。 */
     @PriceSensitive(permission = PriceSensitive.PURCHASE)
     @Column(name = "price_source", length = 32)
     private String priceSource;
@@ -129,7 +129,7 @@ public class PurchaseOrderItem extends BaseEntity {
 
     /** 单价相对参考价的偏离百分比 (如 5.25 表示 +5.25%). */
     @PriceSensitive(permission = PriceSensitive.PURCHASE)
-    @Column(name = "price_deviation_pct", precision = 9, scale = 4)
+    @Column(name = "price_deviation_pct", precision = 21, scale = 4)
     private BigDecimal priceDeviationPct;
 
     /** 税率（百分比，如 13 表示 13%） */

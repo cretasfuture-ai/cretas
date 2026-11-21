@@ -1,6 +1,7 @@
 package com.cretas.aims.dto.inventory;
 
 import com.cretas.aims.security.PriceSensitive;
+import com.cretas.aims.service.inventory.TradeCaliberSettings;
 
 import java.math.BigDecimal;
 import java.util.Map;
@@ -24,7 +25,7 @@ public final class CounterpartyStatisticsResponse {
             @PriceSensitive BigDecimal pendingCollection,
             @PriceSensitive BigDecimal receivedAmount,
             Long totalOrders,
-            @PriceSensitive BigDecimal totalSales) {
+            @PriceSensitive BigDecimal totalSales, TradeCaliberSettings.LedgerMode counterpartyLedgerScopeMode) {
 
         public static Customer from(Map<String, Object> statistics) {
             return new Customer((String) statistics.get("customerId"), (String) statistics.get("customerName"),
@@ -36,7 +37,8 @@ public final class CounterpartyStatisticsResponse {
                     (String) statistics.get("lastOrderDate"), (BigDecimal) statistics.get("pendingShipmentAmount"),
                     (BigDecimal) statistics.get("pendingInvoiceAmount"), (BigDecimal) statistics.get("pendingCollection"),
                     (BigDecimal) statistics.get("receivedAmount"), (Long) statistics.get("totalOrders"),
-                    (BigDecimal) statistics.get("totalSales"));
+                    (BigDecimal) statistics.get("totalSales"),
+                    (TradeCaliberSettings.LedgerMode) statistics.get(TradeCaliberSettings.LEDGER_KEY));
         }
     }
 
@@ -51,7 +53,8 @@ public final class CounterpartyStatisticsResponse {
             @PriceSensitive(permission = PriceSensitive.PURCHASE_OR_FINANCE) BigDecimal paidAmount,
             Long totalOrders,
             @PriceSensitive(permission = PriceSensitive.PURCHASE) BigDecimal totalAmount,
-            Number averageDeliveryDays, Number onTimeDeliveryRate) {
+            Number averageDeliveryDays, Number onTimeDeliveryRate,
+            TradeCaliberSettings.LedgerMode counterpartyLedgerScopeMode) {
 
         public static Supplier from(Map<String, Object> statistics) {
             return new Supplier((String) statistics.get("supplierId"), (String) statistics.get("supplierName"),
@@ -61,7 +64,8 @@ public final class CounterpartyStatisticsResponse {
                     (BigDecimal) statistics.get("pendingReceiptAmount"), (BigDecimal) statistics.get("pendingInvoiceAmount"),
                     (BigDecimal) statistics.get("pendingPayable"), (BigDecimal) statistics.get("paidAmount"),
                     (Long) statistics.get("totalOrders"), (BigDecimal) statistics.get("totalAmount"),
-                    (Number) statistics.get("averageDeliveryDays"), (Number) statistics.get("onTimeDeliveryRate"));
+                    (Number) statistics.get("averageDeliveryDays"), (Number) statistics.get("onTimeDeliveryRate"),
+                    (TradeCaliberSettings.LedgerMode) statistics.get(TradeCaliberSettings.LEDGER_KEY));
         }
     }
 }

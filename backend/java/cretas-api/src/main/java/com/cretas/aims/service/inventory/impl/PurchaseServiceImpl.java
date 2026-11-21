@@ -56,6 +56,8 @@ import com.cretas.aims.service.MaterialBatchService;
 import com.cretas.aims.service.material.MaterialReferenceWriteGuard;
 import com.cretas.aims.service.inventory.OverReceiveLimit;
 import com.cretas.aims.service.inventory.PurchaseService;
+import com.cretas.aims.service.inventory.TradeCaliberSettings;
+import com.cretas.aims.service.inventory.TradeCaliberSettings.PurchasePriceMode;
 import com.cretas.aims.service.rules.annotation.RuleEvaluate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -67,6 +69,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -149,6 +152,9 @@ public class PurchaseServiceImpl implements PurchaseService {
     private final ApplicationEventPublisher applicationEventPublisher;
     private final MaterialBatchService materialBatchService;
     private final MaterialReferenceWriteGuard materialReferenceWriteGuard;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    private TradeCaliberSettings tradeCaliberSettings;
 
     /**
      * SP6 — 采购异常单生成（SP6 新增 bean）。@Lazy 防止循环依赖（PurchaseService ↔ PurchaseExceptionService）。
@@ -459,6 +465,7 @@ public class PurchaseServiceImpl implements PurchaseService {
         BigDecimal totalAmount = BigDecimal.ZERO;
         BigDecimal taxAmount = BigDecimal.ZERO;
         List<PurchaseOrderItem> items = new ArrayList<>();
+        PurchasePriceMode priceMode = purchasePriceMode(factoryId);
 
         for (CreatePurchaseOrderRequest.PurchaseOrderItemDTO itemDTO : request.getItems()) {
             PurchaseOrderItem item = new PurchaseOrderItem();
@@ -474,7 +481,7 @@ public class PurchaseServiceImpl implements PurchaseService {
             item.setQuantity(itemDTO.getQuantity());
             applySupplierPurchaseContract(factoryId, request.getSupplierId(), item, itemDTO);
             applyPurchaseTaxContract(item, itemDTO.getTaxRate());
-            applyPriceTrace(item, itemDTO);
+            applyPriceTrace(order, item, priceMode, itemDTO.getPriceSource());
             item.setRemark(itemDTO.getRemark());
             item.setSpecification(itemDTO.getSpecification());
             item.setBoxQuantity(itemDTO.getBoxQuantity());
@@ -496,6 +503,7 @@ public class PurchaseServiceImpl implements PurchaseService {
         order.setTotalAmount(totalAmount);
         order.setTaxAmount(taxAmount);
         order = purchaseOrderRepository.save(order);
+        order.setPurchasePriceSourceMode(priceMode.name());
 
         log.info("创建采购订单: factoryId={}, orderNumber={}, items={}", factoryId, orderNumber, items.size());
         return order;
@@ -1927,8 +1935,8 @@ public class PurchaseServiceImpl implements PurchaseService {
         // Stable caller order: PO header first, then every old/new raw row.
         PurchaseOrder order = purchaseOrderRepository.findByIdAndFactoryIdForUpdate(orderId, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("采购订单不存在或不属于当前组织"));
-        List<String> referencedMaterialIds = new ArrayList<>(purchaseOrderItemRepository
-                .findByPurchaseOrderId(orderId).stream()
+        List<PurchaseOrderItem> existingItems = purchaseOrderItemRepository.findByPurchaseOrderId(orderId);
+        List<String> referencedMaterialIds = new ArrayList<>(existingItems.stream()
                 .map(PurchaseOrderItem::getMaterialTypeId)
                 .toList());
         if (request.getItems() != null) {
@@ -1948,14 +1956,15 @@ public class PurchaseServiceImpl implements PurchaseService {
         }
 
         // Partial update — only touch fields the caller sent
+        boolean supplierChanged = request.getSupplierId() != null
+                && !Objects.equals(order.getSupplierId(), request.getSupplierId());
+        boolean orderDateChanged = request.getOrderDate() != null && !request.getOrderDate().equals(order.getOrderDate());
         if (request.getSupplierId() != null) {
             // Validate supplier only when changed
             requireActiveSupplier(factoryId, request.getSupplierId());
-            boolean supplierChanged = !Objects.equals(order.getSupplierId(), request.getSupplierId());
             order.setSupplierId(request.getSupplierId());
             if (request.getItems() == null) {
-                List<PurchaseOrderItem> rebound = new ArrayList<>();
-                for (PurchaseOrderItem existingItem : purchaseOrderItemRepository.findByPurchaseOrderId(orderId)) {
+                for (PurchaseOrderItem existingItem : existingItems) {
                     assertSupplierMaterialActive(factoryId, request.getSupplierId(), existingItem.getMaterialTypeId());
                     // 草稿换供应商而没带明细: 行上还挂着旧供应商的供应关系 / 包装规格 / 行价, 提交会被
                     // SUPPLIER_MATERIAL_IDENTITY_INVALID 拦住 (或带着旧价)。改绑到新供应商对这个原料的那一条
@@ -1968,11 +1977,7 @@ public class PurchaseServiceImpl implements PurchaseService {
                                 .orElse(null));
                         existingItem.setPurchasePackagingSpecId(null);
                         existingItem.setUnitPrice(BigDecimal.ZERO);
-                        rebound.add(existingItem);
                     }
-                }
-                if (!rebound.isEmpty()) {
-                    purchaseOrderItemRepository.saveAll(rebound);
                 }
             }
         }
@@ -2009,22 +2014,25 @@ public class PurchaseServiceImpl implements PurchaseService {
         BigDecimal totalAmount = order.getTotalAmount() != null ? order.getTotalAmount() : BigDecimal.ZERO;
         BigDecimal taxAmount = order.getTaxAmount() != null ? order.getTaxAmount() : BigDecimal.ZERO;
         List<PurchaseOrderItem> items = new ArrayList<>();
+        PurchasePriceMode priceMode = purchasePriceMode(factoryId);
 
         if (request.getItems() != null) {
-        purchaseOrderItemRepository.deleteAll(
-                purchaseOrderItemRepository.findByPurchaseOrderId(orderId));
+        // Keep the managed collection in sync with the soft-deleted rows before serializing the draft.
+        order.getItems().clear();
+        purchaseOrderItemRepository.deleteAll(existingItems);
 
         totalAmount = BigDecimal.ZERO;
         taxAmount = BigDecimal.ZERO;
         for (CreatePurchaseOrderRequest.PurchaseOrderItemDTO itemDTO : request.getItems()) {
             PurchaseOrderItem item = new PurchaseOrderItem();
             item.setPurchaseOrderId(orderId);
+            item.setPurchaseOrder(order);
             item.setMaterialTypeId(itemDTO.getMaterialTypeId());
             item.setMaterialName(itemDTO.getMaterialName());
             item.setQuantity(itemDTO.getQuantity());
             applySupplierPurchaseContract(factoryId, order.getSupplierId(), item, itemDTO);
             applyPurchaseTaxContract(item, itemDTO.getTaxRate());
-            applyPriceTrace(item, itemDTO);
+            applyPriceTrace(order, item, priceMode, itemDTO.getPriceSource());
             item.setRemark(itemDTO.getRemark());
             item.setContractNumber(blankToNull(itemDTO.getContractNumber()));
             items.add(item);
@@ -2040,10 +2048,17 @@ public class PurchaseServiceImpl implements PurchaseService {
         }
 
         purchaseOrderItemRepository.saveAll(items);
+        order.getItems().addAll(items);
         order.setTotalAmount(totalAmount);
         order.setTaxAmount(taxAmount);
-        } // end if (request.getItems() != null)
+        } else if (supplierChanged || orderDateChanged) {
+            for (PurchaseOrderItem item : existingItems) {
+                applyPriceTrace(order, item, priceMode, item.getPriceSource());
+            }
+            purchaseOrderItemRepository.saveAll(existingItems);
+        }
         order = purchaseOrderRepository.save(order);
+        order.setPurchasePriceSourceMode(priceMode.name());
 
         log.info("编辑草稿采购订单: orderId={}, orderNumber={}", orderId, order.getOrderNumber());
         return order;
@@ -2122,6 +2137,7 @@ public class PurchaseServiceImpl implements PurchaseService {
         target.setPurchasePackagingSpecId(null);
         applySupplierPurchaseContract(factoryId, supplierId, target, dto);
         applyPurchaseTaxContract(target, taxRate);
+        applyPriceTrace(order, target, purchasePriceMode(factoryId), target.getPriceSource());
         purchaseOrderItemRepository.save(target);
 
         order.setSupplierId(supplierId);
@@ -2208,6 +2224,7 @@ public class PurchaseServiceImpl implements PurchaseService {
         BigDecimal totalAmount = BigDecimal.ZERO;
         BigDecimal taxAmount = BigDecimal.ZERO;
         List<PurchaseOrderItem> newItems = new ArrayList<>();
+        PurchasePriceMode priceMode = purchasePriceMode(factoryId);
         for (PurchaseOrderItem srcItem : source.getItems()) {
             PurchaseOrderItem newItem = new PurchaseOrderItem();
             newItem.setPurchaseOrderId(newOrder.getId());
@@ -2226,6 +2243,7 @@ public class PurchaseServiceImpl implements PurchaseService {
             newItem.setPackageToBaseFactorSnapshot(srcItem.getPackageToBaseFactorSnapshot());
             newItem.setInventoryQuantitySnapshot(srcItem.getInventoryQuantitySnapshot());
             newItem.setUnitPrice(srcItem.getUnitPrice());
+            applyPriceTrace(newOrder, newItem, priceMode, null);
             newItem.setTaxRate(srcItem.getTaxRate() != null ? srcItem.getTaxRate() : BigDecimal.ZERO);
             newItem.setRemark(srcItem.getRemark());
             newItem.setSpecification(srcItem.getSpecification());
@@ -4564,19 +4582,42 @@ public class PurchaseServiceImpl implements PurchaseService {
         item.setInventoryQuantitySnapshot(item.getQuantity().multiply(factor));
     }
 
-    /** 空串与全空白一律存 NULL —— 行级合同号为空要能回落到单头, 存 "" 会让回落判断失效。 */
-    /** G3: 单价来源与参考价留痕. 原样保存客户端算好的来源/参考价/偏离, 不在服务端猜. */
-    static void applyPriceTrace(PurchaseOrderItem item, CreatePurchaseOrderRequest.PurchaseOrderItemDTO dto) {
-        if (dto.getReferencePrice() != null && dto.getReferencePrice().signum() < 0) {
-            throw new BusinessException(400, "参考价不能为负数");
-        }
-        item.setPriceSource(blankToNull(dto.getPriceSource()));
-        item.setReferencePrice(dto.getReferencePrice());
-        item.setReferencePriceListId(blankToNull(dto.getReferencePriceListId()));
-        item.setReferencePriceListName(blankToNull(dto.getReferencePriceListName()));
-        item.setPriceDeviationPct(dto.getPriceDeviationPct());
+    private PurchasePriceMode purchasePriceMode(String factoryId) {
+        // The isolated service constructors predate settings injection. Spring always wires the policy reader.
+        return tradeCaliberSettings == null ? PurchasePriceMode.SERVER_DETERMINED : tradeCaliberSettings.purchasePriceMode(factoryId);
     }
 
+    /** Compare the persisted unit price against an applicable price in the same pricing unit. */
+    private void applyPriceTrace(PurchaseOrder order, PurchaseOrderItem item, PurchasePriceMode mode, String clientSource) {
+        String factoryId = order.getFactoryId();
+        String priceUnit = canonicalUnitOrRaw(factoryId, firstNonBlank(item.getPriceUnit(), item.getUnit()));
+        var match = purchaseOrderItemRepository
+                .findPurchasePriceReferences(factoryId, item.getMaterialTypeId(), order.getOrderDate()).stream()
+                .filter(candidate -> priceUnit != null && priceUnit.equals(canonicalUnitOrRaw(factoryId, candidate.getUnit())))
+                .findFirst().orElse(null);
+        BigDecimal reference = match == null ? null : match.getStandardPrice();
+        BigDecimal unitPrice = item.getUnitPrice() == null ? null : item.getUnitPrice().setScale(4, RoundingMode.HALF_UP);
+        boolean equal = reference != null && unitPrice != null && unitPrice.compareTo(reference) == 0;
+        if (mode == PurchasePriceMode.CLIENT_PRESERVED) {
+            if (clientSource != null && clientSource.length() > 32) {
+                throw new BusinessException(400, "单价来源长度不能超过32个字符").withHintTarget("priceSource");
+            }
+            item.setPriceSource(clientSource);
+        } else {
+            item.setPriceSource(match == null || unitPrice == null ? "手填" : equal ? "价目表" : "手改");
+        }
+        item.setReferencePrice(reference);
+        item.setReferencePriceListId(match == null ? null : match.getPriceListId());
+        item.setReferencePriceListName(match == null ? null : match.getPriceListName());
+        if (reference == null || unitPrice == null || reference.signum() == 0) {
+            item.setPriceDeviationPct(null);
+        } else {
+            item.setPriceDeviationPct(unitPrice.subtract(reference).movePointRight(2)
+                    .divide(reference, 4, RoundingMode.HALF_UP));
+        }
+    }
+
+    /** 空串与全空白一律存 NULL，保证行级合同号能回落到单头。 */
     private static String blankToNull(String value) {
         if (value == null) return null;
         String trimmed = value.trim();

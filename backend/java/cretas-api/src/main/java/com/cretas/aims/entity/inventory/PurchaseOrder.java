@@ -125,6 +125,11 @@ public class PurchaseOrder extends BaseEntity {
     @Column(name = "version", nullable = false)
     private Long version;
 
+    /** Policy used by the draft save response. Line price snapshots are persisted separately. */
+    @Transient
+    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    private String purchasePriceSourceMode;
+
     @Column(name = "approved_by")
     private Long approvedBy;
 

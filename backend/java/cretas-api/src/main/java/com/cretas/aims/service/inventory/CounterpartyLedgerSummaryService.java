@@ -1,6 +1,8 @@
 package com.cretas.aims.service.inventory;
 
+import com.cretas.aims.repository.finance.ArApTransactionRepository;
 import com.cretas.aims.security.BusinessRowScope;
+import com.cretas.aims.service.inventory.TradeCaliberSettings.LedgerMode;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -25,7 +27,7 @@ import java.util.Map;
  *   <li>待开票额: 采购 = 发票状态「未收到」的订单金额; 销售 = 已发过货的订单 总额-已开票额(不为负)。</li>
  *   <li>待付款 / 待收款: AP / AR 台账净额 (挂账+已批准调整-付款-冲减); 已付款 / 已收款: 付款 / 收款流水绝对值之和。</li>
  * </ul>
- * 财务台账目前按全厂口径汇总。受归属限制的账号暂不返回该汇总值。
+ * 财务台账汇总采用当前账号可见流水的归属范围。
  */
 @Service
 public class CounterpartyLedgerSummaryService {
@@ -35,6 +37,12 @@ public class CounterpartyLedgerSummaryService {
 
     @Autowired
     private BusinessRowScope businessRowScope;
+
+    @Autowired
+    private ArApTransactionRepository transactionRepository;
+
+    @Autowired
+    private TradeCaliberSettings tradeCaliberSettings;
 
     private static final String PO = "com.cretas.aims.entity.enums.PurchaseOrderStatus.";
     private static final String SO = "com.cretas.aims.entity.enums.SalesOrderStatus.";
@@ -134,9 +142,23 @@ public class CounterpartyLedgerSummaryService {
 
     private void ledger(Map<String, Object> m, String netExpr, String paymentType, String cpType,
                         String factoryId, String cpId, String pendingKey, String paidKey) {
-        if (BusinessRowScope.recordCreators(businessRowScope, factoryId) != null) {
-            m.put(pendingKey, null);
-            m.put(paidKey, null);
+        LedgerMode mode = tradeCaliberSettings.ledgerMode(factoryId);
+        m.put(TradeCaliberSettings.LEDGER_KEY, mode);
+        List<Long> owners = BusinessRowScope.recordCreators(businessRowScope, factoryId);
+        if (owners != null) {
+            if (mode == LedgerMode.HIDDEN) {
+                m.put(pendingKey, null);
+                m.put(paidKey, null);
+                return;
+            }
+            if (owners.isEmpty()) {
+                m.put(pendingKey, BigDecimal.ZERO);
+                m.put(paidKey, BigDecimal.ZERO);
+                return;
+            }
+            var totals = transactionRepository.sumCounterpartyLedgerScoped(factoryId, cpType, cpId, paymentType, owners);
+            m.put(pendingKey, totals.getNet());
+            m.put(paidKey, totals.getPaid());
             return;
         }
         String scope = " FROM ArApTransaction t WHERE t.factoryId=:f AND t.counterpartyType = "

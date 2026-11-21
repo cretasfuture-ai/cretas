@@ -32,10 +32,12 @@ public class CustomerPriceOverviewRow {
     @PriceSensitive
     private BigDecimal latestTradedPrice;
     private LocalDate latestTradedDate;
-    /** 历史成交单价的简单平均 (历史表无数量, 不加权); 从未成交为 null。 */
+    /** 按工厂配置计算的成交均价。无合格成交时为 null。 */
     @PriceSensitive
     private BigDecimal averageTradedPrice;
+    private String averageTradedPriceUnit;
     private long tradedCount;
+    private long excludedTradeCount;
     private LocalDate effectiveFrom;
     private LocalDate effectiveTo;
     /** 价目表启用且在有效期内。 */

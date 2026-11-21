@@ -36,7 +36,8 @@ public class SalesOrderConfirmedPriceHistoryListener {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void onSalesOrderConfirmed(SalesOrderConfirmedEvent event) {
         try {
-            Optional<SalesOrder> orderOpt = salesOrderRepository.findById(event.getSalesOrderId());
+            Optional<SalesOrder> orderOpt = salesOrderRepository.findByIdAndFactoryId(
+                    event.getSalesOrderId(), event.getFactoryId());
             if (orderOpt.isEmpty()) {
                 log.warn("S-PRICE-1 listener: SO {} not found, skip", event.getSalesOrderId());
                 return;

@@ -2,6 +2,7 @@ package com.cretas.aims.service.inventory;
 
 import com.cretas.aims.entity.Customer;
 import com.cretas.aims.entity.Factory;
+import com.cretas.aims.entity.FactorySettings;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.Supplier;
 import com.cretas.aims.entity.User;
@@ -30,6 +31,11 @@ public final class TradeJpaFixtures {
         factory.setName(factoryId);
         em.persist(factory);
         return createUser(em, factoryId, factoryId, null);
+    }
+
+    public static void createProductionSettings(EntityManager em, String factoryId, String json) {
+        em.persist(FactorySettings.builder().factoryId(factoryId).productionSettings(json).build());
+        em.flush();
     }
 
     static Long createUser(EntityManager em, String factoryId, String username, String roleCode) {
