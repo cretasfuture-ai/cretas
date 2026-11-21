@@ -127,6 +127,7 @@ public class PurchaseOrder extends BaseEntity {
 
     /** Policy used by the draft save response. Line price snapshots are persisted separately. */
     @Transient
+    @PriceSensitive(permission = PriceSensitive.PURCHASE)
     @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
     private String purchasePriceSourceMode;
 
