@@ -1,5 +1,6 @@
 package com.cretas.aims.service.impl;
 
+import com.cretas.aims.ai.tool.impl.production.ProductionDemandQueryTool;
 import com.cretas.aims.dto.ai.IntentExecuteResponse;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.service.ResultFormatterService;
@@ -115,6 +116,12 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
             if (timeNotice != null) {
                 String rest = formatIgnoringTimeNotice(response);
                 return rest == null ? timeNotice : timeNotice + "\n" + rest;
+            }
+            // The bound scheduling Skill already rendered the approved tool result. Preserve
+            // that reply through final formatting so the generic placeholder cannot trigger summarization.
+            String schedule = ProductionDemandQueryTool.validatedSkillReply(response).orElse(null);
+            if (schedule != null) {
+                return schedule;
             }
             String shortageOverview = formatShortageOverview(resultData);
             if (shortageOverview != null) {
