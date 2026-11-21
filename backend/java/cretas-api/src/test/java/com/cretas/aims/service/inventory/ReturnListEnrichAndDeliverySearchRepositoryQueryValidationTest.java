@@ -48,6 +48,7 @@ class ReturnListEnrichAndDeliverySearchRepositoryQueryValidationTest {
         userId = TradeJpaFixtures.createFactoryUser(em, F);
         otherUserId = TradeJpaFixtures.createFactoryUser(em, "OTHER");
         TradeJpaFixtures.createCustomer(em, F, userId, "C1", "甲客户");
+        TradeJpaFixtures.createCustomer(em, F, userId, "C2", "乙客户");
         TradeJpaFixtures.createCustomer(em, "OTHER", otherUserId, "C-OTHER", "其他客户");
         TradeJpaFixtures.createSupplier(em, F, userId, "S1", "乙供应商");
         SalesOrder so = new SalesOrder();
@@ -98,14 +99,24 @@ class ReturnListEnrichAndDeliverySearchRepositoryQueryValidationTest {
         assertThat(r.getSourceOrderNumber()).isNull();
     }
 
-    private void delivery(String no, String orderNo, String customer, SalesDeliveryStatus st, LocalDate date, String factory) {
+    private void salesOrder(String factory, Long owner, String id, String number, String customer) {
+        SalesOrder order = new SalesOrder();
+        order.setFactoryId(factory);
+        order.setId(id);
+        order.setOrderNumber(number);
+        order.setCustomerId(customer);
+        order.setOrderDate(LocalDate.of(2026, 10, 1));
+        order.setCreatedBy(owner);
+        em.persist(order);
+    }
+
+    private void delivery(String no, String orderId, String customerId, SalesDeliveryStatus st, LocalDate date, String factory) {
         SalesDeliveryRecord d = new SalesDeliveryRecord();
         d.setId("D-" + no);
         d.setFactoryId(factory);
         d.setDeliveryNumber(no);
-        d.setOrderNumber(orderNo);
-        d.setCustomerId(F.equals(factory) ? "C1" : "C-OTHER");
-        d.setCustomerName(customer);
+        d.setSalesOrderId(orderId);
+        d.setCustomerId(customerId);
         d.setStatus(st);
         d.setDeliveryDate(date);
         d.setShippedBy(F.equals(factory) ? userId : otherUserId);
@@ -114,11 +125,15 @@ class ReturnListEnrichAndDeliverySearchRepositoryQueryValidationTest {
 
     @Test
     void deliverySearchFiltersByKeywordOrderStatusDateAndFactory() {
-        delivery("DN-001", "SO-100", "甲客户", SalesDeliveryStatus.SHIPPED, LocalDate.of(2026, 11, 1), F);
-        delivery("DN-002", "SO-200", "乙客户", SalesDeliveryStatus.DRAFT, LocalDate.of(2026, 11, 10), F);
-        delivery("DN-003", "SO-100", "甲客户", SalesDeliveryStatus.DELIVERED, LocalDate.of(2026, 11, 15), F);
-        delivery("DN-X", "SO-100", "甲客户", SalesDeliveryStatus.SHIPPED, LocalDate.of(2026, 11, 1), "OTHER");
+        salesOrder(F, userId, "ORDER-100", "SO-100", "C1");
+        salesOrder(F, userId, "ORDER-200", "SO-200", "C2");
+        salesOrder("OTHER", otherUserId, "OTHER-100", "SO-100", "C-OTHER");
+        delivery("DN-001", "ORDER-100", "C1", SalesDeliveryStatus.SHIPPED, LocalDate.of(2026, 11, 1), F);
+        delivery("DN-002", "ORDER-200", "C2", SalesDeliveryStatus.DRAFT, LocalDate.of(2026, 11, 10), F);
+        delivery("DN-003", "ORDER-100", "C1", SalesDeliveryStatus.DELIVERED, LocalDate.of(2026, 11, 15), F);
+        delivery("DN-X", "OTHER-100", "C-OTHER", SalesDeliveryStatus.SHIPPED, LocalDate.of(2026, 11, 1), "OTHER");
         em.flush();
+        em.clear();
 
         assertThat(search.search(F, "乙", null, null, null, null, 1, 20).getTotalElements()).isEqualTo(1);
         assertThat(search.search(F, null, "so-100", null, null, null, 1, 20).getTotalElements()).isEqualTo(2);
@@ -129,5 +144,20 @@ class ReturnListEnrichAndDeliverySearchRepositoryQueryValidationTest {
                 null, null, 1, 20);
         assertThat(combo.getContent()).extracting(SalesDeliveryRecord::getDeliveryNumber).containsExactly("DN-003");
         assertThat(search.search(F, "DN-X", null, null, null, null, 1, 20).getTotalElements()).isZero(); // 别的厂
+    }
+
+    @Test
+    void inconsistentLinksNeverResolveAnotherFactorysCustomerOrOrder() {
+        salesOrder("OTHER", otherUserId, "OTHER-300", "SO-300", "C-OTHER");
+        delivery("DN-LOCAL", "OTHER-300", "C-OTHER", SalesDeliveryStatus.DRAFT, LocalDate.of(2026, 11, 1), F);
+        em.flush();
+        em.clear();
+
+        assertThat(search.search(F, "其他客户", "SO-300", null, null, null, 1, 20).getTotalElements()).isZero();
+        assertThat(search.search(F, "DN-LOCAL", null, null, null, null, 1, 20).getContent())
+                .singleElement().satisfies(row -> {
+                    assertThat(row.getCustomerName()).isNull();
+                    assertThat(row.getOrderNumber()).isNull();
+                });
     }
 }

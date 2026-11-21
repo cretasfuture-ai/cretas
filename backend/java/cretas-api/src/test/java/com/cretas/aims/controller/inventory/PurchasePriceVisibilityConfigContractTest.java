@@ -249,7 +249,8 @@ class PurchasePriceVisibilityConfigContractTest {
                 .addFilters(new PriceSensitiveContextFilter())
                 .addInterceptors(new PermissionInterceptor(permissions, users, json))
                 .setControllerAdvice(advice, new GlobalExceptionHandler())
-                .setMessageConverters(new MappingJackson2HttpMessageConverter(json))
+                .setMessageConverters(new org.springframework.http.converter.ByteArrayHttpMessageConverter(),
+                        new MappingJackson2HttpMessageConverter(json))
                 .build();
     }
 
@@ -592,8 +593,11 @@ class PurchasePriceVisibilityConfigContractTest {
                 .getResponse().getStatus()).isEqualTo(403);
         assertThat(call(DEPT_ADMIN, get(url).param("from", "2026-10-01").param("to", "2026-10-31"))
                 .getResponse().getStatus()).isEqualTo(200);
-        assertThat(call(DEPT_ADMIN, get(url + "/export").param("from", "2026-10-01").param("to", "2026-10-31"))
-                .getResponse().getContentAsString()).isEqualTo("sentinel");
+        var csv = call(DEPT_ADMIN, get(url + "/export").param("from", "2026-10-01").param("to", "2026-10-31"))
+                .getResponse();
+        assertThat(csv.getStatus()).isEqualTo(200);
+        assertThat(csv.getContentType()).startsWith("text/csv");
+        assertThat(csv.getContentAsString()).isEqualTo("sentinel");
     }
 
     private MvcResult call(long userId, MockHttpServletRequestBuilder request) throws Exception {

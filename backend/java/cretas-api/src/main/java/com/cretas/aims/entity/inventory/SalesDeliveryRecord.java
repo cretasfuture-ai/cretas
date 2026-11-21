@@ -94,7 +94,7 @@ public class SalesDeliveryRecord extends BaseEntity {
      * {@code sales_order_id} can be NULL (delivery not linked to an SO) — subquery
      * then naturally returns NULL, no special-case needed.
      */
-    @Formula("(SELECT so.order_number FROM sales_orders so WHERE so.id = sales_order_id)")
+    @Formula("(SELECT so.order_number FROM sales_orders so WHERE so.id = sales_order_id AND so.factory_id = factory_id)")
     private String orderNumber;
 
     @Column(name = "customer_id", nullable = false, length = 191)
@@ -109,7 +109,7 @@ public class SalesDeliveryRecord extends BaseEntity {
      * DB 端 subquery 拿客户名, 无需改任何 controller/DTO/service 调用点, 且自动覆盖本 entity
      * 被序列化的所有位置 (待确认列表 + confirmDelivery 响应 + 确认弹窗)。
      */
-    @Formula("(SELECT c.name FROM customers c WHERE c.id = customer_id)")
+    @Formula("(SELECT c.name FROM customers c WHERE c.id = customer_id AND c.factory_id = factory_id)")
     private String customerName;
 
     @Column(name = "delivery_date", nullable = false)
