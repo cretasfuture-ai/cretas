@@ -877,6 +877,7 @@ public class PurchaseController {
     private com.cretas.aims.service.inventory.PurchasePriceTrendService priceTrendService;
 
     @GetMapping("/price-trend")
+    @com.cretas.aims.security.RowScopeSupported
     @Operation(summary = "采购均价趋势 (原料×月份加权均价, 服务端聚合)")
     @RequirePermission({"procurement:read_write", "procurement:read"})
     public ApiResponse<List<com.cretas.aims.service.inventory.PurchasePriceTrendService.Row>> priceTrend(
@@ -887,10 +888,11 @@ public class PurchaseController {
             @RequestParam(required = false) String supplierId,
             jakarta.servlet.http.HttpServletRequest httpRequest) {
         requirePurchasePrices(httpRequest);
-        return ApiResponse.success("查询成功", requireTrendService().trend(factoryId, from, to, materialTypeId, supplierId));
+        return ApiResponse.success("查询成功", scopedPriceTrend(factoryId, from, to, materialTypeId, supplierId));
     }
 
     @GetMapping("/price-trend/export")
+    @com.cretas.aims.security.RowScopeSupported
     @Operation(summary = "导出采购均价趋势 (CSV)")
     @RequirePermission({"procurement:read_write", "procurement:read"})
     public org.springframework.http.ResponseEntity<byte[]> exportPriceTrend(
@@ -901,12 +903,18 @@ public class PurchaseController {
             @RequestParam(required = false) String supplierId,
             jakarta.servlet.http.HttpServletRequest httpRequest) {
         requirePurchasePrices(httpRequest);
-        var svc = requireTrendService();
-        byte[] csv = svc.exportCsv(svc.trend(factoryId, from, to, materialTypeId, supplierId));
+        var rows = scopedPriceTrend(factoryId, from, to, materialTypeId, supplierId);
+        byte[] csv = requireTrendService().exportCsv(rows);
         return org.springframework.http.ResponseEntity.ok()
                 .header("Content-Disposition", "attachment; filename=purchase-price-trend.csv")
                 .contentType(org.springframework.http.MediaType.parseMediaType("text/csv;charset=UTF-8"))
                 .body(csv);
+    }
+
+    private List<com.cretas.aims.service.inventory.PurchasePriceTrendService.Row> scopedPriceTrend(
+            String factoryId, java.time.LocalDate from, java.time.LocalDate to, String materialTypeId, String supplierId) {
+        List<Long> owners = com.cretas.aims.security.BusinessRowScope.recordCreators(businessRowScope, factoryId);
+        return requireTrendService().trend(factoryId, from, to, materialTypeId, supplierId, owners);
     }
 
     private com.cretas.aims.service.inventory.PurchasePriceTrendService requireTrendService() {

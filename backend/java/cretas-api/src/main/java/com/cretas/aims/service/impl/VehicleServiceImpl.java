@@ -108,14 +108,14 @@ public class VehicleServiceImpl implements VehicleService {
         request.setCapacity(resolveCapacityKg(request));
         // 如果修改了车牌号，检查是否重复 (大小写不敏感、忽略首尾空白; 自己不算重复)
         String newPlate = request.getPlateNumber() == null ? null : normalizePlate(request.getPlateNumber());
-        if (newPlate != null && !newPlate.equals(normalizePlate(vehicle.getPlateNumber()))) {
-            request.setPlateNumber(newPlate);
-            if (!vehicleRepository.findAllByFactoryIdAndNormalizedPlate(factoryId, newPlate).isEmpty()) {
-                throw new BusinessException(409, "车牌号已存在: " + request.getPlateNumber())
+        if (newPlate != null && !newPlate.equals(vehicle.getPlateNumber())) {
+            if (vehicleRepository.findAllByFactoryIdAndNormalizedPlate(factoryId, newPlate).stream()
+                    .anyMatch(other -> !vehicleId.equals(other.getId()))) {
+                throw new BusinessException(409, "车牌号已存在: " + newPlate)
                         .withHint("请使用其他车牌号")
                         .withHintTarget("plateNumber");
             }
-            vehicle.setPlateNumber(request.getPlateNumber());
+            vehicle.setPlateNumber(newPlate);
         }
 
         if (request.getDriver() != null) {
@@ -216,7 +216,7 @@ public class VehicleServiceImpl implements VehicleService {
         if (tons.signum() < 0) {
             throw new BusinessException(400, "载重不能为负数").withHintTarget("capacityTons");
         }
-        BigDecimal fromTons = tons.multiply(new BigDecimal("1000"));
+        BigDecimal fromTons = tons.movePointRight(3);
         if (kg != null && kg.compareTo(fromTons) != 0) {
             throw new BusinessException(400, "载重 capacity(kg) 与 capacityTons(吨) 不一致")
                     .withHint("只传其中一个, 或保证 kg = 吨 × 1000").withHintTarget("capacityTons");
@@ -236,7 +236,7 @@ public class VehicleServiceImpl implements VehicleService {
                 .phone(vehicle.getDriverPhone())
                 .capacity(vehicle.getCapacity())
                 .capacityTons(vehicle.getCapacity() == null ? null
-                        : vehicle.getCapacity().divide(new BigDecimal("1000"), 3, java.math.RoundingMode.HALF_UP))
+                        : vehicle.getCapacity().movePointLeft(3).stripTrailingZeros())
                 .currentLoad(vehicle.getCurrentLoad())
                 .status(vehicle.getStatus() != null ? vehicle.getStatus().name() : "available")
                 .vehicleType(vehicle.getVehicleType())

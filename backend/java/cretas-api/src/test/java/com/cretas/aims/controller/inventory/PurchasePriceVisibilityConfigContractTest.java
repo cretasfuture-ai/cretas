@@ -2,9 +2,14 @@ package com.cretas.aims.controller.inventory;
 
 import com.cretas.aims.config.PermissionInterceptor;
 import com.cretas.aims.config.PriceSensitiveContextFilter;
+import com.cretas.aims.controller.CustomerController;
 import com.cretas.aims.controller.ListSummaryController;
+import com.cretas.aims.controller.SupplierController;
 import com.cretas.aims.controller.SupplierMaterialController;
+import com.cretas.aims.controller.finance.ArApController;
+import com.cretas.aims.controller.sales.CustomerPriceOverviewController;
 import com.cretas.aims.dto.common.PageResponse;
+import com.cretas.aims.dto.inventory.CustomerPriceOverviewRow;
 import com.cretas.aims.dto.inventory.MaterialPriceComparisonDTO;
 import com.cretas.aims.dto.inventory.PurchaseInvoiceLineViewDTO;
 import com.cretas.aims.dto.inventory.PurchaseInvoiceMatchStatusDTO;
@@ -14,6 +19,7 @@ import com.cretas.aims.dto.supplier.SupplierMaterialDTO;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.config.FactoryModuleConfig;
 import com.cretas.aims.entity.enums.ReturnType;
+import com.cretas.aims.entity.finance.ArApTransaction;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
 import com.cretas.aims.entity.inventory.PurchaseOrderItem;
 import com.cretas.aims.entity.inventory.ReturnOrder;
@@ -25,9 +31,14 @@ import com.cretas.aims.repository.config.FactoryModuleConfigRepository;
 import com.cretas.aims.repository.permission.PlatformRolePermissionRepository;
 import com.cretas.aims.repository.workflow.ApprovalWorkflowInstanceRepository;
 import com.cretas.aims.security.PriceFieldResponseAdvice;
+import com.cretas.aims.security.BusinessRowScope;
 import com.cretas.aims.security.PriceSensitiveSerializerModifier;
 import com.cretas.aims.service.listsummary.ListSummaryService;
 import com.cretas.aims.service.MobileService;
+import com.cretas.aims.service.CustomerService;
+import com.cretas.aims.service.SupplierService;
+import com.cretas.aims.service.finance.ArApService;
+import com.cretas.aims.service.finance.FinanceRowScopeQuery;
 import com.cretas.aims.controller.MaterialBatchController;
 import com.cretas.aims.dto.material.MaterialStockSummaryDTO;
 import com.cretas.aims.service.MaterialBatchService;
@@ -47,8 +58,10 @@ import com.cretas.aims.service.inventory.ReturnOrderService;
 import com.cretas.aims.service.impl.PermissionServiceImpl;
 import com.cretas.aims.service.inventory.PurchaseInvoiceService;
 import com.cretas.aims.service.inventory.PurchaseService;
+import com.cretas.aims.service.inventory.CustomerPriceOverviewService;
 import com.cretas.aims.service.supplier.SupplierMaterialPurchaseSpecService;
 import com.cretas.aims.service.supplier.SupplierMaterialService;
+import com.cretas.aims.utils.FactoryAccessValidator;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.module.SimpleModule;
@@ -65,6 +78,7 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -230,6 +244,7 @@ class PurchasePriceVisibilityConfigContractTest {
         ReflectionTestUtils.setField(purchaseController, "workflowEngine", workflowEngine);
         ReflectionTestUtils.setField(purchaseController, "approvalHistoryRepository", approvalHistory);
         ReflectionTestUtils.setField(purchaseController, "priceTrendService", priceTrend);
+        ReflectionTestUtils.setField(purchaseController, "businessRowScope", mock(BusinessRowScope.class));
         MaterialPackagingHierarchyController packagingController =
                 new MaterialPackagingHierarchyController(packagingService, mobile);
         ReflectionTestUtils.setField(packagingController, "priceVisibility", new PriceVisibility(permissions));
@@ -240,6 +255,10 @@ class PurchasePriceVisibilityConfigContractTest {
                         purchaseController,
                         new SupplierMaterialController(supplierMaterialService, mock(SupplierMaterialPurchaseSpecService.class)),
                         new PurchaseInvoiceController(invoiceService, mobile),
+                        customerPriceOverview(),
+                        customerStatistics(),
+                        supplierStatistics(),
+                        receivableItems(),
                         new ListSummaryController(listSummaryService, permissions, users),
                         new ReturnOrderController(returnOrderService, mobile, null),
                         packagingController,
@@ -252,6 +271,58 @@ class PurchasePriceVisibilityConfigContractTest {
                 .setMessageConverters(new org.springframework.http.converter.ByteArrayHttpMessageConverter(),
                         new MappingJackson2HttpMessageConverter(json))
                 .build();
+    }
+
+    private CustomerPriceOverviewController customerPriceOverview() {
+        var service = mock(CustomerPriceOverviewService.class);
+        when(service.list(F, null, 1, 50, null)).thenAnswer(inv -> {
+            var row = new CustomerPriceOverviewRow();
+            row.setCustomerId("C1");
+            row.setStandardPrice(new BigDecimal("10"));
+            row.setLatestTradedPrice(new BigDecimal("11"));
+            row.setAverageTradedPrice(new BigDecimal("12"));
+            return PageResponse.of(List.of(row), 1, 50, 1L);
+        });
+        var scope = mock(BusinessRowScope.class);
+        when(scope.recordCreatorIds(F)).thenReturn(null);
+        return new CustomerPriceOverviewController(service, new FactoryAccessValidator(users), scope);
+    }
+
+    private CustomerController customerStatistics() {
+        var service = mock(CustomerService.class);
+        when(service.getCustomerStatistics(F, "C1")).thenReturn(Map.of(
+                "customerId", "C1", "committedOrderCount", 2L, "totalOrders", 2L,
+                "contractAmount", new BigDecimal("60"), "totalSales", new BigDecimal("60"),
+                "averageOrderValue", new BigDecimal("30")));
+        return new CustomerController(service, null, null, null);
+    }
+
+    private SupplierController supplierStatistics() {
+        var service = mock(SupplierService.class);
+        when(service.getSupplierStatistics(F, "SUP-1")).thenReturn(Map.of(
+                "supplierId", "SUP-1", "purchaseAmount", new BigDecimal("60"), "totalAmount", new BigDecimal("60"),
+                "pendingReceiptAmount", new BigDecimal("20"), "pendingInvoiceAmount", new BigDecimal("50"),
+                "pendingPayable", new BigDecimal("35"), "paidAmount", new BigDecimal("15"),
+                "committedOrderCount", 2L));
+        return new SupplierController(service, null, null, null, json);
+    }
+
+    private ArApController receivableItems() {
+        var service = mock(ArApService.class);
+        when(service.getReceivableItems(F, null, false, false, null, null, 1, 20)).thenAnswer(inv -> {
+            var t = new ArApTransaction();
+            t.setId("AR-1");
+            t.setAmount(new BigDecimal("60"));
+            t.setSettledAmount(new BigDecimal("20"));
+            t.setOutstandingAmount(new BigDecimal("40"));
+            t.setDueDate(LocalDate.now().minusDays(3));
+            return PageResponse.of(List.of(t), 1, 20, 1L);
+        });
+        var rowScope = mock(FinanceRowScopeQuery.class);
+        when(rowScope.responseTransactions(eq(F), any())).thenAnswer(inv -> inv.getArgument(1));
+        var controller = new ArApController(service, json, null, null, null);
+        ReflectionTestUtils.setField(controller, "financeRowScopeQuery", rowScope);
+        return controller;
     }
 
     // ─── F006 形态: 配置说了算 ─────────────────────────────────────────────────
@@ -517,7 +588,12 @@ class PurchasePriceVisibilityConfigContractTest {
     // ─── helpers ──────────────────────────────────────────────────────────────
 
     private void grant(String role, String module, String level) {
-        override.computeIfAbsent(role, r -> new HashMap<>()).put(module, level);
+        Map<String, String> levels = override.computeIfAbsent(role, r -> new HashMap<>());
+        if (level == null) {
+            levels.remove(module);
+        } else {
+            levels.put(module, level);
+        }
         permissions.invalidateCache();
     }
 
@@ -612,6 +688,79 @@ class PurchasePriceVisibilityConfigContractTest {
         assertThat(csv.getStatus()).isEqualTo(200);
         assertThat(csv.getContentType()).startsWith("text/csv");
         assertThat(csv.getContentAsString()).isEqualTo("sentinel");
+    }
+
+    @Test
+    void customerPriceOverviewUsesConfiguredSalesRead() throws Exception {
+        String url = "/api/mobile/" + F + "/customer-prices";
+        // The fallback module matrix still allows this role to enter the route.
+        grant("sales_manager", "sales", null);
+        assertTradeAmounts(body(SALES, url, 200).at("/data/content/0"), "customerId", "C1",
+                Map.of("standardPrice", "10", "latestTradedPrice", "11", "averageTradedPrice", "12"), false);
+        grant("sales_manager", "sales", "r");
+        assertTradeAmounts(body(SALES, url, 200).at("/data/content/0"), "customerId", "C1",
+                Map.of("standardPrice", "10", "latestTradedPrice", "11", "averageTradedPrice", "12"), true);
+    }
+
+    @Test
+    void customerStatisticsMasksContractAndCompatibilityAmountsTogether() throws Exception {
+        String url = "/api/mobile/" + F + "/customers/C1/statistics";
+        var amounts = Map.of("contractAmount", "60", "totalSales", "60", "averageOrderValue", "30");
+        grant("sales_manager", "sales", "r");
+        assertTradeAmounts(body(SALES, url, 200).path("data"), "customerId", "C1", amounts, true);
+        grant("sales_manager", "sales", null);
+        JsonNode hidden = body(SALES, url, 200).path("data");
+        assertTradeAmounts(hidden, "customerId", "C1", amounts, false);
+        assertThat(hidden.path("totalOrders").asInt()).isEqualTo(2);
+        grant("sales_manager", "sales", "-");
+        grant("sales_manager", "finance", "r");
+        assertTradeAmounts(body(SALES, url, 200).path("data"), "customerId", "C1", amounts, true);
+    }
+
+    @Test
+    void supplierStatisticsKeepsTheDistinctProcurementAndPayablesRules() throws Exception {
+        String url = "/api/mobile/" + F + "/suppliers/SUP-1/statistics";
+        var purchasing = Map.of("purchaseAmount", "60", "totalAmount", "60",
+                "pendingReceiptAmount", "20", "pendingInvoiceAmount", "50");
+        var payables = Map.of("pendingPayable", "35", "paidAmount", "15");
+        JsonNode visible = body(DEPT_ADMIN, url, 200).path("data");
+        assertTradeAmounts(visible, "supplierId", "SUP-1", purchasing, true);
+        assertTradeAmounts(visible, "supplierId", "SUP-1", payables, true);
+
+        grant("department_admin", "procurement", "-");
+        JsonNode financeOnly = body(DEPT_ADMIN, url, 200).path("data");
+        assertTradeAmounts(financeOnly, "supplierId", "SUP-1", purchasing, false);
+        assertTradeAmounts(financeOnly, "supplierId", "SUP-1", payables, true);
+
+        grant("warehouse_manager", "procurement", null);
+        JsonNode hidden = body(WAREHOUSE, url, 200).path("data");
+        assertTradeAmounts(hidden, "supplierId", "SUP-1", purchasing, false);
+        assertTradeAmounts(hidden, "supplierId", "SUP-1", payables, false);
+    }
+
+    @Test
+    void receivableItemsExposeAmountsToConfiguredFinanceReadOnly() throws Exception {
+        String url = "/api/mobile/" + F + "/finance/receivable-items";
+        var amounts = Map.of("amount", "60", "settledAmount", "20", "outstandingAmount", "40");
+        assertTradeAmounts(body(PROCUREMENT, url, 200).at("/data/content/0"), "id", "AR-1", amounts, false);
+        grant("procurement_manager", "finance", "r");
+        JsonNode visible = body(PROCUREMENT, url, 200).at("/data/content/0");
+        assertTradeAmounts(visible, "id", "AR-1", amounts, true);
+        assertThat(visible.path("overdue").asBoolean()).isTrue();
+    }
+
+    private static void assertTradeAmounts(JsonNode row, String idField, String id,
+                                           Map<String, String> expected, boolean visible) {
+        assertThat(row.path(idField).asText()).isEqualTo(id);
+        expected.forEach((key, amount) -> {
+            JsonNode node = row.path(key);
+            if (visible) {
+                assertThat(node.isNumber()).as(key).isTrue();
+                assertThat(node.decimalValue()).as(key).isEqualByComparingTo(amount);
+            } else {
+                assertThat(node.isNull()).as(key).isTrue();
+            }
+        });
     }
 
     private MvcResult call(long userId, MockHttpServletRequestBuilder request) throws Exception {

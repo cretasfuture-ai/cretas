@@ -29,6 +29,7 @@ public class DataScopeRouteInterceptor implements HandlerInterceptor {
         new Resource("sales/deliveries","sales_delivery_records",List.of("deliveryId","parentDeliveryId","orderId")),
         new Resource("warehouse/deliveries","sales_delivery_records",List.of("deliveryId")),
         new Resource("purchase/orders","purchase_orders",List.of("orderId","orderNumber")),
+        new Resource("purchase/price-trend","purchase_orders",List.of()),
         new Resource("purchase/receives","purchase_receive_records",List.of("receiveId","orderId")),
         new Resource("warehouse/receiving/receipts","purchase_receive_records",List.of("receiptId","orderId")),
         new Resource("warehouse/receiving/tasks","purchase_orders",List.of("taskId")),
@@ -45,6 +46,7 @@ public class DataScopeRouteInterceptor implements HandlerInterceptor {
         new Resource("markers/sales-order","sales_orders",List.of("id")),
         new Resource("markers/purchase-order","purchase_orders",List.of("id")),
         new Resource("customers","customers",List.of("customerId")),
+        new Resource("customer-prices","customers",List.of()),
         new Resource("material-batches","material_batches",List.of("batchId")),
         new Resource("return-orders/purchase-source","purchase_orders",List.of("purchaseOrderId")),
         new Resource("return-orders","return_orders",List.of("returnOrderId")),
@@ -147,6 +149,9 @@ public class DataScopeRouteInterceptor implements HandlerInterceptor {
         if (request.getMethod().equals("GET") && path.equals("purchase/orders/by-status")
                 && ((HandlerMethod) handler).getBeanType().equals(com.cretas.aims.controller.inventory.PurchaseController.class)
                 && rowScopeSupported((HandlerMethod) handler)) return true;
+        if (request.getMethod().equals("GET") && rowScopeSupported((HandlerMethod) handler)
+                && (Set.of("purchase/price-trend", "purchase/price-trend/export").contains(path)
+                    || path.equals("customer-prices"))) return true;
         // These retired endpoints only return 410 with a migration hint; they cannot create records.
         if (request.getMethod().equals("POST") && Set.of("finance/invoices/request", "finance/invoices/request-from-order").contains(path)) return true;
         // The payment service checks the locked source order before its first write.

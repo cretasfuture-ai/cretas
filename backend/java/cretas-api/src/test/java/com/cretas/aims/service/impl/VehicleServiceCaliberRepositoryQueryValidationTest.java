@@ -1,8 +1,12 @@
 package com.cretas.aims.service.impl;
 
+import com.cretas.aims.service.inventory.TradeJpaQueryTestSupport;
+
 import com.cretas.aims.dto.warehouse.VehicleDTO;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.VehicleRepository;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -23,10 +27,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @EntityScan(basePackages = "com.cretas.aims.entity")
 @EnableJpaRepositories(basePackages = "com.cretas.aims.repository")
-class VehicleServiceCaliberRepositoryQueryValidationTest {
+class VehicleServiceCaliberRepositoryQueryValidationTest extends TradeJpaQueryTestSupport {
 
     private static final String F = "IT-VEH";
     @Autowired private VehicleRepository repo;
+    @PersistenceContext private EntityManager em;
     private VehicleServiceImpl service;
 
     @BeforeEach
@@ -83,6 +88,28 @@ class VehicleServiceCaliberRepositoryQueryValidationTest {
 
         assertThatThrownBy(() -> service.updateVehicle(F, a.getId(), req("沪a00002", null, null)))
                 .isInstanceOf(BusinessException.class);
+    }
+
+    @Test
+    void fractionalKgRoundTripsAndEquivalentLegacyPlateIsNormalizedInDatabase() {
+        String id = service.createVehicle(F, req("沪A56001", "1234.56", null)).getId();
+        var legacy = repo.findByIdAndFactoryId(id, F).orElseThrow();
+        legacy.setPlateNumber(" 沪a56001 ");
+        repo.saveAndFlush(legacy);
+        em.clear();
+
+        VehicleDTO read = service.getVehicle(F, id);
+        assertThat(read.getPlateNumber()).isEqualTo(" 沪a56001 ");
+        assertThat(read.getCapacity()).isEqualByComparingTo("1234.56");
+        assertThat(read.getCapacityTons()).isEqualByComparingTo("1.23456");
+        VehicleDTO updated = service.updateVehicle(F, id, read);
+        assertThat(updated.getCapacity()).isEqualByComparingTo("1234.56");
+
+        em.flush();
+        em.clear();
+        var persisted = repo.findByIdAndFactoryId(id, F).orElseThrow();
+        assertThat(persisted.getPlateNumber()).isEqualTo("沪A56001");
+        assertThat(persisted.getCapacity()).isEqualByComparingTo("1234.56");
     }
 
     @Test

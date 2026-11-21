@@ -82,6 +82,10 @@ public @interface PriceSensitive {
      */
     String PURCHASE_OR_FINANCE = "procurement:read|finance:read";
 
+    String SALES = "sales:read";
+    String FINANCE = "finance:read";
+    String SALES_OR_FINANCE = SALES + "|" + FINANCE;
+
     /**
      * Permission spec required to view this field/method. Default is {@code procurement:price:view}
      * (固定角色名单, 现只管非采购金额). {@code |} 分隔表示任一即可; 由 {@link PriceVisibility} 统一解析。

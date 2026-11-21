@@ -31,7 +31,7 @@ import static org.mockito.Mockito.when;
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @EntityScan(basePackages = "com.cretas.aims.entity")
 @EnableJpaRepositories(basePackages = "com.cretas.aims.repository")
-class CounterpartyLedgerSummaryRepositoryQueryValidationTest {
+class CounterpartyLedgerSummaryRepositoryQueryValidationTest extends TradeJpaQueryTestSupport {
 
     private static final String F = "IT-LEDGER";
     @PersistenceContext private EntityManager em;

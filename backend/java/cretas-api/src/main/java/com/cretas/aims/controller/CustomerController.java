@@ -1,5 +1,9 @@
 package com.cretas.aims.controller;
 
+import com.cretas.aims.dto.inventory.CounterpartyStatisticsResponse;
+import com.cretas.aims.security.PriceScope;
+import com.cretas.aims.security.PriceSensitive;
+
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.common.PageRequest;
@@ -599,15 +603,16 @@ public class CustomerController {
      */
     @RequirePermission({ROSTER_SALES_RW, ROSTER_SALES_R, ROSTER_FINANCE_RW, ROSTER_FINANCE_R})
     @GetMapping("/{customerId}/statistics")
+    @PriceScope(PriceSensitive.SALES_OR_FINANCE)
     @Operation(summary = "获取客户统计信息", description = "获取指定客户的统计数据，包括订单总数、总金额、平均订单金额等")
-    public ApiResponse<Map<String, Object>> getCustomerStatistics(
+    public ApiResponse<CounterpartyStatisticsResponse.Customer> getCustomerStatistics(
             @Parameter(description = "工厂ID", example = "F001", required = true)
             @PathVariable @NotBlank String factoryId,
             @Parameter(description = "客户ID", example = "CUST-001", required = true)
             @PathVariable @NotBlank String customerId) {
 
         Map<String, Object> statistics = customerService.getCustomerStatistics(factoryId, customerId);
-        return ApiResponse.success(statistics);
+        return ApiResponse.success(CounterpartyStatisticsResponse.Customer.from(statistics));
     }
 
     /**

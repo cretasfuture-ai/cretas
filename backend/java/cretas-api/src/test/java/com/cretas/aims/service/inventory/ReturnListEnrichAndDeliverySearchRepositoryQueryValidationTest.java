@@ -29,7 +29,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @EntityScan(basePackages = "com.cretas.aims.entity")
 @EnableJpaRepositories(basePackages = "com.cretas.aims.repository")
-class ReturnListEnrichAndDeliverySearchRepositoryQueryValidationTest {
+class ReturnListEnrichAndDeliverySearchRepositoryQueryValidationTest extends TradeJpaQueryTestSupport {
 
     private static final String F = "IT-RD";
     @PersistenceContext private EntityManager em;

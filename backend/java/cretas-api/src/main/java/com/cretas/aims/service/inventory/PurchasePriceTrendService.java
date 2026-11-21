@@ -53,7 +53,8 @@ public class PurchasePriceTrendService {
             + PO + "CLOSED)";
 
     @Transactional(readOnly = true)
-    public List<Row> trend(String factoryId, LocalDate from, LocalDate to, String materialTypeId, String supplierId) {
+    public List<Row> trend(String factoryId, LocalDate from, LocalDate to, String materialTypeId, String supplierId,
+                           List<Long> owners) {
         if (from == null || to == null || to.isBefore(from)) {
             throw new BusinessException(400, "请提供有效的起止日期 (from ≤ to)");
         }
@@ -61,6 +62,7 @@ public class PurchasePriceTrendService {
         if (months > MAX_MONTHS) {
             throw new BusinessException(400, "时间跨度不能超过 " + MAX_MONTHS + " 个月");
         }
+        if (owners != null && owners.isEmpty()) return List.of();
         StringBuilder jpql = new StringBuilder("SELECT o.id, o.orderDate, i.materialTypeId, i.materialName, i.unit, i.priceUnit, "
                 + "i.quantity, i.unitPrice, i.quantityToPriceFactor FROM PurchaseOrderItem i JOIN i.purchaseOrder o "
                 + "WHERE o.factoryId = :f AND o.status IN " + COMMITTED + " AND o.orderDate >= :from AND o.orderDate <= :to");
@@ -70,10 +72,12 @@ public class PurchasePriceTrendService {
         if (supplierId != null && !supplierId.isBlank()) {
             jpql.append(" AND o.supplierId = :s");
         }
+        if (owners != null) jpql.append(" AND o.createdBy IN :owners");
         var q = em.createQuery(jpql.toString(), Object[].class)
                 .setParameter("f", factoryId).setParameter("from", from).setParameter("to", to);
         if (materialTypeId != null && !materialTypeId.isBlank()) q.setParameter("m", materialTypeId);
         if (supplierId != null && !supplierId.isBlank()) q.setParameter("s", supplierId);
+        if (owners != null) q.setParameter("owners", owners);
 
         Map<GroupKey, Acc> groups = new LinkedHashMap<>();
         for (Object[] r : q.getResultList()) {

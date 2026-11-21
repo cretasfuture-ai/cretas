@@ -26,7 +26,7 @@ import static org.mockito.Mockito.mock;
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @EntityScan(basePackages = "com.cretas.aims.entity")
 @EnableJpaRepositories(basePackages = "com.cretas.aims.repository")
-class PurchaseRequisitionListFilterRepositoryQueryValidationTest {
+class PurchaseRequisitionListFilterRepositoryQueryValidationTest extends TradeJpaQueryTestSupport {
 
     private static final String F = "IT-PR-FILTER";
     @Autowired private PurchaseRequisitionRepository repo;

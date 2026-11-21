@@ -1,16 +1,35 @@
 package com.cretas.aims.dto.finance;
 
 import com.cretas.aims.entity.finance.ArApTransaction;
+import com.cretas.aims.entity.enums.PayablePaymentStatus;
 import com.cretas.aims.security.PriceSensitive;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import lombok.Data;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.List;
 
 /** Keeps existing finance JSON keys while exposing monetary fields to response masking. */
 public final class ArApQueryResponses {
     private ArApQueryResponses() { }
+
+    @Data
+    public static class ReceivableItem {
+        private String id;
+        private String transactionNumber;
+        private String counterpartyId;
+        private String counterpartyName;
+        private String salesOrderId;
+        private LocalDate transactionDate;
+        private LocalDate dueDate;
+        @PriceSensitive private BigDecimal amount;
+        @PriceSensitive private BigDecimal settledAmount;
+        @PriceSensitive private BigDecimal outstandingAmount;
+        private PayablePaymentStatus paymentStatus;
+        private Boolean overdue;
+        private Long overdueDays;
+    }
 
     @Data
     public static class Overview {

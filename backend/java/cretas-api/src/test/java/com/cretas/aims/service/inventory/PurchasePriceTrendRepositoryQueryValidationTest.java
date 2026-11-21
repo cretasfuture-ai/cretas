@@ -1,19 +1,27 @@
 package com.cretas.aims.service.inventory;
 
+import com.cretas.aims.controller.inventory.PurchaseController;
+import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.enums.PurchaseOrderStatus;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
 import com.cretas.aims.entity.inventory.PurchaseOrderItem;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.exception.GlobalExceptionHandler;
+import com.cretas.aims.repository.RoleDefinitionRepository;
+import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.service.PermissionService;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.domain.EntityScan;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
@@ -22,6 +30,11 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /** 采购均价趋势 (原料×月份加权均价): 真实 JPA Context + 真实 JPQL. */
 @DataJpaTest(showSql = false, properties = {"spring.flyway.enabled=false"})
@@ -29,9 +42,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @EntityScan(basePackages = "com.cretas.aims.entity")
 @EnableJpaRepositories(basePackages = "com.cretas.aims.repository")
-class PurchasePriceTrendRepositoryQueryValidationTest {
+class PurchasePriceTrendRepositoryQueryValidationTest extends TradeJpaQueryTestSupport {
 
     private static final String F = "IT-TREND";
+    @Autowired private UserRepository users;
+    @Autowired private RoleDefinitionRepository roles;
     @PersistenceContext private EntityManager em;
     private PurchasePriceTrendService svc;
     private int seq;
@@ -72,11 +87,15 @@ class PurchasePriceTrendRepositoryQueryValidationTest {
     }
 
     private void order(String supplier, PurchaseOrderStatus st, LocalDate date, PurchaseOrderItem item) {
+        order(userId, supplier, st, date, item);
+    }
+
+    private void order(Long creator, String supplier, PurchaseOrderStatus st, LocalDate date, PurchaseOrderItem item) {
         PurchaseOrder o = new PurchaseOrder();
         o.setId("PO-" + (++seq));
         o.setFactoryId(F);
         o.setOrderNumber("PON-" + seq);
-        o.setCreatedBy(userId);
+        o.setCreatedBy(creator);
         o.setSupplierId(supplier);
         o.setOrderDate(date);
         o.setStatus(st);
@@ -85,13 +104,57 @@ class PurchasePriceTrendRepositoryQueryValidationTest {
         em.persist(item);
     }
 
+    @Test
+    void jsonAndCsvExcludeOutOfScopeOrdersBeforeGrouping() throws Exception {
+        String role = "procurement_manager";
+        em.find(User.class, userId).setRoleCode(role);
+        Long other = TradeJpaFixtures.createUser(em, F, "trend-other", role);
+        TradeJpaFixtures.createMaterial(em, F, "M2");
+        LocalDate date = LocalDate.of(2026, 10, 10);
+        order(other, "S2", PurchaseOrderStatus.COMPLETED, date, line("M1", "盐", "kg", "600", "40"));
+        order(other, "S2", PurchaseOrderStatus.COMPLETED, date, line("M2", "范围外原料", "kg", "70", "77"));
+        em.flush();
+
+        var scope = TradeJpaFixtures.scopedHttp(users, roles, F, role);
+        var permissions = mock(PermissionService.class);
+        when(permissions.hasConfiguredPermission(em.find(User.class, userId), "procurement:read",
+                java.util.Set.of(role))).thenReturn(true);
+        var controller = new PurchaseController(null, null, null, permissions, users, null, null);
+        ReflectionTestUtils.setField(controller, "businessRowScope", scope.scope());
+        ReflectionTestUtils.setField(controller, "priceTrendService", svc);
+        var mvc = MockMvcBuilders.standaloneSetup(controller)
+                .addInterceptors(scope.interceptor()).setControllerAdvice(new GlobalExceptionHandler()).build();
+        String path = "/api/mobile/" + F + "/purchase/price-trend";
+
+        mvc.perform(scope.asUser(get(path).param("from", "2026-10-01").param("to", "2026-10-31"), userId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(2))
+                .andExpect(jsonPath("$.data[0].unit").value("kg"))
+                .andExpect(jsonPath("$.data[0].materialTypeId").value("M1"))
+                .andExpect(jsonPath("$.data[0].totalQuantity").value(400.0))
+                .andExpect(jsonPath("$.data[0].weightedAveragePrice").value(17.5))
+                .andExpect(jsonPath("$.data[0].orderCount").value(3))
+                .andExpect(jsonPath("$.data[0].lineCount").value(3))
+                .andExpect(jsonPath("$.data[1].unit").value("箱"))
+                .andExpect(jsonPath("$.data[1].weightedAveragePrice").value(300.0));
+
+        var csv = mvc.perform(scope.asUser(get(path + "/export")
+                        .param("from", "2026-10-01").param("to", "2026-10-31"), userId))
+                .andExpect(status().isOk()).andReturn().getResponse();
+        assertThat(csv.getContentType()).startsWith("text/csv");
+        assertThat(csv.getContentAsString(StandardCharsets.UTF_8).lines().skip(1))
+                .containsExactlyInAnyOrder(
+                        "\"盐\",\"kg\",\"kg\",2026-10,400,17.5000,3,3,1",
+                        "\"盐\",\"箱\",\"箱\",2026-10,2,300.0000,1,1,0");
+    }
+
     private PurchasePriceTrendService.Row find(List<PurchasePriceTrendService.Row> rows, String month, String unit) {
         return rows.stream().filter(r -> r.month().equals(month) && r.unit().equals(unit)).findFirst().orElseThrow();
     }
 
     @Test
     void weightedAverageByMaterialUnitAndMonth() {
-        List<PurchasePriceTrendService.Row> rows = svc.trend(F, LocalDate.of(2026, 10, 1), LocalDate.of(2026, 11, 30), null, null);
+        List<PurchasePriceTrendService.Row> rows = svc.trend(F, LocalDate.of(2026, 10, 1), LocalDate.of(2026, 11, 30), null, null, null);
 
         PurchasePriceTrendService.Row oct = find(rows, "2026-10", "kg");
         assertThat(oct.weightedAveragePrice()).isEqualByComparingTo("17.5");
@@ -105,10 +168,10 @@ class PurchasePriceTrendRepositoryQueryValidationTest {
 
     @Test
     void supplierFilterDateRangeAndFactoryIsolation() {
-        assertThat(svc.trend(F, LocalDate.of(2026, 10, 1), LocalDate.of(2026, 10, 31), null, "S2"))
+        assertThat(svc.trend(F, LocalDate.of(2026, 10, 1), LocalDate.of(2026, 10, 31), null, "S2", null))
                 .singleElement().satisfies(r -> assertThat(r.weightedAveragePrice()).isEqualByComparingTo("20"));
-        assertThat(svc.trend(F, LocalDate.of(2026, 11, 1), LocalDate.of(2026, 11, 30), "NO-SUCH", null)).isEmpty();
-        assertThat(svc.trend("OTHER", LocalDate.of(2026, 10, 1), LocalDate.of(2026, 11, 30), null, null)).isEmpty();
+        assertThat(svc.trend(F, LocalDate.of(2026, 11, 1), LocalDate.of(2026, 11, 30), "NO-SUCH", null, null)).isEmpty();
+        assertThat(svc.trend("OTHER", LocalDate.of(2026, 10, 1), LocalDate.of(2026, 11, 30), null, null, null)).isEmpty();
     }
 
     @Test
@@ -124,7 +187,7 @@ class PurchasePriceTrendRepositoryQueryValidationTest {
         order("S2", PurchaseOrderStatus.COMPLETED, day, largePack);
         em.flush();
 
-        assertThat(svc.trend(F, day, day, "M1", null)).singleElement().satisfies(row -> {
+        assertThat(svc.trend(F, day, day, "M1", null, null)).singleElement().satisfies(row -> {
             assertThat(row.totalQuantity()).isEqualByComparingTo("4");
             assertThat(row.weightedAveragePrice()).isEqualByComparingTo("17.5");
         });
@@ -132,9 +195,9 @@ class PurchasePriceTrendRepositoryQueryValidationTest {
 
     @Test
     void badRangesRejected() {
-        assertThatThrownBy(() -> svc.trend(F, LocalDate.of(2026, 11, 1), LocalDate.of(2026, 10, 1), null, null))
+        assertThatThrownBy(() -> svc.trend(F, LocalDate.of(2026, 11, 1), LocalDate.of(2026, 10, 1), null, null, null))
                 .isInstanceOf(BusinessException.class);
-        assertThatThrownBy(() -> svc.trend(F, LocalDate.of(2020, 1, 1), LocalDate.of(2026, 10, 1), null, null))
+        assertThatThrownBy(() -> svc.trend(F, LocalDate.of(2020, 1, 1), LocalDate.of(2026, 10, 1), null, null, null))
                 .isInstanceOf(BusinessException.class);
     }
 

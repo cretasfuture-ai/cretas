@@ -30,6 +30,8 @@ import java.util.List;
 import java.util.Map;
 import com.cretas.aims.annotation.RequireModule;
 import com.cretas.aims.security.RowScopeSupported;
+import com.cretas.aims.security.PriceScope;
+import com.cretas.aims.security.PriceSensitive;
 
 @Slf4j
 @RestController
@@ -242,7 +244,8 @@ public class ArApController {
     @GetMapping("/receivable-items")
     @Operation(summary = "应收单清单 (到期日/待收/逾期天数)")
     @RequirePermission({"finance:read_write", "finance:read"})
-    public ApiResponse<PageResponse<java.util.Map<String, Object>>> listReceivableItems(
+    @PriceScope(PriceSensitive.FINANCE)
+    public ApiResponse<PageResponse<ArApQueryResponses.ReceivableItem>> listReceivableItems(
             @PathVariable @NotBlank String factoryId,
             @RequestParam(required = false) String counterpartyId,
             @RequestParam(defaultValue = "false") boolean overdueOnly,
@@ -255,37 +258,30 @@ public class ArApController {
                 factoryId, counterpartyId, overdueOnly, unsettledOnly, dueFrom, dueTo, page, size);
         PageResponse<ArApTransaction> projected = projectTransactions(factoryId, raw);
         LocalDate today = LocalDate.now();
-        List<java.util.Map<String, Object>> rows = new java.util.ArrayList<>();
-        for (ArApTransaction t : projected.getContent()) {
-            rows.add(receivableRow(t, today));
-        }
+        var rows = projected.getContent().stream().map(t -> receivableRow(t, today)).toList();
         return ApiResponse.success("查询成功", PageResponse.of(rows, page, size, projected.getTotalElements()));
     }
 
     /** 逾期口径见 listReceivableItems; 静态便于单测. */
-    static java.util.Map<String, Object> receivableRow(ArApTransaction t, LocalDate today) {
-        java.util.Map<String, Object> m = new java.util.LinkedHashMap<>();
-        m.put("id", t.getId());
-        m.put("transactionNumber", t.getTransactionNumber());
-        m.put("counterpartyId", t.getCounterpartyId());
-        m.put("counterpartyName", t.getCounterpartyName());
-        m.put("salesOrderId", t.getSalesOrderId());
-        m.put("transactionDate", t.getTransactionDate());
-        m.put("dueDate", t.getDueDate());
-        m.put("amount", t.getAmount());
-        m.put("settledAmount", t.getSettledAmount());
-        m.put("outstandingAmount", t.getOutstandingAmount());
-        m.put("paymentStatus", t.getPaymentStatus());
-        Boolean overdue = null;
-        Long overdueDays = null;
+    static ArApQueryResponses.ReceivableItem receivableRow(ArApTransaction t, LocalDate today) {
+        var row = new ArApQueryResponses.ReceivableItem();
+        row.setId(t.getId());
+        row.setTransactionNumber(t.getTransactionNumber());
+        row.setCounterpartyId(t.getCounterpartyId());
+        row.setCounterpartyName(t.getCounterpartyName());
+        row.setSalesOrderId(t.getSalesOrderId());
+        row.setTransactionDate(t.getTransactionDate());
+        row.setDueDate(t.getDueDate());
+        row.setAmount(t.getAmount());
+        row.setSettledAmount(t.getSettledAmount());
+        row.setOutstandingAmount(t.getOutstandingAmount());
+        row.setPaymentStatus(t.getPaymentStatus());
         if (t.getOutstandingAmount() != null && t.getDueDate() != null) {
             boolean late = t.getOutstandingAmount().signum() > 0 && t.getDueDate().isBefore(today);
-            overdue = late;
-            overdueDays = late ? java.time.temporal.ChronoUnit.DAYS.between(t.getDueDate(), today) : 0L;
+            row.setOverdue(late);
+            row.setOverdueDays(late ? java.time.temporal.ChronoUnit.DAYS.between(t.getDueDate(), today) : 0L);
         }
-        m.put("overdue", overdue);
-        m.put("overdueDays", overdueDays);
-        return m;
+        return row;
     }
 
     /**

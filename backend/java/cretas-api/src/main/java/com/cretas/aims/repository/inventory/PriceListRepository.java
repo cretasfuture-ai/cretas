@@ -10,9 +10,12 @@ import org.springframework.stereotype.Repository;
 
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Optional;
 
 @Repository
 public interface PriceListRepository extends JpaRepository<PriceList, String> {
+
+    Optional<PriceList> findByIdAndFactoryId(String id, String factoryId);
 
     Page<PriceList> findByFactoryIdOrderByCreatedAtDesc(String factoryId, Pageable pageable);
 

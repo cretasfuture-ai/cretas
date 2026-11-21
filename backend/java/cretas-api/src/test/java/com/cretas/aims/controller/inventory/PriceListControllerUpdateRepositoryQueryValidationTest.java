@@ -1,5 +1,7 @@
 package com.cretas.aims.controller.inventory;
 
+import com.cretas.aims.service.inventory.TradeJpaQueryTestSupport;
+
 import com.cretas.aims.dto.inventory.CreatePriceListRequest;
 import com.cretas.aims.dto.inventory.UpdatePriceListRequest;
 import com.cretas.aims.entity.Factory;
@@ -39,7 +41,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @EntityScan(basePackages = "com.cretas.aims.entity")
 @EnableJpaRepositories(basePackages = "com.cretas.aims.repository")
-class PriceListControllerUpdateRepositoryQueryValidationTest {
+class PriceListControllerUpdateRepositoryQueryValidationTest extends TradeJpaQueryTestSupport {
 
     private static final String F = "IT-PL";
     @Autowired private PriceListRepository lists;
@@ -98,6 +100,7 @@ class PriceListControllerUpdateRepositoryQueryValidationTest {
 
     @Test
     void invalidDateRangeAndOtherFactoryRejected() {
+        assertThat(lists.findByIdAndFactoryId(listId, "OTHER")).isEmpty();
         assertThatThrownBy(() -> controller.updatePriceList(F, listId,
                 new UpdatePriceListRequest("x", LocalDate.of(2026, 5, 1), LocalDate.of(2026, 4, 1), null)))
                 .isInstanceOf(BusinessException.class);
@@ -132,7 +135,12 @@ class PriceListControllerUpdateRepositoryQueryValidationTest {
         String otherId = lists.saveAndFlush(other).getId();
         PriceListItem itm = controller.addItem(F, otherId, dto("1")).getData();
 
+        assertThat(items.findByIdAndPriceListIdAndPriceList_FactoryId(itm.getId(), otherId, F)).isPresent();
+        assertThat(items.findByIdAndPriceListIdAndPriceList_FactoryId(itm.getId(), listId, F)).isEmpty();
+        assertThat(items.findByIdAndPriceListIdAndPriceList_FactoryId(itm.getId(), otherId, "OTHER")).isEmpty();
         assertThatThrownBy(() -> controller.deleteItem(F, listId, itm.getId()))
+                .isInstanceOf(ResourceNotFoundException.class);
+        assertThatThrownBy(() -> controller.updateItem("OTHER", otherId, itm.getId(), dto("2")))
                 .isInstanceOf(ResourceNotFoundException.class);
         CreatePriceListRequest.PriceItemDTO bad = dto("5");
         bad.setMinPrice(new BigDecimal("9"));

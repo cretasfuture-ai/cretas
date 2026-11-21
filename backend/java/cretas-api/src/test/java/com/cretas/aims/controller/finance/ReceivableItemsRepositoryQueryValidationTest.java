@@ -1,5 +1,7 @@
 package com.cretas.aims.controller.finance;
 
+import com.cretas.aims.service.inventory.TradeJpaQueryTestSupport;
+
 import com.cretas.aims.entity.enums.ArApTransactionType;
 import com.cretas.aims.entity.enums.CounterpartyType;
 import com.cretas.aims.entity.finance.ArApTransaction;
@@ -27,7 +29,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @EntityScan(basePackages = "com.cretas.aims.entity")
 @EnableJpaRepositories(basePackages = "com.cretas.aims.repository")
-class ReceivableItemsRepositoryQueryValidationTest {
+class ReceivableItemsRepositoryQueryValidationTest extends TradeJpaQueryTestSupport {
 
     private static final String F = "IT-AR-ITEMS";
     private static final LocalDate TODAY = LocalDate.of(2026, 11, 18);
@@ -97,18 +99,18 @@ class ReceivableItemsRepositoryQueryValidationTest {
         for (ArApTransaction t : q(null, 0, 0, null, null).getContent()) {
             by.put(t.getTransactionNumber().substring(3, 4), t);
         }
-        Map<String, Object> a = ArApController.receivableRow(by.get("A"), TODAY);
-        assertThat(a.get("overdue")).isEqualTo(true);
-        assertThat(a.get("overdueDays")).isEqualTo(10L);
+        var a = ArApController.receivableRow(by.get("A"), TODAY);
+        assertThat(a.getOverdue()).isTrue();
+        assertThat(a.getOverdueDays()).isEqualTo(10L);
 
-        Map<String, Object> b = ArApController.receivableRow(by.get("B"), TODAY);
-        assertThat(b.get("overdue")).isEqualTo(false);   // 待收为负
-        assertThat(b.get("overdueDays")).isEqualTo(0L);
+        var b = ArApController.receivableRow(by.get("B"), TODAY);
+        assertThat(b.getOverdue()).isFalse();   // 待收为负
+        assertThat(b.getOverdueDays()).isEqualTo(0L);
 
-        Map<String, Object> e = ArApController.receivableRow(by.get("E"), TODAY);
-        assertThat(e.get("overdue")).isNull();           // 待收未知: 不冒充逾期也不冒充未逾期
-        assertThat(e.get("overdueDays")).isNull();
+        var e = ArApController.receivableRow(by.get("E"), TODAY);
+        assertThat(e.getOverdue()).isNull();           // 待收未知: 不冒充逾期也不冒充未逾期
+        assertThat(e.getOverdueDays()).isNull();
 
-        assertThat(ArApController.receivableRow(by.get("C"), TODAY).get("overdue")).isEqualTo(false);
+        assertThat(ArApController.receivableRow(by.get("C"), TODAY).getOverdue()).isFalse();
     }
 }

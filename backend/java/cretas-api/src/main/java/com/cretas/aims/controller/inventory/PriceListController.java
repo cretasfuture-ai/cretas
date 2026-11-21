@@ -273,7 +273,7 @@ public class PriceListController {
             @PathVariable Long itemId,
             @Valid @RequestBody CreatePriceListRequest.PriceItemDTO dto) {
         requireEditablePriceList(factoryId, priceListId);
-        PriceListItem item = requireItem(priceListId, itemId);
+        PriceListItem item = requireItem(factoryId, priceListId, itemId);
         applyItem(factoryId, item, dto);
         return ApiResponse.success("价格条目已更新", priceListItemRepository.save(item));
     }
@@ -286,13 +286,12 @@ public class PriceListController {
             @PathVariable @NotBlank String priceListId,
             @PathVariable Long itemId) {
         requireFactoryPriceList(factoryId, priceListId);
-        priceListItemRepository.delete(requireItem(priceListId, itemId));
+        priceListItemRepository.delete(requireItem(factoryId, priceListId, itemId));
         return ApiResponse.success("价格条目已删除", null);
     }
 
-    private PriceListItem requireItem(String priceListId, Long itemId) {
-        return priceListItemRepository.findById(itemId)
-                .filter(i -> priceListId.equals(i.getPriceListId()))
+    private PriceListItem requireItem(String factoryId, String priceListId, Long itemId) {
+        return priceListItemRepository.findByIdAndPriceListIdAndPriceList_FactoryId(itemId, priceListId, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("价格条目不存在"));
     }
 
@@ -335,8 +334,7 @@ public class PriceListController {
     }
 
     private PriceList requireFactoryPriceList(String factoryId, String priceListId) {
-        return priceListRepository.findById(priceListId)
-                .filter(priceList -> factoryId.equals(priceList.getFactoryId()))
+        return priceListRepository.findByIdAndFactoryId(priceListId, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("价格表不存在"));
     }
 }
