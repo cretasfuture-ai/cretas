@@ -335,6 +335,7 @@ public class PriceListController {
 
     private PriceList requireFactoryPriceList(String factoryId, String priceListId) {
         return priceListRepository.findByIdAndFactoryId(priceListId, factoryId)
+                .filter(priceList -> factoryId.equals(priceList.getFactoryId()))
                 .orElseThrow(() -> new ResourceNotFoundException("价格表不存在"));
     }
 }
