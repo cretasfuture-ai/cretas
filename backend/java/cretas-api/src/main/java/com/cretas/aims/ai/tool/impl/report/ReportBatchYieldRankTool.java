@@ -16,6 +16,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
+import java.time.temporal.ChronoUnit;
 import java.util.*;
 
 /**
@@ -30,6 +31,7 @@ public class ReportBatchYieldRankTool extends AbstractBusinessTool {
 
     static final int DEFAULT_LIMIT = 10;
     static final int MAX_LIMIT = 30;
+    private static final int MAX_EXPLICIT_LOSS_WINDOW_DAYS = 90;
     private static final BigDecimal HUNDRED = BigDecimal.valueOf(100);
 
     @Autowired
@@ -91,6 +93,18 @@ public class ReportBatchYieldRankTool extends AbstractBusinessTool {
 
     protected LocalDate today() {
         return LocalDate.now();
+    }
+
+    /** 校验用户给出的完整损耗查询区间。报工按整段读入，起止日都计入天数。 */
+    public String explicitLossAnomalyWindowRejection(LocalDate start, LocalDate end) {
+        LocalDate today = today();
+        if (end.isAfter(today)) {
+            return "结束日期不能晚于今天（" + today + "）。请调整日期后重试。";
+        }
+        if (ChronoUnit.DAYS.between(start, end) >= MAX_EXPLICIT_LOSS_WINDOW_DAYS) {
+            return "损耗异常查询区间过长，请缩短到 " + MAX_EXPLICIT_LOSS_WINDOW_DAYS + " 天以内，或分段查询。";
+        }
+        return null;
     }
 
     @Override

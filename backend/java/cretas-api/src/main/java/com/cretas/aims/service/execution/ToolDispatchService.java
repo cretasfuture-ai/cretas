@@ -666,14 +666,20 @@ public class ToolDispatchService {
             boolean expiryWindowBound = !boundConfirmation && tool instanceof MaterialExpiringAlertTool
                     && MaterialExpiringAlertTool.applyFutureExpiryWindow(params, request.getUserInput(), LocalDate.now());
             String originalInput = request.getUserInput();
-            var explicitLossWindow = !writeOperation && !boundConfirmation && tool instanceof ReportBatchYieldRankTool
+            ReportBatchYieldRankTool lossAnomalyTool = !writeOperation && !boundConfirmation
                     && "REPORT_BATCH_YIELD_RANK".equals(intent.getIntentCode())
-                    ? PhraseShortcutEligibility.explicitLossAnomalyWindow(originalInput) : null;
+                    && tool instanceof ReportBatchYieldRankTool candidate ? candidate : null;
+            var explicitLossWindow = lossAnomalyTool == null
+                    ? null : PhraseShortcutEligibility.explicitLossAnomalyWindow(originalInput);
             if (explicitLossWindow != null) {
-                String from = explicitLossWindow.getStartDate().toString();
-                String to = explicitLossWindow.getEndDate().toString();
-                params.put("startDate", from);
-                params.put("endDate", to);
+                LocalDate from = explicitLossWindow.getStartDate();
+                LocalDate to = explicitLossWindow.getEndDate();
+                String rejection = lossAnomalyTool.explicitLossAnomalyWindowRejection(from, to);
+                if (rejection != null) {
+                    return readTurnRefusal(intent, "NEED_CLARIFICATION", rejection);
+                }
+                params.put("startDate", from.toString());
+                params.put("endDate", to.toString());
                 params.put(TimeRangeFilter.SAID, from + "~" + to);
                 params.put("view", "loss_anomaly");
             }
