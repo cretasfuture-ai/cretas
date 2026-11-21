@@ -21,4 +21,6 @@ public class WorkflowPublishAndActivateRequest {
 
     @NotNull
     private Integer definitionVersion;
+
+    private boolean completenessAcknowledged;
 }

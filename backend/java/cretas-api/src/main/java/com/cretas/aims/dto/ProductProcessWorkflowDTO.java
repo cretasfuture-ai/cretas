@@ -3,6 +3,7 @@ package com.cretas.aims.dto;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
 import com.fasterxml.jackson.annotation.JsonAlias;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -44,6 +45,9 @@ public class ProductProcessWorkflowDTO {
 
     private List<WorkflowUnitIssueDTO> unitWarnings = new ArrayList<>();
     private Boolean unitReviewRequired = false;
+
+    @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
+    private boolean completenessAcknowledged;
 
     @Valid
     @NotNull

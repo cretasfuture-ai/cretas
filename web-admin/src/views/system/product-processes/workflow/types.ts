@@ -294,7 +294,22 @@ export interface ProcessBranchInput {
   timestamp: number;
 }
 
+export interface WorkflowCompletenessIssue {
+  code: string;
+  nodeId: string | null;
+  portId: string | null;
+  message: string;
+  action: string;
+}
+
+export interface WorkflowCompletenessGroup {
+  id: string;
+  label: string;
+  issues: WorkflowCompletenessIssue[];
+}
+
 export interface ProductProcessWorkflowDefinition {
+  completenessAcknowledged?: boolean;
   id?: number;
   factoryId?: string;
   productTypeId?: string;
@@ -373,6 +388,7 @@ export interface WorkflowBomSyncPreflight {
 }
 
 export interface WorkflowPublishAndActivateRequest {
+  completenessAcknowledged?: boolean;
   lockVersion: number;
   idempotencyKey: string;
   revisionId: number;

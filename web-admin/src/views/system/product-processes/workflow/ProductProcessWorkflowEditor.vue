@@ -54,9 +54,10 @@
           <el-button :disabled="!productTypeId || flowNodes.length === 0" @click="fitCanvas">适应画布</el-button>
           <el-button
             type="primary"
-            :disabled="!canEdit || (!dirty && !unsavedNewDefinition)"
+            data-testid="save-workflow"
+            :disabled="!canEdit || manualCompletenessInProgress || (!dirty && !unsavedNewDefinition)"
             :loading="saving"
-            @click="() => saveDraft()"
+            @click="saveDraftWithCompleteness"
           >{{ saveActionLabel }}</el-button>
           <!-- #12a: 发布版本 = 发布并启用当前版本 (一步); 不再有单独「启用版本」按钮 -->
           <el-tooltip :content="publishDisabledReason" :disabled="!publishDisabledReason" placement="bottom">
@@ -262,6 +263,15 @@
       </el-alert>
 
       <div ref="canvasRef" class="canvas-shell" :class="{ 'is-connecting': !!connectingFromKind }" v-loading="loading">
+        <WorkflowCompletenessBadge
+          v-if="completenessInput"
+          v-model:open="completenessOpen"
+          :issues="completenessIssues"
+          :groups="completenessGroups"
+          :state="completenessState"
+          @locate="locateCompletenessIssue"
+          @retry="refreshCompleteness"
+        />
         <!-- #12b: 历史版本预览横幅 (只读, 不会自动保存覆盖草稿) -->
         <div v-if="previewingVersion !== null" class="version-preview-bar" data-testid="version-preview-bar">
           <span>正在预览生产历史版本 <strong>v{{ previewingVersion }}</strong>（只读，不会覆盖当前配置）</span>
@@ -404,6 +414,7 @@
               :active-pair-label="activePairLabelOn(slotProps.id)"
               @toggle-pair="(reworkNodeId: string) => toggleReworkPairPin(slotProps.id, reworkNodeId)"
               @configure-time-limit="openTimeLimitDrawer(slotProps.id)"
+              :check-port-id="completenessTarget?.nodeId === slotProps.id ? completenessTarget.portId : null"
               :data="slotProps.data"
               :selected="slotProps.selected"
               :can-write="canEdit"
@@ -1122,7 +1133,7 @@
 
 <script setup lang="ts">
 
-import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
+import { computed, h, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import gsap from 'gsap';
 import { prefersReducedMotion } from '@/utils/motion/prefersReducedMotion';
 import {
@@ -1166,6 +1177,8 @@ import { fillOmittedSpecFields, preserveExistingWorkflowValues } from './workflo
 import { isWorkflowCheckOnlyRequest } from './workflowAiIntent';
 import WorkflowMaterialNode from './WorkflowMaterialNode.vue';
 import WorkflowProcessNode from './WorkflowProcessNode.vue';
+import WorkflowCompletenessBadge from './WorkflowCompletenessBadge.vue';
+import WorkflowCompletenessList from './WorkflowCompletenessList.vue';
 import WorkflowAuxiliaryNode from './WorkflowAuxiliaryNode.vue';
 import WorkflowPackagingNode from './WorkflowPackagingNode.vue';
 import WorkflowFusedStrip from './WorkflowFusedStrip.vue';
@@ -1231,7 +1244,7 @@ import {
   pickOwningProductId,
 } from './bomEditableRecipe';
 import type { DraftBomNotice } from './bomEditableRecipe';
-import type { WorkflowMaterialBinding, WorkflowPackagingBinding } from './types';
+import type { WorkflowCompletenessGroup, WorkflowCompletenessIssue, WorkflowMaterialBinding, WorkflowPackagingBinding } from './types';
 import {
   allowsInjection,
   allowsPotRatio,
@@ -1286,6 +1299,7 @@ import {
   publishAndActivateProductProcessWorkflow,
   getProductConfigurationReadiness,
   saveProductProcessWorkflowDraft,
+  checkProductProcessWorkflowCompleteness,
   type WorkflowVersionSummary,
 } from './workflowApi';
 import {
@@ -2218,6 +2232,7 @@ function applyFocusClasses(): void {
     //
     // ⇒ 外壳整体不接鼠标, 只有窄条自己接。
     if (isFusedAttachmentNode(node.id)) classes.push('wf-fused-attachment');
+    if (completenessTarget.value?.nodeId === node.id) classes.push('wf-completeness-target');
     if (focus && !focus.has(node.id)) classes.push('wf-focus-dim');
     // 🔴 已确认原型：被聚焦的那一对不是「只是没被压暗」，而是**主动亮起**
     //   (同色描边环 + 抬到最上层)。少了这一步，观感就是「整张图变灰」而不是
@@ -2574,6 +2589,15 @@ const unitReviewPending = ref(false);
 const workflowSecretRestricted = ref(false);
 const workflowSecretMessage = ref('');
 const unitIssues = ref<WorkflowUnitIssue[]>([]);
+const completenessIssues = ref<WorkflowCompletenessIssue[]>([]);
+const completenessState = ref<'checking' | 'ready' | 'failed'>('checking');
+const completenessOpen = ref(false);
+const completenessTarget = ref<WorkflowCompletenessIssue | null>(null);
+const manualCompletenessInProgress = ref(false);
+let completenessTimer: ReturnType<typeof setTimeout> | null = null;
+let completenessRequest: AbortController | null = null;
+let locatingCompleteness = false;
+let pausedAutoSaveGraphKey: string | null = null;
 const publishBindingErrors = ref<WorkflowValidationError[]>([]);
 const publishBindingAttentionNodeIds = ref<Set<string>>(new Set());
 const canEdit = computed(() => (
@@ -2612,6 +2636,7 @@ const publishActionLabel = computed(() => (
 const publishDisabledReason = computed(() => {
   if (workflowSecretRestricted.value) return '该产品工艺已设为保密，需要保密负责人授权才能修改';
   if (publishConfirming.value || publishing.value) return '正在发布 Workflow，请勿重复提交';
+  if (manualCompletenessInProgress.value) return '正在检查工艺遗漏，请稍候';
   if (!canEdit.value) return '当前正在加载、预览历史版本或没有编辑权限，暂不能发布';
   // 只在“当前显示的版本”已经发布并启用、且没有新的本地草稿改动时禁用。
   // 已启用 v1 但当前定义是 v2 草稿时必须仍可发布 v2。
@@ -2703,7 +2728,6 @@ function aiDraftBlockReason(sourceIdentity?: WorkflowIdentity): string {
 }
 const aiQuickPrompts = [
   '检查当前 Workflow 的 SKU 上下游承接',
-  '检查投入与产出单位、数量换算是否完整',
   '检查分流、合流和同 SKU 多投入是否合理',
   '根据我的描述生成工序调整草稿',
 ];
@@ -2761,6 +2785,7 @@ onMounted(async () => {
 onUnmounted(() => {
   window.removeEventListener('keydown', onEditorKeydown);
   invalidatePendingAutoSave();
+  cancelCompletenessRequest();
   gsapCtx?.revert();
   gsapCtx = null;
 });
@@ -2840,7 +2865,8 @@ async function withAutoSaveBarrier(operation: () => Promise<void>): Promise<void
 }
 
 function scheduleAutoSave(): void {
-  if (autoSaveBarrierDepth > 0) return;
+  if (autoSaveBarrierDepth > 0
+      || (pausedAutoSaveGraphKey !== null && pausedAutoSaveGraphKey === completenessInput.value?.key)) return;
   if (autoSaveTimer) clearTimeout(autoSaveTimer);
   const scheduledGeneration = autoSaveGeneration;
   autoSaveTimer = setTimeout(async () => {
@@ -3387,6 +3413,12 @@ function invalidateLoadedDefinition(invalidatePersistence = true): void {
   workflowSecretRestricted.value = false;
   workflowSecretMessage.value = '';
   unitIssues.value = [];
+  cancelCompletenessRequest();
+  completenessIssues.value = [];
+  completenessState.value = 'checking';
+  completenessOpen.value = false;
+  completenessTarget.value = null;
+  pausedAutoSaveGraphKey = null;
   flowNodes.value = [];
   flowEdges.value = [];
   dirty.value = false;
@@ -4858,7 +4890,7 @@ function onNodeDrag({ nodes }: { nodes?: Node[] }): void {
 }
 
 function onViewportChangeEnd(viewport: ViewportTransform): void {
-  if (!definition.value || !canEdit.value) return;
+  if (!definition.value || !canEdit.value || locatingCompleteness) return;
   definition.value.viewport = { x: viewport.x, y: viewport.y, zoom: viewport.zoom };
   editSeq += 1;
   dirty.value = true;
@@ -5002,6 +5034,10 @@ function clearEdgeSelection(): void {
 }
 
 function onPaneClick(): void {
+  if (completenessTarget.value) {
+    completenessTarget.value = null;
+    applyFocusClasses();
+  }
   closeCanvasDropdowns();
   selectedNodeId.value = '';
   clearEdgeSelection();
@@ -6482,7 +6518,157 @@ async function fitCanvas(): Promise<void> {
   await fitView({ padding: 0.16, duration: 300, maxZoom: 1.1 });
 }
 
-async function saveDraft(options: { silent?: boolean; preserveHistory?: boolean } = {}): Promise<boolean> {
+const completenessInput = computed(() => {
+  const identity = currentLoadedIdentity();
+  if (!identity || !props.canWrite || workflowSecretRestricted.value || previewingVersion.value !== null
+      || loading.value || loadedCatalogFactoryId.value !== identity.factoryId || !loadedCatalogCanWrite.value) return null;
+  const graph = currentDefinition();
+  const key = JSON.stringify([identity, graph.nodes.map(({ id, kind, data }) => ({ id, kind, data })), graph.edges]);
+  return { identity, graph, key };
+});
+
+function groupCompletenessIssues(
+  issues: WorkflowCompletenessIssue[],
+  graph: ProductProcessWorkflowDefinition,
+): WorkflowCompletenessGroup[] {
+  const nodes = new Map(graph.nodes.map((node) => [node.id, node]));
+  const groups = new Map<string, WorkflowCompletenessGroup>();
+  for (const issue of issues) {
+    const target = issue.nodeId ? nodes.get(issue.nodeId) : undefined;
+    const processId = target?.kind === 'PROCESS' ? target.id : graph.edges
+      .map((edge) => edge.target === target?.id ? edge.source : edge.source === target?.id ? edge.target : '')
+      .find((id) => nodes.get(id)?.kind === 'PROCESS');
+    const process = processId ? nodes.get(processId) : undefined;
+    const id = process?.id ?? '';
+    const group = groups.get(id) ?? { id, label: process ? String(process.data.processName || '未命名工序') : '整张图', issues: [] };
+    group.issues.push(issue);
+    groups.set(id, group);
+  }
+  return [...groups.values()];
+}
+
+const completenessGroups = computed(() => completenessInput.value
+  ? groupCompletenessIssues(completenessIssues.value, completenessInput.value.graph) : []);
+
+function cancelCompletenessRequest(): void {
+  if (completenessTimer) clearTimeout(completenessTimer);
+  completenessTimer = null;
+  completenessRequest?.abort();
+  completenessRequest = null;
+}
+
+async function refreshCompleteness(): Promise<WorkflowCompletenessIssue[] | null> {
+  const input = completenessInput.value;
+  if (!input) return null;
+  cancelCompletenessRequest();
+  const request = new AbortController();
+  completenessRequest = request;
+  completenessState.value = 'checking';
+  try {
+    const result = await checkProductProcessWorkflowCompleteness(
+      input.identity.factoryId, input.identity.productTypeId, input.graph, request.signal,
+    );
+    if (request.signal.aborted || completenessInput.value?.key !== input.key) return null;
+    if (!result.success || !Array.isArray(result.data)) throw new Error('Completeness check unavailable');
+    completenessIssues.value = result.data;
+    completenessState.value = 'ready';
+    return result.data;
+  } catch {
+    if (!request.signal.aborted && completenessInput.value?.key === input.key) {
+      completenessIssues.value = [];
+      completenessState.value = 'failed';
+    }
+    return null;
+  } finally {
+    if (completenessRequest === request) completenessRequest = null;
+  }
+}
+
+watch(() => completenessInput.value?.key, (key) => {
+  cancelCompletenessRequest();
+  completenessState.value = 'checking';
+  if (!key) {
+    completenessIssues.value = [];
+    completenessOpen.value = false;
+    return;
+  }
+  completenessTimer = setTimeout(() => { void refreshCompleteness(); }, 450);
+}, { immediate: true });
+
+async function locateCompletenessIssue(issue: WorkflowCompletenessIssue): Promise<void> {
+  if (!issue.nodeId || !flowNodes.value.some((node) => node.id === issue.nodeId)) return;
+  clearFocus();
+  completenessTarget.value = issue;
+  selectedNodeId.value = issue.nodeId;
+  applyFocusClasses();
+  locatingCompleteness = true;
+  try {
+    await nextTick();
+    await fitView({ nodes: [issue.nodeId], padding: 0.5, duration: 350, maxZoom: 1.15 });
+  } finally {
+    locatingCompleteness = false;
+  }
+}
+
+interface ConfirmedCompleteness {
+  key: string;
+  acknowledged: boolean;
+}
+
+async function confirmWorkflowCompleteness(action: '保存' | '应用'): Promise<ConfirmedCompleteness | null> {
+  const input = completenessInput.value;
+  if (!input) return null;
+  const issues = await refreshCompleteness();
+  if (!sameCheckedGraph(input.key)) return null;
+  if (issues?.length === 0) return { key: input.key, acknowledged: false };
+  const groups = groupCompletenessIssues(issues ?? [], input.graph);
+  const content = issues ? h('div', [
+    h('p', `发现 ${issues.length} 个遗漏。可以先修改，也可以继续${action}，系统仍会检查必填项。`),
+    h('div', { style: { maxHeight: '45vh', overflow: 'auto' } }, [h(WorkflowCompletenessList, { groups })]),
+  ]) : `自动检查未完成。你可以返回重试，也可以继续${action}，系统仍会检查必填项。`;
+  try {
+    await ElMessageBox.confirm(content, `${action}前检查`, {
+      type: 'warning',
+      confirmButtonText: `仍然${action}`,
+      cancelButtonText: '去修改',
+      autofocus: false,
+      customClass: 'workflow-completeness-confirm',
+    });
+  } catch {
+    if (completenessInput.value?.key === input.key) {
+      pausedAutoSaveGraphKey = input.key;
+      completenessOpen.value = true;
+    }
+    return null;
+  }
+  return sameCheckedGraph(input.key) ? { key: input.key, acknowledged: issues !== null } : null;
+}
+
+function sameCheckedGraph(key: string): boolean {
+  const current = completenessInput.value;
+  if (current?.key === key) return true;
+  if (current) ElMessage.warning('检查期间配置已变化，请重新检查后再操作');
+  return false;
+}
+
+async function saveDraftWithCompleteness(): Promise<void> {
+  if (!canEdit.value || manualCompletenessInProgress.value || saving.value) return;
+  manualCompletenessInProgress.value = true;
+  try {
+    await withAutoSaveBarrier(async () => {
+      const decision = await confirmWorkflowCompleteness('保存');
+      if (!decision || !sameCheckedGraph(decision.key)) return;
+      pausedAutoSaveGraphKey = null;
+      await saveDraft({ completenessAcknowledged: decision.acknowledged });
+    });
+  } finally {
+    manualCompletenessInProgress.value = false;
+  }
+}
+
+async function saveDraft(options: {
+  silent?: boolean; preserveHistory?: boolean; completenessAcknowledged?: boolean;
+} = {}): Promise<boolean> {
   const identity = currentLoadedIdentity();
   if (!identity || !canEdit.value) return false;
   const nextDefinition = await reconcileForPersistence(identity, !options.silent);
@@ -6500,7 +6686,7 @@ async function saveDraft(options: { silent?: boolean; preserveHistory?: boolean 
     const response = await saveProductProcessWorkflowDraft(
       identity.factoryId,
       identity.productTypeId,
-      nextDefinition,
+      options.completenessAcknowledged ? { ...nextDefinition, completenessAcknowledged: true } : nextDefinition,
     );
     if (generation !== saveGeneration || !isLoadedIdentityCurrent(identity)) return false;
     if (!response.success || !response.data) {
@@ -6559,7 +6745,7 @@ function createWorkflowPublishIdempotencyKey(): string {
 
 async function publishWorkflow(): Promise<void> {
   const identity = currentLoadedIdentity();
-  if (!identity || !canEdit.value || publishConfirming.value || publishing.value) return;
+  if (!identity || !canEdit.value || manualCompletenessInProgress.value || publishConfirming.value || publishing.value) return;
   if (currentDefinitionIsEnabled.value && !dirty.value) {
     ElMessage.info(`Workflow v${definition.value?.version} 已发布并启用，当前没有待发布变更`);
     return;
@@ -6572,6 +6758,23 @@ async function publishWorkflow(): Promise<void> {
     ElMessage.info('当前没有待应用的配置修改；请先修改并保存当前配置');
     return;
   }
+  manualCompletenessInProgress.value = true;
+  try {
+    await withAutoSaveBarrier(async () => {
+      if (!(await waitForWorkflowSave())) {
+        ElMessage.warning('Workflow 自动保存仍未完成，请稍后再发布');
+        return;
+      }
+      const decision = await confirmWorkflowCompleteness('应用');
+      if (!decision || !isLoadedIdentityCurrent(identity)) return;
+      await publishCheckedWorkflow(identity, decision);
+    });
+  } finally {
+    manualCompletenessInProgress.value = false;
+  }
+}
+
+async function publishCheckedWorkflow(identity: WorkflowIdentity, decision: ConfirmedCompleteness): Promise<void> {
   // ⛔ 这里刻意**没有**回料门禁(owner 2026-09-01 裁定): 回料是可选能力,
   // 「配了回料但还没配回投目标」不许拦住整张工艺图的发布 —— 那是本末倒置。
   // 状态在回料 Cell 上可见即可, 见 WorkflowMaterialNode 的 rework-config 区块。
@@ -6587,8 +6790,9 @@ async function publishWorkflow(): Promise<void> {
     });
     return;
   }
-  if (!(await confirmSeasoningAbsence(identity))) return;
-  await withAutoSaveBarrier(() => publishWorkflowUnderBarrier(identity));
+  if (!(await confirmSeasoningAbsence(identity)) || !sameCheckedGraph(decision.key)) return;
+  pausedAutoSaveGraphKey = null;
+  await publishWorkflowUnderBarrier(identity, decision.acknowledged);
 }
 
 /**
@@ -6626,11 +6830,9 @@ async function confirmSeasoningAbsence(identity: WorkflowIdentity): Promise<bool
   }
 }
 
-async function publishWorkflowUnderBarrier(initialIdentity: WorkflowIdentity): Promise<void> {
-  if (!(await waitForWorkflowSave())) {
-    ElMessage.warning('Workflow 自动保存仍未完成，请稍后再发布');
-    return;
-  }
+async function publishWorkflowUnderBarrier(
+  initialIdentity: WorkflowIdentity, completenessAcknowledged: boolean,
+): Promise<void> {
   let identity = initialIdentity;
   if (!(await reconcileForPersistence(identity, true))) return;
   if ((dirty.value || unsavedNewDefinition.value) && !(await saveDraft())) return;
@@ -6752,7 +6954,9 @@ async function publishWorkflowUnderBarrier(initialIdentity: WorkflowIdentity): P
       () => publishAndActivateProductProcessWorkflow(
         identity.factoryId,
         identity.productTypeId,
-        previousPublishCommand!.request,
+        completenessAcknowledged
+          ? { ...previousPublishCommand!.request, completenessAcknowledged: true }
+          : previousPublishCommand!.request,
       ),
     );
     if (!response) return;
@@ -7927,6 +8131,12 @@ function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boole
  * 从未生效)。光标图形本身只定义在 style.css 的 :root 变量里, 不在这儿复制一份。 */
 /* VueFlow sets grab on the pane itself, so connection feedback must target it directly. */
 .canvas-shell.is-connecting :deep(.vue-flow__pane) { cursor: var(--cretas-cursor-crosshair); }
+.canvas-shell :deep(.vue-flow__node.wf-completeness-target) {
+  outline: 3px solid #c96b16;
+  outline-offset: 5px;
+  border-radius: 12px;
+  z-index: 12 !important;
+}
 /* #12b: 历史版本预览横幅 + 版本列表行 */
 .version-preview-bar {
   position: absolute; top: 0; left: 0; right: 0; z-index: 30;

@@ -10,6 +10,7 @@ import Process from '../WorkflowProcessNode.vue';
 
 vi.mock('@/api/request', () => ({ get: vi.fn(async () => ({ success: true, data: [] })), post: vi.fn(), put: vi.fn(), del: vi.fn() }));
 vi.mock('../workflowApi', () => ({
+  checkProductProcessWorkflowCompleteness: vi.fn().mockResolvedValue({ success: true, data: [] }),
   getProductProcessWorkflow: vi.fn(async () => ({ success: true, data: { schemaVersion: 1, status: 'DRAFT', nodes: [
     { id: 'raw', kind: 'RAW_MATERIAL', position: { x: 0, y: 0 }, data: { name: 'Raw', skuId: 'RM' } },
   ], edges: [], viewport: { x: 0, y: 0, zoom: 1 } } })),

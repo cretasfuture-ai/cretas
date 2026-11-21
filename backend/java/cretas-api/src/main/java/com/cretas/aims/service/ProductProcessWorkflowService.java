@@ -3,6 +3,7 @@ package com.cretas.aims.service;
 import com.cretas.aims.dto.ProductProcessWorkflowDTO;
 import com.cretas.aims.dto.ProductProcessWorkflowVersionSummaryDTO;
 import com.cretas.aims.dto.workflow.WorkflowBomSyncPreflightResponse;
+import com.cretas.aims.dto.workflow.WorkflowCompletenessIssue;
 import com.cretas.aims.dto.workflow.WorkflowPublishAndActivateResponse;
 
 import java.util.List;
@@ -17,6 +18,12 @@ public interface ProductProcessWorkflowService {
             String factoryId,
             String productTypeId,
             ProductProcessWorkflowDTO definition);
+
+    List<WorkflowCompletenessIssue> checkCompleteness(
+            String factoryId, String productTypeId, ProductProcessWorkflowDTO definition);
+
+    void recordAcknowledgedCompleteness(
+            String factoryId, String productTypeId, ProductProcessWorkflowDTO saved, String action);
 
     ProductProcessWorkflowDTO publish(
             String factoryId, String productTypeId, Long lockVersion, Long operatorId);

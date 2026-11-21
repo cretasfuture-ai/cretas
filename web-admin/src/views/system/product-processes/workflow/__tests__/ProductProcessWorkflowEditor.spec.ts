@@ -56,6 +56,7 @@ vi.mock('@/api/processProduction', () => ({
 }));
 
 vi.mock('../workflowApi', () => ({
+  checkProductProcessWorkflowCompleteness: vi.fn().mockResolvedValue({ success: true, data: [] }),
   getProductProcessWorkflow: apiMocks.getProductProcessWorkflow,
   getProductProcessWorkflowActivation: apiMocks.getProductProcessWorkflowActivation,
   getWorkflowBomSyncPreflight: apiMocks.getWorkflowBomSyncPreflight,
@@ -511,18 +512,18 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
       expect(brine?.data).toMatchObject({ skuId: 'RM-BRINE', bound: true, baseUnit: 'kg' });
     });
 
-    it('检查类快捷问题只回结论文字: 请求带 intent=check, 即便带回方案也不预览、无应用按钮、画布不动', async () => {
+    it('检查快捷问题已移除，手动询问仍只回结论文字且不会生成修改预览', async () => {
       const wrapper = await mountEditorWrapper(false, true);
       const vm = wrapper.vm as unknown as EditorVm;
       const panel = wrapper.getComponent(WorkProcessAIChatPanel);
       const chat = panel.vm as unknown as { runQuickPrompt: (prompt: string) => Promise<void> };
-      const prompt = (panel.props('quickPrompts') as string[]).find(item => item.includes('单位、数量换算'));
-      expect(prompt).toBe('检查投入与产出单位、数量换算是否完整');
+      const prompt = '检查投入与产出单位、数量换算是否完整';
+      expect(panel.props('quickPrompts')).not.toContain(prompt);
       const before = JSON.stringify(vm.currentDefinition());
       const reply = partialSpecReply();
       reply.data.reply = '结论：发现 1 个问题\n1. 工序「卤制」产出「卤肉」没有配置换算规则';
       apiMocks.post.mockResolvedValue(reply);
-      await chat.runQuickPrompt(prompt!);
+      await chat.runQuickPrompt(prompt);
       await flushPromises();
       expect(aiChatCalls()).toHaveLength(1);
       expect(aiChatCalls()[0][1].params.intent).toBe('check');

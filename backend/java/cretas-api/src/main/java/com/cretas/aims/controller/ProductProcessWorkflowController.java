@@ -12,6 +12,7 @@ import com.cretas.aims.dto.workflow.ProductProcessWorkflowActivationDTO;
 import com.cretas.aims.dto.workflow.WorkflowOutputDirectoryDTO;
 import com.cretas.aims.dto.workflow.WorkflowOutputResolutionDTO;
 import com.cretas.aims.dto.workflow.WorkflowBomSyncPreflightResponse;
+import com.cretas.aims.dto.workflow.WorkflowCompletenessIssue;
 import com.cretas.aims.dto.workflow.WorkflowPublishAndActivateRequest;
 import com.cretas.aims.dto.workflow.WorkflowPublishAndActivateResponse;
 import com.cretas.aims.service.ProductProcessWorkflowService;
@@ -153,13 +154,29 @@ public class ProductProcessWorkflowController {
     @ProcessSecretGuard(action = ProcessSecretAction.EDIT, from = ProcessSecretGuard.Source.PRODUCT_PATH, name = "productTypeId")
     @RequirePermission({"production:read_write"})
     @RequireRole({"factory_super_admin", "workshop_supervisor", "department_admin"})
+    @PostMapping("/{productTypeId}/completeness-check")
+    @Operation(summary = "检查画布遗漏，不保存或发布工艺")
+    public ApiResponse<List<WorkflowCompletenessIssue>> checkCompleteness(
+            @PathVariable String factoryId,
+            @PathVariable String productTypeId,
+            @RequestBody @Valid ProductProcessWorkflowDTO definition) {
+        return ApiResponse.success(service.checkCompleteness(factoryId, productTypeId, definition));
+    }
+
+    @ProcessSecretGuard(action = ProcessSecretAction.EDIT, from = ProcessSecretGuard.Source.PRODUCT_PATH, name = "productTypeId")
+    @RequirePermission({"production:read_write"})
+    @RequireRole({"factory_super_admin", "workshop_supervisor", "department_admin"})
     @PutMapping("/{productTypeId}/draft")
     @Operation(summary = "保存 Workflow 草稿，不修改现有报工运行时")
     public ApiResponse<ProductProcessWorkflowDTO> saveDraft(
             @PathVariable String factoryId,
             @PathVariable String productTypeId,
             @RequestBody @Valid ProductProcessWorkflowDTO definition) {
-        return ApiResponse.success(service.saveDraft(factoryId, productTypeId, definition));
+        ProductProcessWorkflowDTO saved = service.saveDraft(factoryId, productTypeId, definition);
+        if (definition.isCompletenessAcknowledged()) {
+            service.recordAcknowledgedCompleteness(factoryId, productTypeId, saved, "仍然保存工艺配置");
+        }
+        return ApiResponse.success(saved);
     }
 
     @ProcessSecretGuard(action = ProcessSecretAction.EDIT, from = ProcessSecretGuard.Source.PRODUCT_PATH, name = "productTypeId")
@@ -198,7 +215,7 @@ public class ProductProcessWorkflowController {
             @PathVariable String productTypeId,
             @RequestBody @Valid WorkflowPublishAndActivateRequest body,
             HttpServletRequest request) {
-        return ApiResponse.success(service.publishAndActivate(
+        WorkflowPublishAndActivateResponse result = service.publishAndActivate(
                 factoryId,
                 productTypeId,
                 body.getLockVersion(),
@@ -206,7 +223,12 @@ public class ProductProcessWorkflowController {
                 body.getRevisionId(),
                 body.getRevisionHash(),
                 body.getDefinitionVersion(),
-                (Long) request.getAttribute("userId")));
+                (Long) request.getAttribute("userId"));
+        if (body.isCompletenessAcknowledged() && !result.isReplayed()
+                && result.getWorkflow() != null && result.getActivation() != null) {
+            service.recordAcknowledgedCompleteness(factoryId, productTypeId, result.getWorkflow(), "仍然应用工艺配置");
+        }
+        return ApiResponse.success(result);
     }
 
     @ProcessSecretGuard(action = ProcessSecretAction.EDIT, from = ProcessSecretGuard.Source.WORKFLOW_PATH, name = "workflowId")
