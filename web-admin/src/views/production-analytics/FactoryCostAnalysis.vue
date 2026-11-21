@@ -70,6 +70,7 @@ const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
 const external = useExternalCost(factoryId);
+const externalDateRange = ref('');
 const canViewPrice = computed(() => permissionStore.canViewPrice);
 
 // ── Date range ────────────────────────────────────────────────────────────────
@@ -444,6 +445,7 @@ async function loadData() {
     const source = await external.load({ startDate, endDate });
     if (!current() || source === 'obsolete') return;
     if (source === 'external') {
+      externalDateRange.value = `${startDate}/${endDate}`;
       costPieChart?.dispose();
       costTrendChart?.dispose();
       yieldTrendChart?.dispose();
@@ -639,7 +641,7 @@ onBeforeUnmount(() => {
     />
     <el-alert v-if="external.error.value" :title="external.error.value" type="warning" :closable="false" class="fca-error" />
     <BlacklakeCostAnalysis v-if="external.data.value" v-loading="loading" :data="external.data.value" :factory-id="factoryId"
-      :can-view-price="canViewPrice" />
+      :can-view-price="canViewPrice" :date-range="externalDateRange" />
 
     <!-- ── 全局空状态: 无任何 gold 数据 ────────────────────── -->
     <template v-else-if="!loading && !loadError && !hasAnyData">

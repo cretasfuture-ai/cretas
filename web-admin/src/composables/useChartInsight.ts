@@ -23,6 +23,7 @@
  */
 
 import { ref, watch, type Ref } from 'vue';
+import { fetchChartInsightStream } from '@/api/smartbi/chartInsightStream';
 import {
   buildChartInsight,
   fetchTier2Insight,
@@ -114,6 +115,8 @@ export interface UseChartInsightOpts {
   autoTier2?: boolean;
   /** Use the authenticated insight service for charts that require server analysis. */
   requireTier2?: boolean;
+  /** Use the progressive Blacklake endpoint with the displayed snapshot and filter range. */
+  dataVersion?: () => string | undefined;
 }
 
 export interface UseChartInsightReturn {
@@ -158,11 +161,15 @@ export function useChartInsight(
 
   watch(
     // Watch source deeply so changes inside the chart object trigger re-evaluation.
-    () => [source(), getFactoryId(), safePerms(perms).canViewFinance] as const,
-    async ([newSource, factoryId], _previous, onCleanup) => {
+    () => [source(), getFactoryId(), safePerms(perms).canViewFinance, opts?.dataVersion?.()] as const,
+    async ([newSource, factoryId, , dataVersion], _previous, onCleanup) => {
       // Bump stale token — any previous in-flight request will see a mismatch.
       const token = ++_staleToken;
-      onCleanup(() => { _staleToken++; });
+      const controller = dataVersion === undefined ? undefined : new AbortController();
+      onCleanup(() => {
+        _staleToken++;
+        controller?.abort();
+      });
       unavailableReason.value = null;
 
       if (!newSource) {
@@ -220,11 +227,11 @@ export function useChartInsight(
         }
 
         const freshPerms = safePerms(perms);
-        const result = await fetchTier2Insight(
-          freshSource.chart,
-          freshPerms,
-          factoryId,
-        );
+        const result = controller && dataVersion !== undefined
+          ? await fetchChartInsightStream(freshSource.chart, freshPerms, factoryId, dataVersion, preview => {
+            if (_staleToken === token) insight.value = preview;
+          }, controller.signal)
+          : await fetchTier2Insight(freshSource.chart, freshPerms, factoryId);
 
         // Final stale check after await.
         if (_staleToken !== token) return;
@@ -236,9 +243,8 @@ export function useChartInsight(
         }
         insight.value = result;
       } catch {
-        // Any unexpected error → honest-null (禁止降级处理: no fabrication).
         if (_staleToken === token) {
-          insight.value = null;
+          unavailableReason.value = 'SERVICE_UNAVAILABLE';
         }
       } finally {
         releaseSlot();

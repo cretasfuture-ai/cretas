@@ -654,7 +654,7 @@ async def test_chart_insight_request_upserts_own_derived_sample_without_delete(m
     statements = []
     service = ChartInsightService(_RecordingPool(statements, {"F006": "private"}), budget_tracker=None)
     monkeypatch.setattr(api, "_get_service", AsyncMock(return_value=service))
-    request = Request({"type": "http"})
+    request = Request({"type": "http", "headers": []})
     request.state.factory_id = "F006"
     request.state.role = "factory_super_admin"
     result = await api.chart_insight(request, api.ChartInsightRequest(

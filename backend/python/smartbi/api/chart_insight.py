@@ -25,11 +25,12 @@ No /api/smartbi/chart/ prefix bypass — this endpoint REQUIRES auth (not in PUB
 """
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -90,6 +91,7 @@ class ChartInsightRequest(BaseModel):
     factory_id: str = Field(..., description="Tenant ID (must match JWT factoryId; body value used for context only)")
     series_values: List[float] = Field(default_factory=list, description="Numeric series data")
     series_labels: List[str] = Field(default_factory=list, description="Labels for series items")
+    data_version: str = Field("", max_length=256, description="Source snapshot and requested date range")
 
 
 # ---------------------------------------------------------------------------
@@ -119,6 +121,8 @@ async def _get_service():
             import os
 
             pool = await get_pg_pool()
+            if _service is not None:
+                return _service
             if pool is None:
                 # U1.3: pool not ready — do NOT cache a broken service; caller gets 503
                 logger.warning(
@@ -214,10 +218,7 @@ async def chart_insight(request: Request, body: ChartInsightRequest) -> Dict[str
     # ------------------------------------------------------------------
     # Step 3: Build context and call service
     # ------------------------------------------------------------------
-    from smartbi.services.insights.chart_insight_service import (
-        ChartInsightContext,
-        InsightUnavailable,
-    )
+    from smartbi.services.insights.chart_insight_service import ChartInsightContext
 
     # U1.4: derive permission_tier server-side from JWT role — NEVER trust body.permission_tier
     # Internal calls (auth_method=='internal') also derive from X-User-Role header (set in state)
@@ -234,6 +235,7 @@ async def chart_insight(request: Request, body: ChartInsightRequest) -> Dict[str
         factory_id=jwt_factory_id,  # Use JWT factoryId, NOT body.factory_id
         series_values=body.series_values,
         series_labels=body.series_labels,
+        data_version=body.data_version,
     )
 
     svc = await _get_service()
@@ -247,12 +249,34 @@ async def chart_insight(request: Request, body: ChartInsightRequest) -> Dict[str
             },
         )
 
-    try:
-        result = await svc.get_insight(
+    async def generate():
+        return await svc.get_insight(
             ctx,
             caller_role=caller_role,
             jwt_factory_id=jwt_factory_id,  # Pass explicitly for internal cross-tenant guard
         )
+
+    if request.headers.get("accept") == "text/event-stream":
+        from smartbi.services.insights.chart_insight_service import build_rule_preview
+
+        async def events():
+            preview = build_rule_preview(ctx)
+            if preview is not None:
+                yield _insight_event("preview", _insight_response(preview))
+            try:
+                yield _insight_event("final", _insight_response(await generate()))
+            except Exception:
+                logger.exception("[chart-insight] stream error for factory=%s", jwt_factory_id)
+                yield _insight_event("final", {"success": False, "data": None, "code": "SERVICE_UNAVAILABLE"})
+
+        return StreamingResponse(
+            events(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+        )
+
+    try:
+        result = await generate()
     except Exception as exc:
         logger.exception("[chart-insight] unexpected error for factory=%s", jwt_factory_id)
         return JSONResponse(
@@ -263,6 +287,16 @@ async def chart_insight(request: Request, body: ChartInsightRequest) -> Dict[str
                 "code": "INTERNAL_ERROR",
             },
         )
+
+    return _insight_response(result)
+
+
+def _insight_event(event: str, payload: Dict[str, Any]) -> str:
+    return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+def _insight_response(result) -> Dict[str, Any]:
+    from smartbi.services.insights.chart_insight_service import InsightUnavailable
 
     if result is None or isinstance(result, InsightUnavailable):
         code = "PERMISSION_DENIED" if result is None else result.value
@@ -288,6 +322,7 @@ async def chart_insight(request: Request, body: ChartInsightRequest) -> Dict[str
             "source": result.source,
             "tier": result.tier,
             "input_hash": result.input_hash,  # G4: corpus row key for feedback endpoint
+            "cacheHit": result.cache_hit,
         },
     }
 
@@ -313,7 +348,7 @@ class InsightFeedbackRequest(BaseModel):
 _FEEDBACK_FETCH_SQL = """
     SELECT id, quality, metadata
     FROM smart_bi_distillation_samples
-    WHERE input_hash = $1
+    WHERE input_hash = $1 AND factory_id = $2
     LIMIT 1
 """
 
@@ -322,7 +357,7 @@ _FEEDBACK_UPDATE_SQL = """
     UPDATE smart_bi_distillation_samples
     SET metadata = $1::jsonb,
         quality  = $2
-    WHERE input_hash = $3
+    WHERE input_hash = $3 AND factory_id = $4
 """
 
 
@@ -406,7 +441,7 @@ async def insight_feedback(request: Request, body: InsightFeedbackRequest) -> Di
         import json as _json
 
         async with pool.acquire() as conn:
-            row = await conn.fetchrow(_FEEDBACK_FETCH_SQL, body.input_hash)
+            row = await conn.fetchrow(_FEEDBACK_FETCH_SQL, body.input_hash, jwt_factory_id)
             if row is None:
                 # No-fake-data: explicit not-found, never silently swallow
                 return {
@@ -452,7 +487,10 @@ async def insight_feedback(request: Request, body: InsightFeedbackRequest) -> Di
                 )
 
             meta_json = _json.dumps(meta_dict, ensure_ascii=False)
-            await conn.execute(_FEEDBACK_UPDATE_SQL, meta_json, new_quality, body.input_hash)
+            await conn.execute(_FEEDBACK_UPDATE_SQL, meta_json, new_quality, body.input_hash, jwt_factory_id)
+
+        if vote == "down":
+            svc.invalidate_answer(jwt_factory_id, body.input_hash)
 
         logger.info(
             "[insight-feedback] recorded vote=%s input_hash=%s... factory=%s "
