@@ -7,7 +7,6 @@ import com.cretas.aims.service.factorydata.FactoryDataScope.ForeignKind;
 import com.cretas.aims.service.factorydata.FactoryDataScope.NulledReference;
 import com.cretas.aims.service.factorydata.FactoryDataScope.TableScope;
 
-import java.sql.Array;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -56,10 +55,15 @@ public final class FactoryDataScopeResolver {
 
     public static FactoryDataScope resolve(Connection conn, Database database, String schema, String factoryId)
             throws SQLException {
+        return resolve(new FactoryDataPreflightQueries(conn), database, schema, factoryId);
+    }
+
+    private static FactoryDataScope resolve(FactoryDataPreflightQueries queries, Database database, String schema,
+                                             String factoryId) throws SQLException {
         if (!FactoryDataCatalog.validFactoryId(factoryId)) {
             throw new IllegalArgumentException("工厂编号格式不合法: " + factoryId);
         }
-        Meta meta = loadMeta(conn, schema);
+        Meta meta = loadMeta(queries, schema);
         FactoryDataScope scope = new FactoryDataScope(database, schema, factoryId);
 
         // 1) 种子
@@ -74,11 +78,11 @@ public final class FactoryDataScopeResolver {
                 }
             }
             if (database == Database.CRETAS && FactoryDataCatalog.FACTORIES_TABLE.equals(table)) {
-                seedFactoryRoot(conn, schema, meta, scope, frontier);
+                seedFactoryRoot(queries, schema, meta, scope, frontier);
                 continue;
             }
             if (tenant.isEmpty()) continue;
-            seedTable(conn, schema, table, tenant, meta.singlePk().get(table), scope, frontier);
+            seedTable(queries, schema, table, tenant, meta.singlePk().get(table), scope, frontier);
         }
 
         // 2) 顺外键扩散到不动点
@@ -92,7 +96,7 @@ public final class FactoryDataScopeResolver {
                 if (!fk.expands()) continue;
                 Set<String> parentKeys = frontier.get(fk.parent());
                 if (parentKeys == null || parentKeys.isEmpty()) continue;
-                expand(conn, schema, meta, fk, parentKeys, scope, next);
+                expand(queries, schema, meta, fk, parentKeys, scope, next);
             }
             frontier = next;
         }
@@ -103,14 +107,14 @@ public final class FactoryDataScopeResolver {
             if (fk.expands()) continue;
             TableScope parent = scope.table(fk.parent());
             if (parent == null || parent.keys().isEmpty()) continue;
-            countNulled(conn, schema, meta, fk, parent.keys(), scope);
+            countNulled(queries, schema, meta, fk, parent.keys(), scope);
         }
 
         // 4) 顺外键认领的子行 (不带租户列) 若同时引用了别的工厂的行 (例: 两厂订单之间的关联行), 不能算本厂的
         for (Fk fk : meta.fks()) {
             TableScope child = scope.table(fk.child());
             if (child == null || child.depth() == 0 || child.keys().isEmpty()) continue;
-            checkOtherParents(conn, schema, meta, fk, child, scope);
+            checkOtherParents(queries, schema, meta, fk, child, scope);
         }
 
         // 5) 父表没有单列主键的外键算不了闭包: 父表里有本厂行、子表又不带租户列 ⇒ 子行归属判不了, 记为无法判定
@@ -138,21 +142,27 @@ public final class FactoryDataScopeResolver {
      */
     public static FactoryDataScope resolveVisible(Connection conn, Database database, String schema, String factoryId)
             throws SQLException {
-        if (database != Database.SMARTBI) return resolve(conn, database, schema, factoryId);
-        setTenant(conn, "");
-        FactoryDataScope wide = resolve(conn, database, schema, factoryId);
-        setTenant(conn, factoryId);
-        FactoryDataScope own = resolve(conn, database, schema, factoryId);
+        return resolveVisible(new FactoryDataPreflightQueries(conn), database, schema, factoryId);
+    }
+
+    static FactoryDataScope resolveVisible(FactoryDataPreflightQueries queries, Database database, String schema,
+                                           String factoryId) throws SQLException {
+        if (database != Database.SMARTBI) return resolve(queries, database, schema, factoryId);
+        setTenant(queries, "");
+        FactoryDataScope wide = resolve(queries, database, schema, factoryId);
+        setTenant(queries, factoryId);
+        FactoryDataScope own = resolve(queries, database, schema, factoryId);
         own.mergeForeignHits(wide.foreignHits());
         return own;
     }
 
     /** SmartBI 行级安全的租户变量, 只在本事务内有效。 */
     public static void setTenant(Connection conn, String factoryId) throws SQLException {
-        try (PreparedStatement ps = conn.prepareStatement("SELECT set_config('app.factory_id', ?, true)")) {
-            ps.setString(1, factoryId);
-            ps.execute();
-        }
+        setTenant(new FactoryDataPreflightQueries(conn), factoryId);
+    }
+
+    private static void setTenant(FactoryDataPreflightQueries queries, String factoryId) throws SQLException {
+        queries.query("SELECT set_config('app.factory_id', ?, true)", ps -> ps.setString(1, factoryId), rs -> null);
     }
 
     /**
@@ -165,7 +175,7 @@ public final class FactoryDataScopeResolver {
      * </ul>
      * 只查一层: 父行本身也是「不带租户列、经别的工厂外键链挂着」的情形不在内 (手册 §4 写明)。
      */
-    private static void checkOtherParents(Connection conn, String schema, Meta meta, Fk fk, TableScope child,
+    private static void checkOtherParents(FactoryDataPreflightQueries queries, String schema, Meta meta, Fk fk, TableScope child,
                                           FactoryDataScope scope) throws SQLException {
         String parentPk = meta.singlePk().get(fk.parent());
         boolean parentIsFactories = scope.database() == Database.CRETAS
@@ -187,56 +197,54 @@ public final class FactoryDataScopeResolver {
         String sql = "SELECT " + select + " FROM " + q(schema) + "." + q(fk.child()) + " c LEFT JOIN " + q(schema) + "."
                 + q(fk.parent()) + " p ON " + on + " WHERE c." + q(child.pkColumn()) + "::text = ANY(?) AND " + notNull
                 + " AND (p." + q(parentPk) + " IS NULL OR NOT (p." + q(parentPk) + "::text = ANY(?)))";
-        try (PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setArray(1, conn.createArrayOf("text", child.keys().toArray(new String[0])));
-            ps.setArray(2, conn.createArrayOf("text",
+        queries.query(sql, ps -> {
+            ps.setArray(1, queries.connection().createArrayOf("text", child.keys().toArray(new String[0])));
+            ps.setArray(2, queries.connection().createArrayOf("text",
                     ownParent == null ? new String[0] : ownParent.keys().toArray(new String[0])));
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    String key = rs.getString(1);
-                    if (rs.getBoolean(2)) {
-                        scope.addForeign(new ForeignHit(fk.child(), rowKey(key), ForeignKind.UNSCOPED,
-                                "引用的 " + fk.parent() + " 行在当前身份下看不见 (可能是别的工厂的)", fk.parent()));
-                        continue;
-                    }
-                    String other = null;
-                    boolean own = false;
-                    for (int i = 0; i < parentTenant.size(); i++) {
-                        String v = rs.getString(3 + i);
-                        if (v == null) continue;
-                        if (v.equals(scope.factoryId())) own = true;
-                        else if (other == null) other = parentTenant.get(i) + "=" + v;
-                    }
-                    if (own && other == null) continue;
-                    scope.addForeign(new ForeignHit(fk.child(), rowKey(key),
-                            other != null ? ForeignKind.OTHER_TENANT : ForeignKind.UNSCOPED,
-                            "同时引用 " + fk.parent() + " 的行 (" + (other != null ? other : "租户列为空") + ")", fk.parent()));
+        }, rs -> {
+            while (rs.next()) {
+                String key = rs.getString(1);
+                if (rs.getBoolean(2)) {
+                    scope.addForeign(new ForeignHit(fk.child(), rowKey(key), ForeignKind.UNSCOPED,
+                            "引用的 " + fk.parent() + " 行在当前身份下看不见 (可能是别的工厂的)", fk.parent()));
+                    continue;
                 }
+                String other = null;
+                boolean own = false;
+                for (int i = 0; i < parentTenant.size(); i++) {
+                    String v = rs.getString(3 + i);
+                    if (v == null) continue;
+                    if (v.equals(scope.factoryId())) own = true;
+                    else if (other == null) other = parentTenant.get(i) + "=" + v;
+                }
+                if (own && other == null) continue;
+                scope.addForeign(new ForeignHit(fk.child(), rowKey(key),
+                        other != null ? ForeignKind.OTHER_TENANT : ForeignKind.UNSCOPED,
+                        "同时引用 " + fk.parent() + " 的行 (" + (other != null ? other : "租户列为空") + ")", fk.parent()));
             }
-        }
+            return null;
+        });
     }
 
     // ------------------------------------------------------------------ seeds
 
-    private static void seedFactoryRoot(Connection conn, String schema, Meta meta, FactoryDataScope scope,
+    private static void seedFactoryRoot(FactoryDataPreflightQueries queries, String schema, Meta meta, FactoryDataScope scope,
                                         Map<String, Set<String>> frontier) throws SQLException {
         String pk = meta.singlePk().get(FactoryDataCatalog.FACTORIES_TABLE);
         if (pk == null) throw new IllegalStateException("factories 没有单列主键");
         String sql = "SELECT " + q(pk) + "::text FROM " + q(schema) + "." + q(FactoryDataCatalog.FACTORIES_TABLE)
                 + " WHERE " + q(pk) + "::text = ?";
-        try (PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, scope.factoryId());
-            try (ResultSet rs = ps.executeQuery()) {
-                if (!rs.next()) return;
-                TableScope root = scope.putTable(new TableScope(FactoryDataCatalog.FACTORIES_TABLE,
-                        Category.FACTORY_ROOT, List.of(), pk, 0));
-                root.addKey(rs.getString(1));
-                frontier.computeIfAbsent(root.table(), k -> new LinkedHashSet<>()).add(rs.getString(1));
-            }
-        }
+        queries.query(sql, ps -> ps.setString(1, scope.factoryId()), rs -> {
+            if (!rs.next()) return null;
+            TableScope root = scope.putTable(new TableScope(FactoryDataCatalog.FACTORIES_TABLE,
+                    Category.FACTORY_ROOT, List.of(), pk, 0));
+            root.addKey(rs.getString(1));
+            frontier.computeIfAbsent(root.table(), k -> new LinkedHashSet<>()).add(rs.getString(1));
+            return null;
+        });
     }
 
-    private static void seedTable(Connection conn, String schema, String table, List<String> tenant, String pk,
+    private static void seedTable(FactoryDataPreflightQueries queries, String schema, String table, List<String> tenant, String pk,
                                   FactoryDataScope scope, Map<String, Set<String>> frontier) throws SQLException {
         StringJoiner select = new StringJoiner(", ");
         select.add(pk != null ? q(pk) + "::text" : "NULL::text");
@@ -246,61 +254,61 @@ public final class FactoryDataScopeResolver {
         String sql = "SELECT " + select + " FROM " + q(schema) + "." + q(table) + " WHERE " + where;
 
         TableScope ts = new TableScope(table, FactoryDataCatalog.categorize(table), tenant, pk, 0);
-        long owned = 0;
-        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+        long owned = queries.query(sql, ps -> {
             for (int i = 0; i < tenant.size(); i++) ps.setString(i + 1, scope.factoryId());
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    String key = rs.getString(1);
-                    String other = otherTenant(rs, 2, tenant, scope.factoryId());
-                    if (other != null) {
-                        scope.addForeign(new ForeignHit(table, rowKey(key), ForeignKind.SHARED_ROW, other, null));
-                        continue;
-                    }
-                    owned++;
-                    if (pk != null && ts.addKey(key)) {
-                        frontier.computeIfAbsent(table, k -> new LinkedHashSet<>()).add(key);
-                    }
+        }, rs -> {
+            long count = 0;
+            while (rs.next()) {
+                String key = rs.getString(1);
+                String other = otherTenant(rs, 2, tenant, scope.factoryId());
+                if (other != null) {
+                    scope.addForeign(new ForeignHit(table, rowKey(key), ForeignKind.SHARED_ROW, other, null));
+                    continue;
+                }
+                count++;
+                if (pk != null && ts.addKey(key)) {
+                    frontier.computeIfAbsent(table, k -> new LinkedHashSet<>()).add(key);
                 }
             }
-        }
+            return count;
+        });
         if (pk == null) ts.setPredicateRows(owned);
         scope.putTable(ts);
     }
 
     // ---------------------------------------------------------------- closure
 
-    private static void expand(Connection conn, String schema, Meta meta, Fk fk, Set<String> parentKeys,
+    private static void expand(FactoryDataPreflightQueries queries, String schema, Meta meta, Fk fk, Set<String> parentKeys,
                                FactoryDataScope scope, Map<String, Set<String>> next) throws SQLException {
         String childPk = meta.singlePk().get(fk.child());
         List<String> childTenant = FactoryDataCatalog.tenantColumns(fk.child(),
                 new LinkedHashSet<>(meta.columns().get(fk.child())));
-        try (PreparedStatement ps = conn.prepareStatement(joinSql(schema, meta, fk, childPk, childTenant))) {
-            Array keys = conn.createArrayOf("text", parentKeys.toArray(new String[0]));
-            ps.setArray(1, keys);
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    String key = rs.getString(1);
-                    if (!childTenant.isEmpty()) {
-                        // 带租户列的子行: 本厂的已是种子; 别的工厂或空值 = 跨租户命中
-                        classifyTenantChild(rs, key, childTenant, fk, scope);
-                        continue;
-                    }
-                    if (childPk == null) {
-                        scope.addForeign(new ForeignHit(fk.child(), rowKey(null), ForeignKind.UNSUPPORTED,
-                                "子表既无租户列也无单列主键", fk.parent()));
-                        continue;
-                    }
-                    TableScope ts = scope.table(fk.child());
-                    if (ts == null) {
-                        int depth = scope.table(fk.parent()).depth() + 1;
-                        ts = scope.putTable(new TableScope(fk.child(), FactoryDataCatalog.categorize(fk.child()),
-                                List.of(), childPk, depth));
-                    }
-                    if (ts.addKey(key)) next.computeIfAbsent(fk.child(), k -> new LinkedHashSet<>()).add(key);
+        String sql = joinSql(schema, meta, fk, childPk, childTenant);
+        queries.query(sql, ps -> {
+            ps.setArray(1, queries.connection().createArrayOf("text", parentKeys.toArray(new String[0])));
+        }, rs -> {
+            while (rs.next()) {
+                String key = rs.getString(1);
+                if (!childTenant.isEmpty()) {
+                    // 带租户列的子行: 本厂的已是种子; 别的工厂或空值 = 跨租户命中
+                    classifyTenantChild(rs, key, childTenant, fk, scope);
+                    continue;
                 }
+                if (childPk == null) {
+                    scope.addForeign(new ForeignHit(fk.child(), rowKey(null), ForeignKind.UNSUPPORTED,
+                            "子表既无租户列也无单列主键", fk.parent()));
+                    continue;
+                }
+                TableScope ts = scope.table(fk.child());
+                if (ts == null) {
+                    int depth = scope.table(fk.parent()).depth() + 1;
+                    ts = scope.putTable(new TableScope(fk.child(), FactoryDataCatalog.categorize(fk.child()),
+                            List.of(), childPk, depth));
+                }
+                if (ts.addKey(key)) next.computeIfAbsent(fk.child(), k -> new LinkedHashSet<>()).add(key);
             }
-        }
+            return null;
+        });
     }
 
     private static void classifyTenantChild(ResultSet rs, String key, List<String> tenant, Fk fk,
@@ -323,39 +331,40 @@ public final class FactoryDataScopeResolver {
         }
     }
 
-    private static void countNulled(Connection conn, String schema, Meta meta, Fk fk, Set<String> parentKeys,
+    private static void countNulled(FactoryDataPreflightQueries queries, String schema, Meta meta, Fk fk, Set<String> parentKeys,
                                     FactoryDataScope scope) throws SQLException {
         String childPk = meta.singlePk().get(fk.child());
         List<String> childTenant = FactoryDataCatalog.tenantColumns(fk.child(),
                 new LinkedHashSet<>(meta.columns().get(fk.child())));
         TableScope ownChild = scope.table(fk.child());
-        long nulled = 0;
-        try (PreparedStatement ps = conn.prepareStatement(joinSql(schema, meta, fk, childPk, childTenant))) {
-            ps.setArray(1, conn.createArrayOf("text", parentKeys.toArray(new String[0])));
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    String key = rs.getString(1);
-                    if (ownChild != null && key != null && ownChild.keys().contains(key)) continue;
-                    if (!childTenant.isEmpty()) {
-                        String other = null;
-                        boolean own = false;
-                        for (int i = 0; i < childTenant.size(); i++) {
-                            String v = rs.getString(2 + i);
-                            if (v == null) continue;
-                            if (v.equals(scope.factoryId())) own = true;
-                            else if (other == null) other = childTenant.get(i) + "=" + v;
-                        }
-                        if (own) continue;
-                        if (other != null) {
-                            scope.addForeign(new ForeignHit(fk.child(), rowKey(key), ForeignKind.OTHER_TENANT,
-                                    other + " (外键置空)", fk.parent()));
-                            continue;
-                        }
+        String sql = joinSql(schema, meta, fk, childPk, childTenant);
+        long nulled = queries.query(sql, ps -> {
+            ps.setArray(1, queries.connection().createArrayOf("text", parentKeys.toArray(new String[0])));
+        }, rs -> {
+            long count = 0;
+            while (rs.next()) {
+                String key = rs.getString(1);
+                if (ownChild != null && key != null && ownChild.keys().contains(key)) continue;
+                if (!childTenant.isEmpty()) {
+                    String other = null;
+                    boolean own = false;
+                    for (int i = 0; i < childTenant.size(); i++) {
+                        String v = rs.getString(2 + i);
+                        if (v == null) continue;
+                        if (v.equals(scope.factoryId())) own = true;
+                        else if (other == null) other = childTenant.get(i) + "=" + v;
                     }
-                    nulled++;
+                    if (own) continue;
+                    if (other != null) {
+                        scope.addForeign(new ForeignHit(fk.child(), rowKey(key), ForeignKind.OTHER_TENANT,
+                                other + " (外键置空)", fk.parent()));
+                        continue;
+                    }
                 }
+                count++;
             }
-        }
+            return count;
+        });
         if (nulled > 0) {
             scope.addNulled(new NulledReference(fk.child(), String.join(",", fk.childColumns()), nulled, fk.parent()));
         }
@@ -377,51 +386,47 @@ public final class FactoryDataScopeResolver {
 
     // --------------------------------------------------------------- metadata
 
-    private static Meta loadMeta(Connection conn, String schema) throws SQLException {
+    private static Meta loadMeta(FactoryDataPreflightQueries queries, String schema) throws SQLException {
         Map<String, List<String>> columns = new TreeMap<>();
-        try (PreparedStatement ps = conn.prepareStatement(
-                "SELECT c.relname, a.attname FROM pg_attribute a "
-                        + "JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace "
-                        + "WHERE n.nspname = ? AND c.relkind IN ('r','p') AND NOT c.relispartition "
-                        + "AND a.attnum > 0 AND NOT a.attisdropped ORDER BY c.relname, a.attnum")) {
-            ps.setString(1, schema);
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) columns.computeIfAbsent(rs.getString(1), k -> new ArrayList<>()).add(rs.getString(2));
-            }
-        }
+        String columnsSql = "SELECT c.relname, a.attname FROM pg_attribute a "
+                + "JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace "
+                + "WHERE n.nspname = ? AND c.relkind IN ('r','p') AND NOT c.relispartition "
+                + "AND a.attnum > 0 AND NOT a.attisdropped ORDER BY c.relname, a.attnum";
+        queries.query(columnsSql, ps -> ps.setString(1, schema), rs -> {
+            while (rs.next()) columns.computeIfAbsent(rs.getString(1), k -> new ArrayList<>()).add(rs.getString(2));
+            return null;
+        });
         Map<String, String> singlePk = new HashMap<>();
-        try (PreparedStatement ps = conn.prepareStatement(
-                "SELECT c.relname, a.attname FROM pg_constraint p "
-                        + "JOIN pg_class c ON c.oid = p.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace "
-                        + "JOIN pg_attribute a ON a.attrelid = p.conrelid AND a.attnum = p.conkey[1] "
-                        + "WHERE n.nspname = ? AND p.contype = 'p' AND array_length(p.conkey, 1) = 1")) {
-            ps.setString(1, schema);
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) singlePk.put(rs.getString(1), rs.getString(2));
-            }
-        }
+        String pkSql = "SELECT c.relname, a.attname FROM pg_constraint p "
+                + "JOIN pg_class c ON c.oid = p.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace "
+                + "JOIN pg_attribute a ON a.attrelid = p.conrelid AND a.attnum = p.conkey[1] "
+                + "WHERE n.nspname = ? AND p.contype = 'p' AND array_length(p.conkey, 1) = 1";
+        queries.query(pkSql, ps -> ps.setString(1, schema), rs -> {
+            while (rs.next()) singlePk.put(rs.getString(1), rs.getString(2));
+            return null;
+        });
         List<Fk> fks = new ArrayList<>();
-        try (PreparedStatement ps = conn.prepareStatement(
-                "SELECT cc.relname, pc.relname, con.confdeltype::text, "
-                        + "array(SELECT a.attname::text FROM unnest(con.conkey) WITH ORDINALITY k(n, o) "
-                        + "      JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.n ORDER BY k.o), "
-                        + "array(SELECT a.attname::text FROM unnest(con.confkey) WITH ORDINALITY k(n, o) "
-                        + "      JOIN pg_attribute a ON a.attrelid = con.confrelid AND a.attnum = k.n ORDER BY k.o) "
-                        + "FROM pg_constraint con "
-                        + "JOIN pg_class cc ON cc.oid = con.conrelid JOIN pg_namespace cn ON cn.oid = cc.relnamespace "
-                        + "JOIN pg_class pc ON pc.oid = con.confrelid JOIN pg_namespace pn ON pn.oid = pc.relnamespace "
-                        + "WHERE con.contype = 'f' AND con.conparentid = 0 AND cn.nspname = ? AND pn.nspname = ? "
-                        + "AND NOT cc.relispartition ORDER BY cc.relname, con.conname")) {
+        String fkSql = "SELECT cc.relname, pc.relname, con.confdeltype::text, "
+                + "array(SELECT a.attname::text FROM unnest(con.conkey) WITH ORDINALITY k(n, o) "
+                + "      JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.n ORDER BY k.o), "
+                + "array(SELECT a.attname::text FROM unnest(con.confkey) WITH ORDINALITY k(n, o) "
+                + "      JOIN pg_attribute a ON a.attrelid = con.confrelid AND a.attnum = k.n ORDER BY k.o) "
+                + "FROM pg_constraint con "
+                + "JOIN pg_class cc ON cc.oid = con.conrelid JOIN pg_namespace cn ON cn.oid = cc.relnamespace "
+                + "JOIN pg_class pc ON pc.oid = con.confrelid JOIN pg_namespace pn ON pn.oid = pc.relnamespace "
+                + "WHERE con.contype = 'f' AND con.conparentid = 0 AND cn.nspname = ? AND pn.nspname = ? "
+                + "AND NOT cc.relispartition ORDER BY cc.relname, con.conname";
+        queries.query(fkSql, ps -> {
             ps.setString(1, schema);
             ps.setString(2, schema);
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    fks.add(new Fk(rs.getString(1), rs.getString(2), rs.getString(3).charAt(0),
-                            List.of((String[]) rs.getArray(4).getArray()),
-                            List.of((String[]) rs.getArray(5).getArray())));
-                }
+        }, rs -> {
+            while (rs.next()) {
+                fks.add(new Fk(rs.getString(1), rs.getString(2), rs.getString(3).charAt(0),
+                        List.of((String[]) rs.getArray(4).getArray()),
+                        List.of((String[]) rs.getArray(5).getArray())));
             }
-        }
+            return null;
+        });
         // 只保留两端都在 columns 里的外键 (分区子表已被排除); 父表没有单列主键的另放一边, 不能做闭包但要报出来
         fks.removeIf(fk -> !columns.containsKey(fk.child()) || !columns.containsKey(fk.parent()));
         List<Fk> dropped = new ArrayList<>();
@@ -493,7 +498,7 @@ public final class FactoryDataScopeResolver {
      */
     public static Map<String, Long> rowsPerFactory(Connection conn, String schema, Set<String> rlsTenants)
             throws SQLException {
-        Meta meta = loadMeta(conn, schema);
+        Meta meta = loadMeta(new FactoryDataPreflightQueries(conn), schema);
         List<String[]> pairs = new ArrayList<>();      // {table, tenantColumn}
         for (Map.Entry<String, List<String>> e : meta.columns().entrySet()) {
             for (String c : FactoryDataCatalog.tenantColumns(e.getKey(), new LinkedHashSet<>(e.getValue()))) {
@@ -537,7 +542,7 @@ public final class FactoryDataScopeResolver {
 
     /** 库里出现过的全部租户编号 (各租户列的去重值; 行级安全下只看得见宽松表里的)。 */
     public static Set<String> tenantValues(Connection conn, String schema) throws SQLException {
-        Meta meta = loadMeta(conn, schema);
+        Meta meta = loadMeta(new FactoryDataPreflightQueries(conn), schema);
         Set<String> out = new java.util.TreeSet<>();
         for (Map.Entry<String, List<String>> e : meta.columns().entrySet()) {
             for (String c : FactoryDataCatalog.tenantColumns(e.getKey(), new LinkedHashSet<>(e.getValue()))) {
