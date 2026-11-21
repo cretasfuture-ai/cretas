@@ -88,6 +88,10 @@ describe('Element 到 Nuxt UI 的适配组件', () => {
     });
     await expect(wrapper.vm.validate()).rejects.toHaveProperty('detail.name');
     expect(wrapper.get('[role=alert]').text()).toBe('请输入名称');
+    const field = wrapper.get('input').element.parentElement!;
+    field.scrollIntoView = vi.fn();
+    wrapper.vm.scrollToField('detail.name', { block: 'center' });
+    expect(field.scrollIntoView).toHaveBeenCalledWith({ block: 'center' });
     model.value.detail.name = '番茄';
     const callback = vi.fn();
     await expect(wrapper.vm.validate(callback)).resolves.toBe(true);

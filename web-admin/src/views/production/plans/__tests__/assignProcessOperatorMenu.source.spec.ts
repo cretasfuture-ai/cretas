@@ -29,7 +29,7 @@ describe('生产计划列表「分配工序操作员」入口 —— 接线契�
   it('🔒 硬约束8: 全文件只有一处「更多」下拉 (table 行内), 没有 card/mobile 副本要同步登记', () => {
     // 判据: 「更多」的显隐按钮字面量只出现一次 —— 若未来加了移动端卡片视图,
     // 这条断言会先红, 提醒补第二处 v-if/command 而不是悄悄漏掉。
-    const moreButtonOccurrences = (view.match(/更多<el-icon/g) || []).length;
+    const moreButtonOccurrences = (view.match(/更多<(?:el-icon|span)\b/g) || []).length;
     expect(moreButtonOccurrences).toBe(1);
     const commandOccurrences = (view.match(/command="assign-process-operator"/g) || []).length;
     expect(commandOccurrences).toBe(1);

@@ -4,6 +4,7 @@
  */
 import { flushPromises, mount } from '@vue/test-utils';
 import { ref } from 'vue';
+import { nuxtPilotStubs } from '@/components/compat/testStubs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import ReturnsList from '../list.vue';
 
@@ -16,9 +17,14 @@ vi.mock('@/store/modules/auth', () => ({ useAuthStore: () => ({ factoryId: 'LSMD
 vi.mock('@/store/modules/permission', () => ({ usePermissionStore: () => ({ canViewPrice: true, canWrite: () => true }) }));
 vi.mock('@/composables/useListSummary', () => ({ useListSummary: () => ({ summary: ref({ stats: [] }), loading: ref(false) }) }));
 vi.mock('element-plus', async (orig) => ({ ...(await orig<Record<string, unknown>>()), ElMessage: { error: vi.fn(), info: vi.fn(), success: vi.fn() } }));
+vi.mock('@/components/compat/messages', async () => {
+  const { ElMessage, ElMessageBox } = await import('element-plus');
+  return { useCompatMessages: () => ({ ElMessage, ElMessageBox }) };
+});
 
 // 表格桩：行数 + #empty 插槽，其余子列不渲染
 const stubs = {
+  ...nuxtPilotStubs,
   'el-table': { props: ['data'], template: '<div class="tbl"><div v-for="(r, i) in data" :key="i" class="row">{{ r.returnNumber }}</div><slot v-if="!data.length" name="empty" /></div>' },
   'el-table-column': true, 'el-card': { template: '<div><slot name="header" /><slot /></div>' },
   'el-select': true, 'el-option': true, 'el-button': true, 'el-pagination': true, 'el-tag': true,

@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { sourceWithChinese } from '@/i18n-pilot/sourceForTests';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -12,7 +13,7 @@ import { describe, expect, it } from 'vitest';
  * 里没有登记，只能手打 URL 才进得去（形态 B：机制在、没接上）。
  */
 const MENU = readFileSync(resolve(__dirname, '../../../components/layout/menuConfig.ts'), 'utf8');
-const PAGE = readFileSync(resolve(__dirname, 'index.vue'), 'utf8');
+const PAGE = sourceWithChinese(readFileSync(resolve(__dirname, 'index.vue'), 'utf8'));
 
 describe('仓储空间必须能被用户找到（BUG-1：上线即不可达）', () => {
   it('侧边栏仓储菜单里登记了 /warehouse/storage-locations', () => {
@@ -114,8 +115,8 @@ describe('全屏编辑不许再引入第二个 el-dialog 过渡（BUG-2 的同�
   it('弹窗数量没有增加 —— 仍然是原来那 4 个，每个都带 :key', () => {
     // 原来 4 个：zone / location / move / recognize。多出第 5 个就是又开了一条
     // 「leave 过渡被打断 → el-overlay-dialog 卡在 is-closing」的通道。
-    expect((PAGE.match(/<el-dialog/g) ?? []).length).toBe(4);
-    expect((PAGE.match(/<el-dialog :key=/g) ?? []).length).toBe(4);
+    expect((PAGE.match(/<(?:el-dialog|CompatDialog)\b/g) ?? []).length).toBe(4);
+    expect((PAGE.match(/<(?:el-dialog|CompatDialog) :key=/g) ?? []).length).toBe(4);
   });
 
   it('全屏时锁住页面滚动，并且离开页面一定还回去', () => {

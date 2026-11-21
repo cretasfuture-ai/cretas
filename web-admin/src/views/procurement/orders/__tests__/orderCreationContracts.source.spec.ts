@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { sourceWithChinese } from '@/i18n-pilot/sourceForTests';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -7,8 +8,8 @@ function source(path: string): string {
 }
 
 describe('order creation contracts', () => {
-  const purchase = source('src/views/procurement/orders/list.vue');
-  const sales = source('src/views/sales/orders/list.vue');
+  const purchase = sourceWithChinese(source('src/views/procurement/orders/list.vue'));
+  const sales = sourceWithChinese(source('src/views/sales/orders/list.vue'));
   // 2026-08-19: StartPurchaseDialog.vue 已删 (自 2026-07-20 `bb17530017` 起无人挂载)。
   // 合并弹窗是唯一的「从销售订单生成采购单」入口, 契约全部落在它身上。
   const mergePurchase = source('src/components/dialog/MergePurchaseDialog.vue');

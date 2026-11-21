@@ -88,7 +88,10 @@ provide(formKey, { items, errors, labelWidth: () => props.labelWidth, orientatio
 watch(() => props.rules, () => {
   if (props.validateOnRuleChange) void validateField(undefined, () => {});
 }, { deep: true });
-defineExpose({ validate: (callback?: FormCallback) => validateField(undefined, callback), validateField, resetFields, clearValidate });
+function scrollToField(path: FieldPath, options?: ScrollIntoViewOptions | boolean) {
+  selected(normalize(path))[0]?.element()?.scrollIntoView(options);
+}
+defineExpose({ validate: (callback?: FormCallback) => validateField(undefined, callback), validateField, resetFields, clearValidate, scrollToField });
 </script>
 
 <template>

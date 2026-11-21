@@ -1,8 +1,9 @@
 import { readFileSync } from 'node:fs';
+import { sourceWithChinese } from '@/i18n-pilot/sourceForTests';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-const source = readFileSync(resolve(process.cwd(), 'src/views/production/plans/list.vue'), 'utf8');
+const source = sourceWithChinese(readFileSync(resolve(process.cwd(), 'src/views/production/plans/list.vue'), 'utf8'));
 const api = readFileSync(resolve(process.cwd(), 'src/api/productionPlan.ts'), 'utf8');
 
 describe('已结单计划成本重算入口', () => {

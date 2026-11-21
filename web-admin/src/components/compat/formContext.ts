@@ -1,7 +1,9 @@
 import type { InjectionKey } from 'vue';
 
 export type FieldPath = string | string[];
-export type FormItem = { name: () => string; rules: () => unknown; required: () => boolean };
+export type FormItem = {
+  name: () => string; rules: () => unknown; required: () => boolean; element: () => HTMLElement | undefined;
+};
 export type FormErrors = Record<string, { message?: string; field?: string }[]>;
 export type FormCallback = (valid: boolean, fields?: FormErrors) => void | Promise<void>;
 export const formKey: InjectionKey<{

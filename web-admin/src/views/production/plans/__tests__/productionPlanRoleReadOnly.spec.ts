@@ -34,7 +34,7 @@ describe('real mounted production plan page customer wiring', () => {
   });
   function mountPage() {
     return shallowMount(Plans, { global: { renderStubDefaultSlot: true,
-      stubs: { ...nuxtPilotStubs, ElTable: { template: '<div />' }, ElTableColumn: { template: '<div />' } },
+      stubs: { ...nuxtPilotStubs, ElTable: { template: '<div />' }, ElTableColumn: { template: '<div />' }, CompatTable: { template: '<div />' } },
       directives: { loading: () => {} }, config: { warnHandler: () => {} } } });
   }
   it('does not request the roster even when UI module access is granted; other production loads still run', async () => {
