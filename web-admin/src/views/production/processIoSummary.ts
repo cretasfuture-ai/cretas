@@ -9,7 +9,7 @@
 
 import { displayProcessUnit } from '@/utils/processSheetUnits';
 
-export type IncomparableReason = 'UNIT_MISMATCH' | 'MIXED_UNITS' | 'NO_UNIT' | 'NO_INPUT';
+export type IncomparableReason = 'UNIT_MISMATCH' | 'MIXED_UNITS' | 'NO_UNIT' | 'NO_INPUT' | 'MISSING_WEIGHT' | 'NO_RECORDS';
 
 export interface ProcessYieldAgg {
   processName: string;
@@ -25,6 +25,14 @@ export interface ProcessYieldAgg {
   batchCount: number;
   /** 合计里来自加工环节记录 (processing_stage_records) 的条数; 旧后端无此字段。 */
   stageRecordCount?: number;
+  recordCount?: number;
+  inputRecordCount?: number;
+  outputRecordCount?: number;
+  knownInputQuantity?: number | null;
+  knownOutputQuantity?: number | null;
+  computable?: boolean;
+  missingInput?: boolean;
+  missingOutput?: boolean;
 }
 
 /** 'unitless' / 空串 / null 都算「没有单位」, 返回 null; 否则返回给用户看的单位 (box → 盒 等走 displayProcessUnit)。 */
@@ -54,8 +62,26 @@ export function incomparableLabel(row: Pick<ProcessYieldAgg, 'conversionRate' | 
     case 'MIXED_UNITS': return '单位不统一，无法比较';
     case 'NO_UNIT': return '未登记单位，无法比较';
     case 'NO_INPUT': return '无投入，无法计算';
+    case 'MISSING_WEIGHT': return '缺少可配对的投入和产出重量';
+    case 'NO_RECORDS': return '本期无记录';
     default: return '无法比较';
   }
+}
+
+export function calculationNote(row: ProcessYieldAgg): string {
+  if (row.recordCount === 0) return '本期无记录';
+  if (row.missingInput && row.missingOutput) return '缺投入和产出重量';
+  if (row.missingOutput) {
+    return row.outputRecordCount === 0 && row.inputRecordCount
+      ? `缺产出重量（${row.inputRecordCount} 条只有投入）`
+      : '缺产出重量';
+  }
+  if (row.missingInput) return '缺投入重量';
+  return incomparableLabel(row);
+}
+
+export function canCalculate(row: Pick<ProcessYieldAgg, 'computable' | 'conversionRate'>): boolean {
+  return row.computable !== false && row.conversionRate != null;
 }
 
 export interface SummaryKpi {
@@ -68,8 +94,8 @@ export interface SummaryKpi {
   lowEfficiencyCount: number;
 }
 
-export function summaryKpi(rows: ReadonlyArray<Pick<ProcessYieldAgg, 'conversionRate' | 'wastageRate'>>): SummaryKpi {
-  const comparable = rows.filter((r) => r.conversionRate != null);
+export function summaryKpi(rows: ReadonlyArray<Pick<ProcessYieldAgg, 'computable' | 'conversionRate' | 'wastageRate'>>): SummaryKpi {
+  const comparable = rows.filter(canCalculate);
   const n = comparable.length;
   const round1 = (v: number) => Math.round(v * 10) / 10;
   const withWastage = comparable.filter((r) => r.wastageRate != null);
@@ -84,12 +110,9 @@ export function summaryKpi(rows: ReadonlyArray<Pick<ProcessYieldAgg, 'conversion
   };
 }
 
-/** KPI 卡下方的口径说明, 例:「按 3 道同单位工序平均（共 5 道，2 道单位不同未计入）」。 */
+/** KPI 卡下方的平均口径。 */
 export function averageScopeNote(kpi: Pick<SummaryKpi, 'processCount' | 'comparableCount'>): string {
   if (kpi.processCount === 0) return '暂无工序';
-  if (kpi.comparableCount === 0) return `${kpi.processCount} 道工序都无法比较，未计算平均`;
-  const skipped = kpi.processCount - kpi.comparableCount;
-  return skipped > 0
-    ? `按 ${kpi.comparableCount} 道同单位工序平均（共 ${kpi.processCount} 道，${skipped} 道无法比较未计入）`
-    : `按 ${kpi.comparableCount} 道同单位工序平均`;
+  if (kpi.comparableCount === 0) return '0 道工序可计算';
+  return `按 ${kpi.comparableCount} 道可计算工序平均`;
 }
