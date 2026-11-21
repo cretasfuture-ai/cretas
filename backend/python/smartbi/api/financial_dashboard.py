@@ -660,7 +660,8 @@ async def _render_factory_analysis_turn(request: FactoryAnalysisRequest, http_re
             return _analysis_response(
                 recommendation_data, factory_id=factory_id, source=context.source,
                 question=request.question, status=status, answer=answer, selected_ids=selected_ids,
-                recommendations=selected, catalog=catalog, facts=facts, limitations=[],
+                recommendations=selected, catalog=catalog, facts=facts,
+                limitations=conversation.limitations_for(selected, catalog, request.question),
                 context_id=context.context_id, subjects=subjects, follow_up_questions=[],
                 planner_mode={'mode': 'rule'},
             )

@@ -794,27 +794,39 @@ async def test_factory_ask_data_uses_blacklake_facts_without_upload_or_remote_ll
                 return [], {"mode": "unavailable"}
             assert len(selected) == 2
             return [item["id"] for item in selected if ".trend:" in item["id"]], {"mode": "ai"}
-        selected = [item for item in catalog if item["sourceKey"] == "blacklake-production"]
-        assert "产品 A" not in json.dumps(selected, ensure_ascii=False)
-        assert {item.get("sourceQuantityUnit") for item in selected if item["unit"] == "%"} == {"KG", "只", "包", "盒"}
-        return [item["id"] for item in selected
-                if item["unit"] == "KG" and item["metric"].endswith(".finished.good")], {"mode": "ai"}
+        pytest.fail("Blacklake production quantity questions should use the report selector without the planner")
 
     monkeypatch.setattr(conversation, "plan", planner)
+    report_scope = {"source": "business", "periodType": "month_range", "year": 2026, "startMonth": 11, "endMonth": 11}
+    quantity_question = f"产品 {CODE} 的成品入库良品数量趋势"
     async with _client() as client:
         response = await client.post("/api/smartbi/financial-dashboard/factory-analysis", headers=_headers(), json={
-            "source": "business", "periodType": "month_range", "year": 2026, "startMonth": 11, "endMonth": 11,
-            "question": f"产品 {CODE} 的成品入库良品数量趋势",
+            **report_scope, "question": quantity_question,
         })
-    assert response.status_code == 200, response.text
-    result = response.json()["data"]
-    assert result["status"] == "answered", result
-    assert [(f["value"], f["unit"]) for f in result["facts"]] == [("120.12", "KG")]
-    assert "黑湖生产报工" in result["facts"][0]["source"]
-    assert "黑湖数据不含投入量，无法计算" in result["limitations"]
-    assert CODE in result["analysisScopeLabel"]
-    report_scope = {"source": "business", "periodType": "month_range", "year": 2026, "startMonth": 11, "endMonth": 11}
-    async with _client() as client:
+        assert response.status_code == 200, response.text
+        result = response.json()["data"]
+        assert result["status"] == "answered", result
+        production_catalog = [item for item in result["catalog"] if item["sourceKey"] == "blacklake-production"]
+        assert "产品 A" not in json.dumps(production_catalog, ensure_ascii=False)
+        expected_units = {"KG", "只", "包", "盒"}
+        assert {item.get("sourceQuantityUnit") for item in production_catalog if item["unit"] == "%"} == expected_units
+        units = [fact["unit"] for fact in result["facts"]]
+        assert set(units) == expected_units
+        assert len(units) == len(set(units))
+        kg_fact = next(fact for fact in result["facts"] if fact["unit"] == "KG")
+        assert kg_fact["value"] == "120.12"
+        assert "黑湖生产报工" in kg_fact["source"]
+        assert "黑湖数据不含投入量，无法计算" in result["limitations"]
+        assert CODE in result["analysisScopeLabel"]
+
+        kg_response = await client.post("/api/smartbi/financial-dashboard/factory-analysis", headers=_headers(), json={
+            **report_scope, "question": f"{quantity_question}，按 KG 计量",
+        })
+        assert kg_response.status_code == 200, kg_response.text
+        kg_result = kg_response.json()["data"]
+        assert kg_result["status"] == "answered", kg_result
+        assert [(fact["value"], fact["unit"]) for fact in kg_result["facts"]] == [("120.12", "KG")]
+
         response = await client.post("/api/smartbi/financial-dashboard/factory-analysis",
             headers=_headers(role="factory_super_admin"), json={**report_scope, "question": "请画黑湖每日工单总成本趋势"})
         assert response.status_code == 200, response.text
